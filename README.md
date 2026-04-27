@@ -119,6 +119,7 @@ CLAUDE_CODE_GIT_BASH_PATH="/c/Program Files/Git/bin/bash.exe" npm start
 | `MEMORIA_DATA` | `<repo>/data` | DB と HTML 保存ディレクトリ |
 | `MEMORIA_CLAUDE_BIN` | `claude` | claude CLI のパス |
 | `CLAUDE_CODE_GIT_BASH_PATH` | (未設定) | Windows 用、bash.exe の絶対パス |
+| `MEMORIA_RAG` | `1` | RAG (意味検索 + Q&A) の有効/無効。`0` で完全に無効化 |
 
 例:
 

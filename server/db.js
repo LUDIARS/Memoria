@@ -60,6 +60,17 @@ export function openDb(dbPath) {
       ON bookmarks(url);
     CREATE INDEX IF NOT EXISTS idx_accesses_bookmark
       ON accesses(bookmark_id, accessed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chunks (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      bookmark_id  INTEGER NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE,
+      idx          INTEGER NOT NULL,
+      text         TEXT NOT NULL,
+      vec          BLOB NOT NULL,
+      vec_dim      INTEGER NOT NULL,
+      vec_model    TEXT NOT NULL DEFAULT 'multilingual-e5-small'
+    );
+    CREATE INDEX IF NOT EXISTS idx_chunks_bookmark ON chunks(bookmark_id);
   `);
 
   // Forward-compat: ensure newer columns exist on older DBs.
@@ -245,6 +256,38 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
       score,
     };
   }).sort((a, b) => b.score - a.score || (a.last_seen_at < b.last_seen_at ? 1 : -1));
+}
+
+// ── chunks / embeddings ----------------------------------------------------
+
+export function deleteChunks(db, bookmarkId) {
+  db.prepare(`DELETE FROM chunks WHERE bookmark_id = ?`).run(bookmarkId);
+}
+
+export function insertChunk(db, { bookmarkId, idx, text, vec, model }) {
+  db.prepare(`
+    INSERT INTO chunks (bookmark_id, idx, text, vec, vec_dim, vec_model)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(bookmarkId, idx, text, vec, vec.length / 4, model || 'multilingual-e5-small');
+}
+
+export function listChunkRows(db) {
+  return db.prepare(`SELECT id, bookmark_id, idx, text, vec FROM chunks`).all();
+}
+
+export function bookmarksMissingEmbeddings(db) {
+  return db.prepare(`
+    SELECT b.id FROM bookmarks b
+    LEFT JOIN chunks c ON c.bookmark_id = b.id
+    WHERE c.id IS NULL AND b.status = 'done'
+    ORDER BY b.created_at DESC
+  `).all().map(r => r.id);
+}
+
+export function chunkStats(db) {
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM chunks`).get().n;
+  const docs = db.prepare(`SELECT COUNT(DISTINCT bookmark_id) AS n FROM chunks`).get().n;
+  return { total_chunks: total, indexed_bookmarks: docs };
 }
 
 // ── trends -----------------------------------------------------------------
