@@ -305,15 +305,32 @@ Claude Code は `~/.claude/mcp.json` (プロジェクト固有なら `.claude/mc
 ### local (既定)
 単一ユーザー、認証なし、すべてのエンドポイント解放、URL アクセスを `page_visits` に蓄積。Chrome 拡張のオプションで「URL をトラッキングしない」をオンにすると `/api/access` の送信を停止できます。
 
-### online
+### online (read-public + write-auth + relay)
 オンライン共有想定。`MEMORIA_MODE=online` + `MEMORIA_JWT_SECRET` を設定して起動。
 
-- すべての `/api/*` で `Authorization: Bearer <JWT>` 必須 (HS256)
+- **読み取り (GET) は誰でも開放** — Web UI を匿名でも閲覧可能
+- **書込 (PATCH/POST/DELETE) は Bearer JWT 必須** (HS256)
+- `POST /api/bookmark` (HTML 直送) は **410 Gone** — Imperativus 経由のみ許可
 - 訪問履歴 (`/api/visits/*`) は 403 で完全停止、`/api/access` は no-op
 - ブックマークは JWT の `sub` (user_id) でスコープ
 - Cernere 統合: `@ludiars/cernere-service-adapter` を **同一プロセスで lazy import** し、admission + peer adapter の両方を起動。`CERNERE_*` env が揃った時のみ有効化、SDK 未インストール時は自前 HS256 検証にフォールバック
 - 開発用 token: `cd service && npm run issue-token alice` で `sub=alice` の JWT を発行
 - Peer adapter で公開するコマンドと発行イベントは [spec/events.md](spec/events.md) 参照
+
+### Web UI のサインイン (online モード)
+- 匿名でアクセスすると **read-only** モード — 一覧 / 検索 / 履歴閲覧 / 傾向 / 推薦表示は可
+- ヘッダーの「サインイン」ボタンから service_token を貼り付けると、メモ編集 / カテゴリ編集 / 削除 / 再要約 / Import / Export / Dig / RAG ask が解放
+- token は `localStorage` に保存され、401 を受けたら自動破棄
+
+### Chrome 拡張の保存ルート
+拡張オプションで 2 モード切替:
+
+| mode | 送信先 | 認証 | アクセス追跡 |
+|------|--------|------|--------------|
+| `local` (既定) | `${server}/api/bookmark` | なし | `/api/access` を送る |
+| `relay` | `${imperativusUrl}/api/relay/memoria/save_html` | Cernere `Bearer JWT` 必須 | 送らない (privacy) |
+
+`relay` モードでは Memoria への直接書込はできない。Imperativus が peer.invoke で memoria.save_html を呼び、user_id をトークンから強制設定する。
 
 ### コンテンツフィルタ
 NG / R18 ワードがブックマークの URL / タイトル / 本文に含まれる場合、422 で保存を拒否します。`MEMORIA_NGWORDS_FILE` / `MEMORIA_NG_DOMAINS_FILE` で追加可能。
