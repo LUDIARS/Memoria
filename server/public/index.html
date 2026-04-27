@@ -44,6 +44,10 @@
           <span id="tabVisitsCount" class="tab-count hidden">0</span>
         </button>
         <button class="tab" data-tab="trends">傾向</button>
+        <button class="tab" data-tab="recommend">
+          おすすめ
+          <span id="tabRecommendCount" class="tab-count hidden">0</span>
+        </button>
       </nav>
 
       <div id="bookmarksView">
@@ -114,6 +118,16 @@
             <div id="trendDomains" class="chart"></div>
           </section>
         </div>
+      </div>
+
+      <div id="recommendView" class="hidden">
+        <div class="rec-bar">
+          <span>保存済 HTML から外部リンクを抽出し、未訪問のサイトを推薦。スコアは「同じリンクが何件の保存記事に出現したか」。</span>
+          <span class="grow"></span>
+          <button id="recRefresh" class="ghost">再計算</button>
+        </div>
+        <div id="recList" class="rec-list"></div>
+        <div id="recEmpty" class="queue-empty hidden">推薦できる未訪問リンクがありません。保存記事を増やすと候補が出ます。</div>
       </div>
 
       <div id="queueView" class="hidden">
