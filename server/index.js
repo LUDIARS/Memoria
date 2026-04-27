@@ -29,6 +29,7 @@ import {
 } from './db.js';
 import { summarizeWithClaude } from './claude.js';
 import { FifoQueue } from './queue.js';
+import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -200,6 +201,25 @@ app.get('/api/trends/timeline', (c) => {
 app.get('/api/trends/domains', (c) => {
   const days = Number(c.req.query('days')) || 30;
   return c.json({ items: trendsDomains(db, { sinceDays: days }) });
+});
+
+// ---- recommendations ------------------------------------------------------
+
+app.get('/api/recommendations', (c) => {
+  const force = c.req.query('force') === '1';
+  return c.json({ items: recommendationsFor(db, HTML_DIR, { force }) });
+});
+
+app.post('/api/recommendations/dismiss', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.url) return c.json({ error: 'url required' }, 400);
+  dismissRecommendation(db, body.url);
+  return c.json({ ok: true });
+});
+
+app.delete('/api/recommendations/dismissals', (c) => {
+  clearDismissals(db);
+  return c.json({ ok: true });
 });
 
 // ---- queue status ---------------------------------------------------------
