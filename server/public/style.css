@@ -508,6 +508,99 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   color: var(--accent);
   white-space: nowrap;
 }
+
+.dig-input {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.dig-input input {
+  flex: 1;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.dig-input button { padding: 12px 20px; font-size: 14px; }
+.dig-history {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.dig-history .pill {
+  background: var(--accent-bg);
+  color: var(--accent);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.dig-history .pill:hover { border-color: var(--accent); }
+.dig-history .pill.pending { background: #fff5e1; color: #8a5a00; }
+.dig-history .pill.error { background: #fae6e6; color: var(--danger); }
+.dig-result .summary {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  white-space: pre-wrap;
+  margin-bottom: 12px;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.dig-graph {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  padding: 8px;
+}
+.dig-graph svg { width: 100%; height: 360px; display: block; }
+.dig-graph .edge { stroke: #c5cad4; stroke-width: 1; }
+.dig-graph .node { fill: var(--accent); }
+.dig-graph .node.center { fill: #1f56c0; }
+.dig-graph .node-label { fill: var(--text); font-size: 11px; pointer-events: none; }
+.dig-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.dig-source {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dig-source.selected { border-color: var(--accent); background: var(--accent-bg); }
+.dig-source .top-line { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.dig-source .title { font-weight: 600; line-height: 1.3; word-break: break-all; flex: 1; }
+.dig-source .url { font-size: 11px; color: var(--muted); word-break: break-all; }
+.dig-source .snippet { font-size: 12px; color: #2c3344; line-height: 1.5; }
+.dig-source .topics { display: flex; gap: 4px; flex-wrap: wrap; }
+.dig-source .topic {
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+.dig-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.dig-actions .grow { flex: 1; }
+.dig-pending {
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 16px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dig-pending .pulse {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
 .visits-actions {
   display: flex;
   gap: 10px;

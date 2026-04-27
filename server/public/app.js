@@ -16,6 +16,10 @@ const state = {
   ragStatus: null,
   ragResults: [],
   ragAnswer: null,
+  digSession: null,
+  digHistory: [],
+  digSelected: new Set(),
+  digPolling: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -399,11 +403,195 @@ function switchTab(tab) {
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('ragView').classList.toggle('hidden', tab !== 'rag');
+  $('digView').classList.toggle('hidden', tab !== 'dig');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'rag') loadRagStatus();
+  if (tab === 'dig') loadDigHistory();
+}
+
+// ── Dig (deep research) ──────────────────────────────────────────────────
+
+async function loadDigHistory() {
+  try {
+    const { items } = await api('/api/dig');
+    state.digHistory = items;
+    renderDigHistory();
+  } catch (e) { console.error(e); }
+}
+
+function renderDigHistory() {
+  const el = $('digHistory');
+  if (!state.digHistory.length) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:11px">過去のディグなし</span>';
+    return;
+  }
+  el.innerHTML = state.digHistory.map(s =>
+    `<span class="pill ${s.status}" data-id="${s.id}" title="${escapeHtml(s.created_at)}">
+      ${escapeHtml(s.query.slice(0, 30))}${s.query.length > 30 ? '…' : ''}
+    </span>`
+  ).join('');
+  el.querySelectorAll('.pill').forEach(p => {
+    p.addEventListener('click', () => loadDigSession(Number(p.dataset.id)));
+  });
+}
+
+async function startDig() {
+  const q = $('digQuery').value.trim();
+  if (!q) return;
+  $('digRun').disabled = true;
+  $('digRun').textContent = '掘削中…';
+  try {
+    const r = await api('/api/dig', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q }),
+    });
+    await loadDigHistory();
+    pollDigSession(r.id);
+  } catch (e) {
+    alert(`dig 失敗: ${e.message}`);
+  } finally {
+    $('digRun').disabled = false;
+    $('digRun').textContent = 'ディグる';
+  }
+}
+
+function pollDigSession(id) {
+  if (state.digPolling) clearInterval(state.digPolling);
+  loadDigSession(id);
+  state.digPolling = setInterval(async () => {
+    const s = await api(`/api/dig/${id}`).catch(() => null);
+    if (!s) return;
+    if (s.status !== 'pending') {
+      clearInterval(state.digPolling);
+      state.digPolling = null;
+      state.digSession = s;
+      renderDigSession();
+      loadDigHistory();
+    }
+  }, 5000);
+}
+
+async function loadDigSession(id) {
+  try {
+    const s = await api(`/api/dig/${id}`);
+    state.digSession = s;
+    state.digSelected = new Set();
+    renderDigSession();
+    if (s.status === 'pending') pollDigSession(id);
+  } catch (e) { console.error(e); }
+}
+
+function renderDigSession() {
+  const s = state.digSession;
+  const el = $('digResult');
+  if (!s) { el.innerHTML = ''; return; }
+  if (s.status === 'pending') {
+    el.innerHTML = `<div class="dig-pending"><div class="pulse"></div>「${escapeHtml(s.query)}」を掘っています…claude が Web 検索 + 取得を行うため数十秒〜数分かかります。</div>`;
+    return;
+  }
+  if (s.status === 'error') {
+    el.innerHTML = `<div class="dig-pending" style="border-color:var(--danger);color:var(--danger)">エラー: ${escapeHtml(s.error || '不明')}</div>`;
+    return;
+  }
+  const r = s.result || {};
+  const sources = r.sources || [];
+  const summaryBlock = r.summary
+    ? `<div class="summary">${escapeHtml(r.summary)}</div>`
+    : '';
+  const graph = sources.length > 0 ? digGraph(s.query, sources) : '';
+  const sourceCards = sources.map((src, i) => {
+    const sel = state.digSelected.has(src.url);
+    const topics = (src.topics || []).map(t => `<span class="topic">${escapeHtml(t)}</span>`).join('');
+    return `
+      <div class="dig-source ${sel ? 'selected' : ''}" data-url="${escapeHtml(src.url)}" data-i="${i}">
+        <div class="top-line">
+          <input type="checkbox" class="dig-chk" ${sel ? 'checked' : ''} />
+          <div class="title">${escapeHtml(src.title)}</div>
+        </div>
+        <div class="url"><a href="${escapeHtml(src.url)}" target="_blank" rel="noreferrer">${escapeHtml(src.url)}</a></div>
+        <div class="snippet">${escapeHtml(src.snippet)}</div>
+        <div class="topics">${topics}</div>
+      </div>
+    `;
+  }).join('');
+  el.innerHTML = `
+    ${summaryBlock}
+    ${graph}
+    <div class="dig-actions">
+      <span id="digSelCount">0</span> 件選択中
+      <span class="grow"></span>
+      <button id="digSaveBtn">選択をブックマーク化</button>
+    </div>
+    <div class="dig-sources">${sourceCards}</div>
+  `;
+  el.querySelectorAll('.dig-source').forEach(card => {
+    const url = card.dataset.url;
+    card.addEventListener('click', (e) => {
+      if (e.target.tagName === 'A') return;
+      if (e.target.tagName !== 'INPUT') {
+        const cb = card.querySelector('.dig-chk');
+        cb.checked = !cb.checked;
+      }
+      const sel = card.querySelector('.dig-chk').checked;
+      if (sel) state.digSelected.add(url); else state.digSelected.delete(url);
+      card.classList.toggle('selected', sel);
+      $('digSelCount').textContent = state.digSelected.size;
+    });
+  });
+  $('digSaveBtn')?.addEventListener('click', async () => {
+    const urls = [...state.digSelected];
+    if (!urls.length) return;
+    $('digSaveBtn').disabled = true;
+    try {
+      const r = await api(`/api/dig/${s.id}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls }),
+      });
+      const ok = r.results.filter(x => x.status === 'queued').length;
+      alert(`${ok} 件をブックマーク化しました (キュー投入)。`);
+      state.digSelected.clear();
+      renderDigSession();
+      await refreshQueue();
+    } finally {
+      const btn = $('digSaveBtn');
+      if (btn) btn.disabled = false;
+    }
+  });
+}
+
+function digGraph(query, sources) {
+  const w = 700, h = 360, cx = w / 2, cy = h / 2, r = 130;
+  const center = { x: cx, y: cy, label: query.slice(0, 24), klass: 'center', size: 10 };
+  const nodes = sources.map((s, i) => {
+    const a = (i / sources.length) * Math.PI * 2 - Math.PI / 2;
+    return {
+      x: cx + Math.cos(a) * r,
+      y: cy + Math.sin(a) * r,
+      label: shortDomain(s.url),
+      klass: '',
+      size: 6,
+    };
+  });
+  const edges = nodes.map(n =>
+    `<line class="edge" x1="${cx}" y1="${cy}" x2="${n.x.toFixed(1)}" y2="${n.y.toFixed(1)}" />`
+  ).join('');
+  const dots = [center, ...nodes].map(n =>
+    `<circle class="node ${n.klass}" cx="${n.x}" cy="${n.y}" r="${n.size}" />`
+  ).join('');
+  const labels = [center, ...nodes].map(n => {
+    const dy = n === center ? -16 : (n.y < cy ? -10 : 18);
+    return `<text class="node-label" x="${n.x}" y="${n.y + dy}" text-anchor="middle">${escapeHtml(n.label)}</text>`;
+  }).join('');
+  return `<div class="dig-graph"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${edges}${dots}${labels}</svg></div>`;
+}
+
+function shortDomain(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url.slice(0, 20); }
 }
 
 // ── RAG ────────────────────────────────────────────────────────────────
@@ -841,6 +1029,10 @@ $('trendsRange').addEventListener('change', (e) => {
   loadTrends();
 });
 $('recRefresh').addEventListener('click', () => loadRecommendations(true));
+$('digRun').addEventListener('click', startDig);
+$('digQuery').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); startDig(); }
+});
 $('ragSearchBtn').addEventListener('click', ragSearch);
 $('ragAskBtn').addEventListener('click', ragAsk);
 $('ragQuery').addEventListener('keydown', (e) => {

@@ -30,9 +30,11 @@ import {
 import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
+import { runDig } from './dig.js';
 import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
   deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
+  insertDigSession, setDigResult, getDigSession, listDigSessions,
 } from './db.js';
 import { spawn } from 'node:child_process';
 
@@ -416,6 +418,48 @@ function claudeAnswer(prompt, timeoutMs = 180_000) {
   });
 }
 
+// ---- dig (deep research) -------------------------------------------------
+
+const digQueue = new FifoQueue();
+
+function enqueueDig(id, query) {
+  digQueue.enqueue(async () => {
+    try {
+      const result = await runDig({ query, claudeBin: CLAUDE_BIN });
+      setDigResult(db, id, { status: 'done', result });
+    } catch (e) {
+      setDigResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
+      throw e;
+    }
+  }, { kind: 'dig', sessionId: id, title: query });
+}
+
+app.post('/api/dig', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const query = body?.query;
+  if (!query || typeof query !== 'string') return c.json({ error: 'query required' }, 400);
+  const id = insertDigSession(db, query);
+  enqueueDig(id, query);
+  return c.json({ id, queued: true });
+});
+
+app.get('/api/dig', (c) => {
+  return c.json({ items: listDigSessions(db) });
+});
+
+app.get('/api/dig/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const s = getDigSession(db, id);
+  if (!s) return c.json({ error: 'not found' }, 404);
+  return c.json(s);
+});
+
+app.post('/api/dig/:id/save', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
+  return c.json({ results: await bulkSaveUrls(body.urls) });
+});
+
 // ---- queue status ---------------------------------------------------------
 
 app.get('/api/queue', (c) => {
@@ -489,19 +533,15 @@ app.delete('/api/visits', async (c) => {
   return c.json({ ok: true, removed: body.urls.length });
 });
 
-app.post('/api/visits/bookmark', async (c) => {
-  const body = await c.req.json().catch(() => null);
-  if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
-
+async function bulkSaveUrls(urls) {
   const results = [];
-  for (const url of body.urls) {
+  for (const url of urls) {
     if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
       results.push({ url, status: 'skipped', error: 'invalid url' });
       continue;
     }
     const existing = findBookmarkByUrl(db, url);
     if (existing) {
-      // Already bookmarked → just clean up the visit row.
       deleteVisit(db, url);
       results.push({ url, status: 'duplicate', id: existing.id });
       continue;
@@ -518,14 +558,19 @@ app.post('/api/visits/bookmark', async (c) => {
       const id = insertBookmark(db, { url, title, htmlPath: safe });
       recordAccess(db, id);
       enqueueSummary(id);
-      // Visit row no longer needed once bookmarked.
       deleteVisit(db, url);
       results.push({ url, status: 'queued', id });
     } catch (e) {
       results.push({ url, status: 'error', error: e.message });
     }
   }
-  return c.json({ results });
+  return results;
+}
+
+app.post('/api/visits/bookmark', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
+  return c.json({ results: await bulkSaveUrls(body.urls) });
 });
 
 async function fetchPageHtml(url, timeoutMs = 30_000) {
