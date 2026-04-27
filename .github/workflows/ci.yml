@@ -23,12 +23,23 @@ jobs:
         working-directory: server
         run: npm ci
 
+      - name: Install mcp-server deps
+        working-directory: mcp-server
+        run: npm ci
+
       - name: Syntax check (server)
         run: |
           set -e
           while IFS= read -r f; do
             node --check "$f"
           done < <(find server -type f -name '*.js' -not -path 'server/node_modules/*')
+
+      - name: Syntax check (mcp-server)
+        run: |
+          set -e
+          while IFS= read -r f; do
+            node --check "$f"
+          done < <(find mcp-server -type f -name '*.js' -not -path 'mcp-server/node_modules/*')
 
       - name: Syntax check (extension)
         run: |
