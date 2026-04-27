@@ -279,11 +279,19 @@ Claude Desktop の `claude_desktop_config.json` (macOS: `~/Library/Application S
     "memoria": {
       "command": "node",
       "args": ["/abs/path/to/Memoria/mcp-server/index.js"],
-      "env": { "MEMORIA_URL": "http://localhost:5180" }
+      "env": {
+        "MEMORIA_URL": "http://localhost:5180",
+        "MEMORIA_TOKEN": "(online モード時のみ — Cernere service_token)",
+        "MEMORIA_RELAY_URL": "(online モード時のみ — Imperativus base URL、save_url を relay 経由にする)"
+      }
     }
   }
 }
 ```
+
+**online モードでの注意:**
+- `MEMORIA_TOKEN` が設定されていれば、すべての read/write リクエストに `Authorization: Bearer` を自動付与
+- `MEMORIA_RELAY_URL` が設定されていれば、`save_url` は Imperativus の `/api/relay/memoria/save_url` を経由する (Memoria 直接の `/api/visits/bookmark` は online で 403)
 
 Claude Code は `~/.claude/mcp.json` (プロジェクト固有なら `.claude/mcp.json`) に同じ形式で書けます。
 

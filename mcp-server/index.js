@@ -13,8 +13,29 @@ import { z } from 'zod';
 
 const SERVER_URL = (process.env.MEMORIA_URL ?? 'http://localhost:5180').replace(/\/+$/, '');
 
+// Optional Bearer JWT for online-mode Memoria. If unset, only read calls
+// will succeed against an online server; write tools (save_url etc.) will
+// surface a clear "sign-in required" error from the backend.
+const TOKEN = process.env.MEMORIA_TOKEN ?? '';
+
+// Optional Imperativus relay base. When the Memoria backend runs in `online`
+// mode, /api/visits/bookmark is disabled, so save_url has to go through
+// Imperativus's POST /api/relay/memoria/save_url. Configure both:
+//   MEMORIA_RELAY_URL=https://imperativus.example.com
+//   MEMORIA_TOKEN=<Cernere service_token>
+const RELAY_URL = (process.env.MEMORIA_RELAY_URL ?? '').replace(/\/+$/, '');
+
+function authHeaders(extra = {}) {
+  const h = { ...extra };
+  if (TOKEN) h['Authorization'] = `Bearer ${TOKEN}`;
+  return h;
+}
+
 async function call(path, opts = {}) {
-  const res = await fetch(SERVER_URL + path, opts);
+  const res = await fetch(SERVER_URL + path, {
+    ...opts,
+    headers: authHeaders(opts.headers || {}),
+  });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Memoria ${res.status}: ${body.slice(0, 200)}`);
@@ -23,7 +44,7 @@ async function call(path, opts = {}) {
 }
 
 async function callText(path) {
-  const res = await fetch(SERVER_URL + path);
+  const res = await fetch(SERVER_URL + path, { headers: authHeaders() });
   if (!res.ok) throw new Error(`Memoria ${res.status}`);
   return res.text();
 }
@@ -104,10 +125,26 @@ server.registerTool(
   'save_url',
   {
     title: 'Save a URL as a Memoria bookmark',
-    description: 'Tell Memoria to fetch and bookmark the given URL. Returns the new bookmark id (queued for summary). If the URL is already saved, returns the existing id.',
+    description: 'Tell Memoria to fetch and bookmark the given URL. Returns the new bookmark id (queued for summary). If the URL is already saved, returns the existing id. In online mode, requires MEMORIA_RELAY_URL (Imperativus) + MEMORIA_TOKEN.',
     inputSchema: { url: z.string().url() },
   },
   async ({ url }) => {
+    // Pick the appropriate path based on the backend mode.
+    if (RELAY_URL) {
+      // Online mode: go through Imperativus peer relay.
+      const res = await fetch(`${RELAY_URL}/api/relay/memoria/save_url`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ url }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Imperativus ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const data = await res.json();
+      return { content: [{ type: 'text', text: JSON.stringify(data.result ?? data, null, 2) }] };
+    }
+    // Local mode: hit Memoria's local visits-bookmark endpoint.
     const res = await call('/api/visits/bookmark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -250,9 +287,23 @@ server.registerPrompt(
 // ── run ──────────────────────────────────────────────────────────────────
 
 async function main() {
+  // Discover the backend's mode so we can warn about likely permission errors.
+  let mode = 'unknown';
+  try {
+    const r = await fetch(`${SERVER_URL}/api/mode`, { headers: authHeaders() }).then((x) => x.json());
+    mode = r?.mode ?? 'unknown';
+    if (mode === 'online' && !TOKEN) {
+      console.error('[memoria-mcp] backend is online and MEMORIA_TOKEN is not set — write tools will return 401.');
+    }
+    if (mode === 'online' && r?.user_id) {
+      console.error(`[memoria-mcp] authenticated as ${r.user_id}`);
+    }
+  } catch (e) {
+    console.error(`[memoria-mcp] could not pre-check ${SERVER_URL}/api/mode: ${e?.message ?? e}`);
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`[memoria-mcp] connected. backend: ${SERVER_URL}`);
+  console.error(`[memoria-mcp] connected. backend=${SERVER_URL} mode=${mode} token=${TOKEN ? 'set' : 'unset'}`);
 }
 
 main().catch((err) => {
