@@ -23,10 +23,13 @@ jobs:
         working-directory: service
         env:
           # Optional: pull @ludiars/* from GitHub Packages if NPM_TOKEN is set.
-          # CI runs fine without it; the SDK is in optionalDependencies and
-          # missing-optional packages are silently skipped.
+          # CI works without it; the SDK is in optionalDependencies and
+          # `npm install` (rather than `ci`) silently skips optional packages
+          # whose registry rejects the missing auth. We avoid `--omit=optional`
+          # because rollup (used by vitest) ships platform-specific binaries
+          # via optionalDependencies — stripping those breaks the test runner.
           NPM_TOKEN: ${{ secrets.LUDIARS_NPM_TOKEN || '' }}
-        run: npm ci --no-optional || npm ci --omit=optional
+        run: npm install --no-audit --no-fund
 
       - name: Install mcp-server deps
         working-directory: mcp-server
@@ -62,6 +65,10 @@ jobs:
             if (!m.background?.service_worker) { throw new Error('background.service_worker required'); }
             console.log('manifest ok, version', m.version);
           "
+
+      - name: Run service unit/integration tests (vitest)
+        working-directory: service
+        run: npm test
 
       - name: Mock claude CLI
         run: |

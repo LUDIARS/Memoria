@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
-    "issue-token": "node --env-file-if-exists=.env --env-file-if-exists=../.env scripts/issue-token.mjs"
+    "issue-token": "node --env-file-if-exists=.env --env-file-if-exists=../.env scripts/issue-token.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
@@ -17,5 +19,8 @@
   },
   "optionalDependencies": {
     "@ludiars/cernere-service-adapter": "^0.2.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
   }
 }
