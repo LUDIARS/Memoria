@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Memoria Bookmarker",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Save the current page to a local Memoria server with auto summary and categories.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms", "identity"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js",
