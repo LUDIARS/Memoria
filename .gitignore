@@ -1,6 +1,10 @@
 # dependencies
 node_modules/
 
+# local environment overrides
+.env
+.env.local
+
 # user data — never commit
 data/
 *.db
