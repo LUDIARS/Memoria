@@ -14,5 +14,8 @@
     "better-sqlite3": "^11.3.0",
     "hono": "^4.6.10",
     "node-html-parser": "^6.1.13"
+  },
+  "optionalDependencies": {
+    "@ludiars/cernere-service-adapter": "^0.2.0"
   }
 }

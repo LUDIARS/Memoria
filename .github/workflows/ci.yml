@@ -21,7 +21,12 @@ jobs:
 
       - name: Install server deps
         working-directory: server
-        run: npm ci
+        env:
+          # Optional: pull @ludiars/* from GitHub Packages if NPM_TOKEN is set.
+          # CI runs fine without it; the SDK is in optionalDependencies and
+          # missing-optional packages are silently skipped.
+          NPM_TOKEN: ${{ secrets.LUDIARS_NPM_TOKEN || '' }}
+        run: npm ci --no-optional || npm ci --omit=optional
 
       - name: Install mcp-server deps
         working-directory: mcp-server

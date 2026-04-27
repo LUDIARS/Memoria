@@ -301,8 +301,9 @@ Claude Code は `~/.claude/mcp.json` (プロジェクト固有なら `.claude/mc
 - すべての `/api/*` で `Authorization: Bearer <JWT>` 必須 (HS256)
 - 訪問履歴 (`/api/visits/*`) は 403 で完全停止、`/api/access` は no-op
 - ブックマークは JWT の `sub` (user_id) でスコープ
-- Cernere 統合: 本番では [`@ludiars/cernere-service-adapter`](https://github.com/LUDIARS/Cernere/tree/main/packages/service-adapter) を別プロセスで起動し、Cernere admission flow → Memoria JWT 発行 → Memoria 側は受け取った JWT を `MEMORIA_JWT_SECRET` で検証する構成
+- Cernere 統合: `@ludiars/cernere-service-adapter` を **同一プロセスで lazy import** し、admission + peer adapter の両方を起動。`CERNERE_*` env が揃った時のみ有効化、SDK 未インストール時は自前 HS256 検証にフォールバック
 - 開発用 token: `cd server && npm run issue-token alice` で `sub=alice` の JWT を発行
+- Peer adapter で公開するコマンドと発行イベントは [docs/events.md](docs/events.md) 参照
 
 ### コンテンツフィルタ
 NG / R18 ワードがブックマークの URL / タイトル / 本文に含まれる場合、422 で保存を拒否します。`MEMORIA_NGWORDS_FILE` / `MEMORIA_NG_DOMAINS_FILE` で追加可能。
