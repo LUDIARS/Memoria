@@ -63,6 +63,10 @@ jobs:
             console.log('manifest ok, version', m.version);
           "
 
+      - name: Run service unit/integration tests (vitest)
+        working-directory: service
+        run: npm test
+
       - name: Mock claude CLI
         run: |
           mkdir -p "$HOME/.local/bin"
