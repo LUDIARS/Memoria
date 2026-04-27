@@ -13,6 +13,9 @@ const state = {
   visitsRange: '7',
   trendsRange: '30',
   recommendations: [],
+  ragStatus: null,
+  ragResults: [],
+  ragAnswer: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -395,10 +398,116 @@ function switchTab(tab) {
   $('visitsView').classList.toggle('hidden', tab !== 'visits');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
+  $('ragView').classList.toggle('hidden', tab !== 'rag');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
+  if (tab === 'rag') loadRagStatus();
+}
+
+// ── RAG ────────────────────────────────────────────────────────────────
+
+async function loadRagStatus() {
+  try {
+    const s = await api('/api/rag/status');
+    state.ragStatus = s;
+    renderRagStatus();
+  } catch (e) {
+    $('ragStatus').textContent = `RAG: ${e.message}`;
+  }
+}
+
+function renderRagStatus() {
+  const s = state.ragStatus;
+  const el = $('ragStatus');
+  if (!s) { el.textContent = '読み込み中…'; return; }
+  if (!s.enabled) {
+    el.innerHTML = '<span class="pill">disabled</span> RAG は無効化されています (MEMORIA_RAG=0)。';
+    return;
+  }
+  const idx = `${s.indexed_bookmarks}/${s.indexed_bookmarks + s.pending_bookmarks} ブックマーク (${s.total_chunks} チャンク)`;
+  const queued = s.queue_depth > 0 ? ` · 埋め込み中 ${s.queue_depth}` : '';
+  el.innerHTML = `
+    <span class="pill">${escapeHtml(s.model)}</span>
+    インデックス: ${idx}${queued}
+    ${s.pending_bookmarks > 0 ? '<button id="ragBackfillBtn">未処理を全部キュー投入</button>' : ''}
+  `;
+  const btn = document.getElementById('ragBackfillBtn');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = '投入中…';
+      try {
+        const r = await api('/api/rag/backfill', { method: 'POST' });
+        alert(`${r.queued} 件をキューに投入しました。完了まで時間がかかります。`);
+        loadRagStatus();
+      } catch (e) { alert(`失敗: ${e.message}`); }
+    });
+  }
+}
+
+async function ragSearch() {
+  const q = $('ragQuery').value.trim();
+  if (!q) return;
+  $('ragResults').innerHTML = '<div class="queue-empty">検索中…</div>';
+  $('ragAnswer').classList.add('hidden');
+  try {
+    const r = await api(`/api/search?q=${encodeURIComponent(q)}&limit=12`);
+    state.ragResults = r.items || [];
+    renderRagResults(r.note);
+  } catch (e) {
+    $('ragResults').innerHTML = `<div class="queue-empty">エラー: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderRagResults(note) {
+  const items = state.ragResults;
+  if (items.length === 0) {
+    $('ragResults').innerHTML = `<div class="queue-empty">${escapeHtml(note || '一致するブックマークがありません。')}</div>`;
+    return;
+  }
+  $('ragResults').innerHTML = items.map(it => `
+    <div class="rag-result" data-id="${it.bookmark_id}">
+      <div>
+        <div class="title">${escapeHtml(it.title)}</div>
+        <div class="url"><a href="${escapeHtml(it.url)}" target="_blank" rel="noreferrer">${escapeHtml(it.url)}</a></div>
+        <div class="chunk">${escapeHtml(it.chunk || '')}</div>
+      </div>
+      <div class="score">${(it.score * 100).toFixed(1)}%</div>
+    </div>
+  `).join('');
+  $('ragResults').querySelectorAll('.rag-result').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.tagName === 'A') return;
+      openDetail(Number(card.dataset.id));
+      switchTab('bookmarks');
+    });
+  });
+}
+
+async function ragAsk() {
+  const q = $('ragQuery').value.trim();
+  if (!q) return;
+  const ans = $('ragAnswer');
+  ans.classList.remove('hidden');
+  ans.innerHTML = '<h4>Answer</h4>考え中…';
+  try {
+    const r = await api('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q }),
+    });
+    ans.innerHTML = `
+      <h4>Answer</h4>
+      ${escapeHtml(r.answer)}
+      <div class="citations">
+        ${(r.sources || []).map(s => `[Source ${s.id}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">${escapeHtml(s.title)}</a>`).join(' &nbsp; ')}
+      </div>
+    `;
+  } catch (e) {
+    ans.innerHTML = `<h4>Error</h4>${escapeHtml(e.message)}`;
+  }
 }
 
 async function loadRecommendations(force = false) {
@@ -732,6 +841,14 @@ $('trendsRange').addEventListener('change', (e) => {
   loadTrends();
 });
 $('recRefresh').addEventListener('click', () => loadRecommendations(true));
+$('ragSearchBtn').addEventListener('click', ragSearch);
+$('ragAskBtn').addEventListener('click', ragAsk);
+$('ragQuery').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    ragSearch();
+  }
+});
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {

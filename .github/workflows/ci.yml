@@ -76,6 +76,7 @@ jobs:
         env:
           MEMORIA_PORT: '15180'
           MEMORIA_DATA: /tmp/memoria-ci
+          MEMORIA_RAG: '0'
         run: |
           set -e
           rm -rf /tmp/memoria-ci

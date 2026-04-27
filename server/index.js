@@ -27,9 +27,14 @@ import {
   trendsTimeline,
   trendsDomains,
 } from './db.js';
-import { summarizeWithClaude } from './claude.js';
+import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
+import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
+import {
+  deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
+} from './db.js';
+import { spawn } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -37,10 +42,58 @@ const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(__dirname, '..', 'data
 const HTML_DIR = join(DATA_DIR, 'html');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
+const RAG_ENABLED = process.env.MEMORIA_RAG !== '0';
 
 mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
+const embeddingQueue = new FifoQueue();
+let chunkCache = null;
+function invalidateChunkCache() { chunkCache = null; }
+function loadChunkCache() {
+  if (chunkCache) return chunkCache;
+  const rows = listChunkRows(db);
+  chunkCache = rows.map(r => ({
+    id: r.id,
+    bookmark_id: r.bookmark_id,
+    idx: r.idx,
+    text: r.text,
+    vec: bufferToVec(r.vec),
+  }));
+  return chunkCache;
+}
+
+function enqueueEmbedding(id) {
+  const meta = getBookmark(db, id);
+  embeddingQueue.enqueue(async () => {
+    const cur = getBookmark(db, id);
+    if (!cur) throw new Error('bookmark not found');
+    const htmlAbs = join(HTML_DIR, cur.html_path);
+    if (!existsSync(htmlAbs)) throw new Error('html file missing');
+
+    const html = readFileSync(htmlAbs, 'utf8');
+    const text = htmlToText(html);
+    const head = [cur.title, cur.summary].filter(Boolean).join('\n\n');
+    const all = [];
+    if (head) all.push(head);
+    for (const c of chunkText(text)) all.push(c);
+    if (all.length === 0) return;
+
+    deleteChunks(db, id);
+    const model = getModelName();
+    let i = 0;
+    for (const t of all) {
+      const v = await embed(t, 'passage');
+      insertChunk(db, { bookmarkId: id, idx: i++, text: t, vec: vecToBuffer(v), model });
+    }
+    invalidateChunkCache();
+  }, {
+    kind: 'embedding',
+    bookmarkId: id,
+    title: meta?.title ?? `id=${id}`,
+    url: meta?.url ?? '',
+  });
+}
 
 function enqueueSummary(id) {
   const b = getBookmark(db, id);
@@ -58,6 +111,9 @@ function enqueueSummary(id) {
         url: cur.url, title: cur.title, html, claudeBin: CLAUDE_BIN,
       });
       setSummary(db, id, { summary, categories, status: 'done' });
+      // Schedule embedding generation in the background; if disabled or
+      // not yet configured, embeddingQueue will simply error out per-job.
+      if (RAG_ENABLED) enqueueEmbedding(id);
     } catch (e) {
       setSummary(db, id, { summary: null, categories: [], status: 'error', error: e.message.slice(0, 500) });
       throw e;
@@ -222,14 +278,162 @@ app.delete('/api/recommendations/dismissals', (c) => {
   return c.json({ ok: true });
 });
 
+// ---- RAG (semantic search + Q&A) -----------------------------------------
+
+app.get('/api/rag/status', (c) => {
+  return c.json({
+    enabled: RAG_ENABLED,
+    model: getModelName(),
+    queue_depth: embeddingQueue.depth,
+    queue_running: embeddingQueue.running,
+    pending_bookmarks: bookmarksMissingEmbeddings(db).length,
+    ...chunkStats(db),
+  });
+});
+
+app.post('/api/rag/backfill', (c) => {
+  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled (MEMORIA_RAG=0)' }, 503);
+  const ids = bookmarksMissingEmbeddings(db);
+  for (const id of ids) enqueueEmbedding(id);
+  return c.json({ queued: ids.length });
+});
+
+app.post('/api/rag/reindex/:id', (c) => {
+  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
+  const id = Number(c.req.param('id'));
+  if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
+  enqueueEmbedding(id);
+  return c.json({ queued: true });
+});
+
+app.get('/api/search', async (c) => {
+  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
+  const q = c.req.query('q');
+  const limit = Number(c.req.query('limit')) || 10;
+  if (!q) return c.json({ error: 'q required' }, 400);
+  const cache = loadChunkCache();
+  if (cache.length === 0) return c.json({ items: [], note: 'No embeddings indexed yet. POST /api/rag/backfill to start.' });
+  const qv = await embed(q, 'query');
+  const scored = cache.map(c => ({ ...c, score: cosine(qv, c.vec) }));
+  scored.sort((a, b) => b.score - a.score);
+  // Group by bookmark, keep best-scoring chunk per bookmark.
+  const byBm = new Map();
+  for (const s of scored) {
+    if (!byBm.has(s.bookmark_id)) byBm.set(s.bookmark_id, s);
+    if (byBm.size >= limit * 2) break;
+  }
+  const out = [];
+  for (const s of [...byBm.values()].sort((a, b) => b.score - a.score).slice(0, limit)) {
+    const b = getBookmark(db, s.bookmark_id);
+    if (!b) continue;
+    out.push({
+      bookmark_id: s.bookmark_id,
+      score: Number(s.score.toFixed(4)),
+      title: b.title,
+      url: b.url,
+      summary: b.summary,
+      categories: b.categories,
+      chunk: s.text.slice(0, 500),
+    });
+  }
+  return c.json({ items: out });
+});
+
+app.post('/api/ask', async (c) => {
+  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
+  const body = await c.req.json().catch(() => null);
+  const q = body?.q;
+  if (!q || typeof q !== 'string') return c.json({ error: 'q required' }, 400);
+  const k = Number(body?.k) || 6;
+
+  const cache = loadChunkCache();
+  if (cache.length === 0) return c.json({ error: 'no embeddings yet; backfill first' }, 400);
+
+  const qv = await embed(q, 'query');
+  const scored = cache.map(c => ({ ...c, score: cosine(qv, c.vec) }));
+  scored.sort((a, b) => b.score - a.score);
+  const seen = new Set();
+  const top = [];
+  for (const s of scored) {
+    if (seen.has(s.bookmark_id)) continue;
+    seen.add(s.bookmark_id);
+    top.push(s);
+    if (top.length >= k) break;
+  }
+
+  const sourcesMd = top.map((s, i) => {
+    const b = getBookmark(db, s.bookmark_id);
+    return `[Source ${i + 1}: ${b?.title ?? `id=${s.bookmark_id}`} (id=${s.bookmark_id}, ${b?.url ?? ''})]\n${s.text}`;
+  }).join('\n\n---\n\n');
+
+  const prompt = [
+    'You are answering a user question using only the provided sources.',
+    '- Cite sources inline as [Source 1], [Source 2] etc.',
+    '- If the sources do not contain the answer, say "Not enough context in the saved bookmarks." and stop.',
+    '- Reply in the same language as the question.',
+    '',
+    `QUESTION: ${q}`,
+    '',
+    'SOURCES:',
+    sourcesMd,
+  ].join('\n');
+
+  let answer;
+  try {
+    answer = await claudeAnswer(prompt);
+  } catch (e) {
+    return c.json({ error: 'claude failed', detail: e.message }, 500);
+  }
+  return c.json({
+    answer,
+    sources: top.map((s, i) => {
+      const b = getBookmark(db, s.bookmark_id);
+      return {
+        id: i + 1,
+        bookmark_id: s.bookmark_id,
+        title: b?.title,
+        url: b?.url,
+        score: Number(s.score.toFixed(4)),
+      };
+    }),
+  });
+});
+
+function claudeAnswer(prompt, timeoutMs = 180_000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(CLAUDE_BIN, ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('claude CLI timed out')); }, timeoutMs);
+    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
+    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
+    child.on('error', err => { clearTimeout(timer); reject(err); });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
+      else resolve(stdout.trim());
+    });
+  });
+}
+
 // ---- queue status ---------------------------------------------------------
 
 app.get('/api/queue', (c) => {
-  return c.json({ depth: summaryQueue.depth, running: summaryQueue.running });
+  return c.json({
+    depth: summaryQueue.depth,
+    running: summaryQueue.running,
+    embedding_depth: embeddingQueue.depth,
+    embedding_running: embeddingQueue.running,
+  });
 });
 
 app.get('/api/queue/items', (c) => {
-  return c.json(summaryQueue.snapshot());
+  return c.json({
+    summary: summaryQueue.snapshot(),
+    embedding: embeddingQueue.snapshot(),
+    // Backward-compat top-level fields:
+    ...summaryQueue.snapshot(),
+  });
 });
 
 // ---- categories ------------------------------------------------------------
