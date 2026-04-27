@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: lint + smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server deps
+        working-directory: server
+        run: npm ci
+
+      - name: Syntax check (server)
+        run: |
+          set -e
+          while IFS= read -r f; do
+            node --check "$f"
+          done < <(find server -type f -name '*.js' -not -path 'server/node_modules/*')
+
+      - name: Syntax check (extension)
+        run: |
+          set -e
+          while IFS= read -r f; do
+            node --check "$f"
+          done < <(find extension -type f -name '*.js')
+
+      - name: Validate manifest.json
+        run: |
+          node -e "
+            const m = require('./extension/manifest.json');
+            if (m.manifest_version !== 3) { throw new Error('manifest_version must be 3'); }
+            if (!Array.isArray(m.permissions)) { throw new Error('permissions[] required'); }
+            if (!m.background?.service_worker) { throw new Error('background.service_worker required'); }
+            console.log('manifest ok, version', m.version);
+          "
+
+      - name: Mock claude CLI
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/claude" <<'EOF'
+          #!/usr/bin/env bash
+          # CI mock: ignore prompt and emit deterministic JSON.
+          cat <<'JSON'
+          {"summary":"ci mock summary","categories":["ci","test"]}
+          JSON
+          EOF
+          chmod +x "$HOME/.local/bin/claude"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Smoke test (server boots + handles a bookmark)
+        working-directory: server
+        env:
+          MEMORIA_PORT: '15180'
+          MEMORIA_DATA: /tmp/memoria-ci
+        run: |
+          set -e
+          rm -rf /tmp/memoria-ci
+          node index.js &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          # Wait for the server to be ready (max 15s).
+          for i in $(seq 1 30); do
+            if curl -fsS "http://localhost:$MEMORIA_PORT/api/queue" > /dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+          curl -fsS "http://localhost:$MEMORIA_PORT/api/bookmarks"
+          echo
+          curl -fsS "http://localhost:$MEMORIA_PORT/api/categories"
+          echo
+          curl -fsS "http://localhost:$MEMORIA_PORT/api/queue"
+          echo
+
+          # Save a bookmark; mock claude returns instantly.
+          curl -fsS -X POST "http://localhost:$MEMORIA_PORT/api/bookmark" \
+            -H 'Content-Type: application/json' \
+            -d '{"url":"https://example.com/ci","title":"CI","html":"<html><body>hi</body></html>"}'
+          echo
+
+          # Wait for the queue to drain.
+          for i in $(seq 1 20); do
+            depth=$(curl -fsS "http://localhost:$MEMORIA_PORT/api/queue" | node -e 'let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>console.log(JSON.parse(s).depth))')
+            if [ "$depth" = "0" ]; then break; fi
+            sleep 0.5
+          done
+
+          # Result should be done with the mock-supplied summary.
+          curl -fsS "http://localhost:$MEMORIA_PORT/api/bookmarks/1"
+          echo
