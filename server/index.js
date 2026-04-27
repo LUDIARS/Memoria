@@ -33,6 +33,7 @@ import { recommendationsFor, dismissRecommendation, clearDismissals } from './re
 import { runDig } from './dig.js';
 import { authMiddleware, readMode, MODES } from './auth.js';
 import { checkContent } from './content-filter.js';
+import { startCernere, stopCernere, emitEvent, isAdmissionRevoked } from './cernere.js';
 import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
   deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
@@ -125,6 +126,11 @@ function enqueueSummary(id) {
       // Schedule embedding generation in the background; if disabled or
       // not yet configured, embeddingQueue will simply error out per-job.
       if (RAG_ENABLED) enqueueEmbedding(id);
+      // Notify subscribers (Imperativus etc.) — best-effort.
+      emitEvent('memoria.summary.done', {
+        userId: cur.user_id ?? null,
+        payload: { id, url: cur.url, title: cur.title, summary, categories },
+      });
     } catch (e) {
       setSummary(db, id, { summary: null, categories: [], status: 'error', error: e.message.slice(0, 500) });
       throw e;
@@ -153,6 +159,15 @@ app.use('/api/*', cors({
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use('/api/*', authMiddleware({ mode: MODE, secret: JWT_SECRET }));
+// Cernere admission tracks revoked users; deny their service tokens even if
+// the JWT signature still verifies.
+app.use('/api/*', async (c, next) => {
+  const uid = c.get('userId');
+  if (uid && isAdmissionRevoked(uid)) {
+    return c.json({ error: 'unauthorized: user revoked' }, 401);
+  }
+  return next();
+});
 
 // Block visit-history endpoints in online mode — that data is local-only.
 const blockInOnline = (c, next) => {
@@ -202,6 +217,11 @@ app.post('/api/bookmark', async (c) => {
   const id = insertBookmark(db, { url, title, htmlPath: safe, userId });
   recordAccess(db, id);
   enqueueSummary(id);
+
+  emitEvent('memoria.bookmark.saved', {
+    userId,
+    payload: { id, url, title },
+  });
 
   return c.json({ id, queued: true, queueDepth: summaryQueue.depth });
 });
@@ -459,11 +479,15 @@ function claudeAnswer(prompt, timeoutMs = 180_000) {
 
 const digQueue = new FifoQueue();
 
-function enqueueDig(id, query) {
+function enqueueDig(id, query, userId = null) {
   digQueue.enqueue(async () => {
     try {
       const result = await runDig({ query, claudeBin: CLAUDE_BIN });
       setDigResult(db, id, { status: 'done', result });
+      emitEvent('memoria.dig.completed', {
+        userId,
+        payload: { session_id: id, query, source_count: result.sources.length },
+      });
     } catch (e) {
       setDigResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
       throw e;
@@ -476,7 +500,7 @@ app.post('/api/dig', async (c) => {
   const query = body?.query;
   if (!query || typeof query !== 'string') return c.json({ error: 'query required' }, 400);
   const id = insertDigSession(db, query);
-  enqueueDig(id, query);
+  enqueueDig(id, query, c.get('userId') ?? null);
   return c.json({ id, queued: true });
 });
 
@@ -717,10 +741,98 @@ app.post('/api/import', async (c) => {
 app.use('/*', serveStatic({ root: './public' }));
 app.get('/', serveStatic({ path: './public/index.html' }));
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
+serve({ fetch: app.fetch, port: PORT }, async (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
   console.log(`  mode: ${MODE}${ONLINE ? ' (auth required)' : ' (no auth)'}`);
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
   console.log(`  rag: ${RAG_ENABLED ? 'enabled' : 'disabled'}`);
+
+  // Boot Cernere adapters last so the HTTP API is already accepting requests
+  // when admission events start arriving.
+  try {
+    await startCernere({
+      upsertUser: async (user) => {
+        // Memoria tracks the user_id only — personal data lives in Cernere
+        // (per LUDIARS personal-data rule). We don't need a users table.
+        console.log(`[memoria] admission: ${user.id} (${user.login})`);
+      },
+      revokeUser: async (uid) => {
+        console.log(`[memoria] revoke: ${uid}`);
+      },
+      peerHandlers: buildPeerHandlers(),
+    });
+  } catch (e) {
+    console.error('[memoria] cernere start failed:', e);
+  }
 });
+
+process.on('SIGINT', async () => { await stopCernere(); process.exit(0); });
+process.on('SIGTERM', async () => { await stopCernere(); process.exit(0); });
+
+// ---- peer handlers ---------------------------------------------------------
+//
+// These are the surface other LUDIARS services (Imperativus etc.) call into.
+// All take an explicit user_id in the payload — the peer channel is server-
+// to-server, so the caller must already know who the request is for.
+
+function buildPeerHandlers() {
+  const requireUserId = (p) => {
+    if (!p?.user_id || typeof p.user_id !== 'string') {
+      throw new Error('user_id required');
+    }
+    return p.user_id;
+  };
+
+  return {
+    'memoria.search': async (_caller, p) => {
+      const userId = requireUserId(p);
+      const items = listBookmarks(db, { userId });
+      const q = String(p.query ?? '').toLowerCase();
+      if (!q) return { items: items.slice(0, p.limit ?? 20) };
+      const filtered = items.filter(b =>
+        (b.title || '').toLowerCase().includes(q) ||
+        (b.url || '').toLowerCase().includes(q) ||
+        (b.summary || '').toLowerCase().includes(q) ||
+        (b.memo || '').toLowerCase().includes(q)
+      ).slice(0, p.limit ?? 20);
+      return { items: filtered };
+    },
+    'memoria.save_url': async (_caller, p) => {
+      const userId = requireUserId(p);
+      const url = String(p.url ?? '');
+      if (!/^https?:\/\//.test(url)) throw new Error('valid http(s) url required');
+      const [r] = await bulkSaveUrls([url], { userId });
+      return r;
+    },
+    'memoria.list_categories': async (_caller, _p) => {
+      return { items: listAllCategories(db) };
+    },
+    'memoria.recent_bookmarks': async (_caller, p) => {
+      const userId = requireUserId(p);
+      const items = listBookmarks(db, { userId, sort: 'created_desc' });
+      return { items: items.slice(0, p.limit ?? 10) };
+    },
+    'memoria.get_bookmark': async (_caller, p) => {
+      const userId = requireUserId(p);
+      const id = Number(p.id);
+      const b = getBookmark(db, id, { userId });
+      if (!b) throw new Error('not found');
+      return b;
+    },
+    'memoria.dig': async (_caller, p) => {
+      const userId = requireUserId(p);
+      const query = String(p.query ?? '');
+      if (!query) throw new Error('query required');
+      const id = insertDigSession(db, query);
+      enqueueDig(id, query, userId);
+      return { id, queued: true };
+    },
+    'memoria.unsaved_visits': async (_caller, p) => {
+      // Local-only feature — explicit refusal in online mode mirrors the HTTP
+      // surface so Imperativus can show a clear error to the user.
+      if (ONLINE) throw new Error('unsaved_visits is disabled in online mode');
+      return { items: listSuggestedVisits(db, { sinceDays: Number(p?.days) || 7 }) };
+    },
+  };
+}
