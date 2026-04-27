@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# user data — never commit
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# logs / artifacts
+*.log
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
+
+# misc test artifacts
+test-payload.json

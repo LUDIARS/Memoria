@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Memoria Bookmarker",
+  "version": "0.3.0",
+  "description": "Save the current page to a local Memoria server with auto summary and categories.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save to Memoria"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

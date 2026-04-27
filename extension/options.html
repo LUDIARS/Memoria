@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Memoria Options</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 480px; margin: 24px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 18px; }
+    label { display: block; margin: 12px 0 4px; font-size: 13px; }
+    input { width: 100%; padding: 8px; box-sizing: border-box; font-size: 14px; }
+    button { margin-top: 12px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
+    .saved { color: #2a7; margin-left: 8px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Memoria 設定</h1>
+  <label for="server">Memoria サーバー URL</label>
+  <input id="server" type="url" placeholder="http://localhost:5180" />
+  <div>
+    <button id="save">保存</button>
+    <span id="msg" class="saved"></span>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,527 @@
+const state = {
+  bookmarks: [],
+  categories: [],
+  category: null,
+  selected: new Set(),
+  detailId: null,
+  search: '',
+  sort: 'created_desc',
+  tab: 'bookmarks',
+  queue: { items: [], history: [] },
+  visits: [],
+  visitsSelected: new Set(),
+};
+
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
+  return res.json();
+}
+
+function fmtDate(s) {
+  if (!s) return '—';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString();
+}
+
+async function load() {
+  const q = new URLSearchParams();
+  if (state.category) q.set('category', state.category);
+  if (state.sort) q.set('sort', state.sort);
+  const [{ items: bookmarks }, { items: categories }] = await Promise.all([
+    api(`/api/bookmarks?${q.toString()}`),
+    api('/api/categories'),
+  ]);
+  state.bookmarks = bookmarks;
+  state.categories = categories;
+  render();
+}
+
+function render() {
+  renderCategories();
+  renderCards();
+  renderBulk();
+  if (state.detailId != null) renderDetail();
+}
+
+function renderCategories() {
+  const ul = $('categoryList');
+  const total = state.bookmarks.length;
+  let html = '';
+  html += `<li class="${state.category === null ? 'active' : ''}" data-cat="">すべて<span class="count">${total}</span></li>`;
+  for (const c of state.categories) {
+    const active = state.category === c.category ? 'active' : '';
+    html += `<li class="${active}" data-cat="${escapeHtml(c.category)}">
+      ${escapeHtml(c.category)}<span class="count">${c.count}</span>
+    </li>`;
+  }
+  ul.innerHTML = html;
+  ul.querySelectorAll('li').forEach(li => {
+    li.addEventListener('click', () => {
+      const cat = li.dataset.cat || null;
+      state.category = cat;
+      load();
+    });
+  });
+}
+
+function renderCards() {
+  const wrap = $('cards');
+  const empty = $('empty');
+  const search = state.search.toLowerCase();
+  const items = state.bookmarks.filter(b => {
+    if (!search) return true;
+    const haystack = `${b.title} ${b.url} ${b.summary ?? ''} ${(b.categories||[]).join(' ')}`.toLowerCase();
+    return haystack.includes(search);
+  });
+  if (items.length === 0) {
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  wrap.innerHTML = items.map(b => {
+    const isSel = state.selected.has(b.id);
+    const statusBadge = b.status === 'pending' ? '<span class="status-pending">要約中</span>'
+      : b.status === 'error' ? '<span class="status-error">要約失敗</span>' : '';
+    return `
+      <div class="card ${isSel ? 'selected' : ''}" data-id="${b.id}">
+        <input type="checkbox" class="check" data-id="${b.id}" ${isSel ? 'checked' : ''} />
+        <div class="title">${escapeHtml(b.title)}</div>
+        <div class="url">${escapeHtml(b.url)}</div>
+        <div class="summary">${escapeHtml(b.summary || '')}</div>
+        <div class="cats">${(b.categories||[]).map(c => `<span class="cat">${escapeHtml(c)}</span>`).join('')}</div>
+        <div class="footer">
+          <span>追加: ${fmtDate(b.created_at)}</span>
+          <span>${b.access_count ?? 0} 回</span>
+        </div>
+        <div class="footer">
+          <span>最終: ${fmtDate(b.last_accessed_at)}</span>
+          <span>${statusBadge}</span>
+        </div>
+      </div>`;
+  }).join('');
+  wrap.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.classList.contains('check')) return;
+      openDetail(Number(card.dataset.id));
+    });
+  });
+  wrap.querySelectorAll('.check').forEach(cb => {
+    cb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = Number(cb.dataset.id);
+      if (cb.checked) state.selected.add(id); else state.selected.delete(id);
+      renderBulk();
+      cb.closest('.card').classList.toggle('selected', cb.checked);
+    });
+  });
+}
+
+function renderBulk() {
+  const bar = $('bulkBar');
+  $('bulkCount').textContent = state.selected.size;
+  bar.classList.toggle('hidden', state.selected.size === 0);
+}
+
+async function openDetail(id) {
+  state.detailId = id;
+  await renderDetail();
+  $('detail').classList.remove('hidden');
+}
+
+async function renderDetail() {
+  const id = state.detailId;
+  if (id == null) return;
+  const b = await api(`/api/bookmarks/${id}`);
+  const accesses = await api(`/api/bookmarks/${id}/accesses`);
+  $('dTitle').textContent = b.title;
+  const url = $('dUrl');
+  url.textContent = b.url;
+  url.href = b.url;
+  $('dCreated').textContent = fmtDate(b.created_at);
+  $('dAccessed').textContent = fmtDate(b.last_accessed_at);
+  $('dCount').textContent = b.access_count ?? 0;
+  $('dStatus').textContent = b.status + (b.error ? ` (${b.error})` : '');
+  $('dSummary').textContent = b.summary || '(要約なし)';
+  $('dCategories').value = (b.categories || []).join(', ');
+  $('dMemo').value = b.memo || '';
+  $('dViewHtml').href = `/api/bookmarks/${id}/html`;
+  $('dAccesses').innerHTML = (accesses.items || []).map(a => `<li>${fmtDate(a.accessed_at)}</li>`).join('');
+}
+
+function closeDetail() {
+  state.detailId = null;
+  $('detail').classList.add('hidden');
+}
+
+async function saveDetail() {
+  const id = state.detailId;
+  if (id == null) return;
+  const memo = $('dMemo').value;
+  const cats = $('dCategories').value.split(',').map(s => s.trim()).filter(Boolean);
+  await api(`/api/bookmarks/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memo, categories: cats }),
+  });
+  await load();
+}
+
+async function resummarizeDetail() {
+  const id = state.detailId;
+  if (id == null) return;
+  const btn = $('dResummarize');
+  btn.disabled = true;
+  btn.textContent = '要求中...';
+  try {
+    await api(`/api/bookmarks/${id}/resummarize`, { method: 'POST' });
+    await renderDetail();
+    await load();
+  } catch (e) {
+    alert(`再要約に失敗: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '再要約';
+  }
+}
+
+async function deleteDetail() {
+  const id = state.detailId;
+  if (id == null) return;
+  if (!confirm('このブックマークを削除しますか？')) return;
+  await api(`/api/bookmarks/${id}`, { method: 'DELETE' });
+  closeDetail();
+  state.selected.delete(id);
+  await load();
+}
+
+async function exportSelected() {
+  const ids = [...state.selected];
+  if (ids.length === 0) {
+    if (!confirm('選択がありません。すべてエクスポートしますか？')) return;
+  }
+  const body = ids.length > 0 ? { ids } : {};
+  const res = await fetch('/api/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert('export failed'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `memoria-export-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importFile(file) {
+  const text = await file.text();
+  let data;
+  try { data = JSON.parse(text); } catch { alert('JSON が壊れています'); return; }
+  const bookmarks = data.bookmarks || data;
+  if (!Array.isArray(bookmarks)) { alert('bookmarks 配列が見つかりません'); return; }
+  const r = await api('/api/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bookmarks }),
+  });
+  alert(`取り込み完了: ${r.imported} 件 / スキップ ${r.skipped} 件`);
+  await load();
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+// ---- wire up ---------------------------------------------------------------
+
+$('search').addEventListener('input', (e) => {
+  state.search = e.target.value;
+  renderCards();
+});
+$('sort').addEventListener('change', (e) => {
+  state.sort = e.target.value;
+  load();
+});
+$('detailClose').addEventListener('click', closeDetail);
+$('dSave').addEventListener('click', saveDetail);
+$('dResummarize').addEventListener('click', resummarizeDetail);
+$('dDelete').addEventListener('click', deleteDetail);
+$('exportBtn').addEventListener('click', exportSelected);
+$('bulkExport').addEventListener('click', exportSelected);
+$('bulkClear').addEventListener('click', () => {
+  state.selected.clear();
+  renderCards();
+  renderBulk();
+});
+$('importInput').addEventListener('change', async (e) => {
+  const f = e.target.files?.[0];
+  if (f) await importFile(f);
+  e.target.value = '';
+});
+
+load().catch(err => {
+  console.error(err);
+  document.body.insertAdjacentHTML('beforeend',
+    `<div style="padding:32px;color:#c33">サーバーに接続できません: ${err.message}</div>`);
+});
+
+async function refreshVisitsBadge() {
+  try {
+    const r = await api('/api/visits/unsaved/count');
+    const badge = $('tabVisitsCount');
+    if (r.count > 0) {
+      badge.classList.remove('hidden');
+      badge.textContent = r.count;
+    } else {
+      badge.classList.add('hidden');
+    }
+  } catch {}
+}
+
+async function refreshQueue() {
+  try {
+    const snap = await api('/api/queue/items');
+    state.queue = snap;
+    const badge = $('queueBadge');
+    const tabCount = $('tabQueueCount');
+    if (snap.depth > 0) {
+      badge.classList.remove('hidden');
+      tabCount.classList.remove('hidden');
+      $('queueCount').textContent = snap.depth;
+      tabCount.textContent = snap.depth;
+    } else {
+      badge.classList.add('hidden');
+      tabCount.classList.add('hidden');
+    }
+    if (state.tab === 'queue') renderQueue();
+    return snap.depth;
+  } catch { return 0; }
+}
+
+function fmtElapsed(ms) {
+  if (ms == null) return '—';
+  const s = Math.round(ms / 100) / 10;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const r = Math.round(s - m * 60);
+  return `${m}m ${r}s`;
+}
+
+function renderQueue() {
+  // Now running
+  const runEl = $('queueRunning');
+  const items = state.queue.items || [];
+  const head = items[0]?.status === 'running' ? items[0] : null;
+  if (head) {
+    const elapsed = head.startedAt ? Date.now() - head.startedAt : 0;
+    runEl.classList.remove('empty');
+    runEl.innerHTML = `
+      <div class="row">
+        <div class="pulse"></div>
+        <div style="flex:1; min-width:0">
+          <div class="title">${escapeHtml(head.title || `id=${head.bookmarkId}`)}</div>
+          <div class="url">${escapeHtml(head.url || '')}</div>
+          <div class="meta">経過 ${fmtElapsed(elapsed)} · seq #${head.seq}</div>
+        </div>
+      </div>
+    `;
+  } else {
+    runEl.classList.add('empty');
+    runEl.textContent = '実行中のジョブはありません';
+  }
+
+  // Queued (skip the running head)
+  const queued = items.filter(i => i.status === 'queued');
+  $('queueQueuedCount').textContent = queued.length;
+  const queuedEl = $('queueQueued');
+  if (queued.length === 0) {
+    queuedEl.innerHTML = '<div class="queue-empty">順番待ちはありません</div>';
+  } else {
+    queuedEl.innerHTML = queued.map(i => `
+      <li>
+        <div class="title">${escapeHtml(i.title || `id=${i.bookmarkId}`)}</div>
+        <div class="url">${escapeHtml(i.url || '')}</div>
+      </li>
+    `).join('');
+  }
+
+  // History
+  const hist = state.queue.history || [];
+  $('queueHistoryCount').textContent = hist.length;
+  const histEl = $('queueHistory');
+  if (hist.length === 0) {
+    histEl.innerHTML = '<div class="queue-empty">履歴はありません</div>';
+  } else {
+    histEl.innerHTML = hist.map(i => {
+      const dur = i.startedAt && i.finishedAt ? i.finishedAt - i.startedAt : null;
+      const ok = i.status === 'done';
+      return `
+        <li>
+          <div class="icon ${ok ? 'done' : 'error'}">${ok ? '✓' : '✗'}</div>
+          <div style="min-width:0">
+            <div class="title">${escapeHtml(i.title || `id=${i.bookmarkId}`)}</div>
+            <div class="url">${escapeHtml(i.url || '')}</div>
+            ${i.error ? `<div class="err">${escapeHtml(i.error)}</div>` : ''}
+          </div>
+          <div class="duration">
+            ${fmtElapsed(dur)}<br>
+            ${i.finishedAt ? new Date(i.finishedAt).toLocaleTimeString() : ''}
+          </div>
+        </li>
+      `;
+    }).join('');
+  }
+}
+
+function switchTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tab);
+  });
+  $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
+  $('queueView').classList.toggle('hidden', tab !== 'queue');
+  $('visitsView').classList.toggle('hidden', tab !== 'visits');
+  if (tab === 'queue') renderQueue();
+  if (tab === 'visits') loadVisits();
+}
+
+async function loadVisits() {
+  try {
+    const { items } = await api('/api/visits/unsaved');
+    state.visits = items;
+    // prune selected for items no longer present
+    const urls = new Set(items.map(i => i.url));
+    state.visitsSelected = new Set([...state.visitsSelected].filter(u => urls.has(u)));
+    renderVisits();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderVisits() {
+  const items = state.visits;
+  const tabBadge = $('tabVisitsCount');
+  if (items.length > 0) {
+    tabBadge.classList.remove('hidden');
+    tabBadge.textContent = items.length;
+  } else {
+    tabBadge.classList.add('hidden');
+  }
+  $('visitsSelCount').textContent = state.visitsSelected.size;
+  $('visitsAll').checked = items.length > 0 && state.visitsSelected.size === items.length;
+
+  const list = $('visitsList');
+  const empty = $('visitsEmpty');
+  if (items.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = items.map(v => {
+    const sel = state.visitsSelected.has(v.url);
+    return `
+      <li class="${sel ? 'selected' : ''}" data-url="${escapeHtml(v.url)}">
+        <input type="checkbox" class="vchk" ${sel ? 'checked' : ''} />
+        <div style="min-width:0">
+          <div class="title">${escapeHtml(v.title || '(タイトル未取得)')}</div>
+          <div class="url">${escapeHtml(v.url)}</div>
+        </div>
+        <div class="when">
+          ${fmtDate(v.last_seen_at)}<br>
+          <span class="count">${v.visit_count} 回</span>
+        </div>
+      </li>
+    `;
+  }).join('');
+  list.querySelectorAll('li').forEach(li => {
+    const url = li.dataset.url;
+    const cb = li.querySelector('.vchk');
+    li.addEventListener('click', (e) => {
+      if (e.target !== cb) {
+        cb.checked = !cb.checked;
+      }
+      if (cb.checked) state.visitsSelected.add(url);
+      else state.visitsSelected.delete(url);
+      li.classList.toggle('selected', cb.checked);
+      $('visitsSelCount').textContent = state.visitsSelected.size;
+      $('visitsAll').checked = state.visitsSelected.size === state.visits.length;
+    });
+  });
+}
+
+async function bookmarkSelectedVisits() {
+  const urls = [...state.visitsSelected];
+  if (urls.length === 0) return;
+  const btn = $('visitsBookmark');
+  btn.disabled = true;
+  btn.textContent = '取得中...';
+  $('visitsResults').innerHTML = '';
+  try {
+    const r = await api('/api/visits/bookmark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls }),
+    });
+    const lines = r.results.map(it => {
+      if (it.status === 'queued') return `<li class="ok">✓ キュー投入: ${escapeHtml(it.url)} (id=${it.id})</li>`;
+      if (it.status === 'duplicate') return `<li class="dup">既存: ${escapeHtml(it.url)} (id=${it.id})</li>`;
+      if (it.status === 'skipped') return `<li class="err">スキップ: ${escapeHtml(it.url)} (${escapeHtml(it.error)})</li>`;
+      return `<li class="err">✗ 失敗: ${escapeHtml(it.url)} — ${escapeHtml(it.error || '不明')}</li>`;
+    });
+    $('visitsResults').innerHTML = lines.join('');
+    state.visitsSelected.clear();
+    await loadVisits();
+    await load();
+    await refreshQueue();
+  } catch (e) {
+    alert(`保存失敗: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '選択をブックマークに保存';
+  }
+}
+
+async function deleteSelectedVisits() {
+  const urls = [...state.visitsSelected];
+  if (urls.length === 0) return;
+  if (!confirm(`${urls.length} 件を履歴から削除しますか？(ブックマークには影響しません)`)) return;
+  await api('/api/visits', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+  });
+  state.visitsSelected.clear();
+  await loadVisits();
+}
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => switchTab(t.dataset.tab));
+});
+
+$('visitsRefresh').addEventListener('click', loadVisits);
+$('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
+$('visitsDelete').addEventListener('click', deleteSelectedVisits);
+$('visitsAll').addEventListener('click', (e) => {
+  if (e.target.checked) state.visits.forEach(v => state.visitsSelected.add(v.url));
+  else state.visitsSelected.clear();
+  renderVisits();
+});
+
+setInterval(async () => {
+  const depth = await refreshQueue();
+  await refreshVisitsBadge();
+  if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
+  if (state.tab === 'queue') renderQueue();
+}, 2000);
+refreshQueue();
+refreshVisitsBadge();
