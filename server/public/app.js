@@ -11,6 +11,7 @@ const state = {
   visits: [],
   visitsSelected: new Set(),
   visitsRange: '7',
+  trendsRange: '30',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -391,8 +392,122 @@ function switchTab(tab) {
   $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
   $('visitsView').classList.toggle('hidden', tab !== 'visits');
+  $('trendsView').classList.toggle('hidden', tab !== 'trends');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
+  if (tab === 'trends') loadTrends();
+}
+
+// ── trends ─────────────────────────────────────────────────────────────
+
+async function loadTrends() {
+  const days = state.trendsRange;
+  try {
+    const [cats, diff, timeline, domains] = await Promise.all([
+      api(`/api/trends/categories?days=${encodeURIComponent(days)}`),
+      api(`/api/trends/category-diff?days=7`),
+      api(`/api/trends/timeline?days=${encodeURIComponent(days)}`),
+      api(`/api/trends/domains?days=${encodeURIComponent(days)}`),
+    ]);
+    renderTrendCategories(cats.items);
+    renderTrendDiff(diff.items);
+    renderTrendTimeline(timeline.items);
+    renderTrendDomains(domains.items);
+  } catch (e) {
+    console.error('trends load failed', e);
+  }
+}
+
+function renderTrendCategories(items) {
+  $('trendCategories').innerHTML = svgHorizontalBar(items, c => c.category, c => c.count);
+}
+
+function renderTrendDomains(items) {
+  $('trendDomains').innerHTML = svgHorizontalBar(items, c => c.domain, c => c.hits, 'alt');
+}
+
+function svgHorizontalBar(items, labelFn, valueFn, klass = '') {
+  if (!items.length) return '<div class="queue-empty">データなし</div>';
+  const max = Math.max(...items.map(valueFn), 1);
+  const rowH = 22, padTop = 4, padLeft = 130, padRight = 40, w = 460;
+  const h = padTop * 2 + items.length * rowH;
+  const rows = items.map((it, i) => {
+    const v = valueFn(it);
+    const len = Math.round((v / max) * (w - padLeft - padRight));
+    const y = padTop + i * rowH;
+    const label = String(labelFn(it)).slice(0, 18);
+    return `
+      <text class="label" x="${padLeft - 8}" y="${y + 14}" text-anchor="end">${escapeHtml(label)}</text>
+      <rect class="bar ${klass}" x="${padLeft}" y="${y + 4}" width="${len}" height="14" rx="2" />
+      <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${v}</text>
+    `;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">${rows}</svg>`;
+}
+
+function renderTrendTimeline(items) {
+  if (!items.length) { $('trendTimeline').innerHTML = '<div class="queue-empty">データなし</div>'; return; }
+  const w = 600, h = 200, padL = 32, padR = 12, padT = 12, padB = 24;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  const max = Math.max(1, ...items.flatMap(d => [d.saves, d.accesses]));
+  const xStep = innerW / Math.max(1, items.length - 1);
+  function pts(key) {
+    return items.map((d, i) => {
+      const x = padL + i * xStep;
+      const y = padT + innerH - (d[key] / max) * innerH;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+  }
+  function dots(key, klass) {
+    return items.map((d, i) => {
+      const x = padL + i * xStep;
+      const y = padT + innerH - (d[key] / max) * innerH;
+      return `<circle class="${klass}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" />`;
+    }).join('');
+  }
+  // Y axis labels (0, max/2, max)
+  const yLabels = [0, Math.round(max / 2), max].map(v => {
+    const y = padT + innerH - (v / max) * innerH;
+    return `<text class="label" x="${padL - 6}" y="${y + 3}" text-anchor="end">${v}</text>
+            <line class="grid" x1="${padL}" y1="${y}" x2="${padL + innerW}" y2="${y}" />`;
+  }).join('');
+  const xLabelStep = Math.max(1, Math.floor(items.length / 6));
+  const xLabels = items.map((d, i) => {
+    if (i % xLabelStep !== 0 && i !== items.length - 1) return '';
+    const x = padL + i * xStep;
+    const md = d.date.slice(5);
+    return `<text class="label" x="${x.toFixed(1)}" y="${h - 6}" text-anchor="middle">${md}</text>`;
+  }).join('');
+  $('trendTimeline').innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">
+      ${yLabels}
+      <polyline class="line-saves" points="${pts('saves')}" />
+      <polyline class="line-accesses" points="${pts('accesses')}" />
+      ${dots('saves', 'dot')}
+      ${dots('accesses', 'dot-alt')}
+      ${xLabels}
+    </svg>
+    <div class="chart-legend">
+      <span><span class="dot saves"></span>新規保存</span>
+      <span><span class="dot accesses"></span>アクセス</span>
+    </div>
+  `;
+}
+
+function renderTrendDiff(items) {
+  if (!items.length) { $('trendDiff').innerHTML = '<li>データなし</li>'; return; }
+  $('trendDiff').innerHTML = items.map(d => {
+    const sign = d.delta > 0 ? '+' : '';
+    const cls = d.delta > 0 ? 'up' : d.delta < 0 ? 'down' : '';
+    const ratio = d.previous > 0 ? `${d.previous}→${d.current}` : `新規 ${d.current}`;
+    return `
+      <li>
+        <span>${escapeHtml(d.category)}</span>
+        <span class="ratio">${ratio}</span>
+        <span class="delta ${cls}">${sign}${d.delta}</span>
+      </li>
+    `;
+  }).join('');
 }
 
 async function loadVisits() {
@@ -529,6 +644,10 @@ $('visitsRefresh').addEventListener('click', loadVisits);
 $('visitsRange').addEventListener('change', (e) => {
   state.visitsRange = e.target.value;
   loadVisits();
+});
+$('trendsRange').addEventListener('change', (e) => {
+  state.trendsRange = e.target.value;
+  loadTrends();
 });
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);

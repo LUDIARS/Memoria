@@ -22,6 +22,10 @@ import {
   listUnsavedVisits,
   listSuggestedVisits,
   deleteVisit,
+  trendsCategories,
+  trendsCategoryDiff,
+  trendsTimeline,
+  trendsDomains,
 } from './db.js';
 import { summarizeWithClaude } from './claude.js';
 import { FifoQueue } from './queue.js';
@@ -174,6 +178,28 @@ app.get('/api/bookmarks/:id/html', (c) => {
 app.get('/api/bookmarks/:id/accesses', (c) => {
   const id = Number(c.req.param('id'));
   return c.json({ items: listAccesses(db, id) });
+});
+
+// ---- trends ---------------------------------------------------------------
+
+app.get('/api/trends/categories', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: trendsCategories(db, { sinceDays: days }) });
+});
+
+app.get('/api/trends/category-diff', (c) => {
+  const days = Number(c.req.query('days')) || 7;
+  return c.json({ items: trendsCategoryDiff(db, { sinceDays: days }) });
+});
+
+app.get('/api/trends/timeline', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: trendsTimeline(db, { sinceDays: days }) });
+});
+
+app.get('/api/trends/domains', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: trendsDomains(db, { sinceDays: days }) });
 });
 
 // ---- queue status ---------------------------------------------------------
