@@ -43,13 +43,36 @@
 | Command | 入力 | 出力 |
 |---------|------|------|
 | `memoria.search` | `{user_id, query, limit?}` | `{items: BookmarkRow[]}` |
-| `memoria.save_url` | `{user_id, url}` | `{status: queued/duplicate/blocked, id?, ...}` |
+| `memoria.save_url` | `{user_id, url}` | `{status: queued/duplicate/blocked, id?, ...}` (Memoria が server-side fetch) |
+| `memoria.save_html` | `{user_id, url, title, html}` | `{id, queued: true / duplicate: true}` (Imperativus が拡張から受け取った HTML を中継する primary パス) |
 | `memoria.list_categories` | `{}` | `{items: [{category, count}]}` |
 | `memoria.recent_bookmarks` | `{user_id, limit?}` | `{items: BookmarkRow[]}` |
 | `memoria.get_bookmark` | `{user_id, id}` | `BookmarkRow` |
 | `memoria.dig` | `{user_id, query}` | `{id, queued: true}` |
 | `memoria.unsaved_visits` | `{days?}` | `{items: VisitRow[]}` (online で throws) |
 | `ping` | `{...}` | `{ok, from, echo, ts}` |
+
+### Imperativus 経由の HTTP relay
+
+`POST /api/relay/memoria/save_html` (Imperativus 側) から呼ばれた場合の流れ:
+
+```
+[拡張]
+  ↓ POST <imperativus>/api/relay/memoria/save_html
+  ↓ Authorization: Bearer <Cernere service_token>
+  ↓ body: { url, title, html }
+[Imperativus PeerRelayAPI]
+  - JWT 検証 → user_id 確定
+  - allowlist (memoria.* のうち save_html を許可)
+  - rate limit 60/min × user × command
+  - peer.invoke('memoria', 'memoria.save_html', { url, title, html, user_id })
+[Memoria peer handler]
+  - saveBookmarkFromHtml({...}) を呼ぶ
+  - NG フィルタ → 重複チェック → 要約キュー投入
+  - emitEvent(memoria.bookmark.saved)
+```
+
+online モードで `POST /api/bookmark` の HTTP 直叩きは **410 Gone** で拒否されるため、relay 以外のルートで書込まれることはない。
 
 ## emitEvent (`service/cernere.js`)
 

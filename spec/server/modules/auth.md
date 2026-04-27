@@ -11,12 +11,12 @@
 
 ## モード
 
-| モード | 認証 | userId |
-|-------|------|--------|
-| `local` (既定) | なし | `null` (全データを単一テナント扱い) |
-| `online` | `Authorization: Bearer <JWT>` 必須 | JWT.sub |
+| モード | GET (read) | 書込 (PATCH/POST/DELETE) | userId |
+|-------|------------|-------------------------|--------|
+| `local` (既定) | 開放 | 開放 | `null` (単一テナント) |
+| `online` | **公開 (auth 不要)** | Bearer JWT 必須 (`requireAuth(c)`) | JWT.sub |
 
-`MEMORIA_MODE=online` のときに `MEMORIA_JWT_SECRET` 不在ならプロセスを fatal exit する。
+`MEMORIA_MODE=online` のときに `MEMORIA_JWT_SECRET` 不在ならプロセスを fatal exit する (誤起動防止)。
 
 ## JWT 仕様
 
@@ -25,16 +25,31 @@
 - 有効期限: `exp` 必須 (秒, 過去なら 401)
 - claim: `sub` (= user_id), `iat`, `iss` (任意)
 
-## Hono middleware (`authMiddleware`)
+## Hono middleware (`authMiddleware`) — fail-open
 
 ```
-local モード: c.set('userId', null), next()
+local モード:
+  c.set('userId', null), c.set('mode', 'local'), next()
+
 online モード:
-  - Authorization 不在 → 401 'bearer token required'
-  - JWT 検証失敗      → 401 'unauthorized: <reason>'
-  - sub 不在          → 401 'unauthorized: token missing sub'
-  - OK                → c.set('userId', sub), next()
+  - Authorization 不在  → userId=null で next() (= 読み取り専用扱い)
+  - 不正 / 期限切れ JWT → userId=null で next()
+  - 有効な JWT          → c.set('userId', sub), next()
 ```
+
+middleware 自体は **拒否しない** ところがポイント。read endpoint は誰でも呼べる必要があるため、認可は **書込ハンドラ内で `requireAuth(c)` を呼ぶ** 形にした。
+
+## requireAuth(c) ヘルパー
+
+```js
+function requireAuth(c) {
+  if ((c.get('mode') ?? 'local') !== 'online') return null;  // local では常に通す
+  if (c.get('userId')) return null;                          // 認証済 OK
+  return c.json({ error: 'unauthorized: sign-in required for write actions' }, 401);
+}
+```
+
+書込ルート (`POST /api/bookmark` 等) の冒頭で `const denied = requireAuth(c); if (denied) return denied;` で 1 行ガード。
 
 ## 続いて admission revoke check (`index.js`)
 

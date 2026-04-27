@@ -1,18 +1,29 @@
 # Backend HTTP API
 
-すべて `/api/*` 配下、JSON 入出力。`online` モードでは `Authorization: Bearer <JWT>` 必須。
+すべて `/api/*` 配下、JSON 入出力。
+
+| モード | GET (read) | PATCH/POST/DELETE (write) |
+|-------|------------|---------------------------|
+| `local` (既定) | open | open |
+| `online` | open (auth 不要) | `Authorization: Bearer <JWT>` 必須 |
+
+`online` で書込を auth なしで叩くと **401**。`POST /api/bookmark` は更に厳しく **410 Gone** で拒否し、Imperativus relay (`POST /api/relay/memoria/save_html`) を使うよう促す。
 
 ## システム
 
 | Method | Path | 用途 |
 |--------|------|------|
-| `GET` | `/api/mode` | 現在のモード + RAG 有効/無効 + user_id |
+| `GET` | `/api/mode` | mode / rag_enabled / user_id / authenticated / caps[] (capability list) |
+
+`caps` は次のいずれか:
+- `read` (常に含まれる)
+- `write` / `memo` / `import` / `export` / `dig` / `rag.ask` (online + auth 済 or local モード)
 
 ## Bookmarks
 
 | Method | Path | 用途 |
 |--------|------|------|
-| `POST` | `/api/bookmark` | HTML+URL+title を保存。NG フィルタ → 重複チェック → 要約キュー投入 |
+| `POST` | `/api/bookmark` | HTML+URL+title を保存。NG フィルタ → 重複チェック → 要約キュー投入。**online で 410** (relay へ誘導) |
 | `GET` | `/api/bookmarks?category=&sort=` | 一覧 (user_id でスコープ) |
 | `GET` | `/api/bookmarks/:id` | 詳細 |
 | `PATCH` | `/api/bookmarks/:id` | メモ・カテゴリ更新 |
