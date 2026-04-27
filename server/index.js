@@ -20,6 +20,7 @@ import {
   insertImportedBookmark,
   upsertVisit,
   listUnsavedVisits,
+  listSuggestedVisits,
   deleteVisit,
 } from './db.js';
 import { summarizeWithClaude } from './claude.js';
@@ -213,6 +214,11 @@ app.post('/api/access', async (c) => {
 app.get('/api/visits/unsaved', (c) => {
   const since = c.req.query('since');
   return c.json({ items: listUnsavedVisits(db, { since }) });
+});
+
+app.get('/api/visits/suggested', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: listSuggestedVisits(db, { sinceDays: days }) });
 });
 
 app.get('/api/visits/unsaved/count', (c) => {

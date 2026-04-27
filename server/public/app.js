@@ -10,6 +10,7 @@ const state = {
   queue: { items: [], history: [] },
   visits: [],
   visitsSelected: new Set(),
+  visitsRange: '7',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -396,15 +397,25 @@ function switchTab(tab) {
 
 async function loadVisits() {
   try {
-    const { items } = await api('/api/visits/unsaved');
+    let items;
+    if (state.visitsRange === 'today') {
+      ({ items } = await api('/api/visits/unsaved'));
+      // Today endpoint doesn't include score; synthesize zero so render works.
+      items = items.map(i => ({ ...i, domain: hostOf(i.url), same_domain_bookmarks: 0, same_path_prefix_bookmarks: 0, score: 0 }));
+    } else {
+      ({ items } = await api(`/api/visits/suggested?days=${encodeURIComponent(state.visitsRange)}`));
+    }
     state.visits = items;
-    // prune selected for items no longer present
     const urls = new Set(items.map(i => i.url));
     state.visitsSelected = new Set([...state.visitsSelected].filter(u => urls.has(u)));
     renderVisits();
   } catch (e) {
     console.error(e);
   }
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname; } catch { return ''; }
 }
 
 function renderVisits() {
@@ -429,12 +440,18 @@ function renderVisits() {
   empty.classList.add('hidden');
   list.innerHTML = items.map(v => {
     const sel = state.visitsSelected.has(v.url);
+    const dom = v.domain || hostOf(v.url);
+    const hot = (v.score ?? 0) >= 10;
+    const badge = hot
+      ? `<span class="suggest-badge">同ドメイン保存 ${v.same_domain_bookmarks}</span>`
+      : '';
     return `
-      <li class="${sel ? 'selected' : ''}" data-url="${escapeHtml(v.url)}">
+      <li class="${sel ? 'selected' : ''} ${hot ? 'hot' : ''}" data-url="${escapeHtml(v.url)}">
         <input type="checkbox" class="vchk" ${sel ? 'checked' : ''} />
         <div style="min-width:0">
-          <div class="title">${escapeHtml(v.title || '(タイトル未取得)')}</div>
+          <div class="title">${escapeHtml(v.title || '(タイトル未取得)')} ${badge}</div>
           <div class="url">${escapeHtml(v.url)}</div>
+          <div class="visits-meta">${escapeHtml(dom)}${v.score ? ` · score ${v.score}` : ''}</div>
         </div>
         <div class="when">
           ${fmtDate(v.last_seen_at)}<br>
@@ -509,6 +526,10 @@ document.querySelectorAll('.tab').forEach(t => {
 });
 
 $('visitsRefresh').addEventListener('click', loadVisits);
+$('visitsRange').addEventListener('change', (e) => {
+  state.visitsRange = e.target.value;
+  loadVisits();
+});
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {
