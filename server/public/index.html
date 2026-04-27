@@ -40,7 +40,7 @@
           <span id="tabQueueCount" class="tab-count hidden">0</span>
         </button>
         <button class="tab" data-tab="visits">
-          本日の未保存
+          未保存履歴
           <span id="tabVisitsCount" class="tab-count hidden">0</span>
         </button>
       </nav>
@@ -57,7 +57,14 @@
 
       <div id="visitsView" class="hidden">
         <div class="visits-bar">
-          <span>本日アクセスした URL のうち、まだ保存していないもの。</span>
+          <span>アクセスした URL のうち、まだ保存していないもの。同ドメインで既にブックマークがあるものほど上位。</span>
+          <span class="grow"></span>
+          <select id="visitsRange">
+            <option value="today">今日のみ</option>
+            <option value="7" selected>過去 7 日</option>
+            <option value="30">過去 30 日</option>
+            <option value="90">過去 90 日</option>
+          </select>
           <button id="visitsRefresh" class="ghost">更新</button>
         </div>
         <div class="visits-actions">
