@@ -8,7 +8,7 @@
     "memoria-mcp": "./index.js"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node --env-file-if-exists=.env --env-file-if-exists=../.env index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
