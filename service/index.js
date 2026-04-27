@@ -183,6 +183,14 @@ app.get('/api/mode', (c) => c.json({
   // List of capabilities available to the current request — the FE uses this
   // to decide which write controls to render.
   caps: capabilitiesFor(c),
+  // Hints the FE / extension can use to direct the user to the right
+  // sign-in surface. None of these are required for Memoria itself; they
+  // are pass-through configuration sourced from env.
+  hints: {
+    cernere_base_url: process.env.CERNERE_BASE_URL || process.env.CERNERE_URL || '',
+    imperativus_url: process.env.MEMORIA_HINT_IMPERATIVUS_URL || '',
+    issue_token_command: 'cd service && npm run issue-token <user_id>',
+  },
 }));
 
 function capabilitiesFor(c) {

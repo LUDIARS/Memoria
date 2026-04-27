@@ -304,6 +304,8 @@ async function applyMode() {
     state.mode = r.mode;
     state.user = r.user_id ? { id: r.user_id } : null;
     state.caps = r.caps || (r.mode === 'online' ? ['read'] : ['read', 'write']);
+    state.hints = r.hints || {};
+    renderSignInHints();
     const isOnline = r.mode === 'online';
     const authed = !!r.user_id;
 
@@ -341,6 +343,23 @@ async function applyMode() {
 }
 
 // ── sign-in / sign-out ──────────────────────────────────────────────────
+
+function renderSignInHints() {
+  const el = $('signInHints');
+  if (!el) return;
+  const h = state.hints || {};
+  const lines = [];
+  if (h.cernere_base_url) {
+    lines.push(`<strong>Cernere</strong>: <a href="${escapeHtml(h.cernere_base_url)}" target="_blank" rel="noreferrer">${escapeHtml(h.cernere_base_url)}</a> でログイン → 設定画面で memoria プロジェクトの service_token を取得`);
+  }
+  if (h.imperativus_url) {
+    lines.push(`<strong>Imperativus</strong> 経由 (Chrome 拡張用): <code>${escapeHtml(h.imperativus_url)}</code>`);
+  }
+  if (h.issue_token_command) {
+    lines.push(`<em>開発用</em>: <code>${escapeHtml(h.issue_token_command)}</code> で開発用 JWT を発行できます`);
+  }
+  el.innerHTML = lines.length ? lines.map((l) => `<div>${l}</div>`).join('') : '';
+}
 
 function openSignIn() {
   const overlay = $('signInOverlay');
