@@ -258,11 +258,31 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .visits-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 12px;
   color: var(--muted);
   font-size: 13px;
 }
+.visits-bar .grow { flex: 1; }
+.visits-bar select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.suggest-badge {
+  display: inline-block;
+  background: #fff5e1;
+  border: 1px solid #f0c97a;
+  color: #8a5a00;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.visits-list li.hot { border-left: 4px solid #d68a00; }
+.visits-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .visits-actions {
   display: flex;
   gap: 10px;
