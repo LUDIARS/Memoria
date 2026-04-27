@@ -49,6 +49,7 @@
           <span id="tabRecommendCount" class="tab-count hidden">0</span>
         </button>
         <button class="tab" data-tab="rag">RAG</button>
+        <button class="tab" data-tab="dig">ディグる</button>
       </nav>
 
       <div id="bookmarksView">
@@ -119,6 +120,15 @@
             <div id="trendDomains" class="chart"></div>
           </section>
         </div>
+      </div>
+
+      <div id="digView" class="hidden">
+        <div class="dig-input">
+          <input id="digQuery" type="text" placeholder="掘りたい単語または質問を入力 (例: WebGPU compute shader readback)" />
+          <button id="digRun">ディグる</button>
+        </div>
+        <div id="digHistory" class="dig-history"></div>
+        <div id="digResult" class="dig-result"></div>
       </div>
 
       <div id="ragView" class="hidden">

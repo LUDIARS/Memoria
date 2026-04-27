@@ -36,6 +36,18 @@ export function openDb(dbPath) {
       accessed_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS dig_sessions (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      query         TEXT NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      status        TEXT NOT NULL DEFAULT 'pending',
+      error         TEXT,
+      result_json   TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dig_sessions_created
+      ON dig_sessions(created_at DESC);
+
     CREATE TABLE IF NOT EXISTS recommendation_dismissals (
       url           TEXT PRIMARY KEY,
       dismissed_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -257,6 +269,37 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
     };
   }).sort((a, b) => b.score - a.score || (a.last_seen_at < b.last_seen_at ? 1 : -1));
 }
+
+// ── dig sessions ----------------------------------------------------------
+
+export function insertDigSession(db, query) {
+  return db.prepare(`INSERT INTO dig_sessions (query) VALUES (?)`).run(query).lastInsertRowid;
+}
+
+export function setDigResult(db, id, { status, result, error }) {
+  db.prepare(`
+    UPDATE dig_sessions SET status = ?, result_json = ?, error = ?
+    WHERE id = ?
+  `).run(status, result ? JSON.stringify(result) : null, error ?? null, id);
+}
+
+export function getDigSession(db, id) {
+  const row = db.prepare(`SELECT * FROM dig_sessions WHERE id = ?`).get(id);
+  if (!row) return null;
+  return {
+    ...row,
+    result: row.result_json ? safeParse(row.result_json) : null,
+  };
+}
+
+export function listDigSessions(db, limit = 30) {
+  return db.prepare(`
+    SELECT id, query, status, created_at FROM dig_sessions
+    ORDER BY id DESC LIMIT ?
+  `).all(limit);
+}
+
+function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
 // ── chunks / embeddings ----------------------------------------------------
 
