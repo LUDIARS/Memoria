@@ -1,0 +1,17 @@
+{
+  "name": "memoria-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server bridging Memoria's local HTTP API to MCP-aware clients.",
+  "bin": {
+    "memoria-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  }
+}
