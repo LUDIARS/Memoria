@@ -31,7 +31,7 @@ import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
 import { runDig } from './dig.js';
-import { authMiddleware, readMode, MODES } from './auth.js';
+import { authMiddleware, readMode, MODES, requireAuth } from './auth.js';
 import { checkContent } from './content-filter.js';
 import { startCernere, stopCernere, emitEvent, isAdmissionRevoked } from './cernere.js';
 import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
@@ -179,51 +179,99 @@ app.get('/api/mode', (c) => c.json({
   mode: MODE,
   rag_enabled: RAG_ENABLED,
   user_id: c.get('userId') ?? null,
+  authenticated: !!c.get('userId'),
+  // List of capabilities available to the current request — the FE uses this
+  // to decide which write controls to render.
+  caps: capabilitiesFor(c),
 }));
+
+function capabilitiesFor(c) {
+  if (MODE !== MODES.ONLINE) return ALL_CAPS;
+  if (c.get('userId')) return ALL_CAPS;
+  return READ_CAPS;
+}
+
+const ALL_CAPS = ['read', 'write', 'memo', 'import', 'export', 'dig', 'rag.ask'];
+const READ_CAPS = ['read'];
 
 // ---- bookmark CRUD ---------------------------------------------------------
 
-app.post('/api/bookmark', async (c) => {
-  const userId = c.get('userId') ?? null;
-  const body = await c.req.json().catch(() => null);
-  if (!body || typeof body.html !== 'string' || typeof body.url !== 'string') {
-    return c.json({ error: 'html, url, title required' }, 400);
+/**
+ * Core save logic shared by the local HTTP path and the Imperativus peer
+ * relay path. Returns the same shape as `POST /api/bookmark` would.
+ *
+ * Throws a tagged error (`{ status, body }`) when the request should be
+ * refused; callers translate it into either an HTTP response or a peer
+ * exception.
+ */
+function saveBookmarkFromHtml({ url, title, html, userId }) {
+  if (typeof html !== 'string' || typeof url !== 'string') {
+    throw makeError(400, { error: 'html, url, title required' });
   }
-  const url = body.url;
-  const title = (body.title || url).slice(0, 500);
-  const html = body.html;
+  const titleStr = (title || url).slice(0, 500);
 
-  // Reject NG / R18 content before touching disk or DB.
-  const filt = checkContent({ url, title, html });
+  const filt = checkContent({ url, title: titleStr, html });
   if (!filt.ok) {
-    return c.json({
+    throw makeError(422, {
       error: 'content blocked by NG word filter',
       reason: filt.reason,
       matches: filt.matches,
-    }, 422);
+    });
   }
 
   const existing = findBookmarkByUrl(db, url, { userId });
   if (existing) {
     recordAccess(db, existing.id);
-    return c.json({ id: existing.id, duplicate: true });
+    return { id: existing.id, duplicate: true };
   }
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const safe = ts + '_' + Math.random().toString(36).slice(2, 8) + '.html';
-  const htmlPath = join(HTML_DIR, safe);
-  writeFileSync(htmlPath, html, 'utf8');
+  writeFileSync(join(HTML_DIR, safe), html, 'utf8');
 
-  const id = insertBookmark(db, { url, title, htmlPath: safe, userId });
+  const id = insertBookmark(db, { url, title: titleStr, htmlPath: safe, userId });
   recordAccess(db, id);
   enqueueSummary(id);
 
   emitEvent('memoria.bookmark.saved', {
     userId,
-    payload: { id, url, title },
+    payload: { id, url, title: titleStr },
   });
 
-  return c.json({ id, queued: true, queueDepth: summaryQueue.depth });
+  return { id, queued: true, queueDepth: summaryQueue.depth };
+}
+
+function makeError(status, body) {
+  const err = new Error(body.error || 'request rejected');
+  err.status = status;
+  err.body = body;
+  return err;
+}
+
+app.post('/api/bookmark', async (c) => {
+  // In ONLINE mode the only supported save path is via the Imperativus relay
+  // (POST /api/relay/memoria/save_html → peer.invoke memoria.save_html).
+  // Direct HTTP submissions from the Chrome extension are intentionally
+  // rejected so all multi-user writes flow through the gateway.
+  if (ONLINE) {
+    return c.json({
+      error: 'direct /api/bookmark is disabled in online mode — use POST /api/relay/memoria/save_html via Imperativus',
+    }, 410);
+  }
+  const denied = requireAuth(c);
+  if (denied) return denied;
+  const userId = c.get('userId') ?? null;
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: 'json body required' }, 400);
+  try {
+    const result = saveBookmarkFromHtml({
+      url: body.url, title: body.title, html: body.html, userId,
+    });
+    return c.json(result);
+  } catch (e) {
+    if (e?.status) return c.json(e.body, e.status);
+    throw e;
+  }
 });
 
 app.get('/api/bookmarks', (c) => {
@@ -241,6 +289,8 @@ app.get('/api/bookmarks/:id', (c) => {
 });
 
 app.patch('/api/bookmarks/:id', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const id = Number(c.req.param('id'));
   const userId = c.get('userId') ?? null;
   const b = getBookmark(db, id, { userId });
@@ -254,6 +304,8 @@ app.patch('/api/bookmarks/:id', async (c) => {
 });
 
 app.delete('/api/bookmarks/:id', (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const id = Number(c.req.param('id'));
   const userId = c.get('userId') ?? null;
   if (!getBookmark(db, id, { userId })) {
@@ -268,6 +320,8 @@ app.delete('/api/bookmarks/:id', (c) => {
 });
 
 app.post('/api/bookmarks/:id/resummarize', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const id = Number(c.req.param('id'));
   const b = getBookmark(db, id);
   if (!b) return c.json({ error: 'not found' }, 404);
@@ -326,6 +380,8 @@ app.get('/api/recommendations', (c) => {
 });
 
 app.post('/api/recommendations/dismiss', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => null);
   if (!body?.url) return c.json({ error: 'url required' }, 400);
   dismissRecommendation(db, body.url);
@@ -333,6 +389,8 @@ app.post('/api/recommendations/dismiss', async (c) => {
 });
 
 app.delete('/api/recommendations/dismissals', (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   clearDismissals(db);
   return c.json({ ok: true });
 });
@@ -351,6 +409,8 @@ app.get('/api/rag/status', (c) => {
 });
 
 app.post('/api/rag/backfill', (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   if (!RAG_ENABLED) return c.json({ error: 'RAG disabled (MEMORIA_RAG=0)' }, 503);
   const ids = bookmarksMissingEmbeddings(db);
   for (const id of ids) enqueueEmbedding(id);
@@ -358,6 +418,8 @@ app.post('/api/rag/backfill', (c) => {
 });
 
 app.post('/api/rag/reindex/:id', (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
   const id = Number(c.req.param('id'));
   if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
@@ -399,6 +461,8 @@ app.get('/api/search', async (c) => {
 });
 
 app.post('/api/ask', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
   const body = await c.req.json().catch(() => null);
   const q = body?.q;
@@ -496,6 +560,8 @@ function enqueueDig(id, query, userId = null) {
 }
 
 app.post('/api/dig', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => null);
   const query = body?.query;
   if (!query || typeof query !== 'string') return c.json({ error: 'query required' }, 400);
@@ -516,6 +582,8 @@ app.get('/api/dig/:id', (c) => {
 });
 
 app.post('/api/dig/:id/save', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => null);
   if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
   return c.json({ results: await bulkSaveUrls(body.urls, { userId: c.get('userId') ?? null }) });
@@ -686,6 +754,8 @@ function decodeHtmlEntities(s) {
 // ---- export / import ------------------------------------------------------
 
 app.post('/api/export', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(Number.isFinite) : null;
   const includeHtml = body.includeHtml !== false; // default true
@@ -718,6 +788,8 @@ app.post('/api/export', async (c) => {
 });
 
 app.post('/api/import', async (c) => {
+  const denied = requireAuth(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => null);
   if (!body || !Array.isArray(body.bookmarks)) return c.json({ error: 'bookmarks[] required' }, 400);
   const results = { imported: 0, skipped: 0, ids: [] };
@@ -804,6 +876,27 @@ function buildPeerHandlers() {
       if (!/^https?:\/\//.test(url)) throw new Error('valid http(s) url required');
       const [r] = await bulkSaveUrls([url], { userId });
       return r;
+    },
+    'memoria.save_html': async (_caller, p) => {
+      // Caller already supplies the rendered HTML (typically the Chrome
+      // extension forwarded by Imperativus). user_id comes from the verified
+      // peer JWT — the FE/extension cannot impersonate.
+      const userId = requireUserId(p);
+      try {
+        return saveBookmarkFromHtml({
+          url: String(p.url ?? ''),
+          title: String(p.title ?? ''),
+          html: String(p.html ?? ''),
+          userId,
+        });
+      } catch (e) {
+        if (e?.body) {
+          const err = new Error(e.body.error || 'rejected');
+          err.body = e.body;
+          throw err;
+        }
+        throw e;
+      }
     },
     'memoria.list_categories': async (_caller, _p) => {
       return { items: listAllCategories(db) };

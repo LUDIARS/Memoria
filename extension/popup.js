@@ -1,15 +1,11 @@
 const DEFAULT_SERVER = 'http://localhost:5180';
 
-async function getServer() {
-  const { server } = await chrome.storage.sync.get({ server: DEFAULT_SERVER });
-  return server.replace(/\/+$/, '');
-}
-
-async function getAuthHeaders() {
-  const { authToken } = await chrome.storage.sync.get({ authToken: '' });
-  const h = { 'Content-Type': 'application/json' };
-  if (authToken) h['Authorization'] = `Bearer ${authToken}`;
-  return h;
+async function readConfig() {
+  return chrome.storage.sync.get({
+    server: DEFAULT_SERVER,
+    mode: 'local',
+    imperativusUrl: '',
+  });
 }
 
 const statusEl = document.getElementById('status');
@@ -17,7 +13,9 @@ const saveBtn = document.getElementById('save');
 const openUi = document.getElementById('openUi');
 
 (async () => {
-  openUi.href = await getServer();
+  // 「Memoria を開く」 のリンクは Memoria サーバー UI を指す (relay モードでも閲覧は memoria server で).
+  const cfg = await readConfig();
+  openUi.href = cfg.server;
 })();
 
 saveBtn.addEventListener('click', async () => {
@@ -25,7 +23,6 @@ saveBtn.addEventListener('click', async () => {
   statusEl.className = '';
   statusEl.textContent = 'ページを取得中...';
   try {
-    const server = await getServer();
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('アクティブなタブが見つかりません');
     if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
@@ -39,20 +36,21 @@ saveBtn.addEventListener('click', async () => {
         url: location.href,
       }),
     });
+
     statusEl.textContent = '送信中...';
-    const headers = await getAuthHeaders();
-    const res = await fetch(`${server}/api/bookmark`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(result),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`サーバーエラー ${res.status}: ${text.slice(0, 100)}`);
+    // Delegate to background — it handles local vs relay routing in one place.
+    const res = await chrome.runtime.sendMessage({ type: 'memoria.save', payload: result });
+    if (!res?.ok) {
+      throw new Error(res?.error ?? '不明なエラー');
     }
-    const data = await res.json();
     statusEl.className = 'ok';
-    statusEl.textContent = `保存しました (id=${data.id})。要約処理中...`;
+    if (res.duplicate) {
+      statusEl.textContent = `保存済み (id=${res.id})`;
+    } else if (res.id) {
+      statusEl.textContent = `保存しました (id=${res.id})。要約処理中...`;
+    } else {
+      statusEl.textContent = '保存しました';
+    }
   } catch (e) {
     statusEl.className = 'err';
     statusEl.textContent = `エラー: ${e.message}`;

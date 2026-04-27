@@ -2,11 +2,11 @@
 //
 // Memoria has two run modes:
 //
-//   MEMORIA_MODE=local   (default) — single-user, no auth, all endpoints open
-//   MEMORIA_MODE=online            — multi-user, every API call must carry
-//                                    a Bearer JWT signed with MEMORIA_JWT_SECRET
-//                                    (HS256). The token's `sub` claim is used
-//                                    as the user_id.
+//   MEMORIA_MODE=local   (default) — single-user, no auth, all endpoints open.
+//   MEMORIA_MODE=online            — multi-user. GET endpoints are public; any
+//                                    mutation requires a Bearer JWT signed with
+//                                    MEMORIA_JWT_SECRET (HS256). The token's
+//                                    `sub` claim is used as the user_id.
 //
 // In production this secret should be the SAME secret used by the Cernere
 // service-adapter when issuing service-scoped JWTs (see Cernere
@@ -65,33 +65,49 @@ function base64UrlDecode(s) {
 }
 
 /**
- * Hono middleware. In ONLINE mode, requires a valid Bearer token; sets
- * `c.set("userId", ...)` for downstream handlers. In LOCAL mode this is a
- * no-op and userId stays null.
+ * Fail-open auth middleware.
+ *
+ *   - LOCAL  : userId = null, mode = 'local'
+ *   - ONLINE : if a valid Bearer JWT is present → userId = sub.
+ *              Missing or invalid token → userId = null (request continues).
+ *
+ * Per-route mutation handlers should call `requireAuth(c)` and bail out on a
+ * 401 from this helper. Read endpoints stay public in online mode so the
+ * Memoria UI can serve as a viewer for unauthenticated visitors.
  */
 export function authMiddleware({ mode, secret }) {
   return async (c, next) => {
+    c.set('mode', mode);
     if (mode !== MODES.ONLINE) {
       c.set('userId', null);
-      c.set('mode', mode);
       return next();
-    }
-    if (!secret) {
-      return c.json({ error: 'server misconfigured: MEMORIA_JWT_SECRET not set' }, 500);
     }
     const auth = c.req.header('Authorization') || c.req.header('authorization') || '';
     const m = auth.match(/^Bearer\s+(.+)$/i);
-    if (!m) {
-      return c.json({ error: 'unauthorized: bearer token required' }, 401);
+    if (!m || !secret) {
+      c.set('userId', null);
+      return next();
     }
-    let payload;
-    try { payload = verifyJwt(m[1], secret); }
-    catch (e) { return c.json({ error: `unauthorized: ${e.message}` }, 401); }
-    if (!payload.sub) {
-      return c.json({ error: 'unauthorized: token missing sub' }, 401);
+    try {
+      const payload = verifyJwt(m[1], secret);
+      c.set('userId', payload.sub ? String(payload.sub) : null);
+    } catch {
+      c.set('userId', null);
     }
-    c.set('userId', String(payload.sub));
-    c.set('mode', mode);
     return next();
   };
+}
+
+/**
+ * Per-route auth gate. Use inside any handler that performs a mutation.
+ * Returns `null` when the request is allowed to proceed, or a 401 Response
+ * the caller should `return` directly.
+ *
+ * In LOCAL mode this is always a no-op (no auth concept). In ONLINE mode
+ * the request must already carry a valid Bearer JWT (verified by middleware).
+ */
+export function requireAuth(c) {
+  if ((c.get('mode') ?? 'local') !== MODES.ONLINE) return null;
+  if (c.get('userId')) return null;
+  return c.json({ error: 'unauthorized: sign-in required for write actions' }, 401);
 }

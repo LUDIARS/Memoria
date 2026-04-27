@@ -21,12 +21,28 @@ const state = {
   digSelected: new Set(),
   digPolling: null,
   mode: 'local',
+  user: null,
+  caps: ['read', 'write'],
 };
 
 const $ = (id) => document.getElementById(id);
 
-async function api(path, opts) {
-  const res = await fetch(path, opts);
+const TOKEN_KEY = 'memoria_token';
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) ?? ''; } catch { return ''; } }
+function setToken(v) { try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); } catch {} }
+
+async function api(path, opts = {}) {
+  const headers = new Headers(opts.headers || {});
+  const token = getToken();
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401) {
+    // Token bad/expired — drop it so the FE drops back to read-only.
+    if (getToken()) {
+      setToken('');
+      applyMode();
+    }
+  }
   if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
   return res.json();
 }
@@ -159,7 +175,9 @@ async function renderDetail() {
   $('dStatus').textContent = b.status + (b.error ? ` (${b.error})` : '');
   $('dSummary').textContent = b.summary || '(要約なし)';
   $('dCategories').value = (b.categories || []).join(', ');
+  $('dCategoriesView').textContent = (b.categories || []).join(', ');
   $('dMemo').value = b.memo || '';
+  $('dMemoView').textContent = b.memo || '';
   $('dViewHtml').href = `/api/bookmarks/${id}/html`;
   $('dAccesses').innerHTML = (accesses.items || []).map(a => `<li>${fmtDate(a.accessed_at)}</li>`).join('');
 }
@@ -281,12 +299,19 @@ $('importInput').addEventListener('change', async (e) => {
 
 async function applyMode() {
   try {
+    // Mode endpoint is public — calling it without a token is fine.
     const r = await api('/api/mode');
     state.mode = r.mode;
+    state.user = r.user_id ? { id: r.user_id } : null;
+    state.caps = r.caps || (r.mode === 'online' ? ['read'] : ['read', 'write']);
     const isOnline = r.mode === 'online';
-    // Hide visit-related UI in online mode.
+    const authed = !!r.user_id;
+
+    // Visit-history tab is hidden in online mode (server-side disabled too).
     document.querySelector('.tab[data-tab="visits"]')?.classList.toggle('hidden', isOnline);
     if (isOnline && state.tab === 'visits') switchTab('bookmarks');
+
+    // Online mode badge
     if (isOnline) {
       document.body.dataset.mode = 'online';
       const brand = document.querySelector('.brand');
@@ -295,8 +320,83 @@ async function applyMode() {
         brand.dataset.modeAnnotated = '1';
       }
     }
+
+    // Read-only iff online + unauthenticated.
+    document.body.classList.toggle('readonly', isOnline && !authed);
+
+    // Sign-in / out controls visibility.
+    const signInBtn = $('signInBtn');
+    const userChip = $('userChip');
+    if (isOnline) {
+      signInBtn.classList.toggle('hidden', authed);
+      userChip.classList.toggle('hidden', !authed);
+      if (authed) {
+        $('userChipId').textContent = r.user_id;
+      }
+    } else {
+      signInBtn.classList.add('hidden');
+      userChip.classList.add('hidden');
+    }
   } catch (e) { console.warn('mode check failed', e); }
 }
+
+// ── sign-in / sign-out ──────────────────────────────────────────────────
+
+function openSignIn() {
+  const overlay = $('signInOverlay');
+  const tokenInput = $('signInToken');
+  const errEl = $('signInError');
+  errEl.classList.add('hidden');
+  tokenInput.value = '';
+  overlay.classList.remove('hidden');
+  setTimeout(() => tokenInput.focus(), 30);
+}
+
+function closeSignIn() {
+  $('signInOverlay').classList.add('hidden');
+}
+
+async function submitSignIn() {
+  const token = $('signInToken').value.trim();
+  const errEl = $('signInError');
+  if (!token) {
+    errEl.textContent = 'トークンを入力してください';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  setToken(token);
+  try {
+    const r = await api('/api/mode');
+    if (!r.user_id) {
+      throw new Error('トークンは受理されましたが user_id が取得できませんでした');
+    }
+    closeSignIn();
+    await applyMode();
+    // Reload data in case some endpoints now expose more (unchanged today,
+    // but future additions may filter per-user).
+    await load();
+  } catch (e) {
+    setToken('');
+    errEl.textContent = `サインイン失敗: ${e.message}`;
+    errEl.classList.remove('hidden');
+  }
+}
+
+function signOut() {
+  setToken('');
+  applyMode();
+}
+
+$('signInBtn')?.addEventListener('click', openSignIn);
+$('signInCancel')?.addEventListener('click', closeSignIn);
+$('signInSubmit')?.addEventListener('click', submitSignIn);
+$('signInToken')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitSignIn();
+});
+$('signOutBtn')?.addEventListener('click', signOut);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('signInOverlay').classList.contains('hidden')) closeSignIn();
+});
 
 applyMode();
 
