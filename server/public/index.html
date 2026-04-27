@@ -48,6 +48,7 @@
           おすすめ
           <span id="tabRecommendCount" class="tab-count hidden">0</span>
         </button>
+        <button class="tab" data-tab="rag">RAG</button>
       </nav>
 
       <div id="bookmarksView">
@@ -118,6 +119,19 @@
             <div id="trendDomains" class="chart"></div>
           </section>
         </div>
+      </div>
+
+      <div id="ragView" class="hidden">
+        <div class="rag-status" id="ragStatus">読み込み中…</div>
+
+        <div class="rag-search">
+          <input id="ragQuery" type="search" placeholder="保存済みブックマークから意味検索…" />
+          <button id="ragSearchBtn">検索</button>
+          <button id="ragAskBtn" class="ghost">この質問で答える</button>
+        </div>
+
+        <div id="ragAnswer" class="rag-answer hidden"></div>
+        <div id="ragResults" class="rag-results"></div>
       </div>
 
       <div id="recommendView" class="hidden">
