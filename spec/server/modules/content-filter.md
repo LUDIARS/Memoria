@@ -58,8 +58,28 @@ URL / title / body どこでも match で reject。例:
 - 多言語対応は単純なケース畳み込みのみ
 - 文脈は読まない (例: "アダルト水泳教室" のような誤検出はあり得る)
 
+## regex pattern (re: 接頭辞)
+
+ファイル中の行頭が `re:` で始まる場合、続く文字列が JS 正規表現として解釈される (case-insensitive)。マッチは substring と同様 (anchorless)。
+
+```
+re:tracking-[0-9]+        # トラッカー ID 形式を弾く
+re:^.+\.example\.bad$     # ホスト末尾固定マッチ
+```
+
+不正な regex は literal substring にフォールバック (`re:` を含む文字列として比較)。
+
+## whitelist (ホワイトリスト)
+
+`MEMORIA_WHITELIST_FILE` で誤検出を逃がす。URL/title/body のいずれかにヒットすると、その候補は **絶対 reject されない**。フォーマットは NG ワードと同じ (substring + `re:` 接頭辞)。
+
+例:
+```
+アダルト水泳教室     # アダルト という NG 語を含むが許容したい
+re:^https://my-trusted-domain\.com/
+```
+
 ## ロードマップ
 
-- regex pattern 対応
-- ホワイトリスト (誤検出になりやすい単語の除外)
 - claude による意味的判定 (オプション、コスト高)
+- ドメイン regex 対応
