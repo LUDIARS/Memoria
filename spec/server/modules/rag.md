@@ -75,6 +75,7 @@ return { answer, sources: [{id, bookmark_id, title, url, score}] }
 | 変数 | 用途 |
 |------|------|
 | `MEMORIA_RAG` | `0` で完全無効化 (検索/Q&A/embedding キューすべて停止) |
+| `MEMORIA_RAG_AUTO_BACKFILL` | `1` で起動時に未インデックスを全部キュー投入 (既定 `0`) |
 
 ## ロードマップ
 

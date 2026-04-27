@@ -152,6 +152,19 @@ function enqueueSummary(id) {
   }
 }
 
+// Optional: auto-backfill embeddings for bookmarks that are summary-done
+// but lack chunks. Off by default because it can spend significant CPU on
+// the first run when the model needs to be downloaded. Enable with
+// MEMORIA_RAG_AUTO_BACKFILL=1 to make a fresh deployment self-heal without
+// requiring the user to click the button in the RAG tab.
+if (RAG_ENABLED && process.env.MEMORIA_RAG_AUTO_BACKFILL === '1') {
+  const missing = bookmarksMissingEmbeddings(db);
+  if (missing.length > 0) {
+    console.log(`[startup] auto-backfilling embeddings for ${missing.length} bookmark(s)`);
+    for (const id of missing) enqueueEmbedding(id);
+  }
+}
+
 const app = new Hono();
 app.use('/api/*', cors({
   origin: '*',
