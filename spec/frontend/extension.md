@@ -80,8 +80,30 @@ UI:
 - `chrome://`, `chrome-extension://`, Chrome Web Store, PDF ビューア等では content script が動かない (Chrome の方針)
 - service_token の自動発行はしない — Cernere admission flow で発行されたトークンを手動で options 入力する想定。将来 `/api/auth/cernere/exchange` 的なフローを足す。
 
+## Cernere SSO (v0.6.0+, options 画面)
+
+`relay` モードのフィールドに **「Cernere でサインイン」** ボタンを追加。
+
+```
+[Cernere でサインイン] (chrome.identity.launchWebAuthFlow)
+   ↓
+Memoria の /api/mode から hints.cernere_base_url を取得
+   ↓
+${cernereBase}/api/auth/extension?service=memoria&redirect_uri=<chrome-extension://...>
+   ↓
+ユーザーが Cernere でログイン (popup)
+   ↓
+Cernere が redirect_uri に #token=<service_token> でリダイレクト
+   ↓
+拡張が token を chrome.storage.sync.authToken に保存
+```
+
+**前提:** Cernere 側に `/api/auth/extension` エンドポイントが必要。chrome-extension URL を redirect_uri allowlist に追加する設定も必要。これらが未対応な間は手動で token を貼り付ける。
+
+権限: manifest に `"identity"` を追加。
+
 ## ロードマップ
 
-- popup から「online サインイン」ボタンで Cernere 認証ポップアップを起動 → service_token を自動取得
 - 拡張のバッジ (アイコン右上) で要約待ち件数を表示
 - ホットキー対応 (Alt+S で保存)
+- token 失効時の自動再 SSO
