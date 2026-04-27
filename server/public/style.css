@@ -138,6 +138,17 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .tab:hover { background: #f0f2f7; color: var(--text); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tab.hidden { display: none !important; }
+.mode-pill {
+  background: #fdecea;
+  color: #b13c2a;
+  border: 1px solid #f0a6a0;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-left: 8px;
+  font-weight: 600;
+}
 .tab-count {
   background: #fff5e1;
   color: #8a5a00;

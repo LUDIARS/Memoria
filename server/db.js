@@ -93,11 +93,28 @@ export function openDb(dbPath) {
   if (!cols.includes('access_count')) {
     db.exec(`ALTER TABLE bookmarks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!cols.includes('user_id')) {
+    db.exec(`ALTER TABLE bookmarks ADD COLUMN user_id TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id)`);
+  }
+
+  // page_visits also needs user_id for proper online-mode isolation.
+  const visitCols = db.prepare(`PRAGMA table_info(page_visits)`).all().map(c => c.name);
+  if (!visitCols.includes('user_id')) {
+    db.exec(`ALTER TABLE page_visits ADD COLUMN user_id TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_visits_user ON page_visits(user_id)`);
+  }
 
   return db;
 }
 
-export function listBookmarks(db, { category, sort = 'created_desc' } = {}) {
+/** Build the WHERE fragment + binding for user scoping. Pass null for local mode. */
+function userClause(userId, alias = 'b') {
+  if (userId == null) return { where: '', args: [] };
+  return { where: ` AND ${alias}.user_id = ?`, args: [userId] };
+}
+
+export function listBookmarks(db, { category, sort = 'created_desc', userId = null } = {}) {
   const orderClauses = {
     created_desc: 'b.created_at DESC',
     created_asc: 'b.created_at ASC',
@@ -106,23 +123,29 @@ export function listBookmarks(db, { category, sort = 'created_desc' } = {}) {
     title_asc: 'b.title ASC',
   };
   const orderBy = orderClauses[sort] ?? orderClauses.created_desc;
+  const u = userClause(userId);
   let rows;
   if (category) {
     rows = db.prepare(`
       SELECT b.* FROM bookmarks b
       JOIN bookmark_categories bc ON bc.bookmark_id = b.id
-      WHERE bc.category = ?
+      WHERE bc.category = ?${u.where}
       ORDER BY ${orderBy}
-    `).all(category);
+    `).all(category, ...u.args);
   } else {
-    rows = db.prepare(`SELECT b.* FROM bookmarks b ORDER BY ${orderBy}`).all();
+    rows = db.prepare(`
+      SELECT b.* FROM bookmarks b
+      WHERE 1=1${u.where}
+      ORDER BY ${orderBy}
+    `).all(...u.args);
   }
   return rows.map(r => ({ ...r, categories: getCategories(db, r.id) }));
 }
 
-export function getBookmark(db, id) {
+export function getBookmark(db, id, { userId = null } = {}) {
   const row = db.prepare(`SELECT * FROM bookmarks WHERE id = ?`).get(id);
   if (!row) return null;
+  if (userId != null && row.user_id !== userId) return null;
   return { ...row, categories: getCategories(db, id) };
 }
 
@@ -141,15 +164,20 @@ export function listAllCategories(db) {
   `).all();
 }
 
-export function insertBookmark(db, { url, title, htmlPath }) {
+export function insertBookmark(db, { url, title, htmlPath, userId = null }) {
   const stmt = db.prepare(`
-    INSERT INTO bookmarks (url, title, html_path) VALUES (?, ?, ?)
+    INSERT INTO bookmarks (url, title, html_path, user_id) VALUES (?, ?, ?, ?)
   `);
-  const info = stmt.run(url, title, htmlPath);
+  const info = stmt.run(url, title, htmlPath, userId);
   return info.lastInsertRowid;
 }
 
-export function findBookmarkByUrl(db, url) {
+export function findBookmarkByUrl(db, url, { userId = null } = {}) {
+  if (userId != null) {
+    return db.prepare(
+      `SELECT * FROM bookmarks WHERE url = ? AND user_id = ? ORDER BY id DESC LIMIT 1`
+    ).get(url, userId) ?? null;
+  }
   return db.prepare(`SELECT * FROM bookmarks WHERE url = ? ORDER BY id DESC LIMIT 1`).get(url) ?? null;
 }
 
@@ -191,15 +219,15 @@ export function updateMemoAndCategories(db, id, { memo, categories }) {
 }
 
 /** Upsert a visit row for any URL (whether bookmarked or not). */
-export function upsertVisit(db, { url, title }) {
+export function upsertVisit(db, { url, title, userId = null }) {
   db.prepare(`
-    INSERT INTO page_visits (url, title)
-    VALUES (?, ?)
+    INSERT INTO page_visits (url, title, user_id)
+    VALUES (?, ?, ?)
     ON CONFLICT(url) DO UPDATE SET
       title = COALESCE(NULLIF(excluded.title, ''), page_visits.title),
       last_seen_at = datetime('now'),
       visit_count = page_visits.visit_count + 1
-  `).run(url, title ?? null);
+  `).run(url, title ?? null, userId);
 }
 
 /**

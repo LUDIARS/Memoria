@@ -31,6 +31,8 @@ import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
 import { runDig } from './dig.js';
+import { authMiddleware, readMode, MODES } from './auth.js';
+import { checkContent } from './content-filter.js';
 import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
   deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
@@ -45,6 +47,13 @@ const HTML_DIR = join(DATA_DIR, 'html');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
 const RAG_ENABLED = process.env.MEMORIA_RAG !== '0';
+const MODE = readMode();
+const JWT_SECRET = process.env.MEMORIA_JWT_SECRET ?? '';
+const ONLINE = MODE === MODES.ONLINE;
+if (ONLINE && !JWT_SECRET) {
+  console.error('[memoria] FATAL: MEMORIA_MODE=online requires MEMORIA_JWT_SECRET');
+  process.exit(2);
+}
 
 mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
@@ -138,11 +147,29 @@ function enqueueSummary(id) {
 }
 
 const app = new Hono();
-app.use('/api/*', cors({ origin: '*', allowMethods: ['GET','POST','PATCH','DELETE','OPTIONS'] }));
+app.use('/api/*', cors({
+  origin: '*',
+  allowMethods: ['GET','POST','PATCH','DELETE','OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+}));
+app.use('/api/*', authMiddleware({ mode: MODE, secret: JWT_SECRET }));
+
+// Block visit-history endpoints in online mode — that data is local-only.
+const blockInOnline = (c, next) => {
+  if (ONLINE) return c.json({ error: 'visits endpoints are disabled in online mode' }, 403);
+  return next();
+};
+
+app.get('/api/mode', (c) => c.json({
+  mode: MODE,
+  rag_enabled: RAG_ENABLED,
+  user_id: c.get('userId') ?? null,
+}));
 
 // ---- bookmark CRUD ---------------------------------------------------------
 
 app.post('/api/bookmark', async (c) => {
+  const userId = c.get('userId') ?? null;
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body.html !== 'string' || typeof body.url !== 'string') {
     return c.json({ error: 'html, url, title required' }, 400);
@@ -151,57 +178,67 @@ app.post('/api/bookmark', async (c) => {
   const title = (body.title || url).slice(0, 500);
   const html = body.html;
 
-  const existing = findBookmarkByUrl(db, url);
+  // Reject NG / R18 content before touching disk or DB.
+  const filt = checkContent({ url, title, html });
+  if (!filt.ok) {
+    return c.json({
+      error: 'content blocked by NG word filter',
+      reason: filt.reason,
+      matches: filt.matches,
+    }, 422);
+  }
+
+  const existing = findBookmarkByUrl(db, url, { userId });
   if (existing) {
-    // Same URL — record access and return existing.
     recordAccess(db, existing.id);
     return c.json({ id: existing.id, duplicate: true });
   }
 
-  // Save HTML to disk first, then DB row, then kick off summarization.
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const safe = ts + '_' + Math.random().toString(36).slice(2, 8) + '.html';
   const htmlPath = join(HTML_DIR, safe);
   writeFileSync(htmlPath, html, 'utf8');
 
-  const id = insertBookmark(db, { url, title, htmlPath: safe });
-
-  // First access = creation.
+  const id = insertBookmark(db, { url, title, htmlPath: safe, userId });
   recordAccess(db, id);
-
-  // Hand off to the FIFO queue so summarizations run strictly one at a time.
   enqueueSummary(id);
 
   return c.json({ id, queued: true, queueDepth: summaryQueue.depth });
 });
 
 app.get('/api/bookmarks', (c) => {
+  const userId = c.get('userId') ?? null;
   const category = c.req.query('category') || undefined;
   const sort = c.req.query('sort') || undefined;
-  return c.json({ items: listBookmarks(db, { category, sort }) });
+  return c.json({ items: listBookmarks(db, { category, sort, userId }) });
 });
 
 app.get('/api/bookmarks/:id', (c) => {
   const id = Number(c.req.param('id'));
-  const b = getBookmark(db, id);
+  const b = getBookmark(db, id, { userId: c.get('userId') ?? null });
   if (!b) return c.json({ error: 'not found' }, 404);
   return c.json(b);
 });
 
 app.patch('/api/bookmarks/:id', async (c) => {
   const id = Number(c.req.param('id'));
-  const b = getBookmark(db, id);
+  const userId = c.get('userId') ?? null;
+  const b = getBookmark(db, id, { userId });
   if (!b) return c.json({ error: 'not found' }, 404);
   const body = await c.req.json().catch(() => ({}));
   updateMemoAndCategories(db, id, {
     memo: typeof body.memo === 'string' ? body.memo : undefined,
     categories: Array.isArray(body.categories) ? body.categories : undefined,
   });
-  return c.json(getBookmark(db, id));
+  return c.json(getBookmark(db, id, { userId }));
 });
 
 app.delete('/api/bookmarks/:id', (c) => {
   const id = Number(c.req.param('id'));
+  const userId = c.get('userId') ?? null;
+  if (!getBookmark(db, id, { userId })) {
+    return c.json({ error: 'not found' }, 404);
+  }
   const htmlName = deleteBookmark(db, id);
   if (htmlName) {
     const p = join(HTML_DIR, htmlName);
@@ -227,7 +264,7 @@ app.post('/api/bookmarks/:id/resummarize', async (c) => {
 
 app.get('/api/bookmarks/:id/html', (c) => {
   const id = Number(c.req.param('id'));
-  const b = getBookmark(db, id);
+  const b = getBookmark(db, id, { userId: c.get('userId') ?? null });
   if (!b) return c.text('not found', 404);
   const p = join(HTML_DIR, b.html_path);
   if (!existsSync(p)) return c.text('html missing', 404);
@@ -457,7 +494,7 @@ app.get('/api/dig/:id', (c) => {
 app.post('/api/dig/:id/save', async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
-  return c.json({ results: await bulkSaveUrls(body.urls) });
+  return c.json({ results: await bulkSaveUrls(body.urls, { userId: c.get('userId') ?? null }) });
 });
 
 // ---- queue status ---------------------------------------------------------
@@ -489,14 +526,17 @@ app.get('/api/categories', (c) => {
 // ---- access ping (from extension) -----------------------------------------
 
 app.post('/api/access', async (c) => {
+  // In online mode the visit-tracking surface is intentionally disabled —
+  // the privacy contract is that we don't aggregate non-bookmarked URLs
+  // server-side for shared deployments.
+  if (ONLINE) return c.json({ matched: false, disabled: true });
+
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
   if (!/^https?:\/\//.test(body.url)) return c.json({ matched: false, ignored: true });
 
-  // Always upsert into page_visits so unsaved URLs are tracked too.
   upsertVisit(db, { url: body.url, title: typeof body.title === 'string' ? body.title : null });
 
-  // If this URL is already bookmarked, also bump its bookmark access counter.
   const b = findBookmarkByUrl(db, body.url);
   if (!b) return c.json({ matched: false });
   recordAccess(db, b.id);
@@ -504,18 +544,20 @@ app.post('/api/access', async (c) => {
 });
 
 // ---- visit history (unsaved URLs) -----------------------------------------
+// All visit-history endpoints are local-only: they expose the user's raw
+// browsing trail and have no place in a multi-user deployment.
 
-app.get('/api/visits/unsaved', (c) => {
+app.get('/api/visits/unsaved', blockInOnline, (c) => {
   const since = c.req.query('since');
   return c.json({ items: listUnsavedVisits(db, { since }) });
 });
 
-app.get('/api/visits/suggested', (c) => {
+app.get('/api/visits/suggested', blockInOnline, (c) => {
   const days = Number(c.req.query('days')) || 30;
   return c.json({ items: listSuggestedVisits(db, { sinceDays: days }) });
 });
 
-app.get('/api/visits/unsaved/count', (c) => {
+app.get('/api/visits/unsaved/count', blockInOnline, (c) => {
   const row = db.prepare(`
     SELECT COUNT(*) AS n
     FROM page_visits v
@@ -526,21 +568,21 @@ app.get('/api/visits/unsaved/count', (c) => {
   return c.json({ count: row?.n ?? 0 });
 });
 
-app.delete('/api/visits', async (c) => {
+app.delete('/api/visits', blockInOnline, async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
   for (const url of body.urls) deleteVisit(db, url);
   return c.json({ ok: true, removed: body.urls.length });
 });
 
-async function bulkSaveUrls(urls) {
+async function bulkSaveUrls(urls, { userId = null } = {}) {
   const results = [];
   for (const url of urls) {
     if (typeof url !== 'string' || !/^https?:\/\//.test(url)) {
       results.push({ url, status: 'skipped', error: 'invalid url' });
       continue;
     }
-    const existing = findBookmarkByUrl(db, url);
+    const existing = findBookmarkByUrl(db, url, { userId });
     if (existing) {
       deleteVisit(db, url);
       results.push({ url, status: 'duplicate', id: existing.id });
@@ -551,11 +593,17 @@ async function bulkSaveUrls(urls) {
       const fetched = await fetchPageHtml(url);
       const title = (visit?.title || fetched.title || url).slice(0, 500);
 
+      const filt = checkContent({ url, title, html: fetched.html });
+      if (!filt.ok) {
+        results.push({ url, status: 'blocked', reason: filt.reason, matches: filt.matches });
+        continue;
+      }
+
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const safe = ts + '_' + Math.random().toString(36).slice(2, 8) + '.html';
       writeFileSync(join(HTML_DIR, safe), fetched.html, 'utf8');
 
-      const id = insertBookmark(db, { url, title, htmlPath: safe });
+      const id = insertBookmark(db, { url, title, htmlPath: safe, userId });
       recordAccess(db, id);
       enqueueSummary(id);
       deleteVisit(db, url);
@@ -567,10 +615,10 @@ async function bulkSaveUrls(urls) {
   return results;
 }
 
-app.post('/api/visits/bookmark', async (c) => {
+app.post('/api/visits/bookmark', blockInOnline, async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
-  return c.json({ results: await bulkSaveUrls(body.urls) });
+  return c.json({ results: await bulkSaveUrls(body.urls, { userId: c.get('userId') ?? null }) });
 });
 
 async function fetchPageHtml(url, timeoutMs = 30_000) {
@@ -671,6 +719,8 @@ app.get('/', serveStatic({ path: './public/index.html' }));
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
+  console.log(`  mode: ${MODE}${ONLINE ? ' (auth required)' : ' (no auth)'}`);
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
+  console.log(`  rag: ${RAG_ENABLED ? 'enabled' : 'disabled'}`);
 });

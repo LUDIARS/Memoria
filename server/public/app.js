@@ -20,6 +20,7 @@ const state = {
   digHistory: [],
   digSelected: new Set(),
   digPolling: null,
+  mode: 'local',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -277,6 +278,27 @@ $('importInput').addEventListener('change', async (e) => {
   if (f) await importFile(f);
   e.target.value = '';
 });
+
+async function applyMode() {
+  try {
+    const r = await api('/api/mode');
+    state.mode = r.mode;
+    const isOnline = r.mode === 'online';
+    // Hide visit-related UI in online mode.
+    document.querySelector('.tab[data-tab="visits"]')?.classList.toggle('hidden', isOnline);
+    if (isOnline && state.tab === 'visits') switchTab('bookmarks');
+    if (isOnline) {
+      document.body.dataset.mode = 'online';
+      const brand = document.querySelector('.brand');
+      if (brand && !brand.dataset.modeAnnotated) {
+        brand.insertAdjacentHTML('afterend', '<span class="mode-pill" title="Online sharing mode">online</span>');
+        brand.dataset.modeAnnotated = '1';
+      }
+    }
+  } catch (e) { console.warn('mode check failed', e); }
+}
+
+applyMode();
 
 load().catch(err => {
   console.error(err);

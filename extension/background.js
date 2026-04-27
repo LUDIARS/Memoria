@@ -13,6 +13,18 @@ async function getServer() {
   return (server || DEFAULT_SERVER).replace(/\/+$/, '');
 }
 
+async function getAuthHeaders() {
+  const { authToken } = await chrome.storage.sync.get({ authToken: '' });
+  const h = { 'Content-Type': 'application/json' };
+  if (authToken) h['Authorization'] = `Bearer ${authToken}`;
+  return h;
+}
+
+async function isTrackingDisabled() {
+  const { disableTracking } = await chrome.storage.sync.get({ disableTracking: false });
+  return !!disableTracking;
+}
+
 function isPingable(url) {
   if (!url) return false;
   return url.startsWith('http://') || url.startsWith('https://');
@@ -20,15 +32,17 @@ function isPingable(url) {
 
 async function pingAccess(url, title) {
   if (!isPingable(url)) return;
+  if (await isTrackingDisabled()) return;
   const now = Date.now();
   const prev = lastPing.get(url) ?? 0;
   if (now - prev < PING_THROTTLE_MS) return;
   lastPing.set(url, now);
   try {
     const server = await getServer();
+    const headers = await getAuthHeaders();
     await fetch(`${server}/api/access`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ url, title: title ?? null }),
     });
   } catch {
@@ -63,9 +77,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       const server = await getServer();
+      const headers = await getAuthHeaders();
       const res = await fetch(`${server}/api/bookmark`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(msg.payload || {}),
       });
       if (!res.ok) {
