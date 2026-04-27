@@ -69,42 +69,41 @@ cd server
 npm install
 ```
 
-### 3. サーバー起動
+### 3. 環境変数 (.env)
 
-#### macOS / Linux
-
-```bash
-npm start
-# Memoria server listening on http://localhost:5180
-```
-
-#### Windows
-
-`claude` CLI は Windows 上で **git-bash** の `bash.exe` を要求します。`CLAUDE_CODE_GIT_BASH_PATH` を指定して起動してください。
-
-PowerShell:
-
-```powershell
-$env:CLAUDE_CODE_GIT_BASH_PATH = "C:\Program Files\Git\bin\bash.exe"
-npm start
-```
-
-Git Bash:
+リポジトリ直下の `.env.example` をコピーして、必要な行だけ有効化:
 
 ```bash
-CLAUDE_CODE_GIT_BASH_PATH="/c/Program Files/Git/bin/bash.exe" npm start
+cp .env.example .env
+# 編集
 ```
 
-未設定だと要約処理が `status="error"` になり、UI の詳細パネルにエラー文が表示されます。
+`server/npm start` は **Node 21.7+ の `--env-file-if-exists`** で `server/.env` または `<repo>/.env` を自動的に読み込みます (dotenv 等の依存は不要)。インラインで渡した env (例: `MEMORIA_PORT=6000 npm start`) が `.env` より優先されます。
 
-### 4. Chrome 拡張の読み込み
+### 4. サーバー起動
+
+```bash
+cd server
+npm start
+# → http://localhost:5180
+```
+
+**Windows 注意:** `claude` CLI が PATH 上にあっても、Node の `spawn()` から呼ぶときは **`bash.exe` の絶対パス** を `CLAUDE_CODE_GIT_BASH_PATH` で渡す必要があります (claude が PATH 経由で bash を見つけないため)。`.env` に書いておけば毎回指定不要:
+
+```dotenv
+CLAUDE_CODE_GIT_BASH_PATH=C:\Program Files\Git\bin\bash.exe
+```
+
+未設定だと要約処理が `status=error` になり、UI 詳細パネルにエラー文が表示されます。
+
+### 5. Chrome 拡張の読み込み
 
 1. Chrome で `chrome://extensions` を開く
 2. 右上の **「デベロッパーモード」** を ON
 3. **「パッケージ化されていない拡張機能を読み込む」** → このリポジトリの `extension/` ディレクトリを選択
 4. Chrome ツールバーに Memoria アイコンが表示される
 
-### 5. 動作確認
+### 6. 動作確認
 
 1. ブラウザで http://localhost:5180/ を開く（Memoria UI）
 2. 別タブで任意の Web ページを開く
