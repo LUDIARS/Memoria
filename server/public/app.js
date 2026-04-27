@@ -12,6 +12,7 @@ const state = {
   visitsSelected: new Set(),
   visitsRange: '7',
   trendsRange: '30',
+  recommendations: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -393,9 +394,90 @@ function switchTab(tab) {
   $('queueView').classList.toggle('hidden', tab !== 'queue');
   $('visitsView').classList.toggle('hidden', tab !== 'visits');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
+  $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
+  if (tab === 'recommend') loadRecommendations();
+}
+
+async function loadRecommendations(force = false) {
+  try {
+    const url = '/api/recommendations' + (force ? '?force=1' : '');
+    const { items } = await api(url);
+    state.recommendations = items;
+    renderRecommendations();
+  } catch (e) {
+    console.error('rec load failed', e);
+  }
+}
+
+function renderRecommendations() {
+  const items = state.recommendations;
+  const list = $('recList');
+  const empty = $('recEmpty');
+  const badge = $('tabRecommendCount');
+  if (items.length > 0) {
+    badge.classList.remove('hidden');
+    badge.textContent = items.length;
+  } else {
+    badge.classList.add('hidden');
+  }
+  if (items.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = items.map(r => {
+    const sources = (r.sources || []).map(s => escapeHtml(s.title)).slice(0, 3).join(' / ');
+    return `
+      <div class="rec-card" data-url="${escapeHtml(r.url)}">
+        <div class="domain">${escapeHtml(r.domain)}<span class="rec-score">${r.source_count} 件の記事から</span></div>
+        <div class="anchor">${escapeHtml(r.anchor || r.url)}</div>
+        <div class="url">${escapeHtml(r.url)}</div>
+        <div class="why">参照元: ${sources}${(r.sources || []).length > 3 ? ' …' : ''}</div>
+        <div class="actions">
+          <button class="rec-save">保存</button>
+          <a class="ghost rec-open" href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">開く</a>
+          <button class="ghost rec-dismiss">却下</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  list.querySelectorAll('.rec-card').forEach(card => {
+    const url = card.dataset.url;
+    card.querySelector('.rec-save').addEventListener('click', async () => {
+      card.querySelector('.rec-save').disabled = true;
+      try {
+        await api('/api/visits/bookmark', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: [url] }),
+        });
+        card.remove();
+        state.recommendations = state.recommendations.filter(r => r.url !== url);
+        renderRecommendations();
+        await refreshQueue();
+      } catch (e) {
+        alert(`保存失敗: ${e.message}`);
+      }
+    });
+    card.querySelector('.rec-dismiss').addEventListener('click', async () => {
+      try {
+        await api('/api/recommendations/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        card.remove();
+        state.recommendations = state.recommendations.filter(r => r.url !== url);
+        renderRecommendations();
+      } catch (e) {
+        alert(`却下失敗: ${e.message}`);
+      }
+    });
+  });
 }
 
 // ── trends ─────────────────────────────────────────────────────────────
@@ -649,6 +731,7 @@ $('trendsRange').addEventListener('change', (e) => {
   state.trendsRange = e.target.value;
   loadTrends();
 });
+$('recRefresh').addEventListener('click', () => loadRecommendations(true));
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {

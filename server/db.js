@@ -36,6 +36,11 @@ export function openDb(dbPath) {
       accessed_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS recommendation_dismissals (
+      url           TEXT PRIMARY KEY,
+      dismissed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS page_visits (
       url            TEXT PRIMARY KEY,
       title          TEXT,
