@@ -15,7 +15,8 @@ Memoria が `@ludiars/cernere-service-adapter` の `PeerAdapter` 経由で公開
 | Command | 入力 | 出力 |
 |---------|------|------|
 | `memoria.search` | `{ user_id, query, limit? }` | `{ items: BookmarkRow[] }` (タイトル/URL/要約/メモを substring 検索) |
-| `memoria.save_url` | `{ user_id, url }` | `{ status: 'queued' / 'duplicate' / 'blocked', id?, reason?, matches? }` (HTML を fetch して保存、要約キュー投入。NG ワードは `blocked`) |
+| `memoria.save_url` | `{ user_id, url }` | `{ status: 'queued' / 'duplicate' / 'blocked', id?, reason?, matches? }` (Memoria が server-side fetch して保存、要約キュー投入。NG ワードは `blocked`) |
+| `memoria.save_html` | `{ user_id, url, title, html }` | `{ id, queued: true / duplicate: true }` (呼び出し側で rendered HTML を持っているケース。Imperativus が Chrome 拡張から受け取った HTML を中継するときの primary パス。online モードでは `POST /api/bookmark` の代替) |
 | `memoria.list_categories` | `{}` | `{ items: [{ category, count }] }` |
 | `memoria.recent_bookmarks` | `{ user_id, limit? }` | `{ items: BookmarkRow[] }` |
 | `memoria.get_bookmark` | `{ user_id, id }` | `BookmarkRow` |

@@ -31,15 +31,29 @@
   </fieldset>
 
   <fieldset style="border:1px solid #ddd;padding:8px 12px;margin-top:12px;border-radius:6px">
-    <legend style="padding:0 6px;font-size:12px;color:#555">認証 (オンラインモード)</legend>
-    <label style="display:block;font-size:12px;color:#555;margin-bottom:4px">
-      Bearer JWT (Cernere 等が発行)
+    <legend style="padding:0 6px;font-size:12px;color:#555">送信先モード</legend>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px">
+      <input id="modeLocal" type="radio" name="mode" value="local" />
+      ローカル直送 — 上の Memoria サーバー URL に直接 POST する (個人運用)
     </label>
-    <input id="authToken" type="password" placeholder="(空欄ならローカル無認証モード)" />
-    <p style="font-size:11px;color:#777;margin:6px 0 0">
-      サーバーが <code>MEMORIA_MODE=online</code> で起動している場合に必要。
-      この JWT は <code>Authorization: Bearer ...</code> ヘッダーで送信されます。
-    </p>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px">
+      <input id="modeRelay" type="radio" name="mode" value="relay" />
+      Imperativus リレー — 共有モードで Cernere 認証を経由してサーバーへ届ける
+    </label>
+    <div id="relayFields" style="margin-top:8px;padding-left:24px;display:none">
+      <label style="display:block;font-size:12px;color:#555;margin-top:4px">
+        Imperativus URL
+        <input id="imperativusUrl" type="url" placeholder="https://imperativus.example.com" />
+      </label>
+      <label style="display:block;font-size:12px;color:#555;margin-top:6px">
+        Cernere service_token (Bearer JWT)
+        <input id="authToken" type="password" placeholder="eyJhbGciOiJIUzI1NiIs..." />
+      </label>
+      <p style="font-size:11px;color:#777;margin:6px 0 0">
+        リレーモードでは保存リクエストは Imperativus の <code>/api/relay/memoria/save_html</code> に送られます。
+        Memoria サーバーへの直接 POST は無効化されます。
+      </p>
+    </div>
   </fieldset>
 
   <div style="margin-top:14px">

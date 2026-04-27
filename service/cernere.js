@@ -115,6 +115,7 @@ export async function startCernere(ctx) {
         imperativus: [
           'memoria.search',
           'memoria.save_url',
+          'memoria.save_html',
           'memoria.list_categories',
           'memoria.recent_bookmarks',
           'memoria.get_bookmark',

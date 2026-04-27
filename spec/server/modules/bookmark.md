@@ -1,9 +1,19 @@
 # Module: Bookmark
 
-`POST /api/bookmark` から始まる保存フロー全般。
+保存フロー全般 (HTTP `POST /api/bookmark` または peer `memoria.save_html`)。
 
 ## 目的
-Chrome 拡張・MCP・peer 経由で受け取った HTML/URL/title を、ファイル + DB に永続化し、要約キューへ流す。
+Chrome 拡張・MCP・Imperativus 中継経由で受け取った HTML/URL/title を、ファイル + DB に永続化し、要約キューへ流す。
+
+## 入口
+
+| エントリ | 利用シナリオ |
+|---------|------------|
+| `POST /api/bookmark` (HTTP) | **local モードのみ**。Chrome 拡張 → Memoria 直送 |
+| peer `memoria.save_html` | Chrome 拡張 → Imperativus → Memoria の中継パス。`POST /api/relay/memoria/save_html` 経由で `user_id` がトークンから強制設定される |
+| peer `memoria.save_url` | URL のみ受け取り、Memoria が server-side fetch する旧パス (ログイン不要ページ向け) |
+
+online モードで `POST /api/bookmark` を直接叩くと **410 Gone** を返して relay パスに誘導する。
 
 ## 責務
 - NG/R18 フィルタによる事前ブロック (422)

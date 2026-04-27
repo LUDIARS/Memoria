@@ -1,28 +1,27 @@
 // Memoria background service worker.
-// On every tab activation/URL change, ping the local server with the current URL
-// so it can record an access if that URL is bookmarked.
+//
+// Two send modes (configured in extension options):
+//
+//   local : POST <memoriaServer>/api/bookmark          (no auth, single-user)
+//   relay : POST <imperativusUrl>/api/relay/memoria/save_html
+//                                                       (Cernere JWT, multi-user)
+//
+// In `relay` mode the access ping (`/api/access`) is also disabled — that
+// data is local-only by design.
 
 const DEFAULT_SERVER = 'http://localhost:5180';
 
-// Per-URL throttle: same URL won't ping more than once every N ms across the whole browser.
 const PING_THROTTLE_MS = 60 * 1000;
 const lastPing = new Map();
 
-async function getServer() {
-  const { server } = await chrome.storage.sync.get({ server: DEFAULT_SERVER });
-  return (server || DEFAULT_SERVER).replace(/\/+$/, '');
-}
-
-async function getAuthHeaders() {
-  const { authToken } = await chrome.storage.sync.get({ authToken: '' });
-  const h = { 'Content-Type': 'application/json' };
-  if (authToken) h['Authorization'] = `Bearer ${authToken}`;
-  return h;
-}
-
-async function isTrackingDisabled() {
-  const { disableTracking } = await chrome.storage.sync.get({ disableTracking: false });
-  return !!disableTracking;
+async function readConfig() {
+  return chrome.storage.sync.get({
+    server: DEFAULT_SERVER,
+    disableTracking: false,
+    authToken: '',
+    imperativusUrl: '',
+    mode: 'local',
+  });
 }
 
 function isPingable(url) {
@@ -32,17 +31,19 @@ function isPingable(url) {
 
 async function pingAccess(url, title) {
   if (!isPingable(url)) return;
-  if (await isTrackingDisabled()) return;
+  const cfg = await readConfig();
+  // Tracking is meaningful only in local mode (single-user). The relay mode
+  // is for shared deployments where we don't aggregate raw browsing data.
+  if (cfg.mode !== 'local') return;
+  if (cfg.disableTracking) return;
   const now = Date.now();
   const prev = lastPing.get(url) ?? 0;
   if (now - prev < PING_THROTTLE_MS) return;
   lastPing.set(url, now);
   try {
-    const server = await getServer();
-    const headers = await getAuthHeaders();
-    await fetch(`${server}/api/access`, {
+    await fetch(`${cfg.server.replace(/\/+$/, '')}/api/access`, {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, title: title ?? null }),
     });
   } catch {
@@ -71,24 +72,54 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   } catch {}
 });
 
-// Save bookmark on behalf of the content script (bypasses page CORS).
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+/**
+ * Save bookmark on behalf of popup / content script.
+ * Routes either to Memoria HTTP directly (local) or to Imperativus relay.
+ */
+async function saveBookmark(payload) {
+  const cfg = await readConfig();
+  if (cfg.mode === 'relay') {
+    if (!cfg.imperativusUrl) throw new Error('Imperativus URL が設定されていません (オプションを開く)');
+    if (!cfg.authToken)      throw new Error('Cernere service_token が設定されていません');
+    const url = `${cfg.imperativusUrl.replace(/\/+$/, '')}/api/relay/memoria/save_html`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${cfg.authToken}`,
+      },
+      body: JSON.stringify({ url: payload.url, title: payload.title, html: payload.html }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Imperativus ${res.status} ${text.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    // peer-relay-api wraps the peer result; extract the inner shape.
+    return { ok: true, ...(data.result || data) };
+  }
+
+  // local mode: direct POST (no auth)
+  const url = `${cfg.server.replace(/\/+$/, '')}/api/bookmark`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Memoria ${res.status} ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return { ok: true, ...data };
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type !== 'memoria.save') return false;
   (async () => {
     try {
-      const server = await getServer();
-      const headers = await getAuthHeaders();
-      const res = await fetch(`${server}/api/bookmark`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(msg.payload || {}),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status} ${text.slice(0, 120)}`);
-      }
-      const data = await res.json();
-      sendResponse({ ok: true, ...data });
+      const result = await saveBookmark(msg.payload || {});
+      sendResponse(result);
     } catch (e) {
       sendResponse({ ok: false, error: e.message });
     }

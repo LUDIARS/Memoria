@@ -2,8 +2,25 @@
 
 ## 目的
 
-ユーザーが見ている Web ページを **ワンクリック** で Memoria サーバーへ送り、要約キューに乗せる。
-タブ切替時の URL ping でアクセス頻度を集計する。
+ユーザーが見ている Web ページを **ワンクリック** で Memoria に登録する。
+個人運用は Memoria サーバーへ直送、共有運用は Imperativus 経由でリレーする。
+
+## 動作モード (`storage.sync.mode`)
+
+| mode | 送信先 | 認証 | アクセス追跡 |
+|------|--------|------|--------------|
+| `local` (既定) | `${server}/api/bookmark` | なし | `/api/access` を送る (ON 時) |
+| `relay` | `${imperativusUrl}/api/relay/memoria/save_html` | Cernere `Bearer JWT` 必須 | 送らない (privacy) |
+
+`relay` モードでは Memoria サーバーへ直接書き込むパスは消える。
+すべての保存は Imperativus を経由し、Imperativus 内で `user_id` がトークンから強制設定される。
+
+## 旧来動作との差分
+
+| | v0.4 (PR #14) | v0.5 (本仕様) |
+|---|---|---|
+| online での書込 | 拡張から Memoria に Bearer 付き直送 | **削除** — Imperativus 中継のみ |
+| options の認証欄 | `authToken` (Memoria 用 Bearer) | `authToken` (Cernere service_token) + relay モード切替 |
 
 ## 構成
 
