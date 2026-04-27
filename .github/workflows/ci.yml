@@ -118,3 +118,66 @@ jobs:
           # Result should be done with the mock-supplied summary.
           curl -fsS "http://localhost:$MEMORIA_PORT/api/bookmarks/1"
           echo
+
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true
+
+      - name: Smoke test (online mode — read public, write 401, /api/bookmark 410)
+        working-directory: service
+        env:
+          MEMORIA_PORT: '15181'
+          MEMORIA_DATA: /tmp/memoria-online-ci
+          MEMORIA_RAG: '0'
+          MEMORIA_MODE: online
+          MEMORIA_JWT_SECRET: ci-test-secret-please-change
+        run: |
+          set -e
+          rm -rf /tmp/memoria-online-ci
+          node index.js &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS "http://localhost:$MEMORIA_PORT/api/mode" > /dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+
+          echo '--- /api/mode (anonymous): expect mode=online, caps=[read] ---'
+          curl -fsS "http://localhost:$MEMORIA_PORT/api/mode"
+          echo
+          curl -fsS "http://localhost:$MEMORIA_PORT/api/mode" | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
+              const r = JSON.parse(s);
+              if (r.mode !== "online") throw new Error("expected mode=online, got " + r.mode);
+              if (r.authenticated) throw new Error("anonymous request should not be authenticated");
+              if (!Array.isArray(r.caps) || !r.caps.includes("read")) throw new Error("caps should include read");
+              if (r.caps.includes("write")) throw new Error("anonymous caps should not include write");
+              console.log("mode endpoint OK");
+            });'
+
+          echo '--- GET /api/bookmarks: expect 200 (public) ---'
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$MEMORIA_PORT/api/bookmarks")" = '200'
+
+          echo '--- POST /api/bookmark without auth: expect 410 (disabled in online) ---'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:$MEMORIA_PORT/api/bookmark" \
+            -H 'Content-Type: application/json' \
+            -d '{"url":"https://example.com/x","title":"x","html":"<html></html>"}')" = '410'
+
+          echo '--- PATCH /api/bookmarks/1 without auth: expect 401 ---'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "http://localhost:$MEMORIA_PORT/api/bookmarks/1" \
+            -H 'Content-Type: application/json' -d '{"memo":"x"}')" = '401'
+
+          echo '--- GET /api/visits/unsaved: expect 403 (online disabled) ---'
+          test "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$MEMORIA_PORT/api/visits/unsaved")" = '403'
+
+          echo '--- issue dev token, /api/mode with auth: expect caps include write ---'
+          TOKEN=$(MEMORIA_JWT_SECRET=ci-test-secret-please-change npm run --silent issue-token alice | tail -1)
+          curl -fsS -H "Authorization: Bearer $TOKEN" "http://localhost:$MEMORIA_PORT/api/mode" | node -e '
+            let s=""; process.stdin.on("data",d=>s+=d); process.stdin.on("end",()=>{
+              const r = JSON.parse(s);
+              if (r.user_id !== "alice") throw new Error("expected user_id=alice, got " + r.user_id);
+              if (!r.caps.includes("write")) throw new Error("authed caps should include write");
+              console.log("authed mode OK");
+            });'
+
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true
