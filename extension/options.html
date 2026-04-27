@@ -16,7 +16,33 @@
   <h1>Memoria 設定</h1>
   <label for="server">Memoria サーバー URL</label>
   <input id="server" type="url" placeholder="http://localhost:5180" />
-  <div>
+
+  <fieldset style="border:1px solid #ddd;padding:8px 12px;margin-top:16px;border-radius:6px">
+    <legend style="padding:0 6px;font-size:12px;color:#555">プライバシー</legend>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px">
+      <input id="disableTracking" type="checkbox" />
+      URL をトラッキングしない (アクセスログをサーバーに送信しない)
+    </label>
+    <p style="font-size:11px;color:#777;margin:6px 0 0">
+      ON にすると、タブ切替時の <code>/api/access</code> 送信を完全に止めます。
+      未保存履歴・最終アクセス日・アクセス回数は更新されません。
+      手動で「このページを保存」した場合のみサーバーへ送ります。
+    </p>
+  </fieldset>
+
+  <fieldset style="border:1px solid #ddd;padding:8px 12px;margin-top:12px;border-radius:6px">
+    <legend style="padding:0 6px;font-size:12px;color:#555">認証 (オンラインモード)</legend>
+    <label style="display:block;font-size:12px;color:#555;margin-bottom:4px">
+      Bearer JWT (Cernere 等が発行)
+    </label>
+    <input id="authToken" type="password" placeholder="(空欄ならローカル無認証モード)" />
+    <p style="font-size:11px;color:#777;margin:6px 0 0">
+      サーバーが <code>MEMORIA_MODE=online</code> で起動している場合に必要。
+      この JWT は <code>Authorization: Bearer ...</code> ヘッダーで送信されます。
+    </p>
+  </fieldset>
+
+  <div style="margin-top:14px">
     <button id="save">保存</button>
     <span id="msg" class="saved"></span>
   </div>

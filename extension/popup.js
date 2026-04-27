@@ -5,6 +5,13 @@ async function getServer() {
   return server.replace(/\/+$/, '');
 }
 
+async function getAuthHeaders() {
+  const { authToken } = await chrome.storage.sync.get({ authToken: '' });
+  const h = { 'Content-Type': 'application/json' };
+  if (authToken) h['Authorization'] = `Bearer ${authToken}`;
+  return h;
+}
+
 const statusEl = document.getElementById('status');
 const saveBtn = document.getElementById('save');
 const openUi = document.getElementById('openUi');
@@ -33,9 +40,10 @@ saveBtn.addEventListener('click', async () => {
       }),
     });
     statusEl.textContent = '送信中...';
+    const headers = await getAuthHeaders();
     const res = await fetch(`${server}/api/bookmark`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(result),
     });
     if (!res.ok) {

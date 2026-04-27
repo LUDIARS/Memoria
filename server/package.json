@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
-    "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js"
+    "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
+    "issue-token": "node --env-file-if-exists=.env --env-file-if-exists=../.env scripts/issue-token.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

@@ -119,6 +119,11 @@ CLAUDE_CODE_GIT_BASH_PATH=C:\Program Files\Git\bin\bash.exe
 | `MEMORIA_CLAUDE_BIN` | `claude` | claude CLI のパス |
 | `CLAUDE_CODE_GIT_BASH_PATH` | (未設定) | Windows 用、bash.exe の絶対パス |
 | `MEMORIA_RAG` | `1` | RAG (意味検索 + Q&A) の有効/無効。`0` で完全に無効化 |
+| `MEMORIA_MODE` | `local` | `local` / `online`。`online` は JWT 認証必須、訪問履歴系を全停止 |
+| `MEMORIA_JWT_SECRET` | (未設定) | `online` 時の JWT (HS256) 検証鍵。Cernere の SERVICE_JWT_SECRET と同期 |
+| `MEMORIA_CONTENT_FILTER` | `1` | NG/R18 ワードフィルタ。`0` で無効化 |
+| `MEMORIA_NGWORDS_FILE` | (未設定) | NG ワード追加リストのパス (1 行 1 語 / JSON 配列) |
+| `MEMORIA_NG_DOMAINS_FILE` | (未設定) | NG ドメイン追加リストのパス |
 
 例:
 
@@ -284,6 +289,23 @@ Claude Code は `~/.claude/mcp.json` (プロジェクト固有なら `.claude/mc
 | `recent_bookmarks` | 最新の保存 |
 
 `memoria://bookmark/<id>` リソースで個別ブックマークの Markdown 表現も取得できます。
+
+## 動作モード
+
+### local (既定)
+単一ユーザー、認証なし、すべてのエンドポイント解放、URL アクセスを `page_visits` に蓄積。Chrome 拡張のオプションで「URL をトラッキングしない」をオンにすると `/api/access` の送信を停止できます。
+
+### online
+オンライン共有想定。`MEMORIA_MODE=online` + `MEMORIA_JWT_SECRET` を設定して起動。
+
+- すべての `/api/*` で `Authorization: Bearer <JWT>` 必須 (HS256)
+- 訪問履歴 (`/api/visits/*`) は 403 で完全停止、`/api/access` は no-op
+- ブックマークは JWT の `sub` (user_id) でスコープ
+- Cernere 統合: 本番では [`@ludiars/cernere-service-adapter`](https://github.com/LUDIARS/Cernere/tree/main/packages/service-adapter) を別プロセスで起動し、Cernere admission flow → Memoria JWT 発行 → Memoria 側は受け取った JWT を `MEMORIA_JWT_SECRET` で検証する構成
+- 開発用 token: `cd server && npm run issue-token alice` で `sub=alice` の JWT を発行
+
+### コンテンツフィルタ
+NG / R18 ワードがブックマークの URL / タイトル / 本文に含まれる場合、422 で保存を拒否します。`MEMORIA_NGWORDS_FILE` / `MEMORIA_NG_DOMAINS_FILE` で追加可能。
 
 ## ロードマップ
 
