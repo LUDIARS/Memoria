@@ -17,10 +17,10 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: server/package-lock.json
+          cache-dependency-path: service/package-lock.json
 
-      - name: Install server deps
-        working-directory: server
+      - name: Install service deps
+        working-directory: service
         env:
           # Optional: pull @ludiars/* from GitHub Packages if NPM_TOKEN is set.
           # CI runs fine without it; the SDK is in optionalDependencies and
@@ -32,12 +32,12 @@ jobs:
         working-directory: mcp-server
         run: npm ci
 
-      - name: Syntax check (server)
+      - name: Syntax check (service)
         run: |
           set -e
           while IFS= read -r f; do
             node --check "$f"
-          done < <(find server -type f -name '*.js' -not -path 'server/node_modules/*')
+          done < <(find service -type f -name '*.js' -not -path 'service/node_modules/*')
 
       - name: Syntax check (mcp-server)
         run: |
@@ -76,8 +76,8 @@ jobs:
           chmod +x "$HOME/.local/bin/claude"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Smoke test (server boots + handles a bookmark)
-        working-directory: server
+      - name: Smoke test (service boots + handles a bookmark)
+        working-directory: service
         env:
           MEMORIA_PORT: '15180'
           MEMORIA_DATA: /tmp/memoria-ci
@@ -88,7 +88,7 @@ jobs:
           node index.js &
           PID=$!
           trap 'kill $PID 2>/dev/null || true' EXIT
-          # Wait for the server to be ready (max 15s).
+          # Wait for the service to be ready (max 15s).
           for i in $(seq 1 30); do
             if curl -fsS "http://localhost:$MEMORIA_PORT/api/queue" > /dev/null 2>&1; then
               break

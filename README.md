@@ -29,12 +29,22 @@ Memoria/
 │  ├ popup.html / .js     ツールバーアイコンの保存ボタン
 │  └ options.html / .js   サーバー URL 設定
 │
-├ server/                 Node.js + Hono + better-sqlite3
+├ service/                Node.js + Hono + better-sqlite3 (バックエンド本体)
 │  ├ index.js             HTTP API + 静的配信
 │  ├ db.js                SQLite スキーマ + クエリ
 │  ├ claude.js            HTML→テキスト抽出 + claude CLI 呼び出し
 │  ├ queue.js             FIFO 要約キュー
+│  ├ cernere.js           Cernere service-adapter ブリッジ
 │  └ public/              SPA (vanilla JS)
+│
+├ mcp-server/             MCP サーバー (stdio, Claude Desktop / Code 用)
+│
+├ spec/                   設計仕様
+│  ├ events.md            peer events / commands 契約
+│  ├ frontend/            フロントエンド (Web UI + 拡張) の仕様
+│  └ server/              バックエンド (service/) のモジュール別仕様
+│
+├ works/                  作業用スクリプト・実験コード (CI 対象外)
 │
 ├ data/                   ★ git 管理外
 │  ├ html/                保存 HTML 本体 (1 ページ = 1 ファイル)
@@ -62,10 +72,10 @@ git clone https://github.com/LUDIARS/Memoria.git
 cd Memoria
 ```
 
-### 2. サーバーのセットアップ
+### 2. バックエンド (service) のセットアップ
 
 ```bash
-cd server
+cd service
 npm install
 ```
 
@@ -78,12 +88,12 @@ cp .env.example .env
 # 編集
 ```
 
-`server/npm start` は **Node 21.7+ の `--env-file-if-exists`** で `server/.env` または `<repo>/.env` を自動的に読み込みます (dotenv 等の依存は不要)。インラインで渡した env (例: `MEMORIA_PORT=6000 npm start`) が `.env` より優先されます。
+`service/npm start` は **Node 21.7+ の `--env-file-if-exists`** で `service/.env` または `<repo>/.env` を自動的に読み込みます (dotenv 等の依存は不要)。インラインで渡した env (例: `MEMORIA_PORT=6000 npm start`) が `.env` より優先されます。
 
-### 4. サーバー起動
+### 4. バックエンド起動
 
 ```bash
-cd server
+cd service
 npm start
 # → http://localhost:5180
 ```
@@ -302,8 +312,8 @@ Claude Code は `~/.claude/mcp.json` (プロジェクト固有なら `.claude/mc
 - 訪問履歴 (`/api/visits/*`) は 403 で完全停止、`/api/access` は no-op
 - ブックマークは JWT の `sub` (user_id) でスコープ
 - Cernere 統合: `@ludiars/cernere-service-adapter` を **同一プロセスで lazy import** し、admission + peer adapter の両方を起動。`CERNERE_*` env が揃った時のみ有効化、SDK 未インストール時は自前 HS256 検証にフォールバック
-- 開発用 token: `cd server && npm run issue-token alice` で `sub=alice` の JWT を発行
-- Peer adapter で公開するコマンドと発行イベントは [docs/events.md](docs/events.md) 参照
+- 開発用 token: `cd service && npm run issue-token alice` で `sub=alice` の JWT を発行
+- Peer adapter で公開するコマンドと発行イベントは [spec/events.md](spec/events.md) 参照
 
 ### コンテンツフィルタ
 NG / R18 ワードがブックマークの URL / タイトル / 本文に含まれる場合、422 で保存を拒否します。`MEMORIA_NGWORDS_FILE` / `MEMORIA_NG_DOMAINS_FILE` で追加可能。
