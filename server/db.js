@@ -242,6 +242,112 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
   }).sort((a, b) => b.score - a.score || (a.last_seen_at < b.last_seen_at ? 1 : -1));
 }
 
+// ── trends -----------------------------------------------------------------
+
+/** Top categories by save count within `sinceDays`. */
+export function trendsCategories(db, { sinceDays = 30, limit = 12 } = {}) {
+  return db.prepare(`
+    SELECT bc.category, COUNT(*) AS count
+    FROM bookmark_categories bc
+    JOIN bookmarks b ON b.id = bc.bookmark_id
+    WHERE b.created_at >= datetime('now', ?)
+    GROUP BY bc.category
+    ORDER BY count DESC
+    LIMIT ?
+  `).all(`-${Number(sinceDays) || 30} days`, Number(limit) || 12);
+}
+
+/**
+ * Compare category counts in the current window with the previous window of
+ * the same length. Returns categories with the largest absolute delta.
+ */
+export function trendsCategoryDiff(db, { sinceDays = 7, limit = 8 } = {}) {
+  const days = Number(sinceDays) || 7;
+  const cur = db.prepare(`
+    SELECT bc.category, COUNT(*) AS n
+    FROM bookmark_categories bc
+    JOIN bookmarks b ON b.id = bc.bookmark_id
+    WHERE b.created_at >= datetime('now', ?)
+    GROUP BY bc.category
+  `).all(`-${days} days`);
+  const prev = db.prepare(`
+    SELECT bc.category, COUNT(*) AS n
+    FROM bookmark_categories bc
+    JOIN bookmarks b ON b.id = bc.bookmark_id
+    WHERE b.created_at < datetime('now', ?)
+      AND b.created_at >= datetime('now', ?)
+    GROUP BY bc.category
+  `).all(`-${days} days`, `-${days * 2} days`);
+  const map = new Map();
+  for (const r of cur) map.set(r.category, { current: r.n, previous: 0 });
+  for (const r of prev) {
+    const cur = map.get(r.category) || { current: 0, previous: 0 };
+    cur.previous = r.n;
+    map.set(r.category, cur);
+  }
+  const rows = [...map.entries()].map(([category, v]) => ({
+    category,
+    current: v.current,
+    previous: v.previous,
+    delta: v.current - v.previous,
+  }));
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || b.current - a.current);
+  return rows.slice(0, Number(limit) || 8);
+}
+
+/** Daily save and access counts (per day, local time) in the window. */
+export function trendsTimeline(db, { sinceDays = 30 } = {}) {
+  const days = Number(sinceDays) || 30;
+  const saves = db.prepare(`
+    SELECT date(created_at, 'localtime') AS d, COUNT(*) AS n
+    FROM bookmarks
+    WHERE created_at >= datetime('now', ?)
+    GROUP BY d ORDER BY d ASC
+  `).all(`-${days} days`);
+  const accesses = db.prepare(`
+    SELECT date(accessed_at, 'localtime') AS d, COUNT(*) AS n
+    FROM accesses
+    WHERE accessed_at >= datetime('now', ?)
+    GROUP BY d ORDER BY d ASC
+  `).all(`-${days} days`);
+  // Build per-day series including zero-fill.
+  const out = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    out.push({
+      date: local,
+      saves: saves.find(r => r.d === local)?.n ?? 0,
+      accesses: accesses.find(r => r.d === local)?.n ?? 0,
+    });
+  }
+  return out;
+}
+
+/** Top accessed domains in window. Joins accesses with bookmarks to get URLs. */
+export function trendsDomains(db, { sinceDays = 30, limit = 12 } = {}) {
+  const rows = db.prepare(`
+    SELECT b.url, COUNT(a.id) AS hits
+    FROM accesses a
+    JOIN bookmarks b ON b.id = a.bookmark_id
+    WHERE a.accessed_at >= datetime('now', ?)
+    GROUP BY b.id
+  `).all(`-${Number(sinceDays) || 30} days`);
+  const tally = new Map();
+  for (const r of rows) {
+    const d = extractDomain(r.url);
+    if (!d) continue;
+    tally.set(d, (tally.get(d) ?? 0) + r.hits);
+  }
+  return [...tally.entries()]
+    .map(([domain, hits]) => ({ domain, hits }))
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, Number(limit) || 12);
+}
+
 function extractDomain(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }

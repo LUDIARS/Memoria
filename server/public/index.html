@@ -43,6 +43,7 @@
           未保存履歴
           <span id="tabVisitsCount" class="tab-count hidden">0</span>
         </button>
+        <button class="tab" data-tab="trends">傾向</button>
       </nav>
 
       <div id="bookmarksView">
@@ -78,6 +79,41 @@
         <ul id="visitsList" class="visits-list"></ul>
         <div id="visitsEmpty" class="queue-empty hidden">本日の未保存履歴はありません。</div>
         <ul id="visitsResults" class="visits-results"></ul>
+      </div>
+
+      <div id="trendsView" class="hidden">
+        <div class="trends-bar">
+          <span>保存・閲覧傾向のサマリ。期間を変えると全カードが更新されます。</span>
+          <span class="grow"></span>
+          <select id="trendsRange">
+            <option value="7">過去 7 日</option>
+            <option value="30" selected>過去 30 日</option>
+            <option value="90">過去 90 日</option>
+            <option value="365">過去 1 年</option>
+          </select>
+        </div>
+
+        <div class="trends-grid">
+          <section class="trend-card">
+            <h3>保存とアクセスの推移</h3>
+            <div id="trendTimeline" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>カテゴリ別 保存数</h3>
+            <div id="trendCategories" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>増えた・減ったカテゴリ (7 日比較)</h3>
+            <ul id="trendDiff" class="trend-diff"></ul>
+          </section>
+
+          <section class="trend-card">
+            <h3>よく訪れているドメイン</h3>
+            <div id="trendDomains" class="chart"></div>
+          </section>
+        </div>
       </div>
 
       <div id="queueView" class="hidden">
