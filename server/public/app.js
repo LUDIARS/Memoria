@@ -1759,6 +1759,28 @@ function renderDiaryDetail() {
     });
   });
 
+  const digs = metrics.digs || [];
+  if (digs.length === 0) {
+    $('diaryDigs').innerHTML = '<li class="queue-empty">この日のディグはなし</li>';
+  } else {
+    $('diaryDigs').innerHTML = digs.map(dg => `
+      <li class="diary-dig" data-id="${dg.id}">
+        <div class="diary-dig-head">
+          <span class="diary-dig-query">${escapeHtml(dg.query)}</span>
+          <span class="diary-dig-meta">${dg.source_count} 件 · ${escapeHtml(dg.status)}</span>
+        </div>
+        ${dg.summary ? `<div class="diary-dig-summary">${escapeHtml(dg.summary)}</div>` : ''}
+      </li>
+    `).join('');
+    $('diaryDigs').querySelectorAll('.diary-dig').forEach(li => {
+      li.addEventListener('click', () => {
+        const id = Number(li.dataset.id);
+        switchTab('dig');
+        loadDigSession(id);
+      });
+    });
+  }
+
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
     $('diaryGithub').innerHTML = `<li class="queue-empty">${d.github_commits?.error ? escapeHtml('GitHub: ' + d.github_commits.error) : 'commit 記録なし'}</li>`;
