@@ -588,7 +588,111 @@ app.get('/api/wordcloud/:id', (c) => {
   const id = Number(c.req.param('id'));
   const w = getWordCloud(db, id);
   if (!w) return c.json({ error: 'not found' }, 404);
-  return c.json(w);
+  return c.json({ ...w, related_pages: buildRelatedPages(w) });
+});
+
+function buildRelatedPages(wc, depth = 0) {
+  if (!wc || depth > 2) return [];
+  if (wc.origin === 'dig' && wc.origin_dig_id) {
+    const dig = getDigSession(db, wc.origin_dig_id);
+    if (!dig) return [];
+    const r = dig.result || {};
+    return (r.sources || []).map(s => ({
+      url: s.url, title: s.title || s.url,
+      snippet: (s.snippet || '').slice(0, 200), kind: 'dig-source',
+    }));
+  }
+  if (wc.origin === 'bookmark' && wc.origin_bookmark_id) {
+    const b = getBookmark(db, wc.origin_bookmark_id);
+    return b ? [{ url: b.url, title: b.title, snippet: (b.summary || '').slice(0, 200), kind: 'bookmark' }] : [];
+  }
+  if (wc.origin === 'bookmarks') {
+    return listBookmarks(db).slice(0, 16).map(b => ({
+      url: b.url, title: b.title, snippet: (b.summary || '').slice(0, 200), kind: 'bookmark',
+    }));
+  }
+  if (wc.origin === 'merged') {
+    const out = [];
+    const seen = new Set();
+    for (const m of (wc.result?.merged_from || [])) {
+      const child = getWordCloud(db, m.id);
+      for (const p of buildRelatedPages(child, depth + 1)) {
+        if (seen.has(p.url)) continue;
+        seen.add(p.url);
+        out.push(p);
+      }
+    }
+    return out.slice(0, 30);
+  }
+  return [];
+}
+
+app.get('/api/wordcloud/:id/graph', (c) => {
+  const id = Number(c.req.param('id'));
+  const radius = Math.min(3, Math.max(1, Number(c.req.query('radius')) || 3));
+  if (!getWordCloud(db, id)) return c.json({ error: 'not found' }, 404);
+
+  // BFS over parent_cloud_id (up) and child clouds (down).
+  const seen = new Map(); // id → depth from current
+  const queue = [{ id, depth: 0 }];
+  seen.set(id, 0);
+  while (queue.length > 0) {
+    const { id: nid, depth } = queue.shift();
+    if (depth >= radius) continue;
+    const cur = db.prepare(`SELECT parent_cloud_id FROM word_clouds WHERE id = ?`).get(nid);
+    if (cur?.parent_cloud_id && !seen.has(cur.parent_cloud_id)) {
+      seen.set(cur.parent_cloud_id, depth + 1);
+      queue.push({ id: cur.parent_cloud_id, depth: depth + 1 });
+    }
+    const children = db.prepare(`
+      SELECT id FROM word_clouds WHERE parent_cloud_id = ? AND status = 'done'
+    `).all(nid);
+    for (const ch of children) {
+      if (!seen.has(ch.id)) {
+        seen.set(ch.id, depth + 1);
+        queue.push({ id: ch.id, depth: depth + 1 });
+      }
+    }
+  }
+
+  // Count truncated branches (clouds at depth=radius that still have un-fetched
+  // children — UI uses this to draw a "..." stub).
+  const truncated = new Map(); // id → truncated_count
+  for (const [nid, depth] of seen.entries()) {
+    if (depth !== radius) continue;
+    const childCount = db.prepare(`
+      SELECT COUNT(*) AS n FROM word_clouds WHERE parent_cloud_id = ? AND status = 'done'
+    `).get(nid)?.n ?? 0;
+    if (childCount > 0) truncated.set(nid, childCount);
+  }
+
+  const nodes = [...seen.keys()].map(nid => {
+    const wc = getWordCloud(db, nid);
+    const r = wc?.result || {};
+    const topWords = (r.words || []).filter(w => w.kept)
+      .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+      .slice(0, 5)
+      .map(w => ({ word: w.word, weight: w.weight }));
+    const totalWeight = topWords.reduce((s, w) => s + (w.weight || 0), 0);
+    return {
+      id: nid,
+      label: wc?.label || `cloud#${nid}`,
+      parent_cloud_id: wc?.parent_cloud_id ?? null,
+      parent_word: wc?.parent_word ?? null,
+      origin: wc?.origin || '',
+      depth: seen.get(nid),
+      total_weight: totalWeight,
+      top_words: topWords,
+      summary: (r.summary || '').slice(0, 200),
+      truncated_children: truncated.get(nid) ?? 0,
+    };
+  });
+  const idsInGraph = new Set(seen.keys());
+  const edges = nodes
+    .filter(n => n.parent_cloud_id && idsInGraph.has(n.parent_cloud_id))
+    .map(n => ({ from: n.parent_cloud_id, to: n.id, label: n.parent_word || '' }));
+
+  return c.json({ current: id, radius, nodes, edges });
 });
 
 app.get('/api/wordcloud/:id/siblings', (c) => {
