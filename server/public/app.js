@@ -33,6 +33,10 @@ const state = {
   diaryDetail: null,        // {date, summary, notes, status, metrics, github_commits, live_metrics}
   diaryDetailDate: null,
   diaryPolling: null,
+  weeklyEntries: [],
+  weeklyDetail: null,
+  weeklyDetailWeek: null,
+  weeklyPolling: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1301,12 +1305,159 @@ async function loadDiary() {
 
 async function refreshDiaryMonth() {
   try {
-    const r = await api(`/api/diary?month=${encodeURIComponent(state.diaryMonth)}`);
-    state.diaryEntries = r.items || [];
-    renderDiaryCalendar(r);
+    const [diary, weekly] = await Promise.all([
+      api(`/api/diary?month=${encodeURIComponent(state.diaryMonth)}`),
+      api(`/api/weekly?month=${encodeURIComponent(state.diaryMonth)}`),
+    ]);
+    state.diaryEntries = diary.items || [];
+    state.weeklyEntries = weekly.items || [];
+    renderDiaryCalendar(diary);
+    renderWeeklyList();
   } catch (e) {
     console.error('diary load failed', e);
   }
+}
+
+function renderWeeklyList() {
+  const ul = $('diaryWeekList');
+  if (!ul) return;
+  const items = state.weeklyEntries || [];
+  // Always also list potential weeks for the month (so user can hit "作成"
+  // for weeks that aren't generated yet). Compute Mondays within this month.
+  const [y, m] = state.diaryMonth.split('-').map(Number);
+  const monthEnd = new Date(y, m, 0).getDate();
+  const generated = new Map(items.map(w => [w.week_start, w]));
+  const candidates = [];
+  for (let d = 1; d <= monthEnd; d++) {
+    const dt = new Date(y, m - 1, d);
+    if (dt.getDay() !== 1) continue; // Mondays only
+    const ws = `${state.diaryMonth}-${String(d).padStart(2, '0')}`;
+    candidates.push(ws);
+  }
+  // Also include weeks whose Monday is in the previous month but Sunday is in this month.
+  const firstOfMonth = new Date(y, m - 1, 1);
+  if (firstOfMonth.getDay() !== 1) {
+    const offset = firstOfMonth.getDay() === 0 ? -6 : 1 - firstOfMonth.getDay();
+    const monBefore = new Date(firstOfMonth);
+    monBefore.setDate(firstOfMonth.getDate() + offset);
+    const ws = `${monBefore.getFullYear()}-${String(monBefore.getMonth() + 1).padStart(2, '0')}-${String(monBefore.getDate()).padStart(2, '0')}`;
+    candidates.unshift(ws);
+  }
+  if (!candidates.length) {
+    ul.innerHTML = '<li class="queue-empty">この月に該当する週なし</li>';
+    return;
+  }
+  const today = todayLocalDate();
+  ul.innerHTML = candidates.map((ws, idx) => {
+    const w = generated.get(ws);
+    const sunday = new Date(ws + 'T00:00:00');
+    sunday.setDate(sunday.getDate() + 6);
+    const sundayStr = `${String(sunday.getMonth() + 1).padStart(2, '0')}/${String(sunday.getDate()).padStart(2, '0')}`;
+    const monStr = ws.slice(5).replace('-', '/');
+    const label = `${y}年${m}月 第${idx + 1}週 (${monStr}〜${sundayStr})`;
+    const status = w?.status || 'absent';
+    const future = ws > today;
+    const klass = `diary-week-item status-${status}${future ? ' future' : ''}`;
+    const tag = w?.status === 'done' ? '✓' : w?.status === 'pending' ? '…' : w?.status === 'error' ? '!' : '+';
+    return `<li class="${klass}" data-week="${ws}">
+      <span class="diary-week-tag">${tag}</span>
+      <span class="diary-week-label">${escapeHtml(label)}</span>
+    </li>`;
+  }).join('');
+  ul.querySelectorAll('.diary-week-item').forEach(li => {
+    li.addEventListener('click', () => loadWeekly(li.dataset.week));
+  });
+}
+
+async function loadWeekly(weekStart) {
+  state.weeklyDetailWeek = weekStart;
+  $('diaryDetail').classList.add('hidden');
+  $('weeklyDetail').classList.remove('hidden');
+  try {
+    const w = await api(`/api/weekly/${weekStart}`);
+    state.weeklyDetail = w;
+    renderWeeklyDetail();
+    if (w.status === 'pending') pollWeekly(weekStart);
+  } catch (e) {
+    alert(`週報取得失敗: ${e.message}`);
+  }
+}
+
+function pollWeekly(ws) {
+  if (state.weeklyPolling) clearInterval(state.weeklyPolling);
+  state.weeklyPolling = setInterval(async () => {
+    if (state.weeklyDetailWeek !== ws) {
+      clearInterval(state.weeklyPolling); state.weeklyPolling = null; return;
+    }
+    const w = await api(`/api/weekly/${ws}`).catch(() => null);
+    if (!w) return;
+    if (w.status !== 'pending') {
+      clearInterval(state.weeklyPolling); state.weeklyPolling = null;
+      state.weeklyDetail = w;
+      renderWeeklyDetail();
+      refreshDiaryMonth();
+    }
+  }, 5000);
+}
+
+function renderWeeklyDetail() {
+  const w = state.weeklyDetail;
+  if (!w) return;
+  $('weeklyTitle').textContent = `${w.week_start} 〜 ${w.week_end}`;
+  const status = w.status || 'absent';
+  const statusEl = $('weeklyStatus');
+  const labels = { absent: '未作成', pending: '生成中…', done: '完了', error: 'エラー' };
+  statusEl.textContent = labels[status] || status;
+  statusEl.className = `diary-status-tag status-${status}`;
+  const btn = $('weeklyGenerate');
+  btn.textContent = status === 'absent' ? '作成' : '再生成';
+  btn.disabled = status === 'pending';
+
+  if (status === 'absent') {
+    $('weeklySummary').innerHTML = '<div class="queue-empty">この週の週報はまだ作成されていません。「作成」ボタンを押して生成できます。</div>';
+  } else if (status === 'pending') {
+    $('weeklySummary').innerHTML = '<div class="dig-pending"><div class="pulse"></div>Opus 1M が週報を生成中…</div>';
+  } else if (status === 'error') {
+    $('weeklySummary').innerHTML = `<div class="dig-pending" style="border-color:var(--danger);color:var(--danger)">エラー: ${escapeHtml(w.error || '不明')}</div>`;
+  } else {
+    $('weeklySummary').textContent = w.summary || '';
+  }
+
+  const ghRepos = w.github_summary?.repos || [];
+  $('weeklyGithub').innerHTML = ghRepos.length === 0
+    ? '<li class="queue-empty">commit なし</li>'
+    : ghRepos.map(r =>
+      `<li><span class="diary-gh-repo">${escapeHtml(r.repo)}</span><span class="diary-gh-count">${r.count} commits</span></li>`
+    ).join('');
+}
+
+async function generateWeekly() {
+  const ws = state.weeklyDetailWeek;
+  if (!ws) return;
+  const btn = $('weeklyGenerate');
+  btn.disabled = true;
+  btn.textContent = '投入中…';
+  try {
+    await api(`/api/weekly/${ws}/generate`, { method: 'POST' });
+    flashToast(`${ws} の週報を生成キューに投入しました`);
+    await loadWeekly(ws);
+  } catch (e) {
+    alert(`失敗: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '再生成';
+  }
+}
+
+async function deleteWeeklyEntry() {
+  const ws = state.weeklyDetailWeek;
+  if (!ws) return;
+  if (!confirm(`${ws} の週報を削除しますか？`)) return;
+  await api(`/api/weekly/${ws}`, { method: 'DELETE' });
+  state.weeklyDetail = null;
+  state.weeklyDetailWeek = null;
+  $('weeklyDetail').classList.add('hidden');
+  refreshDiaryMonth();
 }
 
 function renderDiaryCalendar({ month, start, end }) {
@@ -1348,6 +1499,8 @@ function renderDiaryCalendar({ month, start, end }) {
 
 async function loadDiaryDetail(date) {
   state.diaryDetailDate = date;
+  state.weeklyDetailWeek = null;
+  $('weeklyDetail').classList.add('hidden');
   $('diaryDetail').classList.remove('hidden');
   try {
     const d = await api(`/api/diary/${date}`);
@@ -1392,13 +1545,17 @@ function renderDiaryDetail() {
   generateBtn.disabled = (status === 'pending');
 
   if (status === 'absent') {
-    $('diarySummary').innerHTML = '<div class="queue-empty">この日の日記はまだ作成されていません。「作成」ボタンを押して生成できます。</div>';
+    $('diaryWork').innerHTML = '<div class="queue-empty">この日の日記はまだ作成されていません。「作成」ボタンを押して生成できます。</div>';
+    $('diaryHighlights').innerHTML = '';
   } else if (status === 'pending') {
-    $('diarySummary').innerHTML = '<div class="dig-pending"><div class="pulse"></div>claude が日報を生成中…</div>';
+    $('diaryWork').innerHTML = '<div class="dig-pending"><div class="pulse"></div>Sonnet が作業内容を解析中…</div>';
+    $('diaryHighlights').innerHTML = '<div class="dig-pending"><div class="pulse"></div>Opus 1M がハイライトを生成中…</div>';
   } else if (status === 'error') {
-    $('diarySummary').innerHTML = `<div class="dig-pending" style="border-color:var(--danger);color:var(--danger)">エラー: ${escapeHtml(d.error || '不明')}</div>`;
+    $('diaryWork').innerHTML = `<div class="dig-pending" style="border-color:var(--danger);color:var(--danger)">エラー: ${escapeHtml(d.error || '不明')}</div>`;
+    $('diaryHighlights').innerHTML = '';
   } else {
-    $('diarySummary').textContent = d.summary || '';
+    $('diaryWork').textContent = d.work_content || '(なし)';
+    $('diaryHighlights').textContent = d.highlights || '(なし)';
   }
 
   // Hourly chart: live_metrics is computed fresh on every request and includes
@@ -1447,9 +1604,16 @@ function renderDiaryDetail() {
   if (commits.length === 0) {
     $('diaryGithub').innerHTML = `<li class="queue-empty">${d.github_commits?.error ? escapeHtml('GitHub: ' + d.github_commits.error) : 'commit 記録なし'}</li>`;
   } else {
-    $('diaryGithub').innerHTML = commits.map(c =>
-      `<li><span class="diary-gh-repo">${escapeHtml(c.repo)}</span><code>${escapeHtml(c.sha)}</code> ${escapeHtml(c.message)}</li>`
-    ).join('');
+    // Group by repo: { repo: count }
+    const byRepo = new Map();
+    for (const c of commits) {
+      byRepo.set(c.repo, (byRepo.get(c.repo) || 0) + 1);
+    }
+    const rows = [...byRepo.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([repo, n]) => `<li><span class="diary-gh-repo">${escapeHtml(repo)}</span><span class="diary-gh-count">${n} commits</span></li>`)
+      .join('');
+    $('diaryGithub').innerHTML = rows;
   }
 
   $('diaryNotes').value = d.notes || '';
@@ -1995,6 +2159,8 @@ $('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
 $('diarySettingsTest')?.addEventListener('click', testGithubPat);
 $('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
+$('weeklyGenerate')?.addEventListener('click', generateWeekly);
+$('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {

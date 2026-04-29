@@ -89,6 +89,8 @@ export function openDb(dbPath) {
     CREATE TABLE IF NOT EXISTS diary_entries (
       date                  TEXT PRIMARY KEY,
       summary               TEXT,
+      work_content          TEXT,
+      highlights            TEXT,
       notes                 TEXT,
       metrics_json          TEXT,
       github_commits_json   TEXT,
@@ -97,6 +99,21 @@ export function openDb(dbPath) {
       created_at            TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS weekly_reports (
+      week_start            TEXT PRIMARY KEY,
+      week_end              TEXT NOT NULL,
+      month                 TEXT NOT NULL,
+      week_in_month         INTEGER NOT NULL,
+      summary               TEXT,
+      github_summary_json   TEXT,
+      status                TEXT NOT NULL DEFAULT 'pending',
+      error                 TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_weekly_month
+      ON weekly_reports(month);
 
     CREATE TABLE IF NOT EXISTS diary_settings (
       key    TEXT PRIMARY KEY,
@@ -153,6 +170,10 @@ export function openDb(dbPath) {
   if (!dsCols.includes('preview_json')) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN preview_json TEXT`);
   }
+
+  const deCols = db.prepare(`PRAGMA table_info(diary_entries)`).all().map(c => c.name);
+  if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
+  if (!deCols.includes('highlights'))   db.exec(`ALTER TABLE diary_entries ADD COLUMN highlights TEXT`);
 
   // Forward-compat: ensure newer columns exist on older DBs.
   const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
@@ -559,13 +580,15 @@ export function listDiariesInRange(db, { start, end }) {
   `).all(start, end);
 }
 
-export function upsertDiary(db, { date, summary, notes, metrics, githubCommits, status, error }) {
+export function upsertDiary(db, { date, summary, workContent, highlights, notes, metrics, githubCommits, status, error }) {
   const tx = db.transaction(() => {
     const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date);
     if (exists) {
       db.prepare(`
         UPDATE diary_entries
            SET summary = COALESCE(?, summary),
+               work_content = COALESCE(?, work_content),
+               highlights = COALESCE(?, highlights),
                notes = COALESCE(?, notes),
                metrics_json = COALESCE(?, metrics_json),
                github_commits_json = COALESCE(?, github_commits_json),
@@ -575,6 +598,8 @@ export function upsertDiary(db, { date, summary, notes, metrics, githubCommits, 
          WHERE date = ?
       `).run(
         summary ?? null,
+        workContent ?? null,
+        highlights ?? null,
         notes ?? null,
         metrics ? JSON.stringify(metrics) : null,
         githubCommits ? JSON.stringify(githubCommits) : null,
@@ -585,11 +610,13 @@ export function upsertDiary(db, { date, summary, notes, metrics, githubCommits, 
     } else {
       db.prepare(`
         INSERT INTO diary_entries
-          (date, summary, notes, metrics_json, github_commits_json, status, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (date, summary, work_content, highlights, notes, metrics_json, github_commits_json, status, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         date,
         summary ?? null,
+        workContent ?? null,
+        highlights ?? null,
         notes ?? null,
         metrics ? JSON.stringify(metrics) : null,
         githubCommits ? JSON.stringify(githubCommits) : null,
@@ -599,6 +626,69 @@ export function upsertDiary(db, { date, summary, notes, metrics, githubCommits, 
     }
   });
   tx();
+}
+
+// ── weekly reports ---------------------------------------------------------
+
+export function getWeekly(db, weekStart) {
+  const row = db.prepare(`SELECT * FROM weekly_reports WHERE week_start = ?`).get(weekStart);
+  if (!row) return null;
+  return { ...row, github_summary: row.github_summary_json ? safeParse(row.github_summary_json) : null };
+}
+
+export function listWeeklyForMonth(db, monthStr) {
+  return db.prepare(`
+    SELECT week_start, week_end, week_in_month, status, summary, updated_at
+    FROM weekly_reports
+    WHERE month = ?
+    ORDER BY week_start ASC
+  `).all(monthStr);
+}
+
+export function upsertWeekly(db, { weekStart, weekEnd, month, weekInMonth, summary, githubSummary, status, error }) {
+  const exists = db.prepare(`SELECT week_start FROM weekly_reports WHERE week_start = ?`).get(weekStart);
+  if (exists) {
+    db.prepare(`
+      UPDATE weekly_reports
+         SET week_end = COALESCE(?, week_end),
+             month = COALESCE(?, month),
+             week_in_month = COALESCE(?, week_in_month),
+             summary = COALESCE(?, summary),
+             github_summary_json = COALESCE(?, github_summary_json),
+             status = COALESCE(?, status),
+             error = ?,
+             updated_at = datetime('now')
+       WHERE week_start = ?
+    `).run(
+      weekEnd ?? null,
+      month ?? null,
+      weekInMonth ?? null,
+      summary ?? null,
+      githubSummary ? JSON.stringify(githubSummary) : null,
+      status ?? null,
+      error ?? null,
+      weekStart,
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO weekly_reports
+        (week_start, week_end, month, week_in_month, summary, github_summary_json, status, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      weekStart,
+      weekEnd,
+      month,
+      weekInMonth,
+      summary ?? null,
+      githubSummary ? JSON.stringify(githubSummary) : null,
+      status ?? 'pending',
+      error ?? null,
+    );
+  }
+}
+
+export function deleteWeekly(db, weekStart) {
+  db.prepare(`DELETE FROM weekly_reports WHERE week_start = ?`).run(weekStart);
 }
 
 export function updateDiaryNotes(db, dateStr, notes) {

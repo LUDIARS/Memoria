@@ -5,7 +5,13 @@
 // claude is asked only to narrate.
 
 import { spawn } from 'node:child_process';
-import { visitEventsForDate } from './db.js';
+import { visitEventsForDate, getDiary } from './db.js';
+
+// Model selection. The `claude` CLI accepts `--model sonnet` and `--model opus`.
+// We use Sonnet for the per-URL narrative (cheap, repetitive) and Opus 1M for
+// the integrative highlight/weekly narrative.
+const MODEL_SONNET = 'sonnet';
+const MODEL_OPUS_1M = 'claude-opus-4-7[1m]';
 
 const MIN_VISITS_FOR_REPORT = 1;
 
@@ -293,6 +299,73 @@ export function bookmarksForDate(db, dateStr) {
   return { created, accessed: accessedRows };
 }
 
+/** GitHub commits grouped by repository: { byRepo: {repo: count}, total, repos: [...] }. */
+export function summarizeGithubByRepo(github) {
+  const commits = github?.commits || [];
+  const byRepo = new Map();
+  for (const c of commits) {
+    const r = c.repo || '(unknown)';
+    if (!byRepo.has(r)) byRepo.set(r, { count: 0, samples: [] });
+    const cur = byRepo.get(r);
+    cur.count += 1;
+    if (cur.samples.length < 3) cur.samples.push({ sha: c.sha, message: c.message });
+  }
+  const repos = [...byRepo.entries()]
+    .map(([repo, v]) => ({ repo, count: v.count, samples: v.samples }))
+    .sort((a, b) => b.count - a.count);
+  return { repos, total: commits.length };
+}
+
+const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) => [
+  `あなたは ${dateStr} の「作業内容」セクションを書きます。`,
+  'ブラウザ閲覧履歴 (URL + 時刻) からドメインとパス構造を読み解き、その時間帯に何の作業をしていたかを推察して時系列で書いてください。',
+  '',
+  '出力ルール:',
+  '- markdown 一段落 + 時間帯ごとの箇条書き',
+  '- 各時間帯は HH:MM-HH:MM の範囲で、1〜3 行で「何をしていた風」を記述',
+  '- 推測でも断定口調 (◯◯を確認)。「〜していたと推測」は不要',
+  '- ドメインの羅列は禁止。意味のある作業として書く',
+  '- URL を直接引用せず、内容を要約',
+  '',
+  `日付: ${dateStr}`,
+  `総アクセス: ${totalEvents}`,
+  `ユニークドメイン: ${totalDomains}`,
+  '',
+  'URL 履歴 (時刻 + URL):',
+  urlList,
+].join('\n');
+
+const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics }) => [
+  `あなたは ${dateStr} の「ハイライト」セクションを書きます。`,
+  '以下の 3 種類の情報を統合し、その日の重要なポイントを箇条書きで 3〜6 個。',
+  '事実ベース。憶測や創作はしない。重要度の高い順。',
+  '',
+  '## 入力 1: 作業内容 (時系列)',
+  workContent || '(なし)',
+  '',
+  '## 入力 2: 新規ブックマーク件数',
+  `${bookmarkSummary.created} 件 (再訪 ${bookmarkSummary.accessed} 件)`,
+  bookmarkSummary.topDomains
+    ? `主なドメイン: ${bookmarkSummary.topDomains.join(', ')}`
+    : '',
+  '',
+  '## 入力 3: GitHub commits (リポジトリごとの件数)',
+  githubByRepo.repos.length
+    ? githubByRepo.repos.map(r => `- ${r.repo}: ${r.count} commits`).join('\n')
+    : '(なし)',
+  '',
+  '## メタ情報',
+  `総アクセス: ${metrics.total_events} / アクティブ時間帯: ${metrics.active_hours.join(',')}`,
+  '',
+  notes ? `## ユーザのメモ・補足 (反映してください)\n${notes}\n` : '',
+  '',
+  '出力フォーマット (markdown のみ。前置き不要):',
+  '- ハイライト1',
+  '- ハイライト2',
+].join('\n');
+
+// Legacy single-prompt template — retained for fallback if a stage fails so we
+// can still return some narrative.
 const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
   const hourlyTable = metrics.hourly_visits
     .map((n, h) => `${String(h).padStart(2, '0')}:00 → ${n}`)
@@ -373,30 +446,214 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
   ].join('\n');
 };
 
-export async function generateDiaryNarrative({ dateStr, metrics, github, notes, claudeBin = 'claude', timeoutMs = 180_000 }) {
-  if (metrics.total_events < MIN_VISITS_FOR_REPORT && !github?.commits?.length && !notes) {
-    return '本日の活動記録は取得できていません。';
+/**
+ * Build the URL list for the work-content prompt. Format: "HH:MM <url>" per line,
+ * deduped consecutively (collapse runs of the same URL within 2 minutes).
+ */
+function buildUrlList(db, dateStr) {
+  const events = visitEventsForDate(db, dateStr);
+  if (events.length === 0) {
+    // Fall back to page_visits where last_seen is the date.
+    const visits = db.prepare(`
+      SELECT v.url, v.last_seen_at FROM page_visits v
+      WHERE date(v.last_seen_at, 'localtime') = ?
+      ORDER BY v.last_seen_at ASC
+    `).all(dateStr);
+    return visits.map(v => formatUrlLine(v.last_seen_at, v.url)).join('\n');
   }
-  const prompt = DIARY_PROMPT_TEMPLATE({ dateStr, metrics, github, notes });
-  return await spawnClaude(claudeBin, prompt, timeoutMs);
+  const lines = [];
+  let lastUrl = '';
+  let lastTs = 0;
+  for (const e of events) {
+    const ts = new Date(e.visited_at.replace(' ', 'T')).getTime();
+    if (e.url === lastUrl && Math.abs(ts - lastTs) < 120_000) continue; // collapse <2min
+    lines.push(formatUrlLine(e.visited_at, e.url));
+    lastUrl = e.url;
+    lastTs = ts;
+  }
+  // Cap to a sane upper bound to avoid stalling Sonnet.
+  return lines.slice(-800).join('\n');
 }
 
-function spawnClaude(bin, prompt, timeoutMs) {
+function formatUrlLine(ts, url) {
+  // ts may be 'YYYY-MM-DD HH:MM:SS' (sqlite) — pull HH:MM
+  const m = String(ts).match(/(\d{2}:\d{2})/);
+  return `${m ? m[1] : '??:??'} ${url}`;
+}
+
+/** Stage 1: Sonnet writes 作業内容 from the URL timeline. */
+export async function generateWorkContent({ db, dateStr, metrics, claudeBin = 'claude', timeoutMs = 180_000 }) {
+  const urlList = buildUrlList(db, dateStr);
+  if (!urlList.trim()) return '';
+  const prompt = WORK_CONTENT_PROMPT({
+    dateStr,
+    urlList,
+    totalEvents: metrics.total_events,
+    totalDomains: metrics.unique_domains,
+  });
+  return await spawnClaude(claudeBin, prompt, MODEL_SONNET, timeoutMs);
+}
+
+/** Stage 3: Opus 1M integrates work content + bookmark count + commits into highlights. */
+export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics, claudeBin = 'claude', timeoutMs = 240_000 }) {
+  const prompt = HIGHLIGHTS_PROMPT({
+    dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics,
+  });
+  return await spawnClaude(claudeBin, prompt, MODEL_OPUS_1M, timeoutMs);
+}
+
+/**
+ * Top-level diary generator orchestrating the three stages. Returns the
+ * structured pieces; the caller persists them.
+ */
+export async function generateDiary({ db, dateStr, metrics, github, notes, claudeBin = 'claude' }) {
+  const githubByRepo = summarizeGithubByRepo(github);
+  const bookmarkSummary = buildBookmarkSummary(metrics);
+
+  // Edge case: nothing happened at all.
+  if (metrics.total_events < MIN_VISITS_FOR_REPORT
+      && !github?.commits?.length && !notes
+      && bookmarkSummary.created === 0 && bookmarkSummary.accessed === 0) {
+    return {
+      workContent: '',
+      githubByRepo,
+      highlights: '',
+      summary: '本日の活動記録は取得できていません。',
+    };
+  }
+
+  const workContent = await generateWorkContent({ db, dateStr, metrics, claudeBin });
+  const highlights = await generateHighlights({
+    dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics, claudeBin,
+  });
+
+  // Combined summary for legacy display.
+  const summary = composeSummary({ workContent, githubByRepo, highlights });
+  return { workContent, githubByRepo, highlights, summary };
+}
+
+function buildBookmarkSummary(metrics) {
+  const created = metrics.bookmarks?.created || [];
+  const accessed = metrics.bookmarks?.accessed || [];
+  const domSet = new Set();
+  for (const b of [...created, ...accessed]) {
+    try { domSet.add(new URL(b.url).hostname); } catch {}
+  }
+  return {
+    created: created.length,
+    accessed: accessed.length,
+    topDomains: [...domSet].slice(0, 8),
+  };
+}
+
+function composeSummary({ workContent, githubByRepo, highlights }) {
+  const parts = [];
+  if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
+  if (githubByRepo.repos.length) {
+    const repoLines = githubByRepo.repos
+      .map(r => `- ${r.repo}: ${r.count} commits`)
+      .join('\n');
+    parts.push(`## GitHub commits (${githubByRepo.total} 件)\n${repoLines}`);
+  }
+  if (highlights) parts.push(`## ハイライト\n${highlights.trim()}`);
+  return parts.join('\n\n');
+}
+
+function spawnClaude(bin, prompt, model, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p'], { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
+    const args = ['-p'];
+    if (model) args.push('--model', model);
+    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`claude CLI timed out after ${timeoutMs}ms`)); }, timeoutMs);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`claude CLI (${model || 'default'}) timed out after ${timeoutMs}ms`)); }, timeoutMs);
     child.stdout.on('data', d => { stdout += d.toString('utf8'); });
     child.stderr.on('data', d => { stderr += d.toString('utf8'); });
     child.on('error', err => { clearTimeout(timer); reject(err); });
     child.on('close', code => {
       clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
+      if (code !== 0) reject(new Error(`claude (${model || 'default'}) exited ${code}: ${stderr.slice(0, 400)}`));
       else resolve(stdout.trim());
     });
     child.stdin.end(prompt, 'utf8');
   });
+}
+
+// ── weekly --------------------------------------------------------------
+
+const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }) => [
+  `あなたは ${weekStart} から ${weekEnd} までの「週報」を書きます。`,
+  '7 日分の日報と GitHub コミットヒストリから、週全体での実作業を統合してください。',
+  '',
+  '出力フォーマット (markdown のみ。前置き不要):',
+  '## 今週やったこと',
+  '一段落で週全体を概観。',
+  '## 主な成果',
+  '- 箇条書き。GitHub commit から実装した機能・修正を中心に。',
+  '- 進捗が大きかったプロジェクトを優先。',
+  '## トピック別',
+  '- 学んだこと・調べたこと (作業内容ベース)',
+  '## 来週への引き継ぎ',
+  '- 未完了に見える作業やフォローアップ',
+  '',
+  '出力ルール:',
+  '- 創作禁止。日報と commit に基づくこと',
+  '- リポジトリ名は短く (org/ は省いて末尾のみで OK)',
+  '',
+  '## 入力 1: 日報サマリ (日付ごと)',
+  dailyBlock,
+  '',
+  '## 入力 2: GitHub commit ヒストリ',
+  githubBlock,
+].join('\n');
+
+/**
+ * Generate a weekly narrative from 7 daily diaries + commits.
+ * The caller pre-fetches both via the GitHub API (per-repo commits API).
+ */
+export async function generateWeekly({ weekStart, weekEnd, dailyDiaries, githubByRepo, claudeBin = 'claude', timeoutMs = 360_000 }) {
+  const dailyBlock = dailyDiaries.map(d => {
+    const head = d.summary || d.work_content || '(日報なし)';
+    return `### ${d.date}\n${(head || '').slice(0, 1500)}`;
+  }).join('\n\n');
+  const githubBlock = githubByRepo.repos.length
+    ? githubByRepo.repos.map(r => {
+      const samples = (r.samples || []).map(s => `  - ${s.sha} ${s.message}`).join('\n');
+      return `${r.repo}: ${r.count} commits\n${samples}`;
+    }).join('\n\n')
+    : '(commit なし)';
+  const prompt = WEEKLY_PROMPT({ weekStart, weekEnd, dailyBlock, githubBlock });
+  return await spawnClaude(claudeBin, prompt, MODEL_OPUS_1M, timeoutMs);
+}
+
+/** Fetch a user's commits across `repos` in a date range, grouped by repo. */
+export async function fetchGithubRange({ token, user, repos, since, until, timeoutMs = 30_000 }) {
+  if (!user || !repos?.length) return { commits: [], repos: [] };
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'Memoria-diary/0.1',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const all = [];
+  try {
+    for (const repo of repos) {
+      const url = `https://api.github.com/repos/${repo}/commits`
+        + `?author=${encodeURIComponent(user)}`
+        + `&since=${encodeURIComponent(since)}`
+        + `&until=${encodeURIComponent(until)}`
+        + `&per_page=100`;
+      const res = await fetch(url, { headers, signal: ac.signal });
+      if (!res.ok) continue;
+      const arr = await res.json();
+      for (const c of arr) all.push(formatCommit({ ...c, _repo: repo }));
+    }
+    return { commits: all, ...summarizeGithubByRepo({ commits: all }) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** YYYY-MM-DD in local time for a given Date instance (or now). */
@@ -412,4 +669,31 @@ export function yesterdayLocal(now = new Date()) {
   const d = new Date(now);
   d.setDate(d.getDate() - 1);
   return formatLocalDate(d);
+}
+
+/** Monday → Sunday inclusive range that contains `dateStr`. */
+export function weekRangeFor(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  // Mon=1,...,Sun=7 (ISO). JS getDay: Sun=0,Mon=1,...
+  const dow = d.getDay();
+  const offsetToMonday = dow === 0 ? -6 : 1 - dow;
+  const mon = new Date(d);
+  mon.setDate(d.getDate() + offsetToMonday);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  return { start: formatLocalDate(mon), end: formatLocalDate(sun) };
+}
+
+/** Which week-of-month does `weekStart` fall in (1-based, by Mon). */
+export function weekOfMonth(weekStart) {
+  const d = new Date(weekStart + 'T00:00:00');
+  const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  // Find first Monday in the month containing weekStart's Monday.
+  const firstDay = new Date(d.getFullYear(), d.getMonth(), 1);
+  const dow = firstDay.getDay();
+  const firstMon = new Date(firstDay);
+  firstMon.setDate(1 + ((dow === 0 ? 1 : (8 - dow) % 7)));
+  const diffDays = Math.round((d - firstMon) / 86400000);
+  const idx = Math.floor(diffDays / 7) + 1;
+  return { month, weekInMonth: idx };
 }

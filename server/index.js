@@ -40,11 +40,13 @@ import {
   addDictionaryLink, removeDictionaryLink,
   insertVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
   deleteDiary, getDiarySettings, setDiarySettings,
+  getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
 } from './db.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import {
-  aggregateDay, fetchGithubActivity, generateDiaryNarrative,
-  formatLocalDate, yesterdayLocal, pingGithub,
+  aggregateDay, fetchGithubActivity, fetchGithubRange,
+  generateDiary, generateWeekly, summarizeGithubByRepo,
+  formatLocalDate, yesterdayLocal, weekRangeFor, weekOfMonth, pingGithub,
 } from './diary.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -969,14 +971,13 @@ async function runDiaryGeneration(dateStr) {
     });
   }
 
-  // Read any prior user notes so the narrative can incorporate them.
   const prior = getDiary(db, dateStr);
   const notes = prior?.notes || '';
 
-  let summary;
+  let result;
   try {
-    summary = await generateDiaryNarrative({
-      dateStr, metrics, github, notes, claudeBin: CLAUDE_BIN,
+    result = await generateDiary({
+      db, dateStr, metrics, github, notes, claudeBin: CLAUDE_BIN,
     });
   } catch (e) {
     upsertDiary(db, {
@@ -988,7 +989,9 @@ async function runDiaryGeneration(dateStr) {
 
   upsertDiary(db, {
     date: dateStr,
-    summary,
+    summary: result.summary,
+    workContent: result.workContent,
+    highlights: result.highlights,
     metrics,
     githubCommits: github,
     status: 'done',
@@ -1074,7 +1077,7 @@ app.post('/api/diary/settings', async (c) => {
 app.post('/api/diary/test-github', async (c) => {
   const s = settingsAsObject();
   if (!s.github_token) return c.json({ ok: false, error: 'no token saved' });
-  const r = await pingGithub({ token: s.github_token });
+  const r = await pingGithub({ token: s.github_token, user: s.github_user });
   return c.json(r);
 });
 
@@ -1096,6 +1099,121 @@ function scheduleMidnight() {
   }, Math.max(60_000, ms)).unref?.();
 }
 scheduleMidnight();
+
+// ---- weekly report --------------------------------------------------------
+
+const weeklyQueue = new FifoQueue();
+
+async function runWeeklyGeneration(weekStart) {
+  const range = weekRangeFor(weekStart);
+  const { weekInMonth, month } = weekOfMonth(range.start);
+  upsertWeekly(db, {
+    weekStart: range.start, weekEnd: range.end, month, weekInMonth,
+    status: 'pending', error: null,
+  });
+
+  // Pull the 7 daily diaries (use whichever pieces are available).
+  const dailyDiaries = listDiariesInRange(db, { start: range.start, end: range.end });
+
+  // Pull commits across the week from configured repos.
+  const settings = settingsAsObject();
+  let githubByRepo = { repos: [], total: 0 };
+  if (settings.github_user && settings.github_repos.length > 0) {
+    const since = `${range.start}T00:00:00Z`;
+    const until = `${range.end}T23:59:59Z`;
+    const fetched = await fetchGithubRange({
+      token: settings.github_token, user: settings.github_user,
+      repos: settings.github_repos, since, until,
+    });
+    githubByRepo = summarizeGithubByRepo(fetched);
+  }
+
+  let summary;
+  try {
+    summary = await generateWeekly({
+      weekStart: range.start, weekEnd: range.end,
+      dailyDiaries, githubByRepo, claudeBin: CLAUDE_BIN,
+    });
+  } catch (e) {
+    upsertWeekly(db, {
+      weekStart: range.start, status: 'error', githubSummary: githubByRepo,
+      error: e.message.slice(0, 500),
+    });
+    throw e;
+  }
+
+  upsertWeekly(db, {
+    weekStart: range.start, summary,
+    githubSummary: githubByRepo,
+    status: 'done', error: null,
+  });
+}
+
+function enqueueWeekly(weekStart) {
+  weeklyQueue.enqueue(async () => {
+    await runWeeklyGeneration(weekStart);
+  }, { kind: 'weekly', weekStart, title: weekStart });
+}
+
+app.get('/api/weekly', (c) => {
+  const monthQ = c.req.query('month');
+  const today = new Date();
+  const monthStr = (monthQ && /^\d{4}-\d{2}$/.test(monthQ))
+    ? monthQ
+    : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  return c.json({ month: monthStr, items: listWeeklyForMonth(db, monthStr) });
+});
+
+app.get('/api/weekly/:weekStart', (c) => {
+  const ws = c.req.param('weekStart');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ws)) return c.json({ error: 'invalid week_start' }, 400);
+  const w = getWeekly(db, ws);
+  if (!w) {
+    const range = weekRangeFor(ws);
+    const { weekInMonth, month } = weekOfMonth(range.start);
+    return c.json({ week_start: range.start, week_end: range.end, month, week_in_month: weekInMonth, status: 'absent' });
+  }
+  return c.json(w);
+});
+
+app.post('/api/weekly/:weekStart/generate', (c) => {
+  const ws = c.req.param('weekStart');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ws)) return c.json({ error: 'invalid week_start' }, 400);
+  const range = weekRangeFor(ws);
+  enqueueWeekly(range.start);
+  return c.json({ queued: true, week_start: range.start, week_end: range.end });
+});
+
+app.delete('/api/weekly/:weekStart', (c) => {
+  const ws = c.req.param('weekStart');
+  deleteWeekly(db, ws);
+  return c.json({ ok: true });
+});
+
+// Sunday 23:00 cron — summarises Mon-Sun of the current week.
+function scheduleSundayEvening() {
+  const now = new Date();
+  const next = new Date(now);
+  const dow = now.getDay();
+  const daysUntilSunday = dow === 0 ? 0 : (7 - dow); // 0=Sun,1=Mon,...6=Sat
+  next.setDate(now.getDate() + daysUntilSunday);
+  next.setHours(23, 0, 5, 0);
+  if (next <= now) next.setDate(next.getDate() + 7);
+  const ms = next.getTime() - now.getTime();
+  setTimeout(async () => {
+    try {
+      // Today (Sunday) is the end of the week we're summarising.
+      const today = new Date();
+      const range = weekRangeFor(formatLocalDate(today));
+      console.log(`[weekly cron] generating week ${range.start}`);
+      enqueueWeekly(range.start);
+    } catch (e) {
+      console.error('[weekly cron] failed:', e.message);
+    }
+    scheduleSundayEvening();
+  }, Math.max(60_000, ms)).unref?.();
+}
+scheduleSundayEvening();
 
 // ---- static UI ------------------------------------------------------------
 

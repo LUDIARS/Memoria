@@ -187,7 +187,23 @@
               <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
             </div>
             <div id="diaryCalendar" class="diary-calendar"></div>
+            <h4 class="diary-week-h">週報</h4>
+            <ul id="diaryWeekList" class="diary-week-list"></ul>
           </div>
+          <div id="weeklyDetail" class="diary-detail hidden">
+            <div class="diary-detail-head">
+              <h3 id="weeklyTitle"></h3>
+              <span id="weeklyStatus" class="diary-status-tag"></span>
+              <span class="grow"></span>
+              <button id="weeklyGenerate" class="ghost">再生成</button>
+              <button id="weeklyDelete" class="danger">削除</button>
+            </div>
+            <h4>週報サマリ</h4>
+            <div id="weeklySummary" class="diary-summary"></div>
+            <h4>GitHub commits (リポ別)</h4>
+            <ul id="weeklyGithub" class="diary-github"></ul>
+          </div>
+
           <div id="diaryDetail" class="diary-detail hidden">
             <div class="diary-detail-head">
               <h3 id="diaryDate"></h3>
@@ -196,8 +212,10 @@
               <button id="diaryGenerate" class="ghost">再生成</button>
               <button id="diaryDelete" class="danger">削除</button>
             </div>
-            <h4>サマリ</h4>
-            <div id="diarySummary" class="diary-summary"></div>
+            <h4>作業内容 (Sonnet)</h4>
+            <div id="diaryWork" class="diary-summary"></div>
+            <h4>ハイライト (Opus 1M)</h4>
+            <div id="diaryHighlights" class="diary-summary"></div>
             <h4>時間帯別アクセス (0-24時)</h4>
             <div id="diaryHourly" class="diary-hourly"></div>
             <div class="diary-pie-row">
@@ -214,7 +232,7 @@
             <ul id="diaryBookmarksCreated" class="diary-bookmarks"></ul>
             <h4>再訪したブックマーク</h4>
             <ul id="diaryBookmarksAccessed" class="diary-bookmarks"></ul>
-            <h4>GitHub commits</h4>
+            <h4>GitHub commits (リポ別件数)</h4>
             <ul id="diaryGithub" class="diary-github"></ul>
             <h4>メモ・補足</h4>
             <textarea id="diaryNotes" rows="6" placeholder="補足や訂正を書くと、次の再生成で反映されます。"></textarea>
