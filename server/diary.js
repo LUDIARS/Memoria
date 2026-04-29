@@ -9,18 +9,28 @@ import { visitEventsForDate } from './db.js';
 
 const MIN_VISITS_FOR_REPORT = 1;
 
-/** Aggregate raw visit events for a date into chartable + claude-friendly metrics. */
+function extractDomain(url) {
+  try { return new URL(String(url)).hostname.toLowerCase(); } catch { return null; }
+}
+
+/**
+ * Aggregate the day from BOTH sources together (no URL-level dedup).
+ * - visit_events: per-event log. 1 row = 1 hit at its precise hour.
+ * - page_visits:  per-URL row touched today. 1 row = 1 hit at last_seen_at's hour.
+ * Overlap between the two sources is intentional — when a URL appears in both,
+ * that signals "heavy activity on that URL" (touched many times today, plus
+ * still present in the per-URL touch table).
+ */
 export function aggregateDay(db, dateStr) {
-  const events = visitEventsForDate(db, dateStr);
   const hourlyVisits = new Array(24).fill(0);
   const domainTally = new Map();
   const domainHours = new Map(); // domain -> Set of hour buckets seen
   let firstSeen = null;
   let lastSeen = null;
 
+  // 1) Per-event log
+  const events = visitEventsForDate(db, dateStr);
   for (const e of events) {
-    const dt = new Date(e.visited_at.replace(' ', 'T') + (e.visited_at.endsWith('Z') ? '' : 'Z'));
-    if (!Number.isFinite(dt.getTime())) continue;
     const localHour = new Date(e.visited_at.replace(' ', 'T')).getHours();
     const hour = Number.isFinite(localHour) ? localHour : 0;
     hourlyVisits[hour] += 1;
@@ -31,6 +41,30 @@ export function aggregateDay(db, dateStr) {
       if (!domainHours.has(e.domain)) domainHours.set(e.domain, new Set());
       domainHours.get(e.domain).add(hour);
     }
+  }
+
+  // 2) Per-URL log (page_visits) — every URL touched on this date adds another hit.
+  const visits = db.prepare(`
+    SELECT v.url, v.last_seen_at
+    FROM page_visits v
+    WHERE date(v.last_seen_at, 'localtime') = ?
+  `).all(dateStr);
+  let pageVisitsContribution = 0;
+  for (const v of visits) {
+    const domain = extractDomain(v.url);
+    if (!domain) continue;
+    let hour = 0;
+    try {
+      hour = new Date(v.last_seen_at.replace(' ', 'T')).getHours();
+      if (!Number.isFinite(hour)) hour = 0;
+    } catch {}
+    hourlyVisits[hour] += 1;
+    pageVisitsContribution += 1;
+    domainTally.set(domain, (domainTally.get(domain) || 0) + 1);
+    if (!domainHours.has(domain)) domainHours.set(domain, new Set());
+    domainHours.get(domain).add(hour);
+    if (!firstSeen || v.last_seen_at < firstSeen) firstSeen = v.last_seen_at;
+    if (!lastSeen || v.last_seen_at > lastSeen) lastSeen = v.last_seen_at;
   }
 
   const topDomains = [...domainTally.entries()]
@@ -47,15 +81,21 @@ export function aggregateDay(db, dateStr) {
     .filter(b => b.count > 0)
     .map(b => b.hour);
 
+  const totalEvents = hourlyVisits.reduce((s, n) => s + n, 0);
+
   return {
     date: dateStr,
-    total_events: events.length,
+    total_events: totalEvents,
     unique_domains: domainTally.size,
     hourly_visits: hourlyVisits,
     top_domains: topDomains,
     active_hours: activeHours,
     first_event_at: firstSeen,
     last_event_at: lastSeen,
+    sources: {
+      visit_events: events.length,
+      page_visits: pageVisitsContribution,
+    },
   };
 }
 

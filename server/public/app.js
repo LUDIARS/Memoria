@@ -1401,8 +1401,10 @@ function renderDiaryDetail() {
     $('diarySummary').textContent = d.summary || '';
   }
 
-  // Hourly chart from live_metrics (or stored metrics for older entries)
-  const metrics = d.metrics || d.live_metrics || { hourly_visits: new Array(24).fill(0), top_domains: [] };
+  // Hourly chart: live_metrics is computed fresh on every request and includes
+  // page_visits as a fallback for events captured before visit_events existed,
+  // so it's preferred over the snapshot stored at generation time.
+  const metrics = d.live_metrics || d.metrics || { hourly_visits: new Array(24).fill(0), top_domains: [] };
   $('diaryHourly').innerHTML = renderHourlyChart(metrics.hourly_visits || []);
   const domains = metrics.top_domains || [];
   $('diaryDomains').innerHTML = domains.length === 0
