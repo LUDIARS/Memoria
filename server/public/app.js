@@ -2044,16 +2044,32 @@ function renderVisits() {
       ? `<span class="suggest-badge">同ドメイン保存 ${v.same_domain_bookmarks}</span>`
       : '';
     const cat = v.catalog;
+    const pg = v.page;
+    // Per-URL summary (Sonnet) takes priority. Fallback to the page's own
+    // meta description, then the domain-level description.
+    let pageLine = '';
+    if (pg?.summary) {
+      pageLine = `<div class="visits-page">${pg.kind ? `<span class="visits-kind">${escapeHtml(pg.kind)}</span> ` : ''}${escapeHtml(pg.summary)}</div>`;
+    } else if (pg?.meta_description || pg?.og_description) {
+      pageLine = `<div class="visits-page">${escapeHtml(pg.meta_description || pg.og_description)}</div>`;
+    } else if (pg?.status === 'pending' || !pg) {
+      pageLine = `<div class="visits-page pending">ページ情報を取得中…</div>`;
+    } else if (pg?.status === 'skipped') {
+      pageLine = '';
+    } else if (pg?.status === 'error') {
+      pageLine = `<div class="visits-page pending">取得失敗</div>`;
+    }
     const catLine = cat?.description
-      ? `<div class="visits-catalog">${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}${escapeHtml(cat.description)}</div>`
-      : (cat?.status === 'pending' ? `<div class="visits-catalog pending">分類中…</div>` : '');
+      ? `<div class="visits-catalog"><span class="visits-domain-prefix">[ドメイン] </span>${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}${escapeHtml(cat.description)}</div>`
+      : (cat?.status === 'pending' ? `<div class="visits-catalog pending">ドメイン分類中…</div>` : '');
     return `
       <li class="${sel ? 'selected' : ''} ${hot ? 'hot' : ''}" data-url="${escapeHtml(v.url)}">
         <input type="checkbox" class="vchk" ${sel ? 'checked' : ''} />
         <div style="min-width:0">
-          <div class="title">${escapeHtml(v.title || '(タイトル未取得)')} ${badge}</div>
+          <div class="title">${escapeHtml(pg?.page_title || v.title || '(タイトル未取得)')} ${badge}</div>
           <div class="url">${escapeHtml(v.url)}</div>
           <div class="visits-meta">${escapeHtml(dom)}${v.score ? ` · score ${v.score}` : ''}</div>
+          ${pageLine}
           ${catLine}
         </div>
         <div class="when">

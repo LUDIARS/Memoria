@@ -43,8 +43,11 @@ import {
   getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
   getDomainCatalog, listDomainCatalog, getDomainCatalogMap,
   insertDomainPending, setDomainCatalog, deleteDomainCatalog,
+  getPageMetadata, getPageMetadataMap, insertPageMetadataPending,
+  setPageMetadata, deletePageMetadata,
 } from './db.js';
 import { classifyDomain, shouldSkipDomain } from './domain-catalog.js';
+import { fetchPageMetadata } from './page-metadata.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
@@ -64,6 +67,57 @@ const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
 const domainCatalogQueue = new ConcurrentPool({ concurrency: 2 });
+const pageMetadataQueue = new ConcurrentPool({ concurrency: 2 });
+
+function maybeQueuePageMetadata(url) {
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); }
+  catch { return; }
+  if (shouldSkipDomain(host)) return;
+  if (getPageMetadata(db, url)) return;
+  insertPageMetadataPending(db, url);
+  pageMetadataQueue.enqueue(async () => {
+    const result = await fetchPageMetadata({ url, claudeBin: CLAUDE_BIN });
+    if (result.skip) {
+      deletePageMetadata(db, url);
+      return;
+    }
+    if (result.dropRow) {
+      deletePageMetadata(db, url);
+      console.log(`[page-meta] dropped ${url}: ${result.error}`);
+      return;
+    }
+    if (!result.ok) {
+      setPageMetadata(db, url, {
+        title: result.title ?? null,
+        meta_description: result.meta_description ?? null,
+        og_title: result.og_title ?? null,
+        og_description: result.og_description ?? null,
+        og_image: result.og_image ?? null,
+        og_type: result.og_type ?? null,
+        content_type: result.content_type ?? null,
+        http_status: result.http_status ?? null,
+        status: 'error',
+        error: result.error ?? 'unknown',
+      });
+      return;
+    }
+    setPageMetadata(db, url, {
+      title: result.title,
+      meta_description: result.meta_description,
+      og_title: result.og_title,
+      og_description: result.og_description,
+      og_image: result.og_image,
+      og_type: result.og_type,
+      content_type: result.content_type,
+      http_status: result.http_status,
+      summary: result.summary,
+      kind: result.kind,
+      status: 'done',
+      error: null,
+    });
+  }, { kind: 'page', url, title: url });
+}
 
 function extractDomainFromUrl(u) {
   try { return new URL(u).hostname.toLowerCase(); } catch { return null; }
@@ -835,11 +889,20 @@ app.get('/api/visits/unsaved', (c) => {
   const since = c.req.query('since');
   const items = listUnsavedVisits(db, { since });
   const domains = [...new Set(items.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
+  const urls = items.map(v => v.url);
   const catalog = getDomainCatalogMap(db, domains);
+  const pageMap = getPageMetadataMap(db, urls);
+
+  // Lazy-fetch any URL that doesn't have metadata yet.
+  for (const url of urls) {
+    if (!pageMap.has(url)) maybeQueuePageMetadata(url);
+  }
+
   return c.json({
     items: items.map(v => {
       const dom = extractDomainFromUrl(v.url);
       const cat = dom ? catalog.get(dom) : null;
+      const pm = pageMap.get(v.url);
       return {
         ...v,
         domain: dom,
@@ -849,6 +912,14 @@ app.get('/api/visits/unsaved', (c) => {
           title: cat.title,
           status: cat.status,
         } : null,
+        page: pm ? {
+          status: pm.status,
+          summary: pm.summary,
+          kind: pm.kind,
+          meta_description: pm.meta_description,
+          og_description: pm.og_description,
+          page_title: pm.title,
+        } : (dom && shouldSkipDomain(dom)) ? { status: 'skipped' } : { status: 'pending' },
       };
     }),
   });
