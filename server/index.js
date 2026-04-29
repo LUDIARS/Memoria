@@ -31,18 +31,21 @@ import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
 import { runDig, runDigPreview } from './dig.js';
-import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
-  deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
   insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
   getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
   listDictionaryEntries, getDictionaryEntry, findDictionaryEntryByTerm,
   insertDictionaryEntry, updateDictionaryEntry, deleteDictionaryEntry,
   addDictionaryLink, removeDictionaryLink,
+  insertVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
+  deleteDiary, getDiarySettings, setDiarySettings,
 } from './db.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
-import { spawn } from 'node:child_process';
+import {
+  aggregateDay, fetchGithubActivity, generateDiaryNarrative,
+  formatLocalDate, yesterdayLocal,
+} from './diary.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -50,59 +53,11 @@ const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(__dirname, '..', 'data
 const HTML_DIR = join(DATA_DIR, 'html');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
-const RAG_ENABLED = process.env.MEMORIA_RAG !== '0';
 
 mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
-const embeddingQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
-let chunkCache = null;
-function invalidateChunkCache() { chunkCache = null; }
-function loadChunkCache() {
-  if (chunkCache) return chunkCache;
-  const rows = listChunkRows(db);
-  chunkCache = rows.map(r => ({
-    id: r.id,
-    bookmark_id: r.bookmark_id,
-    idx: r.idx,
-    text: r.text,
-    vec: bufferToVec(r.vec),
-  }));
-  return chunkCache;
-}
-
-function enqueueEmbedding(id) {
-  const meta = getBookmark(db, id);
-  embeddingQueue.enqueue(async () => {
-    const cur = getBookmark(db, id);
-    if (!cur) throw new Error('bookmark not found');
-    const htmlAbs = join(HTML_DIR, cur.html_path);
-    if (!existsSync(htmlAbs)) throw new Error('html file missing');
-
-    const html = readFileSync(htmlAbs, 'utf8');
-    const text = htmlToText(html);
-    const head = [cur.title, cur.summary].filter(Boolean).join('\n\n');
-    const all = [];
-    if (head) all.push(head);
-    for (const c of chunkText(text)) all.push(c);
-    if (all.length === 0) return;
-
-    deleteChunks(db, id);
-    const model = getModelName();
-    let i = 0;
-    for (const t of all) {
-      const v = await embed(t, 'passage');
-      insertChunk(db, { bookmarkId: id, idx: i++, text: t, vec: vecToBuffer(v), model });
-    }
-    invalidateChunkCache();
-  }, {
-    kind: 'embedding',
-    bookmarkId: id,
-    title: meta?.title ?? `id=${id}`,
-    url: meta?.url ?? '',
-  });
-}
 
 function enqueueSummary(id) {
   const b = getBookmark(db, id);
@@ -120,9 +75,6 @@ function enqueueSummary(id) {
         url: cur.url, title: cur.title, html, claudeBin: CLAUDE_BIN,
       });
       setSummary(db, id, { summary, categories, status: 'done' });
-      // Schedule embedding generation in the background; if disabled or
-      // not yet configured, embeddingQueue will simply error out per-job.
-      if (RAG_ENABLED) enqueueEmbedding(id);
     } catch (e) {
       setSummary(db, id, { summary: null, categories: [], status: 'error', error: e.message.slice(0, 500) });
       throw e;
@@ -310,144 +262,6 @@ app.delete('/api/recommendations/dismissals', (c) => {
   clearDismissals(db);
   return c.json({ ok: true });
 });
-
-// ---- RAG (semantic search + Q&A) -----------------------------------------
-
-app.get('/api/rag/status', (c) => {
-  return c.json({
-    enabled: RAG_ENABLED,
-    model: getModelName(),
-    queue_depth: embeddingQueue.depth,
-    queue_running: embeddingQueue.running,
-    pending_bookmarks: bookmarksMissingEmbeddings(db).length,
-    ...chunkStats(db),
-  });
-});
-
-app.post('/api/rag/backfill', (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled (MEMORIA_RAG=0)' }, 503);
-  const ids = bookmarksMissingEmbeddings(db);
-  for (const id of ids) enqueueEmbedding(id);
-  return c.json({ queued: ids.length });
-});
-
-app.post('/api/rag/reindex/:id', (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
-  const id = Number(c.req.param('id'));
-  if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
-  enqueueEmbedding(id);
-  return c.json({ queued: true });
-});
-
-app.get('/api/search', async (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
-  const q = c.req.query('q');
-  const limit = Number(c.req.query('limit')) || 10;
-  if (!q) return c.json({ error: 'q required' }, 400);
-  const cache = loadChunkCache();
-  if (cache.length === 0) return c.json({ items: [], note: 'No embeddings indexed yet. POST /api/rag/backfill to start.' });
-  const qv = await embed(q, 'query');
-  const scored = cache.map(c => ({ ...c, score: cosine(qv, c.vec) }));
-  scored.sort((a, b) => b.score - a.score);
-  // Group by bookmark, keep best-scoring chunk per bookmark.
-  const byBm = new Map();
-  for (const s of scored) {
-    if (!byBm.has(s.bookmark_id)) byBm.set(s.bookmark_id, s);
-    if (byBm.size >= limit * 2) break;
-  }
-  const out = [];
-  for (const s of [...byBm.values()].sort((a, b) => b.score - a.score).slice(0, limit)) {
-    const b = getBookmark(db, s.bookmark_id);
-    if (!b) continue;
-    out.push({
-      bookmark_id: s.bookmark_id,
-      score: Number(s.score.toFixed(4)),
-      title: b.title,
-      url: b.url,
-      summary: b.summary,
-      categories: b.categories,
-      chunk: s.text.slice(0, 500),
-    });
-  }
-  return c.json({ items: out });
-});
-
-app.post('/api/ask', async (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
-  const body = await c.req.json().catch(() => null);
-  const q = body?.q;
-  if (!q || typeof q !== 'string') return c.json({ error: 'q required' }, 400);
-  const k = Number(body?.k) || 6;
-
-  const cache = loadChunkCache();
-  if (cache.length === 0) return c.json({ error: 'no embeddings yet; backfill first' }, 400);
-
-  const qv = await embed(q, 'query');
-  const scored = cache.map(c => ({ ...c, score: cosine(qv, c.vec) }));
-  scored.sort((a, b) => b.score - a.score);
-  const seen = new Set();
-  const top = [];
-  for (const s of scored) {
-    if (seen.has(s.bookmark_id)) continue;
-    seen.add(s.bookmark_id);
-    top.push(s);
-    if (top.length >= k) break;
-  }
-
-  const sourcesMd = top.map((s, i) => {
-    const b = getBookmark(db, s.bookmark_id);
-    return `[Source ${i + 1}: ${b?.title ?? `id=${s.bookmark_id}`} (id=${s.bookmark_id}, ${b?.url ?? ''})]\n${s.text}`;
-  }).join('\n\n---\n\n');
-
-  const prompt = [
-    'You are answering a user question using only the provided sources.',
-    '- Cite sources inline as [Source 1], [Source 2] etc.',
-    '- If the sources do not contain the answer, say "Not enough context in the saved bookmarks." and stop.',
-    '- Reply in the same language as the question.',
-    '',
-    `QUESTION: ${q}`,
-    '',
-    'SOURCES:',
-    sourcesMd,
-  ].join('\n');
-
-  let answer;
-  try {
-    answer = await claudeAnswer(prompt);
-  } catch (e) {
-    return c.json({ error: 'claude failed', detail: e.message }, 500);
-  }
-  return c.json({
-    answer,
-    sources: top.map((s, i) => {
-      const b = getBookmark(db, s.bookmark_id);
-      return {
-        id: i + 1,
-        bookmark_id: s.bookmark_id,
-        title: b?.title,
-        url: b?.url,
-        score: Number(s.score.toFixed(4)),
-      };
-    }),
-  });
-});
-
-function claudeAnswer(prompt, timeoutMs = 180_000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(CLAUDE_BIN, ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('claude CLI timed out')); }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout.trim());
-    });
-  });
-}
 
 // ---- dig (deep research) -------------------------------------------------
 // Digs run in parallel — they're independent claude CLI invocations that
@@ -925,15 +739,12 @@ app.get('/api/queue', (c) => {
   return c.json({
     depth: summaryQueue.depth,
     running: summaryQueue.running,
-    embedding_depth: embeddingQueue.depth,
-    embedding_running: embeddingQueue.running,
   });
 });
 
 app.get('/api/queue/items', (c) => {
   return c.json({
     summary: summaryQueue.snapshot(),
-    embedding: embeddingQueue.snapshot(),
     wordcloud: cloudQueue.snapshot(),
     // Backward-compat top-level fields:
     ...summaryQueue.snapshot(),
@@ -953,8 +764,12 @@ app.post('/api/access', async (c) => {
   if (!body || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
   if (!/^https?:\/\//.test(body.url)) return c.json({ matched: false, ignored: true });
 
-  // Always upsert into page_visits so unsaved URLs are tracked too.
-  upsertVisit(db, { url: body.url, title: typeof body.title === 'string' ? body.title : null });
+  const title = typeof body.title === 'string' ? body.title : null;
+
+  // Always upsert into page_visits (rolling counter) and append a per-event
+  // row to visit_events (used by the diary aggregator for hourly buckets).
+  upsertVisit(db, { url: body.url, title });
+  insertVisitEvent(db, { url: body.url, title });
 
   // If this URL is already bookmarked, also bump its bookmark access counter.
   const b = findBookmarkByUrl(db, body.url);
@@ -1123,6 +938,156 @@ app.post('/api/import', async (c) => {
   }
   return c.json(results);
 });
+
+// ---- diary ----------------------------------------------------------------
+
+const diaryQueue = new FifoQueue();
+
+function settingsAsObject() {
+  const s = getDiarySettings(db);
+  return {
+    github_token: s.github_token || process.env.MEMORIA_GH_TOKEN || '',
+    github_user: s.github_user || process.env.MEMORIA_GH_USER || '',
+    github_repos: s.github_repos
+      ? s.github_repos.split(',').map(x => x.trim()).filter(Boolean)
+      : [],
+  };
+}
+
+async function runDiaryGeneration(dateStr) {
+  const metrics = aggregateDay(db, dateStr);
+  const settings = settingsAsObject();
+  upsertDiary(db, { date: dateStr, status: 'pending', metrics, error: null });
+
+  let github = null;
+  if (settings.github_user) {
+    github = await fetchGithubActivity({
+      token: settings.github_token,
+      user: settings.github_user,
+      repos: settings.github_repos,
+      dateStr,
+    });
+  }
+
+  // Read any prior user notes so the narrative can incorporate them.
+  const prior = getDiary(db, dateStr);
+  const notes = prior?.notes || '';
+
+  let summary;
+  try {
+    summary = await generateDiaryNarrative({
+      dateStr, metrics, github, notes, claudeBin: CLAUDE_BIN,
+    });
+  } catch (e) {
+    upsertDiary(db, {
+      date: dateStr, status: 'error', metrics,
+      githubCommits: github, error: e.message.slice(0, 500),
+    });
+    throw e;
+  }
+
+  upsertDiary(db, {
+    date: dateStr,
+    summary,
+    metrics,
+    githubCommits: github,
+    status: 'done',
+    error: null,
+  });
+}
+
+function enqueueDiary(dateStr) {
+  diaryQueue.enqueue(async () => {
+    await runDiaryGeneration(dateStr);
+  }, { kind: 'diary', date: dateStr, title: dateStr });
+}
+
+app.get('/api/diary', (c) => {
+  // ?month=YYYY-MM (defaults to current local month)
+  const monthQ = c.req.query('month');
+  const today = new Date();
+  const monthStr = (monthQ && /^\d{4}-\d{2}$/.test(monthQ))
+    ? monthQ
+    : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const start = `${monthStr}-01`;
+  const [y, m] = monthStr.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  const end = `${monthStr}-${String(last).padStart(2, '0')}`;
+  const items = listDiariesInRange(db, { start, end });
+  return c.json({ month: monthStr, start, end, items });
+});
+
+app.get('/api/diary/:date', (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  const entry = getDiary(db, date) || { date, status: 'absent' };
+  // Always include live metrics so the UI can chart even before the claude
+  // narrative finishes. (cheap; pure SQL aggregation)
+  const liveMetrics = aggregateDay(db, date);
+  return c.json({ ...entry, live_metrics: liveMetrics });
+});
+
+app.post('/api/diary/:date/generate', (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  enqueueDiary(date);
+  return c.json({ queued: true, queue_depth: diaryQueue.depth });
+});
+
+app.patch('/api/diary/:date', async (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.notes === 'string') {
+    upsertDiary(db, { date, notes: body.notes });
+  }
+  return c.json(getDiary(db, date));
+});
+
+app.delete('/api/diary/:date', (c) => {
+  const date = c.req.param('date');
+  deleteDiary(db, date);
+  return c.json({ ok: true });
+});
+
+app.get('/api/diary/settings', (c) => {
+  // Mask the token when returning to the FE.
+  const s = settingsAsObject();
+  return c.json({
+    github_user: s.github_user,
+    github_repos: s.github_repos.join(','),
+    github_token_set: !!s.github_token,
+  });
+});
+
+app.post('/api/diary/settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.github_token === 'string') patch.github_token = body.github_token;
+  if (typeof body.github_user === 'string') patch.github_user = body.github_user;
+  if (typeof body.github_repos === 'string') patch.github_repos = body.github_repos;
+  setDiarySettings(db, patch);
+  return c.json({ ok: true });
+});
+
+// Midnight scheduler — fires at next 00:00:05 local, generates the previous
+// day's diary, then re-schedules itself.
+function scheduleMidnight() {
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+  const ms = next.getTime() - now.getTime();
+  setTimeout(async () => {
+    try {
+      const dateStr = yesterdayLocal();
+      console.log(`[diary cron] generating ${dateStr}`);
+      enqueueDiary(dateStr);
+    } catch (e) {
+      console.error('[diary cron] failed:', e.message);
+    }
+    scheduleMidnight();
+  }, Math.max(60_000, ms)).unref?.();
+}
+scheduleMidnight();
 
 // ---- static UI ------------------------------------------------------------
 

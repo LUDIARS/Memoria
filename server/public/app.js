@@ -13,9 +13,6 @@ const state = {
   visitsRange: '7',
   trendsRange: '30',
   recommendations: [],
-  ragStatus: null,
-  ragResults: [],
-  ragAnswer: null,
   digSession: null,
   digHistory: [],
   digSelected: new Set(),
@@ -31,6 +28,11 @@ const state = {
   dictEntries: [],
   dictDetail: null,
   dictSearch: '',
+  diaryMonth: null,         // 'YYYY-MM' currently shown in calendar
+  diaryEntries: [],
+  diaryDetail: null,        // {date, summary, notes, status, metrics, github_commits, live_metrics}
+  diaryDetailDate: null,
+  diaryPolling: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -469,16 +471,16 @@ function switchTab(tab) {
   $('visitsView').classList.toggle('hidden', tab !== 'visits');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
-  $('ragView').classList.toggle('hidden', tab !== 'rag');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('dictView').classList.toggle('hidden', tab !== 'dict');
+  $('diaryView').classList.toggle('hidden', tab !== 'diary');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
-  if (tab === 'rag') loadRagStatus();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'dict') loadDictionary();
+  if (tab === 'diary') loadDiary();
 }
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
@@ -1274,107 +1276,243 @@ async function createDictionaryEntry() {
   }
 }
 
-// ── RAG ────────────────────────────────────────────────────────────────
+// ── Diary ──────────────────────────────────────────────────────────────
 
-async function loadRagStatus() {
+function todayLocalDate() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function todayMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function shiftMonth(monthStr, delta) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function loadDiary() {
+  if (!state.diaryMonth) state.diaryMonth = todayMonth();
+  await refreshDiaryMonth();
+}
+
+async function refreshDiaryMonth() {
   try {
-    const s = await api('/api/rag/status');
-    state.ragStatus = s;
-    renderRagStatus();
+    const r = await api(`/api/diary?month=${encodeURIComponent(state.diaryMonth)}`);
+    state.diaryEntries = r.items || [];
+    renderDiaryCalendar(r);
   } catch (e) {
-    $('ragStatus').textContent = `RAG: ${e.message}`;
+    console.error('diary load failed', e);
   }
 }
 
-function renderRagStatus() {
-  const s = state.ragStatus;
-  const el = $('ragStatus');
-  if (!s) { el.textContent = '読み込み中…'; return; }
-  if (!s.enabled) {
-    el.innerHTML = '<span class="pill">disabled</span> RAG は無効化されています (MEMORIA_RAG=0)。';
-    return;
-  }
-  const idx = `${s.indexed_bookmarks}/${s.indexed_bookmarks + s.pending_bookmarks} ブックマーク (${s.total_chunks} チャンク)`;
-  const queued = s.queue_depth > 0 ? ` · 埋め込み中 ${s.queue_depth}` : '';
-  el.innerHTML = `
-    <span class="pill">${escapeHtml(s.model)}</span>
-    インデックス: ${idx}${queued}
-    ${s.pending_bookmarks > 0 ? '<button id="ragBackfillBtn">未処理を全部キュー投入</button>' : ''}
-  `;
-  const btn = document.getElementById('ragBackfillBtn');
-  if (btn) {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      btn.textContent = '投入中…';
-      try {
-        const r = await api('/api/rag/backfill', { method: 'POST' });
-        alert(`${r.queued} 件をキューに投入しました。完了まで時間がかかります。`);
-        loadRagStatus();
-      } catch (e) { alert(`失敗: ${e.message}`); }
-    });
-  }
-}
+function renderDiaryCalendar({ month, start, end }) {
+  $('diaryMonthLabel').textContent = month;
+  const [y, m] = month.split('-').map(Number);
+  const firstWeekday = new Date(y, m - 1, 1).getDay();
+  const lastDay = new Date(y, m, 0).getDate();
+  const today = todayLocalDate();
+  const byDate = new Map(state.diaryEntries.map(e => [e.date, e]));
 
-async function ragSearch() {
-  const q = $('ragQuery').value.trim();
-  if (!q) return;
-  $('ragResults').innerHTML = '<div class="queue-empty">検索中…</div>';
-  $('ragAnswer').classList.add('hidden');
-  try {
-    const r = await api(`/api/search?q=${encodeURIComponent(q)}&limit=12`);
-    state.ragResults = r.items || [];
-    renderRagResults(r.note);
-  } catch (e) {
-    $('ragResults').innerHTML = `<div class="queue-empty">エラー: ${escapeHtml(e.message)}</div>`;
+  let html = '';
+  // Leading blanks
+  for (let i = 0; i < firstWeekday; i++) {
+    html += `<div class="diary-cell empty"></div>`;
   }
-}
-
-function renderRagResults(note) {
-  const items = state.ragResults;
-  if (items.length === 0) {
-    $('ragResults').innerHTML = `<div class="queue-empty">${escapeHtml(note || '一致するブックマークがありません。')}</div>`;
-    return;
-  }
-  $('ragResults').innerHTML = items.map(it => `
-    <div class="rag-result" data-id="${it.bookmark_id}">
-      <div>
-        <div class="title">${escapeHtml(it.title)}</div>
-        <div class="url"><a href="${escapeHtml(it.url)}" target="_blank" rel="noreferrer">${escapeHtml(it.url)}</a></div>
-        <div class="chunk">${escapeHtml(it.chunk || '')}</div>
+  for (let d = 1; d <= lastDay; d++) {
+    const ds = `${month}-${String(d).padStart(2, '0')}`;
+    const entry = byDate.get(ds);
+    const klass = [
+      'diary-cell',
+      entry ? `has-${entry.status || 'pending'}` : '',
+      ds === today ? 'today' : '',
+      ds > today ? 'future' : '',
+      state.diaryDetailDate === ds ? 'selected' : '',
+    ].filter(Boolean).join(' ');
+    const indicator = entry?.status === 'done' ? '✓' : entry?.status === 'pending' ? '…' : entry?.status === 'error' ? '!' : '';
+    html += `
+      <div class="${klass}" data-date="${ds}">
+        <div class="diary-cell-day">${d}</div>
+        <div class="diary-cell-mark">${indicator}</div>
       </div>
-      <div class="score">${(it.score * 100).toFixed(1)}%</div>
-    </div>
-  `).join('');
-  $('ragResults').querySelectorAll('.rag-result').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.tagName === 'A') return;
-      openDetail(Number(card.dataset.id));
-      switchTab('bookmarks');
-    });
+    `;
+  }
+  $('diaryCalendar').innerHTML = html;
+  $('diaryCalendar').querySelectorAll('.diary-cell[data-date]').forEach(cell => {
+    cell.addEventListener('click', () => loadDiaryDetail(cell.dataset.date));
   });
 }
 
-async function ragAsk() {
-  const q = $('ragQuery').value.trim();
-  if (!q) return;
-  const ans = $('ragAnswer');
-  ans.classList.remove('hidden');
-  ans.innerHTML = '<h4>Answer</h4>考え中…';
+async function loadDiaryDetail(date) {
+  state.diaryDetailDate = date;
+  $('diaryDetail').classList.remove('hidden');
   try {
-    const r = await api('/api/ask', {
+    const d = await api(`/api/diary/${date}`);
+    state.diaryDetail = d;
+    renderDiaryDetail();
+    if (d.status === 'pending') pollDiary(date);
+    refreshDiaryMonth();
+  } catch (e) {
+    alert(`日記取得失敗: ${e.message}`);
+  }
+}
+
+function pollDiary(date) {
+  if (state.diaryPolling) clearInterval(state.diaryPolling);
+  state.diaryPolling = setInterval(async () => {
+    if (state.diaryDetailDate !== date) {
+      clearInterval(state.diaryPolling); state.diaryPolling = null; return;
+    }
+    const d = await api(`/api/diary/${date}`).catch(() => null);
+    if (!d) return;
+    if (d.status !== 'pending') {
+      clearInterval(state.diaryPolling); state.diaryPolling = null;
+      state.diaryDetail = d;
+      renderDiaryDetail();
+      refreshDiaryMonth();
+    }
+  }, 3000);
+}
+
+function renderDiaryDetail() {
+  const d = state.diaryDetail;
+  if (!d) return;
+  $('diaryDate').textContent = d.date;
+  const status = d.status || 'absent';
+  const statusEl = $('diaryStatus');
+  const statusLabels = { absent: '未作成', pending: '生成中…', done: '完了', error: 'エラー' };
+  statusEl.textContent = statusLabels[status] || status;
+  statusEl.className = `diary-status-tag status-${status}`;
+
+  const generateBtn = $('diaryGenerate');
+  generateBtn.textContent = (status === 'absent') ? '作成' : '再生成';
+  generateBtn.disabled = (status === 'pending');
+
+  if (status === 'absent') {
+    $('diarySummary').innerHTML = '<div class="queue-empty">この日の日記はまだ作成されていません。「作成」ボタンを押して生成できます。</div>';
+  } else if (status === 'pending') {
+    $('diarySummary').innerHTML = '<div class="dig-pending"><div class="pulse"></div>claude が日報を生成中…</div>';
+  } else if (status === 'error') {
+    $('diarySummary').innerHTML = `<div class="dig-pending" style="border-color:var(--danger);color:var(--danger)">エラー: ${escapeHtml(d.error || '不明')}</div>`;
+  } else {
+    $('diarySummary').textContent = d.summary || '';
+  }
+
+  // Hourly chart from live_metrics (or stored metrics for older entries)
+  const metrics = d.metrics || d.live_metrics || { hourly_visits: new Array(24).fill(0), top_domains: [] };
+  $('diaryHourly').innerHTML = renderHourlyChart(metrics.hourly_visits || []);
+  const domains = metrics.top_domains || [];
+  $('diaryDomains').innerHTML = domains.length === 0
+    ? '<li class="queue-empty">アクセスログなし</li>'
+    : domains.slice(0, 12).map(dm =>
+      `<li><span class="diary-domain-name">${escapeHtml(dm.domain)}</span><span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></li>`
+    ).join('');
+
+  const commits = d.github_commits?.commits || [];
+  if (commits.length === 0) {
+    $('diaryGithub').innerHTML = `<li class="queue-empty">${d.github_commits?.error ? escapeHtml('GitHub: ' + d.github_commits.error) : 'commit 記録なし'}</li>`;
+  } else {
+    $('diaryGithub').innerHTML = commits.map(c =>
+      `<li><span class="diary-gh-repo">${escapeHtml(c.repo)}</span><code>${escapeHtml(c.sha)}</code> ${escapeHtml(c.message)}</li>`
+    ).join('');
+  }
+
+  $('diaryNotes').value = d.notes || '';
+}
+
+function renderHourlyChart(hours) {
+  const max = Math.max(1, ...hours);
+  const w = 720, h = 140, padL = 30, padR = 12, padT = 12, padB = 24;
+  const cw = (w - padL - padR) / 24;
+  let bars = '';
+  for (let i = 0; i < 24; i++) {
+    const v = hours[i] || 0;
+    const bh = Math.round((v / max) * (h - padT - padB));
+    const x = padL + i * cw;
+    const y = h - padB - bh;
+    bars += `
+      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(cw - 2).toFixed(1)}" height="${bh}" class="diary-bar" />
+      <text x="${(x + cw / 2).toFixed(1)}" y="${(h - padB + 12).toFixed(1)}" class="diary-bar-label">${i}</text>
+      ${v > 0 ? `<text x="${(x + cw / 2).toFixed(1)}" y="${(y - 2).toFixed(1)}" class="diary-bar-value">${v}</text>` : ''}
+    `;
+  }
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${bars}</svg>`;
+}
+
+async function generateDiary() {
+  const date = state.diaryDetailDate;
+  if (!date) return;
+  const btn = $('diaryGenerate');
+  btn.disabled = true;
+  btn.textContent = '投入中…';
+  try {
+    await api(`/api/diary/${date}/generate`, { method: 'POST' });
+    flashToast(`${date} の日記を生成キューに投入しました`);
+    await loadDiaryDetail(date);
+  } catch (e) {
+    alert(`失敗: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '再生成';
+  }
+}
+
+async function deleteDiaryEntry() {
+  const date = state.diaryDetailDate;
+  if (!date) return;
+  if (!confirm(`${date} の日記を削除しますか？ (アクセスログ自体は消えません)`)) return;
+  await api(`/api/diary/${date}`, { method: 'DELETE' });
+  state.diaryDetail = null;
+  state.diaryDetailDate = null;
+  $('diaryDetail').classList.add('hidden');
+  refreshDiaryMonth();
+}
+
+async function saveDiaryNotes() {
+  const date = state.diaryDetailDate;
+  if (!date) return;
+  const notes = $('diaryNotes').value;
+  try {
+    await api(`/api/diary/${date}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    });
+    flashToast('メモを保存しました');
+  } catch (e) {
+    alert(`保存失敗: ${e.message}`);
+  }
+}
+
+async function openDiarySettings() {
+  $('diarySettingsPanel').classList.remove('hidden');
+  try {
+    const s = await api('/api/diary/settings');
+    $('diaryGhUser').value = s.github_user || '';
+    $('diaryGhRepos').value = s.github_repos || '';
+    $('diaryGhTokenStatus').textContent = s.github_token_set ? '✓ token 設定済み (再入力で上書き)' : '(未設定)';
+  } catch (e) { console.error(e); }
+}
+
+async function saveDiarySettings() {
+  try {
+    await api('/api/diary/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q }),
+      body: JSON.stringify({
+        github_user: $('diaryGhUser').value.trim(),
+        github_repos: $('diaryGhRepos').value.trim(),
+        github_token: $('diaryGhToken').value,
+      }),
     });
-    ans.innerHTML = `
-      <h4>Answer</h4>
-      ${escapeHtml(r.answer)}
-      <div class="citations">
-        ${(r.sources || []).map(s => `[Source ${s.id}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">${escapeHtml(s.title)}</a>`).join(' &nbsp; ')}
-      </div>
-    `;
+    $('diaryGhToken').value = '';
+    flashToast('GitHub 設定を保存しました');
+    openDiarySettings();
   } catch (e) {
-    ans.innerHTML = `<h4>Error</h4>${escapeHtml(e.message)}`;
+    alert(`保存失敗: ${e.message}`);
   }
 }
 
@@ -1727,14 +1865,25 @@ $('dictSearch')?.addEventListener('input', (e) => {
   state.dictSearch = e.target.value.trim();
   loadDictionary();
 });
-$('ragSearchBtn').addEventListener('click', ragSearch);
-$('ragAskBtn').addEventListener('click', ragAsk);
-$('ragQuery').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    ragSearch();
-  }
+$('diaryPrevMonth')?.addEventListener('click', () => {
+  state.diaryMonth = shiftMonth(state.diaryMonth || todayMonth(), -1);
+  refreshDiaryMonth();
 });
+$('diaryNextMonth')?.addEventListener('click', () => {
+  state.diaryMonth = shiftMonth(state.diaryMonth || todayMonth(), 1);
+  refreshDiaryMonth();
+});
+$('diaryToday')?.addEventListener('click', () => {
+  state.diaryMonth = todayMonth();
+  refreshDiaryMonth();
+  loadDiaryDetail(todayLocalDate());
+});
+$('diaryGenerate')?.addEventListener('click', generateDiary);
+$('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
+$('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
+$('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
+$('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
+$('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {

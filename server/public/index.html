@@ -48,9 +48,9 @@
           おすすめ
           <span id="tabRecommendCount" class="tab-count hidden">0</span>
         </button>
-        <button class="tab" data-tab="rag">RAG</button>
         <button class="tab" data-tab="dig">ディグる</button>
         <button class="tab" data-tab="dict">📖 辞書</button>
+        <button class="tab" data-tab="diary">📅 日記</button>
       </nav>
 
       <div id="bookmarksView">
@@ -139,19 +139,6 @@
         <div id="digResult" class="dig-result"></div>
       </div>
 
-      <div id="ragView" class="hidden">
-        <div class="rag-status" id="ragStatus">読み込み中…</div>
-
-        <div class="rag-search">
-          <input id="ragQuery" type="search" placeholder="保存済みブックマークから意味検索…" />
-          <button id="ragSearchBtn">検索</button>
-          <button id="ragAskBtn" class="ghost">この質問で答える</button>
-        </div>
-
-        <div id="ragAnswer" class="rag-answer hidden"></div>
-        <div id="ragResults" class="rag-results"></div>
-      </div>
-
       <div id="recommendView" class="hidden">
         <div class="rec-bar">
           <span>保存済 HTML から外部リンクを抽出し、未訪問のサイトを推薦。スコアは「同じリンクが何件の保存記事に出現したか」。</span>
@@ -181,6 +168,59 @@
             <textarea id="dictNotes" rows="4" placeholder="追加メモ"></textarea>
             <h4>リンクされた調査記録</h4>
             <ul id="dictLinks" class="dict-links"></ul>
+          </div>
+        </div>
+      </div>
+
+      <div id="diaryView" class="hidden">
+        <div class="diary-bar">
+          <button id="diaryPrevMonth" class="ghost">◀</button>
+          <span id="diaryMonthLabel" class="diary-month-label"></span>
+          <button id="diaryNextMonth" class="ghost">▶</button>
+          <button id="diaryToday" class="ghost">今日</button>
+          <span class="grow"></span>
+          <button id="diarySettingsBtn" class="ghost">⚙ GitHub設定</button>
+        </div>
+        <div class="diary-layout">
+          <div class="diary-calendar-wrap">
+            <div class="diary-weekdays">
+              <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+            </div>
+            <div id="diaryCalendar" class="diary-calendar"></div>
+          </div>
+          <div id="diaryDetail" class="diary-detail hidden">
+            <div class="diary-detail-head">
+              <h3 id="diaryDate"></h3>
+              <span id="diaryStatus" class="diary-status-tag"></span>
+              <span class="grow"></span>
+              <button id="diaryGenerate" class="ghost">再生成</button>
+              <button id="diaryDelete" class="danger">削除</button>
+            </div>
+            <h4>サマリ</h4>
+            <div id="diarySummary" class="diary-summary"></div>
+            <h4>時間帯別アクセス (0-24時)</h4>
+            <div id="diaryHourly" class="diary-hourly"></div>
+            <h4>よく見たドメイン</h4>
+            <ul id="diaryDomains" class="diary-domains"></ul>
+            <h4>GitHub commits</h4>
+            <ul id="diaryGithub" class="diary-github"></ul>
+            <h4>メモ・補足</h4>
+            <textarea id="diaryNotes" rows="6" placeholder="補足や訂正を書くと、次の再生成で反映されます。"></textarea>
+            <div class="diary-detail-actions">
+              <button id="diaryNotesSave">メモを保存</button>
+            </div>
+          </div>
+        </div>
+        <div id="diarySettingsPanel" class="diary-settings hidden">
+          <h4>GitHub 設定</h4>
+          <p class="diary-settings-help">GitHub の commit ツリーを日報に取り込むときだけ設定してください。トークンはサーバーの SQLite に保存されます。</p>
+          <label>ユーザ名 <input id="diaryGhUser" type="text" placeholder="example" /></label>
+          <label>リポジトリ (カンマ区切り。空欄なら全リポ) <input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
+          <label>Personal access token (公開リポのみなら不要) <input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
+          <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
+          <div class="diary-settings-actions">
+            <button id="diarySettingsSave">保存</button>
+            <button id="diarySettingsClose" class="ghost">閉じる</button>
           </div>
         </div>
       </div>
