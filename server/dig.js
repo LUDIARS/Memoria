@@ -31,10 +31,87 @@ const PROMPT_TEMPLATE = (query) => [
   `QUERY: ${query}`,
 ].join('\n');
 
+const PREVIEW_PROMPT_TEMPLATE = (query) => [
+  'You are returning a SERP-style preview as fast as possible.',
+  'Use ONLY web search — do NOT fetch or read result pages.',
+  'If the search engine displays an AI overview / generative summary, capture it verbatim.',
+  '',
+  'Return STRICTLY one JSON object and nothing else (no prose, no code fences):',
+  '',
+  '{',
+  '  "ai_overview": "search engine の AI overview があればその文章 (なければ空文字)",',
+  '  "results": [',
+  '    {',
+  '      "title": "...",',
+  '      "url": "https://...",',
+  '      "snippet": "検索エンジンが返したスニペット 1〜2 文",',
+  '      "domain": "..."',
+  '    }',
+  '  ]',
+  '}',
+  '',
+  '- 上位 8〜10 件のみ。',
+  '- ai_overview は要約済みの段落 1〜3。なければ "" を返す。',
+  '- 各ページの本文を取りにいかないこと (速さが最優先)。',
+  '',
+  `QUERY: ${query}`,
+].join('\n');
+
+export async function runDigPreview({ query, claudeBin = 'claude', timeoutMs = 90_000 }) {
+  const prompt = PREVIEW_PROMPT_TEMPLATE(query);
+  const stdout = await spawnClaudeWithTools(claudeBin, prompt, ['WebSearch'], timeoutMs);
+  return parsePreview(stdout);
+}
+
 export async function runDig({ query, claudeBin = 'claude', timeoutMs = 600_000 }) {
   const prompt = PROMPT_TEMPLATE(query);
   const stdout = await spawnClaude(claudeBin, prompt, timeoutMs);
   return parseJsonStrict(stdout);
+}
+
+function spawnClaudeWithTools(bin, prompt, tools, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const args = ['-p', prompt, '--allowedTools', tools.join(',')];
+    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
+    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
+    child.on('error', err => { clearTimeout(timer); reject(err); });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
+      else resolve(stdout);
+    });
+  });
+}
+
+function parsePreview(raw) {
+  let text = raw.trim();
+  const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (fence) text = fence[1].trim();
+  const first = text.indexOf('{');
+  const last = text.lastIndexOf('}');
+  if (first >= 0 && last > first) text = text.slice(first, last + 1);
+  let obj;
+  try { obj = JSON.parse(text); }
+  catch (e) { throw new Error(`preview parse: ${e.message}\nRaw: ${raw.slice(0, 400)}`); }
+  return {
+    ai_overview: String(obj.ai_overview ?? '').trim(),
+    results: Array.isArray(obj.results) ? obj.results.map(r => ({
+      title: String(r.title ?? '').trim(),
+      url: String(r.url ?? '').trim(),
+      snippet: String(r.snippet ?? '').trim(),
+      domain: String(r.domain ?? '').trim() || extractDomain(r.url),
+    })).filter(r => /^https?:\/\//.test(r.url)) : [],
+  };
+}
+
+function extractDomain(url) {
+  try { return new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
 }
 
 function spawnClaude(bin, prompt, timeoutMs) {

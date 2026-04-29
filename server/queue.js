@@ -66,3 +66,72 @@ export class FifoQueue {
 function toPlain(item) {
   return { ...item };
 }
+
+/**
+ * Concurrent task pool. Runs up to `concurrency` tasks in parallel.
+ * Same metadata + history shape as FifoQueue, but `running` reflects whether
+ * at least one slot is busy (not just the head).
+ */
+export class ConcurrentPool {
+  constructor({ concurrency = 4, historyLimit = 50 } = {}) {
+    this.concurrency = Math.max(1, Number(concurrency) || 1);
+    this.queued = [];
+    this._runningSet = new Set();
+    this.history = [];
+    this.historyLimit = historyLimit;
+    this._nextSeq = 1;
+  }
+
+  enqueue(fn, meta = {}) {
+    const item = {
+      seq: this._nextSeq++,
+      ...meta,
+      status: 'queued',
+      enqueuedAt: Date.now(),
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+    };
+    this.queued.push({ item, fn });
+    this._tryStart();
+  }
+
+  _tryStart() {
+    while (this._runningSet.size < this.concurrency && this.queued.length > 0) {
+      const { item, fn } = this.queued.shift();
+      this._runningSet.add(item);
+      item.status = 'running';
+      item.startedAt = Date.now();
+      Promise.resolve()
+        .then(() => fn())
+        .then(
+          () => { item.status = 'done'; },
+          (e) => {
+            item.status = 'error';
+            item.error = e?.message ?? String(e);
+            console.error(`[pool] task ${item.kind ?? ''}#${item.seq} failed:`, item.error);
+          },
+        )
+        .finally(() => {
+          item.finishedAt = Date.now();
+          this._runningSet.delete(item);
+          this.history.unshift(item);
+          if (this.history.length > this.historyLimit) this.history.length = this.historyLimit;
+          this._tryStart();
+        });
+    }
+  }
+
+  get depth() { return this.queued.length + this._runningSet.size; }
+  get running() { return this._runningSet.size > 0; }
+
+  snapshot() {
+    return {
+      depth: this.depth,
+      running: this.running,
+      concurrency: this.concurrency,
+      items: [...this._runningSet, ...this.queued.map(q => q.item)].map(toPlain),
+      history: this.history.map(toPlain),
+    };
+  }
+}

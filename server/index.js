@@ -28,14 +28,20 @@ import {
   trendsDomains,
 } from './db.js';
 import { summarizeWithClaude, htmlToText } from './claude.js';
-import { FifoQueue } from './queue.js';
+import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
-import { runDig } from './dig.js';
+import { runDig, runDigPreview } from './dig.js';
 import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
   deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
-  insertDigSession, setDigResult, getDigSession, listDigSessions,
+  insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
+  insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
+  getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
+  listDictionaryEntries, getDictionaryEntry, findDictionaryEntryByTerm,
+  insertDictionaryEntry, updateDictionaryEntry, deleteDictionaryEntry,
+  addDictionaryLink, removeDictionaryLink,
 } from './db.js';
+import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { spawn } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +56,7 @@ mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
 const embeddingQueue = new FifoQueue();
+const cloudQueue = new FifoQueue();
 let chunkCache = null;
 function invalidateChunkCache() { chunkCache = null; }
 function loadChunkCache() {
@@ -203,7 +210,8 @@ app.get('/api/bookmarks/:id', (c) => {
   const id = Number(c.req.param('id'));
   const b = getBookmark(db, id);
   if (!b) return c.json({ error: 'not found' }, 404);
-  return c.json(b);
+  const cloud = getBookmarkWordCloud(db, id);
+  return c.json({ ...b, wordcloud: cloud });
 });
 
 app.patch('/api/bookmarks/:id', async (c) => {
@@ -277,6 +285,11 @@ app.get('/api/trends/timeline', (c) => {
 app.get('/api/trends/domains', (c) => {
   const days = Number(c.req.query('days')) || 30;
   return c.json({ items: trendsDomains(db, { sinceDays: days }) });
+});
+
+app.get('/api/trends/visit-domains', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: trendsVisitDomains(db, { sinceDays: days }) });
 });
 
 // ---- recommendations ------------------------------------------------------
@@ -437,11 +450,19 @@ function claudeAnswer(prompt, timeoutMs = 180_000) {
 }
 
 // ---- dig (deep research) -------------------------------------------------
-
-const digQueue = new FifoQueue();
+// Digs run in parallel — they're independent claude CLI invocations that
+// each spawn a separate child process. Concurrency keeps a sane upper bound.
+const DIG_CONCURRENCY = Number(process.env.MEMORIA_DIG_CONCURRENCY) || 4;
+const digQueue = new ConcurrentPool({ concurrency: DIG_CONCURRENCY });
 
 function enqueueDig(id, query) {
   digQueue.enqueue(async () => {
+    // Phase 1: SERP preview (fast — no page fetches). Persisted as soon as
+    // it lands so the FE can render before the deep claude pass finishes.
+    runDigPreview({ query, claudeBin: CLAUDE_BIN })
+      .then(preview => setDigPreview(db, id, preview))
+      .catch(err => console.warn(`[dig#${id}] preview failed: ${err.message}`));
+    // Phase 2: full deep analysis with WebFetch (existing behavior).
     try {
       const result = await runDig({ query, claudeBin: CLAUDE_BIN });
       setDigResult(db, id, { status: 'done', result });
@@ -478,6 +499,426 @@ app.post('/api/dig/:id/save', async (c) => {
   return c.json({ results: await bulkSaveUrls(body.urls) });
 });
 
+// ---- word clouds ---------------------------------------------------------
+
+const BOOKMARK_DOC_LIMIT = 80;
+const DIG_DOC_LIMIT = 30;
+const SINGLE_BOOKMARK_TEXT_LIMIT = 12000;
+
+function buildBookmarksDocs({ category, limit = BOOKMARK_DOC_LIMIT }) {
+  const items = listBookmarks(db, { category }).slice(0, limit);
+  return items.map((b, i) => {
+    const cats = (b.categories || []).join(', ');
+    const summary = (b.summary || '').slice(0, 800);
+    return `[Doc ${i + 1}] ${b.title}\nURL: ${b.url}\nCategories: ${cats}\nSummary: ${summary}`;
+  }).join('\n\n');
+}
+
+function buildDigDocs(session) {
+  const r = session.result || {};
+  const sources = (r.sources || []).slice(0, DIG_DOC_LIMIT);
+  if (sources.length === 0) return '';
+  const head = r.summary ? `OVERVIEW: ${r.summary}\n\n` : '';
+  return head + sources.map((s, i) => {
+    const topics = (s.topics || []).join(', ');
+    return `[Doc ${i + 1}] ${s.title}\nURL: ${s.url}\nTopics: ${topics}\nSnippet: ${s.snippet}`;
+  }).join('\n\n');
+}
+
+function buildBookmarkDoc(b) {
+  let bodyText = '';
+  try {
+    const html = readFileSync(join(HTML_DIR, b.html_path), 'utf8');
+    bodyText = htmlToText(html).slice(0, SINGLE_BOOKMARK_TEXT_LIMIT);
+  } catch {}
+  const cats = (b.categories || []).join(', ');
+  return `Title: ${b.title}\nURL: ${b.url}\nCategories: ${cats}\nSummary: ${b.summary || ''}\n\nBody:\n${bodyText}`;
+}
+
+function enqueueCloud(id, { docs, label }) {
+  cloudQueue.enqueue(async () => {
+    try {
+      const result = await extractWordCloud({ label, docs, claudeBin: CLAUDE_BIN });
+      setWordCloudResult(db, id, { status: 'done', result });
+    } catch (e) {
+      setWordCloudResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
+      throw e;
+    }
+  }, { kind: 'wordcloud', cloudId: id, title: label });
+}
+
+app.post('/api/wordcloud', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: 'body required' }, 400);
+  const origin = body.origin;
+  const parentCloudId = body.parentCloudId ?? null;
+  const parentWord = typeof body.parentWord === 'string' ? body.parentWord : null;
+
+  let label, docs, originDigId = null;
+
+  if (origin === 'bookmarks') {
+    const cat = body.category || null;
+    const items = listBookmarks(db, { category: cat });
+    if (items.length === 0) return c.json({ error: 'no bookmarks' }, 400);
+    label = cat ? `bookmarks:${cat}` : 'all bookmarks';
+    docs = buildBookmarksDocs({ category: cat });
+  } else if (origin === 'dig') {
+    const digId = Number(body.digId);
+    const ses = getDigSession(db, digId);
+    if (!ses) return c.json({ error: 'dig session not found' }, 404);
+    if (ses.status !== 'done') return c.json({ error: `dig status: ${ses.status}` }, 400);
+    label = ses.query;
+    originDigId = digId;
+    docs = buildDigDocs(ses);
+    if (!docs) return c.json({ error: 'dig has no sources' }, 400);
+  } else {
+    return c.json({ error: 'origin must be bookmarks or dig' }, 400);
+  }
+
+  const id = insertWordCloud(db, { origin, originDigId, parentCloudId, parentWord, label });
+  enqueueCloud(id, { docs, label });
+  return c.json({ id, queued: true });
+});
+
+app.get('/api/wordcloud', (c) => {
+  return c.json({ items: listWordClouds(db) });
+});
+
+app.get('/api/wordcloud/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const w = getWordCloud(db, id);
+  if (!w) return c.json({ error: 'not found' }, 404);
+  return c.json({ ...w, related_pages: buildRelatedPages(w) });
+});
+
+function buildRelatedPages(wc, depth = 0) {
+  if (!wc || depth > 2) return [];
+  if (wc.origin === 'dig' && wc.origin_dig_id) {
+    const dig = getDigSession(db, wc.origin_dig_id);
+    if (!dig) return [];
+    const r = dig.result || {};
+    return (r.sources || []).map(s => ({
+      url: s.url, title: s.title || s.url,
+      snippet: (s.snippet || '').slice(0, 200), kind: 'dig-source',
+    }));
+  }
+  if (wc.origin === 'bookmark' && wc.origin_bookmark_id) {
+    const b = getBookmark(db, wc.origin_bookmark_id);
+    return b ? [{ url: b.url, title: b.title, snippet: (b.summary || '').slice(0, 200), kind: 'bookmark' }] : [];
+  }
+  if (wc.origin === 'bookmarks') {
+    return listBookmarks(db).slice(0, 16).map(b => ({
+      url: b.url, title: b.title, snippet: (b.summary || '').slice(0, 200), kind: 'bookmark',
+    }));
+  }
+  if (wc.origin === 'merged') {
+    const out = [];
+    const seen = new Set();
+    for (const m of (wc.result?.merged_from || [])) {
+      const child = getWordCloud(db, m.id);
+      for (const p of buildRelatedPages(child, depth + 1)) {
+        if (seen.has(p.url)) continue;
+        seen.add(p.url);
+        out.push(p);
+      }
+    }
+    return out.slice(0, 30);
+  }
+  return [];
+}
+
+app.get('/api/wordcloud/:id/graph', (c) => {
+  const id = Number(c.req.param('id'));
+  const radius = Math.min(3, Math.max(1, Number(c.req.query('radius')) || 3));
+  if (!getWordCloud(db, id)) return c.json({ error: 'not found' }, 404);
+
+  // BFS over parent_cloud_id (up) and child clouds (down).
+  const seen = new Map(); // id → depth from current
+  const queue = [{ id, depth: 0 }];
+  seen.set(id, 0);
+  while (queue.length > 0) {
+    const { id: nid, depth } = queue.shift();
+    if (depth >= radius) continue;
+    const cur = db.prepare(`SELECT parent_cloud_id FROM word_clouds WHERE id = ?`).get(nid);
+    if (cur?.parent_cloud_id && !seen.has(cur.parent_cloud_id)) {
+      seen.set(cur.parent_cloud_id, depth + 1);
+      queue.push({ id: cur.parent_cloud_id, depth: depth + 1 });
+    }
+    const children = db.prepare(`
+      SELECT id FROM word_clouds WHERE parent_cloud_id = ? AND status = 'done'
+    `).all(nid);
+    for (const ch of children) {
+      if (!seen.has(ch.id)) {
+        seen.set(ch.id, depth + 1);
+        queue.push({ id: ch.id, depth: depth + 1 });
+      }
+    }
+  }
+
+  // Count truncated branches (clouds at depth=radius that still have un-fetched
+  // children — UI uses this to draw a "..." stub).
+  const truncated = new Map(); // id → truncated_count
+  for (const [nid, depth] of seen.entries()) {
+    if (depth !== radius) continue;
+    const childCount = db.prepare(`
+      SELECT COUNT(*) AS n FROM word_clouds WHERE parent_cloud_id = ? AND status = 'done'
+    `).get(nid)?.n ?? 0;
+    if (childCount > 0) truncated.set(nid, childCount);
+  }
+
+  const nodes = [...seen.keys()].map(nid => {
+    const wc = getWordCloud(db, nid);
+    const r = wc?.result || {};
+    const topWords = (r.words || []).filter(w => w.kept)
+      .sort((a, b) => (b.weight || 0) - (a.weight || 0))
+      .slice(0, 5)
+      .map(w => ({ word: w.word, weight: w.weight }));
+    const totalWeight = topWords.reduce((s, w) => s + (w.weight || 0), 0);
+    return {
+      id: nid,
+      label: wc?.label || `cloud#${nid}`,
+      parent_cloud_id: wc?.parent_cloud_id ?? null,
+      parent_word: wc?.parent_word ?? null,
+      origin: wc?.origin || '',
+      depth: seen.get(nid),
+      total_weight: totalWeight,
+      top_words: topWords,
+      summary: (r.summary || '').slice(0, 200),
+      truncated_children: truncated.get(nid) ?? 0,
+    };
+  });
+  const idsInGraph = new Set(seen.keys());
+  const edges = nodes
+    .filter(n => n.parent_cloud_id && idsInGraph.has(n.parent_cloud_id))
+    .map(n => ({ from: n.parent_cloud_id, to: n.id, label: n.parent_word || '' }));
+
+  return c.json({ current: id, radius, nodes, edges });
+});
+
+app.get('/api/wordcloud/:id/siblings', (c) => {
+  const id = Number(c.req.param('id'));
+  const cur = getWordCloud(db, id);
+  if (!cur) return c.json({ error: 'not found' }, 404);
+  if (!cur.parent_cloud_id) return c.json({ items: [] });
+  const rows = db.prepare(`
+    SELECT id, label, status, parent_word, created_at
+    FROM word_clouds
+    WHERE parent_cloud_id = ? AND id != ? AND status = 'done'
+    ORDER BY id DESC
+  `).all(cur.parent_cloud_id, id);
+  return c.json({ items: rows });
+});
+
+app.post('/api/wordcloud/merge', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const cloudIds = Array.isArray(body?.cloudIds)
+    ? body.cloudIds.map(Number).filter(Number.isFinite)
+    : [];
+  if (cloudIds.length < 2) return c.json({ error: 'cloudIds[] (>=2) required' }, 400);
+  const clouds = cloudIds.map(id => getWordCloud(db, id)).filter(Boolean);
+  const done = clouds.filter(c => c.status === 'done' && c.result);
+  if (done.length < 2) return c.json({ error: 'need at least 2 completed clouds' }, 400);
+
+  const merged = mergeWordCloudResults(done);
+  const label = (typeof body?.label === 'string' && body.label.trim())
+    ? body.label.trim().slice(0, 200)
+    : `merged: ${done.map(d => d.label).join(' + ').slice(0, 160)}`;
+  const id = insertWordCloud(db, {
+    origin: 'merged',
+    originDigId: null,
+    parentCloudId: done[0].parent_cloud_id ?? null,
+    parentWord: cloudIds.join(','),
+    label,
+  });
+  setWordCloudResult(db, id, { status: 'done', result: merged });
+  return c.json({ id });
+});
+
+function mergeWordCloudResults(clouds) {
+  const map = new Map(); // word_lower → aggregate
+  let firstSummary = '';
+  for (const c of clouds) {
+    const r = c.result || {};
+    if (!firstSummary && r.summary) firstSummary = r.summary;
+    for (const w of (r.words || [])) {
+      const key = String(w.word || '').toLowerCase().trim();
+      if (!key) continue;
+      const cur = map.get(key) || {
+        word: w.word, weightSum: 0, sources: 0, kept: false, count: 0, reasons: [],
+      };
+      cur.weightSum += Number(w.weight) || 0;
+      cur.sources += Number(w.sources) || 1;
+      cur.kept = cur.kept || !!w.kept;
+      cur.count += 1;
+      if (!w.kept && w.reason) cur.reasons.push(w.reason);
+      map.set(key, cur);
+    }
+  }
+  // Bonus: words appearing in more clouds get a boost.
+  const words = [...map.values()].map(w => ({
+    word: w.word,
+    weight: Math.min(100, Math.round(w.weightSum + (w.count - 1) * 8)),
+    sources: w.sources,
+    kept: w.kept,
+    reason: w.kept ? '' : (w.reasons[0] || ''),
+  }));
+  words.sort((a, b) => b.weight - a.weight);
+  const labelList = clouds.map(c => `「${c.label}」`).join(' + ');
+  return {
+    summary: clouds.length === 2
+      ? `${labelList} の合体クラウド (${words.length} 語)`
+      : `${clouds.length} 件の関連クラウドを統合 (${words.length} 語)`,
+    words: words.slice(0, 80),
+    merged_from: clouds.map(c => ({ id: c.id, label: c.label })),
+    base_summary: firstSummary,
+  };
+}
+
+app.post('/api/wordcloud/validate-word', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const word = body?.word;
+  const context = body?.context;
+  if (!word || !context) return c.json({ error: 'word and context required' }, 400);
+  try {
+    const r = await validateWordRelevance({ word, context, claudeBin: CLAUDE_BIN });
+    return c.json(r);
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// Per-bookmark word cloud (default: not generated; on-demand).
+app.post('/api/bookmarks/:id/wordcloud', async (c) => {
+  const id = Number(c.req.param('id'));
+  const b = getBookmark(db, id);
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const docs = buildBookmarkDoc(b);
+  const cloudId = insertWordCloud(db, {
+    origin: 'bookmark',
+    originDigId: null,
+    parentCloudId: null,
+    parentWord: null,
+    label: b.title || b.url,
+  });
+  // Stamp origin_bookmark_id (insertWordCloud schema doesn't accept it directly).
+  db.prepare(`UPDATE word_clouds SET origin_bookmark_id = ? WHERE id = ?`).run(id, cloudId);
+  enqueueCloud(cloudId, { docs, label: b.title || b.url });
+  return c.json({ id: cloudId, queued: true });
+});
+
+app.get('/api/bookmarks/:id/wordcloud', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
+  const cloud = getBookmarkWordCloud(db, id);
+  return c.json({ cloud });
+});
+
+// ---- dictionary -----------------------------------------------------------
+
+app.get('/api/dictionary', (c) => {
+  const search = c.req.query('q')?.trim() || undefined;
+  return c.json({ items: listDictionaryEntries(db, { search }) });
+});
+
+app.get('/api/dictionary/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const e = getDictionaryEntry(db, id);
+  if (!e) return c.json({ error: 'not found' }, 404);
+  return c.json(e);
+});
+
+app.post('/api/dictionary', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const term = (body?.term ?? '').toString().trim();
+  if (!term) return c.json({ error: 'term required' }, 400);
+  const existing = findDictionaryEntryByTerm(db, term);
+  if (existing) {
+    // Idempotent: update if any new fields supplied, otherwise return existing.
+    const patch = {};
+    if (typeof body.definition === 'string') patch.definition = body.definition;
+    if (typeof body.notes === 'string') patch.notes = body.notes;
+    if (Object.keys(patch).length > 0) updateDictionaryEntry(db, existing.id, patch);
+    return c.json({ id: existing.id, existed: true });
+  }
+  const id = insertDictionaryEntry(db, {
+    term,
+    definition: body.definition ?? null,
+    notes: body.notes ?? null,
+  });
+  return c.json({ id, existed: false });
+});
+
+app.patch('/api/dictionary/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getDictionaryEntry(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  updateDictionaryEntry(db, id, body);
+  return c.json(getDictionaryEntry(db, id));
+});
+
+app.delete('/api/dictionary/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  deleteDictionaryEntry(db, id);
+  return c.json({ ok: true });
+});
+
+const VALID_DICT_SOURCE_KINDS = new Set(['cloud', 'dig', 'bookmark']);
+
+app.post('/api/dictionary/:id/links', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getDictionaryEntry(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => null);
+  const sourceKind = body?.source_kind;
+  const sourceId = Number(body?.source_id);
+  if (!VALID_DICT_SOURCE_KINDS.has(sourceKind)) return c.json({ error: 'source_kind must be cloud|dig|bookmark' }, 400);
+  if (!Number.isFinite(sourceId)) return c.json({ error: 'source_id required' }, 400);
+  addDictionaryLink(db, { entryId: id, sourceKind, sourceId });
+  return c.json({ ok: true });
+});
+
+app.delete('/api/dictionary/:id/links', async (c) => {
+  const id = Number(c.req.param('id'));
+  const sourceKind = c.req.query('source_kind');
+  const sourceId = Number(c.req.query('source_id'));
+  if (!VALID_DICT_SOURCE_KINDS.has(sourceKind)) return c.json({ error: 'source_kind required' }, 400);
+  if (!Number.isFinite(sourceId)) return c.json({ error: 'source_id required' }, 400);
+  removeDictionaryLink(db, { entryId: id, sourceKind, sourceId });
+  return c.json({ ok: true });
+});
+
+/** Convenience: upsert a term + add a source link in one call. */
+app.post('/api/dictionary/upsert-from-source', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const term = (body?.term ?? '').toString().trim();
+  const sourceKind = body?.source_kind;
+  const sourceId = Number(body?.source_id);
+  if (!term) return c.json({ error: 'term required' }, 400);
+  if (!VALID_DICT_SOURCE_KINDS.has(sourceKind)) return c.json({ error: 'source_kind required' }, 400);
+  if (!Number.isFinite(sourceId)) return c.json({ error: 'source_id required' }, 400);
+
+  const existing = findDictionaryEntryByTerm(db, term);
+  let entryId;
+  let existed = false;
+  if (existing) {
+    entryId = existing.id;
+    existed = true;
+    if (typeof body.definition === 'string' || typeof body.notes === 'string') {
+      updateDictionaryEntry(db, entryId, {
+        definition: typeof body.definition === 'string' ? body.definition : undefined,
+        notes: typeof body.notes === 'string' ? body.notes : undefined,
+      });
+    }
+  } else {
+    entryId = insertDictionaryEntry(db, {
+      term,
+      definition: body.definition ?? null,
+      notes: body.notes ?? null,
+    });
+  }
+  addDictionaryLink(db, { entryId, sourceKind, sourceId });
+  return c.json({ id: entryId, existed });
+});
+
 // ---- queue status ---------------------------------------------------------
 
 app.get('/api/queue', (c) => {
@@ -493,6 +934,7 @@ app.get('/api/queue/items', (c) => {
   return c.json({
     summary: summaryQueue.snapshot(),
     embedding: embeddingQueue.snapshot(),
+    wordcloud: cloudQueue.snapshot(),
     // Backward-compat top-level fields:
     ...summaryQueue.snapshot(),
   });
