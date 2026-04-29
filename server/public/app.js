@@ -1582,12 +1582,25 @@ async function testGithubPat() {
   el.textContent = '検証中…';
   try {
     const r = await api('/api/diary/test-github', { method: 'POST' });
+    const fmt = r.token_format
+      ? `format: ${r.token_format.fine_grained ? 'fine-grained' : r.token_format.classic ? 'classic' : 'unknown'} (${r.token_format.length} 文字)`
+      : '';
+    const probeLines = (r.probes || []).map(p => {
+      if (p.error) return `<li><code>${escapeHtml(p.name)}</code>: ${escapeHtml(p.error)}</li>`;
+      const s = p.ok ? `<span style="color:#1f7a1f">${p.status}</span>` : `<span style="color:var(--danger)">${p.status}</span>`;
+      return `<li><code>${escapeHtml(p.name)}</code>: ${s} ${escapeHtml((p.body || '').slice(0, 80))}</li>`;
+    }).join('');
     if (r.ok) {
-      el.innerHTML = `<span style="color:#1f7a1f">✓ ${escapeHtml(r.login || '')} として認証 OK${r.scopes ? ` (scopes: ${escapeHtml(r.scopes)})` : ''}</span>`;
-    } else if (r.status === 401) {
-      el.innerHTML = `<span style="color:var(--danger)">✗ 401 Bad credentials — PAT が期限切れ・取り消し・形式不正の可能性。新しい PAT を生成して保存し直してください</span>`;
+      el.innerHTML = `
+        <div style="color:#1f7a1f">✓ ${escapeHtml(r.login || '')} として認証 OK${r.scopes ? ` (scopes: ${escapeHtml(r.scopes)})` : ''}</div>
+        <div style="font-size:11px;color:var(--muted)">${escapeHtml(fmt)}</div>
+        <ul class="diary-probe-list">${probeLines}</ul>`;
     } else {
-      el.innerHTML = `<span style="color:var(--danger)">✗ ${escapeHtml(r.error || `${r.status}`)}: ${escapeHtml((r.body || '').slice(0, 200))}</span>`;
+      el.innerHTML = `
+        <div style="color:var(--danger)">✗ ${escapeHtml(r.error ? `error: ${r.error}` : `status ${r.status}`)}</div>
+        ${r.hint ? `<div style="font-size:12px;color:#8a5a00">ヒント: ${escapeHtml(r.hint)}</div>` : ''}
+        <div style="font-size:11px;color:var(--muted)">${escapeHtml(fmt)}</div>
+        <ul class="diary-probe-list">${probeLines}</ul>`;
     }
   } catch (e) {
     el.textContent = `エラー: ${e.message}`;

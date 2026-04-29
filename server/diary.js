@@ -184,8 +184,12 @@ function formatCommit(c) {
   };
 }
 
-/** Lightweight credential check (used by the settings panel). */
-export async function pingGithub({ token, timeoutMs = 10_000 }) {
+/**
+ * Probe a few GitHub endpoints to figure out *why* a PAT is failing — a single
+ * /user call can return 401 simply because a fine-grained PAT lacks Account
+ * permissions, even though the token itself is valid.
+ */
+export async function pingGithub({ token, user, timeoutMs = 12_000 }) {
   const headers = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
@@ -194,19 +198,75 @@ export async function pingGithub({ token, timeoutMs = 10_000 }) {
   if (token) headers.Authorization = `Bearer ${token}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch('https://api.github.com/user', { headers, signal: ac.signal });
-    if (!res.ok) {
-      const body = (await res.text()).slice(0, 200);
-      return { ok: false, status: res.status, body };
+
+  const fmt = {
+    classic: !!(token && /^gh[pousr]_/.test(token)),
+    fine_grained: !!(token && /^github_pat_/.test(token)),
+    length: token ? token.length : 0,
+  };
+
+  const probes = [];
+  async function tryProbe(name, url) {
+    try {
+      const res = await fetch(url, { headers, signal: ac.signal });
+      let body = '';
+      if (!res.ok) body = (await res.text()).slice(0, 200);
+      probes.push({ name, url, status: res.status, ok: res.ok, body });
+      return res;
+    } catch (e) {
+      probes.push({ name, url, error: e.message });
+      return null;
     }
-    const data = await res.json();
-    return { ok: true, login: data.login, scopes: res.headers.get('x-oauth-scopes') || '' };
+  }
+
+  try {
+    const userRes = await tryProbe('user', 'https://api.github.com/user');
+    await tryProbe('rate_limit', 'https://api.github.com/rate_limit');
+    if (user) {
+      await tryProbe('user_public', `https://api.github.com/users/${encodeURIComponent(user)}`);
+    }
+
+    if (userRes?.ok) {
+      const data = await userRes.json();
+      return {
+        ok: true,
+        login: data.login,
+        scopes: userRes.headers.get('x-oauth-scopes') || '',
+        token_format: fmt,
+        probes,
+      };
+    }
+
+    // Build a diagnostic hint based on what failed.
+    const hint = inferAuthHint({ probes, fmt });
+    return { ok: false, status: userRes?.status, hint, token_format: fmt, probes };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: e.message, token_format: fmt, probes };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function inferAuthHint({ probes, fmt }) {
+  const userProbe = probes.find(p => p.name === 'user');
+  const rate = probes.find(p => p.name === 'rate_limit');
+  const userPub = probes.find(p => p.name === 'user_public');
+
+  // /users/<u> works WITHOUT auth normally, so a 401 there means the Bearer
+  // header itself was rejected — i.e. the token is unknown to GitHub.
+  if (userPub?.status === 401) {
+    return 'トークン自体が GitHub に存在しません (revoke 済み・期限切れ・別アカウント発行・コピー切れのいずれか)。GitHub Settings → Developer settings → Personal access tokens を開き、保存されているトークン (先頭は github_pat_) が一覧にあり active か確認してください。なければ作り直しが必要です。';
+  }
+  if (rate?.ok && userProbe?.status === 401 && fmt.fine_grained) {
+    return 'トークンは生きていますが /user で拒否。fine-grained PAT は発行時に Account permissions → "Profile (Read)" を有効化しないと /user 系が通りません。';
+  }
+  if (userProbe?.status === 401 && fmt.classic) {
+    return 'classic PAT が拒否されました。期限切れ・revoke・スコープ不足の可能性。`repo` と `read:user` を含めて作り直してください。';
+  }
+  if (userProbe?.status === 401 && !fmt.classic && !fmt.fine_grained) {
+    return 'PAT のフォーマットが GitHub の標準形式 (`ghp_...` か `github_pat_...`) と一致しません。トークンを再確認してください。';
+  }
+  return 'GitHub から 401 が返りました。期限切れ・revoke・権限不足のいずれかです。';
 }
 
 /** Bookmarks created or accessed on `dateStr`. */
@@ -248,12 +308,40 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
       : '(GitHub commit なし)';
   const created = metrics.bookmarks?.created || [];
   const accessed = metrics.bookmarks?.accessed || [];
-  const createdBlock = created.length
-    ? created.map(b => `- ${b.title} (${b.url})${b.summary ? '\n  ' + b.summary.slice(0, 200) : ''}`).join('\n')
-    : '(新規ブックマークなし)';
-  const accessedBlock = accessed.length
-    ? accessed.map(b => `- ${b.title} ×${b.access_count} (${b.url})`).join('\n')
-    : '(再訪したブックマークなし)';
+  const totalBookmarks = created.length + accessed.length;
+  // When bookmark count balloons, the prompt becomes too long and the per-item
+  // detail dilutes the narrative — fall back to a domain-only summary.
+  const BOOKMARK_DETAIL_THRESHOLD = 10;
+  let bookmarkSection;
+  if (totalBookmarks === 0) {
+    bookmarkSection = '新規・再訪したブックマーク: (なし)';
+  } else if (totalBookmarks > BOOKMARK_DETAIL_THRESHOLD) {
+    const allDomains = new Map();
+    for (const b of [...created, ...accessed]) {
+      try {
+        const dom = new URL(b.url).hostname.toLowerCase();
+        allDomains.set(dom, (allDomains.get(dom) || 0) + (b.access_count || 1));
+      } catch {}
+    }
+    const domLines = [...allDomains.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12)
+      .map(([d, n]) => `- ${d} (${n} 件)`)
+      .join('\n');
+    bookmarkSection = [
+      `ブックマーク総数: 新規 ${created.length} 件 + 再訪 ${accessed.length} 件 = ${totalBookmarks} 件`,
+      '(個別タイトルは省略。ドメイン分布から作業内容を推察してください)',
+      domLines,
+    ].join('\n');
+  } else {
+    const createdBlock = created.length
+      ? created.map(b => `- ${b.title} (${b.url})${b.summary ? '\n  ' + b.summary.slice(0, 200) : ''}`).join('\n')
+      : '(新規ブックマークなし)';
+    const accessedBlock = accessed.length
+      ? accessed.map(b => `- ${b.title} ×${b.access_count} (${b.url})`).join('\n')
+      : '(再訪したブックマークなし)';
+    bookmarkSection = `新規ブックマーク:\n${createdBlock}\n\n再訪したブックマーク:\n${accessedBlock}`;
+  }
   const notesBlock = notes ? `\nUSER NOTES (反映してください):\n${notes}\n` : '';
   return [
     `あなたは ${dateStr} の活動データから 1 日の日報を書きます。`,
@@ -277,11 +365,7 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
     'TOP DOMAINS:',
     domainTable || '(なし)',
     '',
-    '新規ブックマーク:',
-    createdBlock,
-    '',
-    '再訪したブックマーク:',
-    accessedBlock,
+    bookmarkSection,
     '',
     'GITHUB COMMITS:',
     githubBlock,
@@ -299,7 +383,7 @@ export async function generateDiaryNarrative({ dateStr, metrics, github, notes, 
 
 function spawnClaude(bin, prompt, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const child = spawn(bin, ['-p'], { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`claude CLI timed out after ${timeoutMs}ms`)); }, timeoutMs);
@@ -311,6 +395,7 @@ function spawnClaude(bin, prompt, timeoutMs) {
       if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
       else resolve(stdout.trim());
     });
+    child.stdin.end(prompt, 'utf8');
   });
 }
 
