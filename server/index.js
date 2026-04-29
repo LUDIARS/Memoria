@@ -35,7 +35,10 @@ import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from
 import {
   deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
   insertDigSession, setDigResult, getDigSession, listDigSessions,
+  insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
+  getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
 } from './db.js';
+import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { spawn } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +53,7 @@ mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
 const embeddingQueue = new FifoQueue();
+const cloudQueue = new FifoQueue();
 let chunkCache = null;
 function invalidateChunkCache() { chunkCache = null; }
 function loadChunkCache() {
@@ -203,7 +207,8 @@ app.get('/api/bookmarks/:id', (c) => {
   const id = Number(c.req.param('id'));
   const b = getBookmark(db, id);
   if (!b) return c.json({ error: 'not found' }, 404);
-  return c.json(b);
+  const cloud = getBookmarkWordCloud(db, id);
+  return c.json({ ...b, wordcloud: cloud });
 });
 
 app.patch('/api/bookmarks/:id', async (c) => {
@@ -277,6 +282,11 @@ app.get('/api/trends/timeline', (c) => {
 app.get('/api/trends/domains', (c) => {
   const days = Number(c.req.query('days')) || 30;
   return c.json({ items: trendsDomains(db, { sinceDays: days }) });
+});
+
+app.get('/api/trends/visit-domains', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: trendsVisitDomains(db, { sinceDays: days }) });
 });
 
 // ---- recommendations ------------------------------------------------------
@@ -478,6 +488,137 @@ app.post('/api/dig/:id/save', async (c) => {
   return c.json({ results: await bulkSaveUrls(body.urls) });
 });
 
+// ---- word clouds ---------------------------------------------------------
+
+const BOOKMARK_DOC_LIMIT = 80;
+const DIG_DOC_LIMIT = 30;
+const SINGLE_BOOKMARK_TEXT_LIMIT = 12000;
+
+function buildBookmarksDocs({ category, limit = BOOKMARK_DOC_LIMIT }) {
+  const items = listBookmarks(db, { category }).slice(0, limit);
+  return items.map((b, i) => {
+    const cats = (b.categories || []).join(', ');
+    const summary = (b.summary || '').slice(0, 800);
+    return `[Doc ${i + 1}] ${b.title}\nURL: ${b.url}\nCategories: ${cats}\nSummary: ${summary}`;
+  }).join('\n\n');
+}
+
+function buildDigDocs(session) {
+  const r = session.result || {};
+  const sources = (r.sources || []).slice(0, DIG_DOC_LIMIT);
+  if (sources.length === 0) return '';
+  const head = r.summary ? `OVERVIEW: ${r.summary}\n\n` : '';
+  return head + sources.map((s, i) => {
+    const topics = (s.topics || []).join(', ');
+    return `[Doc ${i + 1}] ${s.title}\nURL: ${s.url}\nTopics: ${topics}\nSnippet: ${s.snippet}`;
+  }).join('\n\n');
+}
+
+function buildBookmarkDoc(b) {
+  let bodyText = '';
+  try {
+    const html = readFileSync(join(HTML_DIR, b.html_path), 'utf8');
+    bodyText = htmlToText(html).slice(0, SINGLE_BOOKMARK_TEXT_LIMIT);
+  } catch {}
+  const cats = (b.categories || []).join(', ');
+  return `Title: ${b.title}\nURL: ${b.url}\nCategories: ${cats}\nSummary: ${b.summary || ''}\n\nBody:\n${bodyText}`;
+}
+
+function enqueueCloud(id, { docs, label }) {
+  cloudQueue.enqueue(async () => {
+    try {
+      const result = await extractWordCloud({ label, docs, claudeBin: CLAUDE_BIN });
+      setWordCloudResult(db, id, { status: 'done', result });
+    } catch (e) {
+      setWordCloudResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
+      throw e;
+    }
+  }, { kind: 'wordcloud', cloudId: id, title: label });
+}
+
+app.post('/api/wordcloud', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: 'body required' }, 400);
+  const origin = body.origin;
+  const parentCloudId = body.parentCloudId ?? null;
+  const parentWord = typeof body.parentWord === 'string' ? body.parentWord : null;
+
+  let label, docs, originDigId = null;
+
+  if (origin === 'bookmarks') {
+    const cat = body.category || null;
+    const items = listBookmarks(db, { category: cat });
+    if (items.length === 0) return c.json({ error: 'no bookmarks' }, 400);
+    label = cat ? `bookmarks:${cat}` : 'all bookmarks';
+    docs = buildBookmarksDocs({ category: cat });
+  } else if (origin === 'dig') {
+    const digId = Number(body.digId);
+    const ses = getDigSession(db, digId);
+    if (!ses) return c.json({ error: 'dig session not found' }, 404);
+    if (ses.status !== 'done') return c.json({ error: `dig status: ${ses.status}` }, 400);
+    label = ses.query;
+    originDigId = digId;
+    docs = buildDigDocs(ses);
+    if (!docs) return c.json({ error: 'dig has no sources' }, 400);
+  } else {
+    return c.json({ error: 'origin must be bookmarks or dig' }, 400);
+  }
+
+  const id = insertWordCloud(db, { origin, originDigId, parentCloudId, parentWord, label });
+  enqueueCloud(id, { docs, label });
+  return c.json({ id, queued: true });
+});
+
+app.get('/api/wordcloud', (c) => {
+  return c.json({ items: listWordClouds(db) });
+});
+
+app.get('/api/wordcloud/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const w = getWordCloud(db, id);
+  if (!w) return c.json({ error: 'not found' }, 404);
+  return c.json(w);
+});
+
+app.post('/api/wordcloud/validate-word', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const word = body?.word;
+  const context = body?.context;
+  if (!word || !context) return c.json({ error: 'word and context required' }, 400);
+  try {
+    const r = await validateWordRelevance({ word, context, claudeBin: CLAUDE_BIN });
+    return c.json(r);
+  } catch (e) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// Per-bookmark word cloud (default: not generated; on-demand).
+app.post('/api/bookmarks/:id/wordcloud', async (c) => {
+  const id = Number(c.req.param('id'));
+  const b = getBookmark(db, id);
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const docs = buildBookmarkDoc(b);
+  const cloudId = insertWordCloud(db, {
+    origin: 'bookmark',
+    originDigId: null,
+    parentCloudId: null,
+    parentWord: null,
+    label: b.title || b.url,
+  });
+  // Stamp origin_bookmark_id (insertWordCloud schema doesn't accept it directly).
+  db.prepare(`UPDATE word_clouds SET origin_bookmark_id = ? WHERE id = ?`).run(id, cloudId);
+  enqueueCloud(cloudId, { docs, label: b.title || b.url });
+  return c.json({ id: cloudId, queued: true });
+});
+
+app.get('/api/bookmarks/:id/wordcloud', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
+  const cloud = getBookmarkWordCloud(db, id);
+  return c.json({ cloud });
+});
+
 // ---- queue status ---------------------------------------------------------
 
 app.get('/api/queue', (c) => {
@@ -493,6 +634,7 @@ app.get('/api/queue/items', (c) => {
   return c.json({
     summary: summaryQueue.snapshot(),
     embedding: embeddingQueue.snapshot(),
+    wordcloud: cloudQueue.snapshot(),
     // Backward-compat top-level fields:
     ...summaryQueue.snapshot(),
   });

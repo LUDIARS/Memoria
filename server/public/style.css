@@ -601,6 +601,126 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
   animation: pulse 1.4s ease-in-out infinite;
 }
+
+/* ── Word cloud ─────────────────────────────────────────────── */
+.dig-cloud {
+  margin-top: 14px;
+}
+.cloud-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cloud-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.cloud-breadcrumb {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.cloud-breadcrumb .parent-link {
+  cursor: pointer;
+  text-decoration: underline;
+  color: var(--accent);
+}
+.cloud-breadcrumb .parent-word {
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.cloud-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 8px;
+  font-size: 12px;
+}
+.cloud-toolbar .grow { flex: 1; }
+.cloud-dropped-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cloud-words {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  line-height: 2.1;
+  text-align: center;
+  box-shadow: var(--shadow);
+  min-height: 80px;
+}
+.cloud-word {
+  display: inline-block;
+  margin: 0 6px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+  transition: transform .12s ease, color .12s ease;
+}
+.cloud-word:hover {
+  transform: scale(1.08);
+  color: #1f56c0;
+  text-decoration: underline;
+}
+.cloud-word.dropped {
+  color: var(--muted);
+  font-weight: 400;
+  font-style: italic;
+}
+.cloud-manual {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.cloud-manual input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.dig-chain-hint {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* Per-bookmark cloud in the detail panel */
+.detail-cloud {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  line-height: 1.9;
+  text-align: center;
+  min-height: 50px;
+}
+.detail-cloud .cloud-word {
+  margin: 0 4px;
+  font-weight: 500;
+}
+.detail-cloud-empty {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  padding: 8px;
+}
+.ghost-sm {
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+  margin-left: 6px;
+}
 .visits-actions {
   display: flex;
   gap: 10px;

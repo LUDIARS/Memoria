@@ -83,7 +83,32 @@ export function openDb(dbPath) {
       vec_model    TEXT NOT NULL DEFAULT 'multilingual-e5-small'
     );
     CREATE INDEX IF NOT EXISTS idx_chunks_bookmark ON chunks(bookmark_id);
+
+    CREATE TABLE IF NOT EXISTS word_clouds (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      origin              TEXT NOT NULL,
+      origin_dig_id       INTEGER,
+      origin_bookmark_id  INTEGER REFERENCES bookmarks(id) ON DELETE CASCADE,
+      parent_cloud_id     INTEGER,
+      parent_word         TEXT,
+      label               TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'pending',
+      error               TEXT,
+      result_json         TEXT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_word_clouds_created
+      ON word_clouds(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_word_clouds_bookmark
+      ON word_clouds(origin_bookmark_id);
   `);
+
+  // Forward-compat: ensure newer columns exist on older word_clouds tables.
+  const wcCols = db.prepare(`PRAGMA table_info(word_clouds)`).all().map(c => c.name);
+  if (!wcCols.includes('origin_bookmark_id')) {
+    db.exec(`ALTER TABLE word_clouds ADD COLUMN origin_bookmark_id INTEGER`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_word_clouds_bookmark ON word_clouds(origin_bookmark_id)`);
+  }
 
   // Forward-compat: ensure newer columns exist on older DBs.
   const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
@@ -300,6 +325,96 @@ export function listDigSessions(db, limit = 30) {
 }
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+// ── word clouds ------------------------------------------------------------
+
+export function insertWordCloud(db, { origin, originDigId, parentCloudId, parentWord, label }) {
+  return db.prepare(`
+    INSERT INTO word_clouds (origin, origin_dig_id, parent_cloud_id, parent_word, label)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    origin,
+    originDigId ?? null,
+    parentCloudId ?? null,
+    parentWord ?? null,
+    label,
+  ).lastInsertRowid;
+}
+
+export function setWordCloudResult(db, id, { status, result, error }) {
+  db.prepare(`
+    UPDATE word_clouds SET status = ?, result_json = ?, error = ?
+    WHERE id = ?
+  `).run(status, result ? JSON.stringify(result) : null, error ?? null, id);
+}
+
+export function getWordCloud(db, id) {
+  const row = db.prepare(`SELECT * FROM word_clouds WHERE id = ?`).get(id);
+  if (!row) return null;
+  return {
+    ...row,
+    result: row.result_json ? safeParse(row.result_json) : null,
+  };
+}
+
+export function listWordClouds(db, limit = 30) {
+  return db.prepare(`
+    SELECT id, origin, origin_dig_id, origin_bookmark_id, parent_cloud_id, parent_word,
+           label, status, created_at
+    FROM word_clouds ORDER BY id DESC LIMIT ?
+  `).all(limit);
+}
+
+/** Latest 'done' word cloud for a single bookmark, or null. */
+export function getBookmarkWordCloud(db, bookmarkId) {
+  const row = db.prepare(`
+    SELECT * FROM word_clouds
+    WHERE origin = 'bookmark' AND origin_bookmark_id = ? AND status = 'done'
+    ORDER BY id DESC LIMIT 1
+  `).get(bookmarkId);
+  if (!row) return null;
+  return { ...row, result: row.result_json ? safeParse(row.result_json) : null };
+}
+
+/** Most recent 'done' bookmark clouds (for recommendation weighting). */
+export function recentBookmarkWordClouds(db, { limit = 50 } = {}) {
+  const rows = db.prepare(`
+    SELECT wc.* FROM word_clouds wc
+    JOIN bookmarks b ON b.id = wc.origin_bookmark_id
+    WHERE wc.origin = 'bookmark' AND wc.status = 'done'
+    ORDER BY b.created_at DESC LIMIT ?
+  `).all(Number(limit) || 50);
+  return rows.map(r => ({
+    bookmark_id: r.origin_bookmark_id,
+    label: r.label,
+    result: r.result_json ? safeParse(r.result_json) : null,
+  }));
+}
+
+/**
+ * Top domains across the page_visits log (URL-only history),
+ * regardless of whether the URL is bookmarked.
+ */
+export function trendsVisitDomains(db, { sinceDays = 30, limit = 12 } = {}) {
+  const rows = db.prepare(`
+    SELECT v.url, v.visit_count, v.last_seen_at
+    FROM page_visits v
+    WHERE v.last_seen_at >= datetime('now', ?)
+  `).all(`-${Number(sinceDays) || 30} days`);
+  const tally = new Map();
+  for (const r of rows) {
+    const d = extractDomain(r.url);
+    if (!d) continue;
+    const cur = tally.get(d) || { domain: d, visits: 0, urls: 0, last_seen_at: '' };
+    cur.visits += r.visit_count || 1;
+    cur.urls += 1;
+    if (!cur.last_seen_at || r.last_seen_at > cur.last_seen_at) cur.last_seen_at = r.last_seen_at;
+    tally.set(d, cur);
+  }
+  return [...tally.values()]
+    .sort((a, b) => b.visits - a.visits || b.urls - a.urls)
+    .slice(0, Number(limit) || 12);
+}
 
 // ── chunks / embeddings ----------------------------------------------------
 

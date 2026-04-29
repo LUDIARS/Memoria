@@ -116,8 +116,13 @@
           </section>
 
           <section class="trend-card">
-            <h3>よく訪れているドメイン</h3>
+            <h3>よくアクセスしている保存ドメイン</h3>
             <div id="trendDomains" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>よく訪れているサイト (ブクマ未保存含む)</h3>
+            <div id="trendVisitDomains" class="chart"></div>
           </section>
         </div>
       </div>
@@ -126,8 +131,10 @@
         <div class="dig-input">
           <input id="digQuery" type="text" placeholder="掘りたい単語または質問を入力 (例: WebGPU compute shader readback)" />
           <button id="digRun">ディグる</button>
+          <button id="digFromBookmarks" class="ghost" title="既存のブックマークからワードクラウドを作る">📚 ブクマから雲</button>
         </div>
         <div id="digHistory" class="dig-history"></div>
+        <div id="cloudView" class="dig-cloud"></div>
         <div id="digResult" class="dig-result"></div>
       </div>
 
@@ -180,6 +187,8 @@
       </div>
       <h3>要約</h3>
       <div id="dSummary" class="summary"></div>
+      <h3>ワードクラウド <button id="dCloudGen" class="ghost ghost-sm" title="この記事からワードクラウドを生成">生成</button></h3>
+      <div id="dCloud" class="detail-cloud"></div>
       <h3>カテゴリ</h3>
       <input id="dCategories" type="text" placeholder="カンマ区切り" />
       <h3>メモ</h3>
