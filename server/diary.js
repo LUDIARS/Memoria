@@ -5,7 +5,7 @@
 // claude is asked only to narrate.
 
 import { spawn } from 'node:child_process';
-import { visitEventsForDate, getDiary } from './db.js';
+import { visitEventsForDate, getDiary, getDomainCatalogMap } from './db.js';
 
 // Model selection. The `claude` CLI accepts `--model sonnet` and `--model opus`.
 // We use Sonnet for the per-URL narrative (cheap, repetitive) and Opus 1M for
@@ -73,7 +73,7 @@ export function aggregateDay(db, dateStr) {
     if (!lastSeen || v.last_seen_at > lastSeen) lastSeen = v.last_seen_at;
   }
 
-  const topDomains = [...domainTally.entries()]
+  const topDomainList = [...domainTally.entries()]
     .map(([domain, count]) => ({
       domain,
       count,
@@ -81,6 +81,16 @@ export function aggregateDay(db, dateStr) {
     }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 20);
+  const catalog = getDomainCatalogMap(db, topDomainList.map(d => d.domain));
+  const topDomains = topDomainList.map(d => {
+    const cat = catalog.get(d.domain);
+    return cat ? {
+      ...d,
+      description: cat.description || null,
+      kind: cat.kind || null,
+      catalog_title: cat.title || null,
+    } : d;
+  });
 
   const activeHours = hourlyVisits
     .map((n, h) => ({ hour: h, count: n }))
@@ -372,7 +382,10 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
     .filter((_, h) => metrics.hourly_visits[h] > 0)
     .join(', ');
   const domainTable = metrics.top_domains
-    .map(d => `${d.domain} (${d.count} 件 / 時間帯 ${d.active_hours.join(',')})`)
+    .map(d => {
+      const desc = d.description ? ` — ${d.description}` : '';
+      return `${d.domain} (${d.count} 件 / 時間帯 ${d.active_hours.join(',')})${desc}`;
+    })
     .join('\n');
   const githubBlock = github?.commits?.length
     ? github.commits.map(c => `- [${c.repo} ${c.sha}] ${c.message}`).join('\n')

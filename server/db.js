@@ -74,6 +74,16 @@ export function openDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_accesses_bookmark
       ON accesses(bookmark_id, accessed_at DESC);
 
+    CREATE TABLE IF NOT EXISTS domain_catalog (
+      domain        TEXT PRIMARY KEY,
+      title         TEXT,
+      description   TEXT,
+      kind          TEXT,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      error         TEXT,
+      fetched_at    TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS visit_events (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       url         TEXT NOT NULL,
@@ -540,6 +550,51 @@ export function removeDictionaryLink(db, { entryId, sourceKind, sourceId }) {
     DELETE FROM dictionary_links
     WHERE entry_id = ? AND source_kind = ? AND source_id = ?
   `).run(entryId, sourceKind, sourceId);
+}
+
+// ── domain catalog ---------------------------------------------------------
+
+export function getDomainCatalog(db, domain) {
+  return db.prepare(`SELECT * FROM domain_catalog WHERE domain = ?`).get(domain) ?? null;
+}
+
+export function listDomainCatalog(db, { limit = 200 } = {}) {
+  return db.prepare(`
+    SELECT * FROM domain_catalog
+    ORDER BY (status = 'done') DESC, fetched_at DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+/** Bulk fetch by domain set; returns { domain → row }. */
+export function getDomainCatalogMap(db, domains) {
+  if (!domains.length) return new Map();
+  const placeholders = domains.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM domain_catalog WHERE domain IN (${placeholders})`).all(...domains);
+  return new Map(rows.map(r => [r.domain, r]));
+}
+
+export function insertDomainPending(db, domain) {
+  db.prepare(`
+    INSERT OR IGNORE INTO domain_catalog (domain, status) VALUES (?, 'pending')
+  `).run(domain);
+}
+
+export function setDomainCatalog(db, domain, { title, description, kind, status, error }) {
+  db.prepare(`
+    UPDATE domain_catalog
+       SET title = COALESCE(?, title),
+           description = COALESCE(?, description),
+           kind = COALESCE(?, kind),
+           status = COALESCE(?, status),
+           error = ?,
+           fetched_at = datetime('now')
+     WHERE domain = ?
+  `).run(title ?? null, description ?? null, kind ?? null, status ?? null, error ?? null, domain);
+}
+
+export function deleteDomainCatalog(db, domain) {
+  db.prepare(`DELETE FROM domain_catalog WHERE domain = ?`).run(domain);
 }
 
 // ── visit events / diary ---------------------------------------------------

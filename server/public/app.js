@@ -1569,7 +1569,13 @@ function renderDiaryDetail() {
     ? '<li class="queue-empty">アクセスログなし</li>'
     : domains.slice(0, 12).map((dm, i) => {
       const color = pieColor(i);
-      return `<li><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(dm.domain)}</span><span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></li>`;
+      const desc = dm.description
+        ? `<div class="diary-domain-desc">${dm.kind ? `<span class="visits-kind">${escapeHtml(dm.kind)}</span> ` : ''}${escapeHtml(dm.description)}</div>`
+        : '';
+      return `<li>
+        <div class="diary-domain-row"><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(dm.domain)}</span><span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></div>
+        ${desc}
+      </li>`;
     }).join('');
 
   const created = metrics.bookmarks?.created || [];
@@ -2037,6 +2043,10 @@ function renderVisits() {
     const badge = hot
       ? `<span class="suggest-badge">同ドメイン保存 ${v.same_domain_bookmarks}</span>`
       : '';
+    const cat = v.catalog;
+    const catLine = cat?.description
+      ? `<div class="visits-catalog">${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}${escapeHtml(cat.description)}</div>`
+      : (cat?.status === 'pending' ? `<div class="visits-catalog pending">分類中…</div>` : '');
     return `
       <li class="${sel ? 'selected' : ''} ${hot ? 'hot' : ''}" data-url="${escapeHtml(v.url)}">
         <input type="checkbox" class="vchk" ${sel ? 'checked' : ''} />
@@ -2044,6 +2054,7 @@ function renderVisits() {
           <div class="title">${escapeHtml(v.title || '(タイトル未取得)')} ${badge}</div>
           <div class="url">${escapeHtml(v.url)}</div>
           <div class="visits-meta">${escapeHtml(dom)}${v.score ? ` · score ${v.score}` : ''}</div>
+          ${catLine}
         </div>
         <div class="when">
           ${fmtDate(v.last_seen_at)}<br>

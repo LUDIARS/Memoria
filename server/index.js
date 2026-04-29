@@ -41,7 +41,10 @@ import {
   insertVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
   deleteDiary, getDiarySettings, setDiarySettings,
   getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
+  getDomainCatalog, listDomainCatalog, getDomainCatalogMap,
+  insertDomainPending, setDomainCatalog, deleteDomainCatalog,
 } from './db.js';
+import { classifyDomain, shouldSkipDomain } from './domain-catalog.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
@@ -60,6 +63,49 @@ mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
+const domainCatalogQueue = new ConcurrentPool({ concurrency: 2 });
+
+function extractDomainFromUrl(u) {
+  try { return new URL(u).hostname.toLowerCase(); } catch { return null; }
+}
+
+function maybeQueueDomain(url) {
+  const domain = extractDomainFromUrl(url);
+  if (!domain) return;
+  if (shouldSkipDomain(domain)) return;
+  // Cheap dedup: if we already have a row, skip. Pending rows count too.
+  if (getDomainCatalog(db, domain)) return;
+  insertDomainPending(db, domain);
+  domainCatalogQueue.enqueue(async () => {
+    const result = await classifyDomain({ domain, claudeBin: CLAUDE_BIN });
+    if (result.skip) {
+      deleteDomainCatalog(db, domain);
+      return;
+    }
+    if (result.dropRow) {
+      // 404 / DNS error / non-2xx → drop the row entirely so it can be retried later.
+      deleteDomainCatalog(db, domain);
+      console.log(`[domain-catalog] dropped ${domain}: ${result.error}`);
+      return;
+    }
+    if (!result.ok) {
+      setDomainCatalog(db, domain, {
+        title: result.title ?? null,
+        description: result.metaDescription ?? null,
+        status: 'error',
+        error: result.error ?? 'unknown',
+      });
+      return;
+    }
+    setDomainCatalog(db, domain, {
+      title: result.title,
+      description: result.description,
+      kind: result.kind,
+      status: 'done',
+      error: null,
+    });
+  }, { kind: 'domain', domain, title: domain });
+}
 
 function enqueueSummary(id) {
   const b = getBookmark(db, id);
@@ -772,6 +818,9 @@ app.post('/api/access', async (c) => {
   // row to visit_events (used by the diary aggregator for hourly buckets).
   upsertVisit(db, { url: body.url, title });
   insertVisitEvent(db, { url: body.url, title });
+  // Lazily classify the domain in the background (skip for localhost, dedup
+  // via domain_catalog rows).
+  maybeQueueDomain(body.url);
 
   // If this URL is already bookmarked, also bump its bookmark access counter.
   const b = findBookmarkByUrl(db, body.url);
@@ -784,7 +833,36 @@ app.post('/api/access', async (c) => {
 
 app.get('/api/visits/unsaved', (c) => {
   const since = c.req.query('since');
-  return c.json({ items: listUnsavedVisits(db, { since }) });
+  const items = listUnsavedVisits(db, { since });
+  const domains = [...new Set(items.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
+  const catalog = getDomainCatalogMap(db, domains);
+  return c.json({
+    items: items.map(v => {
+      const dom = extractDomainFromUrl(v.url);
+      const cat = dom ? catalog.get(dom) : null;
+      return {
+        ...v,
+        domain: dom,
+        catalog: cat ? {
+          description: cat.description,
+          kind: cat.kind,
+          title: cat.title,
+          status: cat.status,
+        } : null,
+      };
+    }),
+  });
+});
+
+app.get('/api/domains', (c) => {
+  return c.json({ items: listDomainCatalog(db, { limit: 500 }) });
+});
+
+app.get('/api/domains/:domain', (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  const row = getDomainCatalog(db, d);
+  if (!row) return c.json({ error: 'not found' }, 404);
+  return c.json(row);
 });
 
 app.get('/api/visits/suggested', (c) => {
