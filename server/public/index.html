@@ -50,6 +50,7 @@
         </button>
         <button class="tab" data-tab="rag">RAG</button>
         <button class="tab" data-tab="dig">ディグる</button>
+        <button class="tab" data-tab="dict">📖 辞書</button>
       </nav>
 
       <div id="bookmarksView">
@@ -116,8 +117,13 @@
           </section>
 
           <section class="trend-card">
-            <h3>よく訪れているドメイン</h3>
+            <h3>よくアクセスしている保存ドメイン</h3>
             <div id="trendDomains" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>よく訪れているサイト (ブクマ未保存含む)</h3>
+            <div id="trendVisitDomains" class="chart"></div>
           </section>
         </div>
       </div>
@@ -126,8 +132,10 @@
         <div class="dig-input">
           <input id="digQuery" type="text" placeholder="掘りたい単語または質問を入力 (例: WebGPU compute shader readback)" />
           <button id="digRun">ディグる</button>
+          <button id="digFromBookmarks" class="ghost" title="既存のブックマークからワードクラウドを作る">📚 ブクマから雲</button>
         </div>
         <div id="digHistory" class="dig-history"></div>
+        <div id="cloudView" class="dig-cloud"></div>
         <div id="digResult" class="dig-result"></div>
       </div>
 
@@ -152,6 +160,29 @@
         </div>
         <div id="recList" class="rec-list"></div>
         <div id="recEmpty" class="queue-empty hidden">推薦できる未訪問リンクがありません。保存記事を増やすと候補が出ます。</div>
+      </div>
+
+      <div id="dictView" class="hidden">
+        <div class="dict-bar">
+          <input id="dictSearch" type="search" placeholder="辞書を検索 (term / 説明 / メモ)" />
+          <button id="dictNewBtn">＋ 新規エントリ</button>
+        </div>
+        <div class="dict-layout">
+          <ul id="dictList" class="dict-list"></ul>
+          <div id="dictDetail" class="dict-detail hidden">
+            <div class="dict-detail-head">
+              <input id="dictTerm" type="text" placeholder="単語" />
+              <button id="dictSaveBtn">保存</button>
+              <button id="dictDeleteBtn" class="danger">削除</button>
+            </div>
+            <h4>説明</h4>
+            <textarea id="dictDefinition" rows="6" placeholder="調査内容・定義 (Markdown 可)"></textarea>
+            <h4>メモ</h4>
+            <textarea id="dictNotes" rows="4" placeholder="追加メモ"></textarea>
+            <h4>リンクされた調査記録</h4>
+            <ul id="dictLinks" class="dict-links"></ul>
+          </div>
+        </div>
       </div>
 
       <div id="queueView" class="hidden">
@@ -180,6 +211,8 @@
       </div>
       <h3>要約</h3>
       <div id="dSummary" class="summary"></div>
+      <h3>ワードクラウド <button id="dCloudGen" class="ghost ghost-sm" title="この記事からワードクラウドを生成">生成</button></h3>
+      <div id="dCloud" class="detail-cloud"></div>
       <h3>カテゴリ</h3>
       <input id="dCategories" type="text" placeholder="カンマ区切り" />
       <h3>メモ</h3>

@@ -42,7 +42,8 @@ export function openDb(dbPath) {
       created_at    TEXT NOT NULL DEFAULT (datetime('now')),
       status        TEXT NOT NULL DEFAULT 'pending',
       error         TEXT,
-      result_json   TEXT
+      result_json   TEXT,
+      preview_json  TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_dig_sessions_created
@@ -83,7 +84,57 @@ export function openDb(dbPath) {
       vec_model    TEXT NOT NULL DEFAULT 'multilingual-e5-small'
     );
     CREATE INDEX IF NOT EXISTS idx_chunks_bookmark ON chunks(bookmark_id);
+
+    CREATE TABLE IF NOT EXISTS dictionary_entries (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      term         TEXT NOT NULL UNIQUE,
+      definition   TEXT,
+      notes        TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS dictionary_links (
+      entry_id      INTEGER NOT NULL REFERENCES dictionary_entries(id) ON DELETE CASCADE,
+      source_kind   TEXT NOT NULL,
+      source_id     INTEGER NOT NULL,
+      added_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (entry_id, source_kind, source_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dict_links_entry
+      ON dictionary_links(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_dict_links_source
+      ON dictionary_links(source_kind, source_id);
+
+    CREATE TABLE IF NOT EXISTS word_clouds (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      origin              TEXT NOT NULL,
+      origin_dig_id       INTEGER,
+      origin_bookmark_id  INTEGER REFERENCES bookmarks(id) ON DELETE CASCADE,
+      parent_cloud_id     INTEGER,
+      parent_word         TEXT,
+      label               TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'pending',
+      error               TEXT,
+      result_json         TEXT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_word_clouds_created
+      ON word_clouds(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_word_clouds_bookmark
+      ON word_clouds(origin_bookmark_id);
   `);
+
+  // Forward-compat: ensure newer columns exist on older word_clouds tables.
+  const wcCols = db.prepare(`PRAGMA table_info(word_clouds)`).all().map(c => c.name);
+  if (!wcCols.includes('origin_bookmark_id')) {
+    db.exec(`ALTER TABLE word_clouds ADD COLUMN origin_bookmark_id INTEGER`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_word_clouds_bookmark ON word_clouds(origin_bookmark_id)`);
+  }
+
+  const dsCols = db.prepare(`PRAGMA table_info(dig_sessions)`).all().map(c => c.name);
+  if (!dsCols.includes('preview_json')) {
+    db.exec(`ALTER TABLE dig_sessions ADD COLUMN preview_json TEXT`);
+  }
 
   // Forward-compat: ensure newer columns exist on older DBs.
   const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
@@ -283,12 +334,18 @@ export function setDigResult(db, id, { status, result, error }) {
   `).run(status, result ? JSON.stringify(result) : null, error ?? null, id);
 }
 
+export function setDigPreview(db, id, preview) {
+  db.prepare(`UPDATE dig_sessions SET preview_json = ? WHERE id = ?`)
+    .run(preview ? JSON.stringify(preview) : null, id);
+}
+
 export function getDigSession(db, id) {
   const row = db.prepare(`SELECT * FROM dig_sessions WHERE id = ?`).get(id);
   if (!row) return null;
   return {
     ...row,
     result: row.result_json ? safeParse(row.result_json) : null,
+    preview: row.preview_json ? safeParse(row.preview_json) : null,
   };
 }
 
@@ -300,6 +357,176 @@ export function listDigSessions(db, limit = 30) {
 }
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+// ── word clouds ------------------------------------------------------------
+
+export function insertWordCloud(db, { origin, originDigId, parentCloudId, parentWord, label }) {
+  return db.prepare(`
+    INSERT INTO word_clouds (origin, origin_dig_id, parent_cloud_id, parent_word, label)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    origin,
+    originDigId ?? null,
+    parentCloudId ?? null,
+    parentWord ?? null,
+    label,
+  ).lastInsertRowid;
+}
+
+export function setWordCloudResult(db, id, { status, result, error }) {
+  db.prepare(`
+    UPDATE word_clouds SET status = ?, result_json = ?, error = ?
+    WHERE id = ?
+  `).run(status, result ? JSON.stringify(result) : null, error ?? null, id);
+}
+
+export function getWordCloud(db, id) {
+  const row = db.prepare(`SELECT * FROM word_clouds WHERE id = ?`).get(id);
+  if (!row) return null;
+  return {
+    ...row,
+    result: row.result_json ? safeParse(row.result_json) : null,
+  };
+}
+
+export function listWordClouds(db, limit = 30) {
+  return db.prepare(`
+    SELECT id, origin, origin_dig_id, origin_bookmark_id, parent_cloud_id, parent_word,
+           label, status, created_at
+    FROM word_clouds ORDER BY id DESC LIMIT ?
+  `).all(limit);
+}
+
+/** Latest 'done' word cloud for a single bookmark, or null. */
+export function getBookmarkWordCloud(db, bookmarkId) {
+  const row = db.prepare(`
+    SELECT * FROM word_clouds
+    WHERE origin = 'bookmark' AND origin_bookmark_id = ? AND status = 'done'
+    ORDER BY id DESC LIMIT 1
+  `).get(bookmarkId);
+  if (!row) return null;
+  return { ...row, result: row.result_json ? safeParse(row.result_json) : null };
+}
+
+/** Most recent 'done' bookmark clouds (for recommendation weighting). */
+export function recentBookmarkWordClouds(db, { limit = 50 } = {}) {
+  const rows = db.prepare(`
+    SELECT wc.* FROM word_clouds wc
+    JOIN bookmarks b ON b.id = wc.origin_bookmark_id
+    WHERE wc.origin = 'bookmark' AND wc.status = 'done'
+    ORDER BY b.created_at DESC LIMIT ?
+  `).all(Number(limit) || 50);
+  return rows.map(r => ({
+    bookmark_id: r.origin_bookmark_id,
+    label: r.label,
+    result: r.result_json ? safeParse(r.result_json) : null,
+  }));
+}
+
+// ── dictionary -------------------------------------------------------------
+
+export function listDictionaryEntries(db, { search } = {}) {
+  const args = [];
+  let where = '';
+  if (search) {
+    where = `WHERE e.term LIKE ? OR e.definition LIKE ? OR e.notes LIKE ?`;
+    const pat = `%${search}%`;
+    args.push(pat, pat, pat);
+  }
+  const rows = db.prepare(`
+    SELECT e.*, COALESCE(l.link_count, 0) AS link_count
+    FROM dictionary_entries e
+    LEFT JOIN (
+      SELECT entry_id, COUNT(*) AS link_count
+      FROM dictionary_links GROUP BY entry_id
+    ) l ON l.entry_id = e.id
+    ${where}
+    ORDER BY e.updated_at DESC
+  `).all(...args);
+  return rows;
+}
+
+export function getDictionaryEntry(db, id) {
+  const row = db.prepare(`SELECT * FROM dictionary_entries WHERE id = ?`).get(id);
+  if (!row) return null;
+  const links = db.prepare(`
+    SELECT source_kind, source_id, added_at
+    FROM dictionary_links WHERE entry_id = ?
+    ORDER BY added_at DESC
+  `).all(id);
+  return { ...row, links };
+}
+
+export function findDictionaryEntryByTerm(db, term) {
+  return db.prepare(`SELECT * FROM dictionary_entries WHERE term = ?`).get(term) ?? null;
+}
+
+export function insertDictionaryEntry(db, { term, definition, notes }) {
+  const info = db.prepare(`
+    INSERT INTO dictionary_entries (term, definition, notes)
+    VALUES (?, ?, ?)
+  `).run(String(term).trim(), definition ?? null, notes ?? null);
+  return info.lastInsertRowid;
+}
+
+export function updateDictionaryEntry(db, id, patch) {
+  const fields = [];
+  const args = [];
+  if (typeof patch.term === 'string') { fields.push('term = ?'); args.push(patch.term.trim()); }
+  if (typeof patch.definition === 'string' || patch.definition === null) {
+    fields.push('definition = ?'); args.push(patch.definition);
+  }
+  if (typeof patch.notes === 'string' || patch.notes === null) {
+    fields.push('notes = ?'); args.push(patch.notes);
+  }
+  if (fields.length === 0) return;
+  fields.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE dictionary_entries SET ${fields.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteDictionaryEntry(db, id) {
+  db.prepare(`DELETE FROM dictionary_entries WHERE id = ?`).run(id);
+}
+
+export function addDictionaryLink(db, { entryId, sourceKind, sourceId }) {
+  db.prepare(`
+    INSERT OR IGNORE INTO dictionary_links (entry_id, source_kind, source_id)
+    VALUES (?, ?, ?)
+  `).run(entryId, sourceKind, sourceId);
+}
+
+export function removeDictionaryLink(db, { entryId, sourceKind, sourceId }) {
+  db.prepare(`
+    DELETE FROM dictionary_links
+    WHERE entry_id = ? AND source_kind = ? AND source_id = ?
+  `).run(entryId, sourceKind, sourceId);
+}
+
+/**
+ * Top domains across the page_visits log (URL-only history),
+ * regardless of whether the URL is bookmarked.
+ */
+export function trendsVisitDomains(db, { sinceDays = 30, limit = 12 } = {}) {
+  const rows = db.prepare(`
+    SELECT v.url, v.visit_count, v.last_seen_at
+    FROM page_visits v
+    WHERE v.last_seen_at >= datetime('now', ?)
+  `).all(`-${Number(sinceDays) || 30} days`);
+  const tally = new Map();
+  for (const r of rows) {
+    const d = extractDomain(r.url);
+    if (!d) continue;
+    const cur = tally.get(d) || { domain: d, visits: 0, urls: 0, last_seen_at: '' };
+    cur.visits += r.visit_count || 1;
+    cur.urls += 1;
+    if (!cur.last_seen_at || r.last_seen_at > cur.last_seen_at) cur.last_seen_at = r.last_seen_at;
+    tally.set(d, cur);
+  }
+  return [...tally.values()]
+    .sort((a, b) => b.visits - a.visits || b.urls - a.urls)
+    .slice(0, Number(limit) || 12);
+}
 
 // ── chunks / embeddings ----------------------------------------------------
 
