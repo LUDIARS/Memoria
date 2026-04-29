@@ -23,6 +23,7 @@
       <label class="ghost file-btn">
         Import<input id="importInput" type="file" accept="application/json" hidden />
       </label>
+      <button id="aiSettingsBtn" class="ghost" title="モデル/プロバイダ設定">⚙ AI</button>
     </div>
   </header>
 
@@ -324,6 +325,25 @@
     </aside>
   </main>
 
+  <div id="aiSettingsPanel" class="ai-settings hidden">
+    <div class="ai-settings-head">
+      <h3>AI モデル / プロバイダ設定</h3>
+      <button id="aiSettingsClose" class="ghost">×</button>
+    </div>
+    <p class="ai-settings-help">タスクごとに使う LLM プロバイダを選びます。Claude CLI / Gemini CLI / Codex CLI / OpenAI API を切り替え可能。Tools (WebSearch 等) が必要なタスクで非対応プロバイダを選ぶと、そのタスクは Tools なしで動きます。</p>
+    <div id="aiTaskRows"></div>
+    <h4>CLI バイナリパス (PATH に通っていない場合のみ指定)</h4>
+    <label>claude: <input id="aiBinClaude" type="text" placeholder="claude" /></label>
+    <label>gemini: <input id="aiBinGemini" type="text" placeholder="gemini" /></label>
+    <label>codex:  <input id="aiBinCodex"  type="text" placeholder="codex" /></label>
+    <h4>OpenAI API</h4>
+    <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." /></label>
+    <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
+    <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+    <div class="ai-settings-actions">
+      <button id="aiSettingsSave">保存</button>
+    </div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>
