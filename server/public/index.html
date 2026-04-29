@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <div class="brand">Memoria</div>
-    <div id="queueBadge" class="queue-badge hidden" title="要約待ちのジョブ数">要約待ち <span id="queueCount">0</span></div>
+    <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
       <select id="sort">
         <option value="created_desc">追加日 (新しい順)</option>
@@ -36,7 +36,7 @@
       <nav class="tabs">
         <button class="tab active" data-tab="bookmarks">ブックマーク</button>
         <button class="tab" data-tab="queue">
-          要約キュー
+          作業リスト
           <span id="tabQueueCount" class="tab-count hidden">0</span>
         </button>
         <button class="tab" data-tab="visits">
@@ -50,6 +50,7 @@
         </button>
         <button class="tab" data-tab="dig">ディグる</button>
         <button class="tab" data-tab="dict">📖 辞書</button>
+        <button class="tab" data-tab="domain">🏷 ドメイン</button>
         <button class="tab" data-tab="diary">📅 日記</button>
       </nav>
 
@@ -172,6 +173,34 @@
         </div>
       </div>
 
+      <div id="domainView" class="hidden">
+        <div class="dict-bar">
+          <input id="domainSearch" type="search" placeholder="ドメイン・サイト名・概要で検索" />
+        </div>
+        <div class="dict-layout">
+          <ul id="domainList" class="dict-list"></ul>
+          <div id="domainDetail" class="dict-detail hidden">
+            <div class="dict-detail-head">
+              <input id="domainKey" type="text" placeholder="ドメイン" disabled />
+              <button id="domainSaveBtn">保存</button>
+              <button id="domainRegenBtn" class="ghost" title="claude に再分類させる">再分類</button>
+              <button id="domainDeleteBtn" class="danger">削除</button>
+            </div>
+            <div id="domainStats" class="domain-stats"></div>
+            <h4>Webサイト名</h4>
+            <input id="domainSiteName" type="text" placeholder="サービス名 / プロダクト名" />
+            <h4>概要</h4>
+            <textarea id="domainDesc" rows="3" placeholder="このドメインの 1〜2 文の説明"></textarea>
+            <h4>できること</h4>
+            <textarea id="domainCanDo" rows="4" placeholder="- できること1\n- できること2"></textarea>
+            <h4>カテゴリ</h4>
+            <input id="domainKind" type="text" placeholder="例: ドキュメント / SaaS / ブログ" />
+            <h4>メモ</h4>
+            <textarea id="domainNotes" rows="3" placeholder="自分用のメモ"></textarea>
+          </div>
+        </div>
+      </div>
+
       <div id="diaryView" class="hidden">
         <div class="diary-bar">
           <button id="diaryPrevMonth" class="ghost">◀</button>
@@ -258,14 +287,8 @@
       </div>
 
       <div id="queueView" class="hidden">
-        <h2 class="queue-h">実行中</h2>
-        <div id="queueRunning" class="queue-running"></div>
-
-        <h2 class="queue-h">順番待ち <span id="queueQueuedCount" class="queue-h-count">0</span></h2>
-        <ol id="queueQueued" class="queue-list"></ol>
-
-        <h2 class="queue-h">履歴 <span id="queueHistoryCount" class="queue-h-count">0</span></h2>
-        <ul id="queueHistory" class="queue-history"></ul>
+        <p class="queue-bar-help">ブックマーク要約・ディグ・ワードクラウド・日記・週報・ドメイン分類・ページメタの作業をすべて 1 件ずつ順次処理しています。</p>
+        <div id="queueGroups" class="queue-groups"></div>
       </div>
     </section>
 

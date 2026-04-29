@@ -37,6 +37,9 @@ const state = {
   weeklyDetail: null,
   weeklyDetailWeek: null,
   weeklyPolling: null,
+  domainEntries: [],
+  domainDetail: null,
+  domainSearch: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -374,19 +377,27 @@ async function refreshQueue() {
   try {
     const snap = await api('/api/queue/items');
     state.queue = snap;
+    // Sum depth across all groups for the top-bar badge.
+    const groups = ['summary','dig','wordcloud','diary','weekly','domain','page'];
+    let totalDepth = 0;
+    for (const g of groups) {
+      const s = snap[g];
+      if (s) totalDepth += (s.items?.length || 0);
+    }
+    if (totalDepth === 0) totalDepth = snap.depth || 0;
     const badge = $('queueBadge');
     const tabCount = $('tabQueueCount');
-    if (snap.depth > 0) {
+    if (totalDepth > 0) {
       badge.classList.remove('hidden');
       tabCount.classList.remove('hidden');
-      $('queueCount').textContent = snap.depth;
-      tabCount.textContent = snap.depth;
+      $('queueCount').textContent = totalDepth;
+      tabCount.textContent = totalDepth;
     } else {
       badge.classList.add('hidden');
       tabCount.classList.add('hidden');
     }
     if (state.tab === 'queue') renderQueue();
-    return snap.depth;
+    return totalDepth;
   } catch { return 0; }
 }
 
@@ -399,70 +410,99 @@ function fmtElapsed(ms) {
   return `${m}m ${r}s`;
 }
 
+const QUEUE_GROUP_LABELS = {
+  summary:   '📑 ブックマーク要約',
+  dig:       '🔎 ディグ (deep research)',
+  wordcloud: '🌐 ワードクラウド',
+  diary:     '📅 日記',
+  weekly:    '📆 週報',
+  domain:    '🏷 ドメイン分類',
+  page:      '📄 ページメタ',
+};
+
 function renderQueue() {
-  // Now running
-  const runEl = $('queueRunning');
-  const items = state.queue.items || [];
-  const head = items[0]?.status === 'running' ? items[0] : null;
-  if (head) {
-    const elapsed = head.startedAt ? Date.now() - head.startedAt : 0;
-    runEl.classList.remove('empty');
-    runEl.innerHTML = `
-      <div class="row">
+  const root = $('queueGroups');
+  if (!root) return;
+  const snap = state.queue || {};
+  const sections = [];
+  for (const [key, label] of Object.entries(QUEUE_GROUP_LABELS)) {
+    const g = snap[key];
+    if (!g) continue;
+    const items = g.items || [];
+    const history = g.history || [];
+    if (items.length === 0 && history.length === 0) continue;
+    sections.push(renderQueueGroup(label, items, history));
+  }
+  root.innerHTML = sections.length === 0
+    ? '<div class="queue-empty">作業はありません</div>'
+    : sections.join('');
+}
+
+function renderQueueGroup(label, items, history) {
+  const running = items.find(i => i.status === 'running');
+  const queued = items.filter(i => i.status === 'queued');
+  let runHtml = '';
+  if (running) {
+    const elapsed = running.startedAt ? Date.now() - running.startedAt : 0;
+    runHtml = `
+      <div class="qg-row running">
         <div class="pulse"></div>
-        <div style="flex:1; min-width:0">
-          <div class="title">${escapeHtml(head.title || `id=${head.bookmarkId}`)}</div>
-          <div class="url">${escapeHtml(head.url || '')}</div>
-          <div class="meta">経過 ${fmtElapsed(elapsed)} · seq #${head.seq}</div>
+        <div class="qg-row-body">
+          <div class="title">${escapeHtml(jobLabel(running))}</div>
+          <div class="meta">経過 ${fmtElapsed(elapsed)} · seq #${running.seq}</div>
         </div>
       </div>
     `;
-  } else {
-    runEl.classList.add('empty');
-    runEl.textContent = '実行中のジョブはありません';
   }
+  const queuedHtml = queued.length === 0 ? '' : queued.map(i => `
+    <div class="qg-row queued">
+      <div class="qg-row-body">
+        <div class="title">${escapeHtml(jobLabel(i))}</div>
+      </div>
+    </div>
+  `).join('');
+  const histHtml = history.length === 0 ? '' : history.slice(0, 8).map(i => {
+    const dur = i.startedAt && i.finishedAt ? i.finishedAt - i.startedAt : null;
+    const ok = i.status === 'done';
+    return `
+      <div class="qg-row history">
+        <div class="qg-icon ${ok ? 'done' : 'error'}">${ok ? '✓' : '✗'}</div>
+        <div class="qg-row-body">
+          <div class="title">${escapeHtml(jobLabel(i))}</div>
+          ${i.error ? `<div class="err">${escapeHtml(i.error)}</div>` : ''}
+        </div>
+        <div class="duration">${fmtElapsed(dur)}</div>
+      </div>
+    `;
+  }).join('');
+  const nothing = !runHtml && !queuedHtml && !histHtml;
+  return `
+    <section class="qg">
+      <h3 class="qg-h">
+        ${escapeHtml(label)}
+        <span class="qg-count">running ${running ? 1 : 0} · queued ${queued.length} · history ${history.length}</span>
+      </h3>
+      ${nothing ? '<div class="queue-empty">なし</div>' : `
+        ${runHtml}
+        ${queuedHtml}
+        ${histHtml}
+      `}
+    </section>
+  `;
+}
 
-  // Queued (skip the running head)
-  const queued = items.filter(i => i.status === 'queued');
-  $('queueQueuedCount').textContent = queued.length;
-  const queuedEl = $('queueQueued');
-  if (queued.length === 0) {
-    queuedEl.innerHTML = '<div class="queue-empty">順番待ちはありません</div>';
-  } else {
-    queuedEl.innerHTML = queued.map(i => `
-      <li>
-        <div class="title">${escapeHtml(i.title || `id=${i.bookmarkId}`)}</div>
-        <div class="url">${escapeHtml(i.url || '')}</div>
-      </li>
-    `).join('');
-  }
-
-  // History
-  const hist = state.queue.history || [];
-  $('queueHistoryCount').textContent = hist.length;
-  const histEl = $('queueHistory');
-  if (hist.length === 0) {
-    histEl.innerHTML = '<div class="queue-empty">履歴はありません</div>';
-  } else {
-    histEl.innerHTML = hist.map(i => {
-      const dur = i.startedAt && i.finishedAt ? i.finishedAt - i.startedAt : null;
-      const ok = i.status === 'done';
-      return `
-        <li>
-          <div class="icon ${ok ? 'done' : 'error'}">${ok ? '✓' : '✗'}</div>
-          <div style="min-width:0">
-            <div class="title">${escapeHtml(i.title || `id=${i.bookmarkId}`)}</div>
-            <div class="url">${escapeHtml(i.url || '')}</div>
-            ${i.error ? `<div class="err">${escapeHtml(i.error)}</div>` : ''}
-          </div>
-          <div class="duration">
-            ${fmtElapsed(dur)}<br>
-            ${i.finishedAt ? new Date(i.finishedAt).toLocaleTimeString() : ''}
-          </div>
-        </li>
-      `;
-    }).join('');
-  }
+function jobLabel(item) {
+  const title = item.title || '';
+  const kindHint = item.kind ? `[${item.kind}] ` : '';
+  if (title) return kindHint + title;
+  if (item.bookmarkId != null) return `${kindHint}bookmark #${item.bookmarkId}`;
+  if (item.sessionId != null) return `${kindHint}dig #${item.sessionId}`;
+  if (item.cloudId != null) return `${kindHint}cloud #${item.cloudId}`;
+  if (item.date) return `${kindHint}${item.date}`;
+  if (item.weekStart) return `${kindHint}${item.weekStart}`;
+  if (item.domain) return `${kindHint}${item.domain}`;
+  if (item.url) return `${kindHint}${item.url}`;
+  return kindHint + `seq #${item.seq}`;
 }
 
 function switchTab(tab) {
@@ -477,6 +517,7 @@ function switchTab(tab) {
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('dictView').classList.toggle('hidden', tab !== 'dict');
+  $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
@@ -484,6 +525,7 @@ function switchTab(tab) {
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'dict') loadDictionary();
+  if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
 }
 
@@ -1280,6 +1322,113 @@ async function createDictionaryEntry() {
   }
 }
 
+// ── Domain catalog ─────────────────────────────────────────────────────
+
+async function loadDomainCatalog() {
+  try {
+    const q = state.domainSearch ? `?q=${encodeURIComponent(state.domainSearch)}` : '';
+    const r = await api(`/api/domains${q}`);
+    state.domainEntries = r.items || [];
+    renderDomainList();
+  } catch (e) { console.error(e); }
+}
+
+function renderDomainList() {
+  const ul = $('domainList');
+  if (!state.domainEntries.length) {
+    ul.innerHTML = '<li class="dict-empty">ドメイン辞書はまだ空です。アクセス履歴の生成によって自動で追加されます。</li>';
+    return;
+  }
+  ul.innerHTML = state.domainEntries.map(e => `
+    <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
+      <div class="dict-snippet">${escapeHtml((e.description || '').slice(0, 100))}</div>
+      <div class="dict-meta">
+        <span>${escapeHtml(e.domain)}</span>
+        <span>本日 ${e.visits_today} / 週 ${e.visits_week}</span>
+      </div>
+    </li>
+  `).join('');
+  ul.querySelectorAll('.dict-item').forEach(li => {
+    li.addEventListener('click', () => loadDomainEntry(li.dataset.domain));
+  });
+}
+
+async function loadDomainEntry(domain) {
+  try {
+    const e = await api(`/api/domains/${encodeURIComponent(domain)}`);
+    // Visit counts from list (re-use the cached row).
+    const fromList = state.domainEntries.find(x => x.domain === domain) || {};
+    state.domainDetail = { ...e, visits_today: fromList.visits_today, visits_week: fromList.visits_week, visits_total: fromList.visits_total };
+    renderDomainList();
+    renderDomainDetail();
+  } catch (e) { console.error(e); }
+}
+
+function renderDomainDetail() {
+  const e = state.domainDetail;
+  const panel = $('domainDetail');
+  if (!e) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  $('domainKey').value = e.domain;
+  $('domainSiteName').value = e.site_name || '';
+  $('domainDesc').value = e.description || '';
+  $('domainCanDo').value = e.can_do || '';
+  $('domainKind').value = e.kind || '';
+  $('domainNotes').value = e.notes || '';
+  $('domainStats').innerHTML = `
+    <span class="domain-stat"><b>${e.visits_today ?? 0}</b><br>本日</span>
+    <span class="domain-stat"><b>${e.visits_week ?? 0}</b><br>過去7日</span>
+    <span class="domain-stat"><b>${e.visits_total ?? 0}</b><br>累計</span>
+    <span class="domain-stat"><b>${e.user_edited ? '✓' : '—'}</b><br>編集済み</span>
+    <span class="domain-stat"><b>${e.status}</b><br>状態</span>
+  `;
+}
+
+async function saveDomainEntry() {
+  const e = state.domainDetail;
+  if (!e) return;
+  try {
+    await api(`/api/domains/${encodeURIComponent(e.domain)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        site_name: $('domainSiteName').value,
+        description: $('domainDesc').value,
+        can_do: $('domainCanDo').value,
+        kind: $('domainKind').value,
+        notes: $('domainNotes').value,
+      }),
+    });
+    flashToast('ドメイン情報を保存しました');
+    await loadDomainCatalog();
+    await loadDomainEntry(e.domain);
+  } catch (err) {
+    alert(`保存失敗: ${err.message}`);
+  }
+}
+
+async function regenerateDomainEntry() {
+  const e = state.domainDetail;
+  if (!e) return;
+  try {
+    await api(`/api/domains/${encodeURIComponent(e.domain)}/regenerate`, { method: 'POST' });
+    flashToast('再分類をキューに投入しました (user_edited 列は保護されます)');
+  } catch (err) {
+    alert(`失敗: ${err.message}`);
+  }
+}
+
+async function deleteDomainEntry() {
+  const e = state.domainDetail;
+  if (!e) return;
+  if (!confirm(`「${e.domain}」をドメイン辞書から削除しますか？`)) return;
+  await api(`/api/domains/${encodeURIComponent(e.domain)}`, { method: 'DELETE' });
+  state.domainDetail = null;
+  $('domainDetail').classList.add('hidden');
+  await loadDomainCatalog();
+}
+
 // ── Diary ──────────────────────────────────────────────────────────────
 
 function todayLocalDate() {
@@ -1569,11 +1718,15 @@ function renderDiaryDetail() {
     ? '<li class="queue-empty">アクセスログなし</li>'
     : domains.slice(0, 12).map((dm, i) => {
       const color = pieColor(i);
+      const display = dm.site_name || dm.domain;
+      const sub = dm.site_name && dm.site_name !== dm.domain
+        ? `<span class="diary-domain-sub">${escapeHtml(dm.domain)}</span>`
+        : '';
       const desc = dm.description
         ? `<div class="diary-domain-desc">${dm.kind ? `<span class="visits-kind">${escapeHtml(dm.kind)}</span> ` : ''}${escapeHtml(dm.description)}</div>`
         : '';
       return `<li>
-        <div class="diary-domain-row"><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(dm.domain)}</span><span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></div>
+        <div class="diary-domain-row"><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(display)}</span>${sub}<span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></div>
         ${desc}
       </li>`;
     }).join('');
@@ -2056,8 +2209,13 @@ function renderVisits() {
       pageLine = `<div class="visits-page pending">ページ情報を取得中…</div>`;
     } else if (pg?.status === 'skipped') {
       pageLine = '';
-    } else if (pg?.status === 'error') {
-      pageLine = `<div class="visits-page pending">取得失敗</div>`;
+    } else if (pg?.status === 'error' || !pg?.summary) {
+      // Fallback: use the domain catalog's site_name when per-URL fetch failed.
+      if (cat?.site_name || cat?.description) {
+        pageLine = `<div class="visits-page">${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}<strong>${escapeHtml(cat.site_name || '')}</strong>${cat.description ? ` — ${escapeHtml(cat.description)}` : ''}</div>`;
+      } else {
+        pageLine = `<div class="visits-page pending">取得失敗</div>`;
+      }
     }
     const catLine = cat?.description
       ? `<div class="visits-catalog"><span class="visits-domain-prefix">[ドメイン] </span>${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}${escapeHtml(cat.description)}</div>`
@@ -2188,6 +2346,13 @@ $('diarySettingsTest')?.addEventListener('click', testGithubPat);
 $('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
+$('domainSearch')?.addEventListener('input', (e) => {
+  state.domainSearch = e.target.value.trim();
+  loadDomainCatalog();
+});
+$('domainSaveBtn')?.addEventListener('click', saveDomainEntry);
+$('domainRegenBtn')?.addEventListener('click', regenerateDomainEntry);
+$('domainDeleteBtn')?.addEventListener('click', deleteDomainEntry);
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {

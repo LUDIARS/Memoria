@@ -1342,3 +1342,69 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .visits-page.pending { color: var(--muted); font-style: italic; background: transparent; border-left: 3px solid var(--border); }
 .visits-domain-prefix { font-size: 10px; color: var(--muted); margin-right: 4px; }
+
+.queue-bar-help { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+.queue-groups { display: flex; flex-direction: column; gap: 14px; }
+.qg {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+}
+.qg-h {
+  margin: 0 0 8px;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.qg-count { font-size: 11px; color: var(--muted); font-weight: 400; }
+.qg-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.qg-row.running { background: var(--accent-bg); }
+.qg-row.queued { color: var(--muted); }
+.qg-row.history { font-size: 11px; }
+.qg-row-body { flex: 1; min-width: 0; }
+.qg-row-body .title { line-height: 1.4; word-break: break-all; }
+.qg-row-body .err { color: var(--danger); font-size: 11px; }
+.qg-row-body .meta { font-size: 11px; color: var(--muted); }
+.qg-icon { width: 18px; text-align: center; }
+.qg-icon.done { color: #1f7a1f; }
+.qg-icon.error { color: var(--danger); }
+.qg-row .duration { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.qg-row .pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+
+.domain-stats {
+  display: flex;
+  gap: 12px;
+  margin: 4px 0 12px;
+  flex-wrap: wrap;
+}
+.domain-stat {
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  min-width: 64px;
+}
+.domain-stat b {
+  color: var(--text);
+  font-size: 14px;
+  display: block;
+  margin-bottom: 2px;
+}
+.diary-domain-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 4px;
+}

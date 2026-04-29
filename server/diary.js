@@ -86,7 +86,9 @@ export function aggregateDay(db, dateStr) {
     const cat = catalog.get(d.domain);
     return cat ? {
       ...d,
+      site_name: cat.site_name || null,
       description: cat.description || null,
+      can_do: cat.can_do || null,
       kind: cat.kind || null,
       catalog_title: cat.title || null,
     } : d;
@@ -383,8 +385,9 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
     .join(', ');
   const domainTable = metrics.top_domains
     .map(d => {
+      const display = d.site_name ? `${d.site_name} (${d.domain})` : d.domain;
       const desc = d.description ? ` — ${d.description}` : '';
-      return `${d.domain} (${d.count} 件 / 時間帯 ${d.active_hours.join(',')})${desc}`;
+      return `${display} ${d.count}件 [時間帯 ${d.active_hours.join(',')}]${desc}`;
     })
     .join('\n');
   const githubBlock = github?.commits?.length

@@ -17,11 +17,13 @@ export function shouldSkipDomain(domain) {
 }
 
 const CLASSIFY_PROMPT = ({ domain, title, metaDescription, bodySample }) => [
-  'あなたは Web サイトを分類する係です。次の情報からこのドメインの説明を JSON 1 オブジェクトのみで出力してください (前置き不要、コードフェンス禁止)。',
+  'あなたは Web サイトを辞書化する係です。次の情報からこのドメインを JSON 1 オブジェクトのみで出力してください (前置き不要、コードフェンス禁止)。',
   '',
   'スキーマ:',
   '{',
-  '  "description": "1〜2 文で日本語の説明 (50〜120 文字)",',
+  '  "site_name": "サービス名 / プロダクト名 (例: GitHub, Notion, Cloudflare Dashboard)",',
+  '  "description": "1〜2 文の概要 (50〜120 文字)",',
+  '  "can_do": "このドメインで何ができるかを箇条書き 2〜4 個 (- で始める)。改行は \\n。",',
   '  "kind": "短いカテゴリ (例: ドキュメント, ブログ, SaaS, ニュース, ツール, 企業サイト, 個人サイト)"',
   '}',
   '',
@@ -98,7 +100,9 @@ export async function classifyDomain({ domain, claudeBin = 'claude', timeoutMs =
   return {
     ok: true,
     title,
+    site_name: parsed.site_name,
     description: parsed.description,
+    can_do: parsed.can_do,
     kind: parsed.kind,
   };
 }
@@ -114,7 +118,9 @@ function parseClassifyJson(raw) {
   try { obj = JSON.parse(text); }
   catch (e) { throw new Error(`json parse: ${e.message}`); }
   return {
+    site_name: String(obj.site_name ?? '').trim().slice(0, 120),
     description: String(obj.description ?? '').trim().slice(0, 400),
+    can_do: String(obj.can_do ?? '').trim().slice(0, 600),
     kind: String(obj.kind ?? '').trim().slice(0, 40),
   };
 }

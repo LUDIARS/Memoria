@@ -41,8 +41,9 @@ import {
   insertVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
   deleteDiary, getDiarySettings, setDiarySettings,
   getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
-  getDomainCatalog, listDomainCatalog, getDomainCatalogMap,
+  getDomainCatalog, listDomainCatalog, listDomainCatalogWithCounts, getDomainCatalogMap,
   insertDomainPending, setDomainCatalog, deleteDomainCatalog,
+  updateDomainCatalogUser,
   getPageMetadata, getPageMetadataMap, insertPageMetadataPending,
   setPageMetadata, deletePageMetadata,
 } from './db.js';
@@ -66,8 +67,8 @@ mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
-const domainCatalogQueue = new ConcurrentPool({ concurrency: 2 });
-const pageMetadataQueue = new ConcurrentPool({ concurrency: 2 });
+const domainCatalogQueue = new FifoQueue();
+const pageMetadataQueue = new FifoQueue();
 
 function maybeQueuePageMetadata(url) {
   let host;
@@ -153,7 +154,9 @@ function maybeQueueDomain(url) {
     }
     setDomainCatalog(db, domain, {
       title: result.title,
+      site_name: result.site_name,
       description: result.description,
+      can_do: result.can_do,
       kind: result.kind,
       status: 'done',
       error: null,
@@ -366,10 +369,9 @@ app.delete('/api/recommendations/dismissals', (c) => {
 });
 
 // ---- dig (deep research) -------------------------------------------------
-// Digs run in parallel — they're independent claude CLI invocations that
-// each spawn a separate child process. Concurrency keeps a sane upper bound.
-const DIG_CONCURRENCY = Number(process.env.MEMORIA_DIG_CONCURRENCY) || 4;
-const digQueue = new ConcurrentPool({ concurrency: DIG_CONCURRENCY });
+// All claude-using work (dig / cloud / diary / weekly / domain / page) runs
+// strictly one job at a time so the user can watch progress in 作業リスト.
+const digQueue = new FifoQueue();
 
 function enqueueDig(id, query) {
   digQueue.enqueue(async () => {
@@ -848,6 +850,11 @@ app.get('/api/queue/items', (c) => {
   return c.json({
     summary: summaryQueue.snapshot(),
     wordcloud: cloudQueue.snapshot(),
+    dig: digQueue.snapshot(),
+    diary: diaryQueue.snapshot(),
+    weekly: weeklyQueue.snapshot(),
+    domain: domainCatalogQueue.snapshot(),
+    page: pageMetadataQueue.snapshot(),
     // Backward-compat top-level fields:
     ...summaryQueue.snapshot(),
   });
@@ -907,7 +914,9 @@ app.get('/api/visits/unsaved', (c) => {
         ...v,
         domain: dom,
         catalog: cat ? {
+          site_name: cat.site_name,
           description: cat.description,
+          can_do: cat.can_do,
           kind: cat.kind,
           title: cat.title,
           status: cat.status,
@@ -926,7 +935,8 @@ app.get('/api/visits/unsaved', (c) => {
 });
 
 app.get('/api/domains', (c) => {
-  return c.json({ items: listDomainCatalog(db, { limit: 500 }) });
+  const search = c.req.query('q')?.trim() || undefined;
+  return c.json({ items: listDomainCatalogWithCounts(db, { search }) });
 });
 
 app.get('/api/domains/:domain', (c) => {
@@ -934,6 +944,46 @@ app.get('/api/domains/:domain', (c) => {
   const row = getDomainCatalog(db, d);
   if (!row) return c.json({ error: 'not found' }, 404);
   return c.json(row);
+});
+
+app.patch('/api/domains/:domain', async (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  const row = getDomainCatalog(db, d);
+  if (!row) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  updateDomainCatalogUser(db, d, body);
+  return c.json(getDomainCatalog(db, d));
+});
+
+app.post('/api/domains/:domain/regenerate', (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  if (shouldSkipDomain(d)) return c.json({ error: 'skipped domain' }, 400);
+  // Force re-classify even if a row exists; the user_edited flag still
+  // protects manual fields.
+  insertDomainPending(db, d);
+  domainCatalogQueue.enqueue(async () => {
+    const result = await classifyDomain({ domain: d, claudeBin: CLAUDE_BIN });
+    if (result.skip || result.dropRow) {
+      deleteDomainCatalog(db, d);
+      return;
+    }
+    if (!result.ok) {
+      setDomainCatalog(db, d, { status: 'error', error: result.error });
+      return;
+    }
+    setDomainCatalog(db, d, {
+      title: result.title, site_name: result.site_name,
+      description: result.description, can_do: result.can_do,
+      kind: result.kind, status: 'done', error: null,
+    });
+  }, { kind: 'domain', domain: d, title: d });
+  return c.json({ queued: true });
+});
+
+app.delete('/api/domains/:domain', (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  deleteDomainCatalog(db, d);
+  return c.json({ ok: true });
 });
 
 app.get('/api/visits/suggested', (c) => {
