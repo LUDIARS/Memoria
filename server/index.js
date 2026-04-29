@@ -44,7 +44,7 @@ import {
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import {
   aggregateDay, fetchGithubActivity, generateDiaryNarrative,
-  formatLocalDate, yesterdayLocal,
+  formatLocalDate, yesterdayLocal, pingGithub,
 } from './diary.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1068,6 +1068,14 @@ app.post('/api/diary/settings', async (c) => {
   if (typeof body.github_repos === 'string') patch.github_repos = body.github_repos;
   setDiarySettings(db, patch);
   return c.json({ ok: true });
+});
+
+/** Validate the saved GitHub PAT by hitting /user. */
+app.post('/api/diary/test-github', async (c) => {
+  const s = settingsAsObject();
+  if (!s.github_token) return c.json({ ok: false, error: 'no token saved' });
+  const r = await pingGithub({ token: s.github_token });
+  return c.json(r);
 });
 
 // Midnight scheduler — fires at next 00:00:05 local, generates the previous

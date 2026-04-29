@@ -200,8 +200,20 @@
             <div id="diarySummary" class="diary-summary"></div>
             <h4>時間帯別アクセス (0-24時)</h4>
             <div id="diaryHourly" class="diary-hourly"></div>
-            <h4>よく見たドメイン</h4>
-            <ul id="diaryDomains" class="diary-domains"></ul>
+            <div class="diary-pie-row">
+              <div class="diary-pie-wrap">
+                <h4>ドメイン内訳</h4>
+                <div id="diaryPie" class="diary-pie"></div>
+              </div>
+              <div class="diary-pie-legend-wrap">
+                <h4>よく見たドメイン</h4>
+                <ul id="diaryDomains" class="diary-domains"></ul>
+              </div>
+            </div>
+            <h4>新規ブックマーク</h4>
+            <ul id="diaryBookmarksCreated" class="diary-bookmarks"></ul>
+            <h4>再訪したブックマーク</h4>
+            <ul id="diaryBookmarksAccessed" class="diary-bookmarks"></ul>
             <h4>GitHub commits</h4>
             <ul id="diaryGithub" class="diary-github"></ul>
             <h4>メモ・補足</h4>
@@ -220,8 +232,10 @@
           <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
           <div class="diary-settings-actions">
             <button id="diarySettingsSave">保存</button>
+            <button id="diarySettingsTest" class="ghost">PAT を検証</button>
             <button id="diarySettingsClose" class="ghost">閉じる</button>
           </div>
+          <div id="diaryGhTestResult" class="diary-settings-tokenstatus"></div>
         </div>
       </div>
 

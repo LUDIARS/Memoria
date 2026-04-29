@@ -1407,11 +1407,41 @@ function renderDiaryDetail() {
   const metrics = d.live_metrics || d.metrics || { hourly_visits: new Array(24).fill(0), top_domains: [] };
   $('diaryHourly').innerHTML = renderHourlyChart(metrics.hourly_visits || []);
   const domains = metrics.top_domains || [];
+  $('diaryPie').innerHTML = renderDomainPie(domains);
   $('diaryDomains').innerHTML = domains.length === 0
     ? '<li class="queue-empty">アクセスログなし</li>'
-    : domains.slice(0, 12).map(dm =>
-      `<li><span class="diary-domain-name">${escapeHtml(dm.domain)}</span><span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></li>`
+    : domains.slice(0, 12).map((dm, i) => {
+      const color = pieColor(i);
+      return `<li><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(dm.domain)}</span><span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></li>`;
+    }).join('');
+
+  const created = metrics.bookmarks?.created || [];
+  $('diaryBookmarksCreated').innerHTML = created.length === 0
+    ? '<li class="queue-empty">新規ブックマークなし</li>'
+    : created.map(b =>
+      `<li class="diary-bookmark" data-id="${b.id}">
+        <a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer" class="title">${escapeHtml(b.title)}</a>
+        <div class="url">${escapeHtml(b.url)}</div>
+        ${b.summary ? `<div class="summary">${escapeHtml(b.summary.slice(0, 200))}</div>` : ''}
+      </li>`
     ).join('');
+  const accessed = metrics.bookmarks?.accessed || [];
+  $('diaryBookmarksAccessed').innerHTML = accessed.length === 0
+    ? '<li class="queue-empty">再訪なし</li>'
+    : accessed.map(b =>
+      `<li class="diary-bookmark" data-id="${b.id}">
+        <a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer" class="title">${escapeHtml(b.title)}</a>
+        <div class="url">${escapeHtml(b.url)} <span class="access-count">×${b.access_count}</span></div>
+      </li>`
+    ).join('');
+  document.querySelectorAll('.diary-bookmark').forEach(li => {
+    li.addEventListener('click', (ev) => {
+      if (ev.target.tagName === 'A') return;
+      const id = Number(li.dataset.id);
+      switchTab('bookmarks');
+      openDetail(id);
+    });
+  });
 
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
@@ -1423,6 +1453,54 @@ function renderDiaryDetail() {
   }
 
   $('diaryNotes').value = d.notes || '';
+}
+
+const PIE_PALETTE = [
+  '#1f56c0', '#3a7ddc', '#7aa3df', '#c5cad4',
+  '#e07b00', '#f0a040', '#9c27b0', '#ce93d8',
+  '#388e3c', '#81c784', '#d04545', '#f5a8a8',
+];
+function pieColor(i) { return PIE_PALETTE[i % PIE_PALETTE.length]; }
+
+function renderDomainPie(domains) {
+  if (!domains.length) return '<div class="queue-empty">データなし</div>';
+  const top = domains.slice(0, 12);
+  // Aggregate the long tail into "その他"
+  const tail = domains.slice(12).reduce((s, d) => s + d.count, 0);
+  const slices = tail > 0 ? [...top, { domain: 'その他', count: tail }] : top;
+  const total = slices.reduce((s, d) => s + d.count, 0);
+  if (total <= 0) return '<div class="queue-empty">データなし</div>';
+
+  const cx = 110, cy = 110, r = 90;
+  let startAngle = -Math.PI / 2;
+  let paths = '';
+  slices.forEach((d, i) => {
+    const portion = d.count / total;
+    const sweep = portion * Math.PI * 2;
+    const endAngle = startAngle + sweep;
+    const color = d.domain === 'その他' ? '#bbb' : pieColor(i);
+    const x1 = cx + Math.cos(startAngle) * r;
+    const y1 = cy + Math.sin(startAngle) * r;
+    const x2 = cx + Math.cos(endAngle) * r;
+    const y2 = cy + Math.sin(endAngle) * r;
+    const large = sweep > Math.PI ? 1 : 0;
+    if (slices.length === 1) {
+      paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" />
+        <title>${escapeHtml(d.domain)}: 100%</title>`;
+    } else {
+      const path = `M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z`;
+      const labelAngle = startAngle + sweep / 2;
+      const lx = cx + Math.cos(labelAngle) * (r * 0.65);
+      const ly = cy + Math.sin(labelAngle) * (r * 0.65);
+      const pct = (portion * 100).toFixed(1);
+      const showLabel = portion >= 0.06;
+      paths += `<g class="pie-slice"><path d="${path}" fill="${color}" />
+        ${showLabel ? `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dy="3" class="pie-label">${pct}%</text>` : ''}
+        <title>${escapeHtml(d.domain)}: ${d.count} 件 (${pct}%)</title></g>`;
+    }
+    startAngle = endAngle;
+  });
+  return `<svg viewBox="0 0 220 220" preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
 }
 
 function renderHourlyChart(hours) {
@@ -1497,6 +1575,23 @@ async function openDiarySettings() {
     $('diaryGhRepos').value = s.github_repos || '';
     $('diaryGhTokenStatus').textContent = s.github_token_set ? '✓ token 設定済み (再入力で上書き)' : '(未設定)';
   } catch (e) { console.error(e); }
+}
+
+async function testGithubPat() {
+  const el = $('diaryGhTestResult');
+  el.textContent = '検証中…';
+  try {
+    const r = await api('/api/diary/test-github', { method: 'POST' });
+    if (r.ok) {
+      el.innerHTML = `<span style="color:#1f7a1f">✓ ${escapeHtml(r.login || '')} として認証 OK${r.scopes ? ` (scopes: ${escapeHtml(r.scopes)})` : ''}</span>`;
+    } else if (r.status === 401) {
+      el.innerHTML = `<span style="color:var(--danger)">✗ 401 Bad credentials — PAT が期限切れ・取り消し・形式不正の可能性。新しい PAT を生成して保存し直してください</span>`;
+    } else {
+      el.innerHTML = `<span style="color:var(--danger)">✗ ${escapeHtml(r.error || `${r.status}`)}: ${escapeHtml((r.body || '').slice(0, 200))}</span>`;
+    }
+  } catch (e) {
+    el.textContent = `エラー: ${e.message}`;
+  }
 }
 
 async function saveDiarySettings() {
@@ -1885,6 +1980,7 @@ $('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
 $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
 $('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
+$('diarySettingsTest')?.addEventListener('click', testGithubPat);
 $('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);

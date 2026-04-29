@@ -83,6 +83,8 @@ export function aggregateDay(db, dateStr) {
 
   const totalEvents = hourlyVisits.reduce((s, n) => s + n, 0);
 
+  const bookmarks = bookmarksForDate(db, dateStr);
+
   return {
     date: dateStr,
     total_events: totalEvents,
@@ -92,6 +94,7 @@ export function aggregateDay(db, dateStr) {
     active_hours: activeHours,
     first_event_at: firstSeen,
     last_event_at: lastSeen,
+    bookmarks,
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
@@ -99,11 +102,18 @@ export function aggregateDay(db, dateStr) {
   };
 }
 
-/** Fetch a user's PushEvents on a given date from the GitHub Events API. */
+/**
+ * Fetch a user's commits authored on `dateStr`.
+ * - If `repos` is supplied: per-repo commits API (works for public repos
+ *   without auth; needs PAT for private).
+ * - Otherwise: GitHub search/commits across all of GitHub (PAT required).
+ *
+ * The events API was avoided because /users/{user}/events does not include
+ * commit lists in its payload (only ref/head/before SHAs).
+ */
 export async function fetchGithubActivity({ token, user, repos, dateStr, timeoutMs = 30_000 }) {
   if (!user) return null;
 
-  // GitHub Events API only returns the last ~90 days of events anyway.
   const headers = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
@@ -111,42 +121,116 @@ export async function fetchGithubActivity({ token, user, repos, dateStr, timeout
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
+  const since = `${dateStr}T00:00:00Z`;
+  const until = `${dateStr}T23:59:59Z`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const commits = [];
+  const errors = [];
+
   try {
-    const url = `https://api.github.com/users/${encodeURIComponent(user)}/events?per_page=100`;
-    const res = await fetch(url, { headers, signal: ac.signal });
-    if (!res.ok) {
-      return { error: `github API ${res.status}: ${(await res.text()).slice(0, 200)}` };
-    }
-    const events = await res.json();
-    const repoFilter = (repos && repos.length > 0)
-      ? new Set(repos.map(r => r.toLowerCase()))
-      : null;
-    const commits = [];
-    for (const ev of events) {
-      if (ev.type !== 'PushEvent') continue;
-      const evDate = (ev.created_at || '').slice(0, 10);
-      if (evDate !== dateStr) continue;
-      const repoName = ev.repo?.name?.toLowerCase();
-      if (repoFilter && !repoFilter.has(repoName)) continue;
-      const evCommits = ev.payload?.commits || [];
-      for (const c of evCommits) {
-        commits.push({
-          repo: ev.repo?.name,
-          sha: (c.sha || '').slice(0, 7),
-          message: (c.message || '').split('\n')[0].slice(0, 200),
-          author: c.author?.name || '',
-          created_at: ev.created_at,
-        });
+    if (repos && repos.length > 0) {
+      for (const repo of repos) {
+        const url = `https://api.github.com/repos/${repo}/commits`
+          + `?author=${encodeURIComponent(user)}`
+          + `&since=${encodeURIComponent(since)}`
+          + `&until=${encodeURIComponent(until)}`
+          + `&per_page=100`;
+        const res = await fetch(url, { headers, signal: ac.signal });
+        if (!res.ok) {
+          errors.push(`${repo}: ${res.status} ${res.statusText}`);
+          continue;
+        }
+        const arr = await res.json();
+        for (const c of arr) {
+          commits.push(formatCommit({ ...c, _repo: repo }));
+        }
+      }
+    } else {
+      // Search across all repos the user can reach. Needs auth.
+      const q = `author:${user} author-date:${dateStr}`;
+      const url = `https://api.github.com/search/commits?q=${encodeURIComponent(q)}&per_page=100`;
+      const res = await fetch(url, { headers, signal: ac.signal });
+      if (!res.ok) {
+        const body = (await res.text()).slice(0, 300);
+        return { error: `github API ${res.status}: ${body}` };
+      }
+      const data = await res.json();
+      for (const c of (data.items || [])) {
+        commits.push(formatCommit({ ...c, _repo: c.repository?.full_name }));
       }
     }
-    return { commits, fetched_at: new Date().toISOString() };
+    return {
+      commits,
+      errors: errors.length ? errors : undefined,
+      fetched_at: new Date().toISOString(),
+    };
   } catch (e) {
     return { error: e.message };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function formatCommit(c) {
+  const fullMsg = c.commit?.message || '';
+  return {
+    repo: c._repo || c.repository?.full_name || '',
+    sha: (c.sha || '').slice(0, 7),
+    message: fullMsg.split('\n')[0].slice(0, 200),
+    author: c.commit?.author?.name || c.author?.login || '',
+    created_at: c.commit?.author?.date || c.commit?.committer?.date || '',
+    url: c.html_url || '',
+  };
+}
+
+/** Lightweight credential check (used by the settings panel). */
+export async function pingGithub({ token, timeoutMs = 10_000 }) {
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'Memoria-diary/0.1',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch('https://api.github.com/user', { headers, signal: ac.signal });
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 200);
+      return { ok: false, status: res.status, body };
+    }
+    const data = await res.json();
+    return { ok: true, login: data.login, scopes: res.headers.get('x-oauth-scopes') || '' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Bookmarks created or accessed on `dateStr`. */
+export function bookmarksForDate(db, dateStr) {
+  const created = db.prepare(`
+    SELECT id, url, title, summary, created_at
+    FROM bookmarks
+    WHERE date(created_at, 'localtime') = ?
+    ORDER BY created_at ASC
+  `).all(dateStr);
+
+  const accessedRows = db.prepare(`
+    SELECT b.id, b.url, b.title,
+           MIN(a.accessed_at) AS first_accessed_at,
+           MAX(a.accessed_at) AS last_accessed_at,
+           COUNT(*) AS access_count
+    FROM accesses a
+    JOIN bookmarks b ON b.id = a.bookmark_id
+    WHERE date(a.accessed_at, 'localtime') = ?
+    GROUP BY b.id
+    ORDER BY access_count DESC, last_accessed_at DESC
+  `).all(dateStr);
+
+  return { created, accessed: accessedRows };
 }
 
 const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
@@ -155,12 +239,22 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
     .filter((_, h) => metrics.hourly_visits[h] > 0)
     .join(', ');
   const domainTable = metrics.top_domains
-    .map(d => `${d.domain} (${d.count} 件 / ${d.active_hours.length} 時間帯)`)
+    .map(d => `${d.domain} (${d.count} 件 / 時間帯 ${d.active_hours.join(',')})`)
     .join('\n');
   const githubBlock = github?.commits?.length
     ? github.commits.map(c => `- [${c.repo} ${c.sha}] ${c.message}`).join('\n')
-    : '(GitHub commit なし)';
-  const notesBlock = notes ? `\nUSER NOTES:\n${notes}\n` : '';
+    : github?.error
+      ? `(GitHub 取得失敗: ${github.error})`
+      : '(GitHub commit なし)';
+  const created = metrics.bookmarks?.created || [];
+  const accessed = metrics.bookmarks?.accessed || [];
+  const createdBlock = created.length
+    ? created.map(b => `- ${b.title} (${b.url})${b.summary ? '\n  ' + b.summary.slice(0, 200) : ''}`).join('\n')
+    : '(新規ブックマークなし)';
+  const accessedBlock = accessed.length
+    ? accessed.map(b => `- ${b.title} ×${b.access_count} (${b.url})`).join('\n')
+    : '(再訪したブックマークなし)';
+  const notesBlock = notes ? `\nUSER NOTES (反映してください):\n${notes}\n` : '';
   return [
     `あなたは ${dateStr} の活動データから 1 日の日報を書きます。`,
     '事実だけを淡々と。憶測や創作はせず、データから読み取れる活動のみを書きます。',
@@ -170,8 +264,10 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
     '一段落で「何時頃から何時頃まで何をしていた風」かをまとめる。',
     '## 時間帯別',
     '- HH:00 〜 HH:00: ドメインから推測される作業',
+    '## ブックマーク',
+    '- 新規追加・再訪したブックマークから読み取れる関心',
     '## ハイライト',
-    '- 印象的なドメインや、commit があれば反映する',
+    '- GitHub commit、印象的な調査、ニュース等',
     '',
     `日付: ${dateStr}`,
     `総アクセス: ${metrics.total_events}`,
@@ -180,6 +276,12 @@ const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
     '',
     'TOP DOMAINS:',
     domainTable || '(なし)',
+    '',
+    '新規ブックマーク:',
+    createdBlock,
+    '',
+    '再訪したブックマーク:',
+    accessedBlock,
     '',
     'GITHUB COMMITS:',
     githubBlock,
