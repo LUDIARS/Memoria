@@ -25,6 +25,11 @@ const state = {
   cloudShowDropped: false,
   detailCloud: null,     // word cloud for the currently open bookmark detail
   detailCloudPolling: null,
+  cloudDictMode: false,
+  cloudSiblings: [],
+  dictEntries: [],
+  dictDetail: null,
+  dictSearch: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -465,12 +470,14 @@ function switchTab(tab) {
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('ragView').classList.toggle('hidden', tab !== 'rag');
   $('digView').classList.toggle('hidden', tab !== 'dig');
+  $('dictView').classList.toggle('hidden', tab !== 'dict');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'rag') loadRagStatus();
   if (tab === 'dig') loadDigHistory();
+  if (tab === 'dict') loadDictionary();
 }
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
@@ -527,17 +534,21 @@ async function startDig({ chainCloudId, chainParentWord } = {}) {
 function pollDigSession(id) {
   if (state.digPolling) clearInterval(state.digPolling);
   loadDigSession(id);
+  // Poll faster while waiting for preview, then settle.
   state.digPolling = setInterval(async () => {
     const s = await api(`/api/dig/${id}`).catch(() => null);
     if (!s) return;
+    const had = state.digSession;
+    state.digSession = s;
+    const previewArrived = !had?.preview && !!s.preview;
+    if (previewArrived) renderDigSession();
     if (s.status !== 'pending') {
       clearInterval(state.digPolling);
       state.digPolling = null;
-      state.digSession = s;
       renderDigSession();
       loadDigHistory();
     }
-  }, 5000);
+  }, 2000);
 }
 
 async function loadDigSession(id) {
@@ -555,7 +566,11 @@ function renderDigSession() {
   const el = $('digResult');
   if (!s) { el.innerHTML = ''; return; }
   if (s.status === 'pending') {
-    el.innerHTML = `<div class="dig-pending"><div class="pulse"></div>「${escapeHtml(s.query)}」を掘っています…claude が Web 検索 + 取得を行うため数十秒〜数分かかります。</div>`;
+    if (s.preview) {
+      el.innerHTML = renderDigPreview(s) + `<div class="dig-pending dig-pending-tight"><div class="pulse"></div>詳細解析を続行中…完了するとさらに整理された結果が表示されます。</div>`;
+    } else {
+      el.innerHTML = `<div class="dig-pending"><div class="pulse"></div>「${escapeHtml(s.query)}」を検索中…まずは Google の AI overview と上位結果のみを取得し、続けて詳細を解析します。</div>`;
+    }
     return;
   }
   if (s.status === 'error') {
@@ -595,6 +610,7 @@ function renderDigSession() {
       ${chainHint}
       <span class="grow"></span>
       <button id="digCloudBtn" class="ghost" title="このディグの記事からワードクラウドを生成">🌐 このディグから雲を抽出</button>
+      <button id="digDictBtn" class="ghost" title="このディグを辞書エントリとして記録">📖 辞書に追加</button>
       <button id="digSaveBtn">選択をブックマーク化</button>
     </div>
     <div class="dig-sources">${sourceCards}</div>
@@ -617,6 +633,7 @@ function renderDigSession() {
     const chain = state.digChain || {};
     startCloudFromDig(s.id, chain.cloudId, chain.parentWord);
   });
+  $('digDictBtn')?.addEventListener('click', () => addDigToDictionary(s));
   $('digSaveBtn')?.addEventListener('click', async () => {
     const urls = [...state.digSelected];
     if (!urls.length) return;
@@ -669,6 +686,51 @@ function shortDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url.slice(0, 20); }
 }
 
+function renderDigPreview(session) {
+  const p = session.preview || {};
+  const overview = p.ai_overview
+    ? `<div class="dig-preview-overview"><div class="dig-preview-tag">AI overview (検索結果より)</div>${escapeHtml(p.ai_overview)}</div>`
+    : '';
+  const results = (p.results || []).map((r, i) => `
+    <li class="dig-preview-result">
+      <div class="title"><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.title || r.url)}</a></div>
+      <div class="url">${escapeHtml(r.domain || r.url)}</div>
+      <div class="snippet">${escapeHtml(r.snippet || '')}</div>
+    </li>
+  `).join('');
+  if (!overview && !results) return '';
+  return `
+    <div class="dig-preview">
+      <h3 class="dig-preview-h">⚡ クイックプレビュー</h3>
+      ${overview}
+      <ol class="dig-preview-list">${results}</ol>
+    </div>
+  `;
+}
+
+async function addDigToDictionary(session) {
+  if (!session) return;
+  const term = (session.query || '').trim();
+  if (!term) return;
+  const r = session.result || {};
+  const definition = r.summary || '';
+  try {
+    const res = await api('/api/dictionary/upsert-from-source', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term,
+        source_kind: 'dig',
+        source_id: session.id,
+        definition,
+      }),
+    });
+    flashToast(res.existed ? `「${term}」にディグをリンクしました` : `「${term}」を辞書に追加しました`);
+  } catch (e) {
+    alert(`辞書追加失敗: ${e.message}`);
+  }
+}
+
 // ── Word cloud ─────────────────────────────────────────────────────────
 
 async function startCloudFromBookmarks() {
@@ -717,7 +779,34 @@ async function loadCloud(id) {
     state.cloud = c;
     renderCloud();
     if (c.status === 'pending') pollCloud(id);
+    if (c.status === 'done') loadCloudSiblings(id);
   } catch (e) { console.error(e); }
+}
+
+async function loadCloudSiblings(id) {
+  try {
+    const r = await api(`/api/wordcloud/${id}/siblings`);
+    state.cloudSiblings = r.items || [];
+    renderCloud();
+  } catch (e) { console.error(e); }
+}
+
+async function mergeWithSiblings() {
+  const c = state.cloud;
+  if (!c) return;
+  const sibs = state.cloudSiblings || [];
+  if (sibs.length === 0) return alert('合体できる兄弟雲がありません');
+  const ids = [c.id, ...sibs.map(s => s.id)];
+  try {
+    const r = await api('/api/wordcloud/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cloudIds: ids }),
+    });
+    await loadCloud(r.id);
+  } catch (e) {
+    alert(`合体失敗: ${e.message}`);
+  }
 }
 
 function renderCloud() {
@@ -750,16 +839,33 @@ function renderCloud() {
     ? `<label class="check-inline cloud-dropped-toggle"><input type="checkbox" id="cloudShowDropped" ${state.cloudShowDropped ? 'checked' : ''}/> 関係薄を表示 (${dropped.length})</label>`
     : '';
 
+  const dictToggle = `<label class="check-inline cloud-dict-toggle"><input type="checkbox" id="cloudDictMode" ${state.cloudDictMode ? 'checked' : ''}/>📖 辞書登録モード</label>`;
+
+  const sibs = state.cloudSiblings || [];
+  const siblingBtn = sibs.length > 0
+    ? `<button id="cloudMergeBtn" class="ghost" title="親 ${escapeHtml(c.parent_word || '')} の兄弟雲 ${sibs.length} 件と合体">🔀 兄弟雲をまとめる (${sibs.length})</button>`
+    : '';
+  const mergedFrom = (r.merged_from || []).length > 0
+    ? `<div class="cloud-merged-list">合体元: ${r.merged_from.map(m => `<span class="pill" data-mid="${m.id}">${escapeHtml(m.label)}</span>`).join(' ')}</div>`
+    : '';
+
+  const modeHint = state.cloudDictMode
+    ? '語クリックで <strong>辞書に登録</strong>'
+    : '語クリックで深掘り';
+
   el.innerHTML = `
     <div class="cloud-head">
       <h3>ワードクラウド: ${escapeHtml(c.label || '')}</h3>
       ${breadcrumb}
     </div>
     ${summaryBlock}
+    ${mergedFrom}
     <div class="cloud-toolbar">
       ${dropToggle}
+      ${dictToggle}
+      ${siblingBtn}
       <span class="grow"></span>
-      <span style="font-size:11px;color:var(--muted)">語をクリックで深掘り</span>
+      <span style="font-size:11px;color:var(--muted)">${modeHint}</span>
     </div>
     <div class="cloud-words">${cloudHtml}</div>
     <div class="cloud-manual">
@@ -774,6 +880,14 @@ function renderCloud() {
   el.querySelector('#cloudShowDropped')?.addEventListener('change', (e) => {
     state.cloudShowDropped = e.target.checked;
     renderCloud();
+  });
+  el.querySelector('#cloudDictMode')?.addEventListener('change', (e) => {
+    state.cloudDictMode = e.target.checked;
+    renderCloud();
+  });
+  el.querySelector('#cloudMergeBtn')?.addEventListener('click', mergeWithSiblings);
+  el.querySelectorAll('.cloud-merged-list .pill').forEach(p => {
+    p.addEventListener('click', () => loadCloud(Number(p.dataset.mid)));
   });
   el.querySelectorAll('.cloud-word').forEach(w => {
     w.addEventListener('click', () => onCloudWordClick(w.dataset.word));
@@ -802,10 +916,47 @@ function renderCloudWords(words) {
 async function onCloudWordClick(word) {
   if (!word) return;
   const c = state.cloud;
+  if (state.cloudDictMode) {
+    await addCloudWordToDictionary(word, c);
+    return;
+  }
   // Drilling from cloud: words are pre-validated (kept=true). Run a dig with this word as query.
   switchTab('dig');
   $('digQuery').value = word;
   await startDig({ chainCloudId: c?.id, chainParentWord: word });
+}
+
+async function addCloudWordToDictionary(word, cloud) {
+  if (!cloud) return;
+  try {
+    const r = await api('/api/dictionary/upsert-from-source', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: word,
+        source_kind: 'cloud',
+        source_id: cloud.id,
+        notes: cloud.label ? `via cloud: ${cloud.label}` : null,
+      }),
+    });
+    flashToast(r.existed ? `「${word}」を既存エントリにリンクしました` : `「${word}」を辞書に追加しました`);
+  } catch (e) {
+    alert(`辞書登録失敗: ${e.message}`);
+  }
+}
+
+function flashToast(msg) {
+  let el = document.getElementById('memToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'memToast';
+    el.className = 'mem-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(flashToast._t);
+  flashToast._t = setTimeout(() => el.classList.remove('show'), 2400);
 }
 
 async function submitManualWord() {
@@ -834,6 +985,171 @@ async function submitManualWord() {
     alert(`関連チェック失敗: ${e.message}`);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '関連チェックして掘る'; }
+  }
+}
+
+// ── Dictionary ─────────────────────────────────────────────────────────
+
+async function loadDictionary() {
+  try {
+    const q = state.dictSearch ? `?q=${encodeURIComponent(state.dictSearch)}` : '';
+    const r = await api(`/api/dictionary${q}`);
+    state.dictEntries = r.items || [];
+    renderDictionaryList();
+  } catch (e) { console.error(e); }
+}
+
+function renderDictionaryList() {
+  const ul = $('dictList');
+  if (!state.dictEntries.length) {
+    ul.innerHTML = '<li class="dict-empty">辞書エントリはまだありません。雲の語をクリック (辞書登録モード) や、ディグの「📖 辞書に追加」から登録できます。</li>';
+    return;
+  }
+  ul.innerHTML = state.dictEntries.map(e => `
+    <li class="dict-item ${state.dictDetail?.id === e.id ? 'selected' : ''}" data-id="${e.id}">
+      <div class="dict-term">${escapeHtml(e.term)}</div>
+      <div class="dict-snippet">${escapeHtml((e.definition || '').slice(0, 120))}</div>
+      <div class="dict-meta">
+        <span>${e.link_count} 件リンク</span>
+        <span>${fmtDate(e.updated_at)}</span>
+      </div>
+    </li>
+  `).join('');
+  ul.querySelectorAll('.dict-item').forEach(li => {
+    li.addEventListener('click', () => loadDictionaryEntry(Number(li.dataset.id)));
+  });
+}
+
+async function loadDictionaryEntry(id) {
+  try {
+    const e = await api(`/api/dictionary/${id}`);
+    state.dictDetail = e;
+    renderDictionaryList();
+    renderDictionaryDetail();
+  } catch (e) { console.error(e); }
+}
+
+async function renderDictionaryDetail() {
+  const e = state.dictDetail;
+  const panel = $('dictDetail');
+  if (!e) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  $('dictTerm').value = e.term || '';
+  $('dictDefinition').value = e.definition || '';
+  $('dictNotes').value = e.notes || '';
+
+  const links = e.links || [];
+  if (!links.length) {
+    $('dictLinks').innerHTML = '<li class="dict-empty">リンクなし</li>';
+    return;
+  }
+
+  // Resolve sources by kind for nicer labels.
+  const resolved = await Promise.all(links.map(async l => {
+    let label = `${l.source_kind} #${l.source_id}`;
+    let url = '';
+    try {
+      if (l.source_kind === 'cloud') {
+        const c = await api(`/api/wordcloud/${l.source_id}`);
+        label = `🌐 雲: ${c.label || ''}`;
+      } else if (l.source_kind === 'dig') {
+        const d = await api(`/api/dig/${l.source_id}`);
+        label = `🔎 dig: ${d.query || ''}`;
+      } else if (l.source_kind === 'bookmark') {
+        const b = await api(`/api/bookmarks/${l.source_id}`);
+        label = `📑 ${b.title || ''}`;
+        url = b.url || '';
+      }
+    } catch {}
+    return { ...l, label, url };
+  }));
+  $('dictLinks').innerHTML = resolved.map(l => `
+    <li class="dict-link" data-kind="${l.source_kind}" data-sid="${l.source_id}">
+      <span class="dict-link-label">${escapeHtml(l.label)}</span>
+      ${l.url ? `<a href="${escapeHtml(l.url)}" target="_blank" rel="noreferrer" class="ghost">↗</a>` : ''}
+      <button class="ghost dict-link-remove" data-kind="${l.source_kind}" data-sid="${l.source_id}">×</button>
+    </li>
+  `).join('');
+  $('dictLinks').querySelectorAll('.dict-link-label').forEach(s => {
+    s.addEventListener('click', () => {
+      const li = s.closest('.dict-link');
+      const kind = li.dataset.kind;
+      const sid = Number(li.dataset.sid);
+      navigateToDictSource(kind, sid);
+    });
+  });
+  $('dictLinks').querySelectorAll('.dict-link-remove').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/dictionary/${e.id}/links?source_kind=${btn.dataset.kind}&source_id=${btn.dataset.sid}`, { method: 'DELETE' });
+      await loadDictionaryEntry(e.id);
+    });
+  });
+}
+
+function navigateToDictSource(kind, sid) {
+  if (kind === 'cloud') {
+    switchTab('dig');
+    loadCloud(sid);
+  } else if (kind === 'dig') {
+    switchTab('dig');
+    loadDigSession(sid);
+  } else if (kind === 'bookmark') {
+    switchTab('bookmarks');
+    openDetail(sid);
+  }
+}
+
+async function saveDictionaryEntry() {
+  const e = state.dictDetail;
+  if (!e) return;
+  const body = {
+    term: $('dictTerm').value.trim(),
+    definition: $('dictDefinition').value,
+    notes: $('dictNotes').value,
+  };
+  if (!body.term) return alert('単語は必須です');
+  try {
+    await api(`/api/dictionary/${e.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    flashToast('保存しました');
+    await loadDictionary();
+    await loadDictionaryEntry(e.id);
+  } catch (e) {
+    alert(`保存失敗: ${e.message}`);
+  }
+}
+
+async function deleteDictionaryEntry() {
+  const e = state.dictDetail;
+  if (!e) return;
+  if (!confirm(`「${e.term}」を辞書から削除しますか？`)) return;
+  try {
+    await api(`/api/dictionary/${e.id}`, { method: 'DELETE' });
+    state.dictDetail = null;
+    $('dictDetail').classList.add('hidden');
+    await loadDictionary();
+  } catch (e) {
+    alert(`削除失敗: ${e.message}`);
+  }
+}
+
+async function createDictionaryEntry() {
+  const term = prompt('新しいエントリの単語を入力してください');
+  if (!term || !term.trim()) return;
+  try {
+    const r = await api('/api/dictionary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ term: term.trim() }),
+    });
+    await loadDictionary();
+    await loadDictionaryEntry(r.id);
+  } catch (e) {
+    alert(`作成失敗: ${e.message}`);
   }
 }
 
@@ -1283,6 +1599,13 @@ $('digQuery').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); startDig(); }
 });
 $('digFromBookmarks')?.addEventListener('click', startCloudFromBookmarks);
+$('dictNewBtn')?.addEventListener('click', createDictionaryEntry);
+$('dictSaveBtn')?.addEventListener('click', saveDictionaryEntry);
+$('dictDeleteBtn')?.addEventListener('click', deleteDictionaryEntry);
+$('dictSearch')?.addEventListener('input', (e) => {
+  state.dictSearch = e.target.value.trim();
+  loadDictionary();
+});
 $('ragSearchBtn').addEventListener('click', ragSearch);
 $('ragAskBtn').addEventListener('click', ragAsk);
 $('ragQuery').addEventListener('keydown', (e) => {

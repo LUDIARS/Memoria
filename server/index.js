@@ -28,15 +28,18 @@ import {
   trendsDomains,
 } from './db.js';
 import { summarizeWithClaude, htmlToText } from './claude.js';
-import { FifoQueue } from './queue.js';
+import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
-import { runDig } from './dig.js';
+import { runDig, runDigPreview } from './dig.js';
 import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
   deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
-  insertDigSession, setDigResult, getDigSession, listDigSessions,
+  insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
   getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
+  listDictionaryEntries, getDictionaryEntry, findDictionaryEntryByTerm,
+  insertDictionaryEntry, updateDictionaryEntry, deleteDictionaryEntry,
+  addDictionaryLink, removeDictionaryLink,
 } from './db.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { spawn } from 'node:child_process';
@@ -447,11 +450,19 @@ function claudeAnswer(prompt, timeoutMs = 180_000) {
 }
 
 // ---- dig (deep research) -------------------------------------------------
-
-const digQueue = new FifoQueue();
+// Digs run in parallel — they're independent claude CLI invocations that
+// each spawn a separate child process. Concurrency keeps a sane upper bound.
+const DIG_CONCURRENCY = Number(process.env.MEMORIA_DIG_CONCURRENCY) || 4;
+const digQueue = new ConcurrentPool({ concurrency: DIG_CONCURRENCY });
 
 function enqueueDig(id, query) {
   digQueue.enqueue(async () => {
+    // Phase 1: SERP preview (fast — no page fetches). Persisted as soon as
+    // it lands so the FE can render before the deep claude pass finishes.
+    runDigPreview({ query, claudeBin: CLAUDE_BIN })
+      .then(preview => setDigPreview(db, id, preview))
+      .catch(err => console.warn(`[dig#${id}] preview failed: ${err.message}`));
+    // Phase 2: full deep analysis with WebFetch (existing behavior).
     try {
       const result = await runDig({ query, claudeBin: CLAUDE_BIN });
       setDigResult(db, id, { status: 'done', result });
@@ -580,6 +591,85 @@ app.get('/api/wordcloud/:id', (c) => {
   return c.json(w);
 });
 
+app.get('/api/wordcloud/:id/siblings', (c) => {
+  const id = Number(c.req.param('id'));
+  const cur = getWordCloud(db, id);
+  if (!cur) return c.json({ error: 'not found' }, 404);
+  if (!cur.parent_cloud_id) return c.json({ items: [] });
+  const rows = db.prepare(`
+    SELECT id, label, status, parent_word, created_at
+    FROM word_clouds
+    WHERE parent_cloud_id = ? AND id != ? AND status = 'done'
+    ORDER BY id DESC
+  `).all(cur.parent_cloud_id, id);
+  return c.json({ items: rows });
+});
+
+app.post('/api/wordcloud/merge', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const cloudIds = Array.isArray(body?.cloudIds)
+    ? body.cloudIds.map(Number).filter(Number.isFinite)
+    : [];
+  if (cloudIds.length < 2) return c.json({ error: 'cloudIds[] (>=2) required' }, 400);
+  const clouds = cloudIds.map(id => getWordCloud(db, id)).filter(Boolean);
+  const done = clouds.filter(c => c.status === 'done' && c.result);
+  if (done.length < 2) return c.json({ error: 'need at least 2 completed clouds' }, 400);
+
+  const merged = mergeWordCloudResults(done);
+  const label = (typeof body?.label === 'string' && body.label.trim())
+    ? body.label.trim().slice(0, 200)
+    : `merged: ${done.map(d => d.label).join(' + ').slice(0, 160)}`;
+  const id = insertWordCloud(db, {
+    origin: 'merged',
+    originDigId: null,
+    parentCloudId: done[0].parent_cloud_id ?? null,
+    parentWord: cloudIds.join(','),
+    label,
+  });
+  setWordCloudResult(db, id, { status: 'done', result: merged });
+  return c.json({ id });
+});
+
+function mergeWordCloudResults(clouds) {
+  const map = new Map(); // word_lower → aggregate
+  let firstSummary = '';
+  for (const c of clouds) {
+    const r = c.result || {};
+    if (!firstSummary && r.summary) firstSummary = r.summary;
+    for (const w of (r.words || [])) {
+      const key = String(w.word || '').toLowerCase().trim();
+      if (!key) continue;
+      const cur = map.get(key) || {
+        word: w.word, weightSum: 0, sources: 0, kept: false, count: 0, reasons: [],
+      };
+      cur.weightSum += Number(w.weight) || 0;
+      cur.sources += Number(w.sources) || 1;
+      cur.kept = cur.kept || !!w.kept;
+      cur.count += 1;
+      if (!w.kept && w.reason) cur.reasons.push(w.reason);
+      map.set(key, cur);
+    }
+  }
+  // Bonus: words appearing in more clouds get a boost.
+  const words = [...map.values()].map(w => ({
+    word: w.word,
+    weight: Math.min(100, Math.round(w.weightSum + (w.count - 1) * 8)),
+    sources: w.sources,
+    kept: w.kept,
+    reason: w.kept ? '' : (w.reasons[0] || ''),
+  }));
+  words.sort((a, b) => b.weight - a.weight);
+  const labelList = clouds.map(c => `「${c.label}」`).join(' + ');
+  return {
+    summary: clouds.length === 2
+      ? `${labelList} の合体クラウド (${words.length} 語)`
+      : `${clouds.length} 件の関連クラウドを統合 (${words.length} 語)`,
+    words: words.slice(0, 80),
+    merged_from: clouds.map(c => ({ id: c.id, label: c.label })),
+    base_summary: firstSummary,
+  };
+}
+
 app.post('/api/wordcloud/validate-word', async (c) => {
   const body = await c.req.json().catch(() => null);
   const word = body?.word;
@@ -617,6 +707,112 @@ app.get('/api/bookmarks/:id/wordcloud', (c) => {
   if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
   const cloud = getBookmarkWordCloud(db, id);
   return c.json({ cloud });
+});
+
+// ---- dictionary -----------------------------------------------------------
+
+app.get('/api/dictionary', (c) => {
+  const search = c.req.query('q')?.trim() || undefined;
+  return c.json({ items: listDictionaryEntries(db, { search }) });
+});
+
+app.get('/api/dictionary/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const e = getDictionaryEntry(db, id);
+  if (!e) return c.json({ error: 'not found' }, 404);
+  return c.json(e);
+});
+
+app.post('/api/dictionary', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const term = (body?.term ?? '').toString().trim();
+  if (!term) return c.json({ error: 'term required' }, 400);
+  const existing = findDictionaryEntryByTerm(db, term);
+  if (existing) {
+    // Idempotent: update if any new fields supplied, otherwise return existing.
+    const patch = {};
+    if (typeof body.definition === 'string') patch.definition = body.definition;
+    if (typeof body.notes === 'string') patch.notes = body.notes;
+    if (Object.keys(patch).length > 0) updateDictionaryEntry(db, existing.id, patch);
+    return c.json({ id: existing.id, existed: true });
+  }
+  const id = insertDictionaryEntry(db, {
+    term,
+    definition: body.definition ?? null,
+    notes: body.notes ?? null,
+  });
+  return c.json({ id, existed: false });
+});
+
+app.patch('/api/dictionary/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getDictionaryEntry(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  updateDictionaryEntry(db, id, body);
+  return c.json(getDictionaryEntry(db, id));
+});
+
+app.delete('/api/dictionary/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  deleteDictionaryEntry(db, id);
+  return c.json({ ok: true });
+});
+
+const VALID_DICT_SOURCE_KINDS = new Set(['cloud', 'dig', 'bookmark']);
+
+app.post('/api/dictionary/:id/links', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getDictionaryEntry(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => null);
+  const sourceKind = body?.source_kind;
+  const sourceId = Number(body?.source_id);
+  if (!VALID_DICT_SOURCE_KINDS.has(sourceKind)) return c.json({ error: 'source_kind must be cloud|dig|bookmark' }, 400);
+  if (!Number.isFinite(sourceId)) return c.json({ error: 'source_id required' }, 400);
+  addDictionaryLink(db, { entryId: id, sourceKind, sourceId });
+  return c.json({ ok: true });
+});
+
+app.delete('/api/dictionary/:id/links', async (c) => {
+  const id = Number(c.req.param('id'));
+  const sourceKind = c.req.query('source_kind');
+  const sourceId = Number(c.req.query('source_id'));
+  if (!VALID_DICT_SOURCE_KINDS.has(sourceKind)) return c.json({ error: 'source_kind required' }, 400);
+  if (!Number.isFinite(sourceId)) return c.json({ error: 'source_id required' }, 400);
+  removeDictionaryLink(db, { entryId: id, sourceKind, sourceId });
+  return c.json({ ok: true });
+});
+
+/** Convenience: upsert a term + add a source link in one call. */
+app.post('/api/dictionary/upsert-from-source', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const term = (body?.term ?? '').toString().trim();
+  const sourceKind = body?.source_kind;
+  const sourceId = Number(body?.source_id);
+  if (!term) return c.json({ error: 'term required' }, 400);
+  if (!VALID_DICT_SOURCE_KINDS.has(sourceKind)) return c.json({ error: 'source_kind required' }, 400);
+  if (!Number.isFinite(sourceId)) return c.json({ error: 'source_id required' }, 400);
+
+  const existing = findDictionaryEntryByTerm(db, term);
+  let entryId;
+  let existed = false;
+  if (existing) {
+    entryId = existing.id;
+    existed = true;
+    if (typeof body.definition === 'string' || typeof body.notes === 'string') {
+      updateDictionaryEntry(db, entryId, {
+        definition: typeof body.definition === 'string' ? body.definition : undefined,
+        notes: typeof body.notes === 'string' ? body.notes : undefined,
+      });
+    }
+  } else {
+    entryId = insertDictionaryEntry(db, {
+      term,
+      definition: body.definition ?? null,
+      notes: body.notes ?? null,
+    });
+  }
+  addDictionaryLink(db, { entryId, sourceKind, sourceId });
+  return c.json({ id: entryId, existed });
 });
 
 // ---- queue status ---------------------------------------------------------
