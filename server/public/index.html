@@ -36,9 +36,10 @@
       <nav class="tabs">
         <button class="tab active" data-tab="bookmarks">ブックマーク</button>
         <button class="tab" data-tab="queue">
-          作業リスト
+          作業キュー
           <span id="tabQueueCount" class="tab-count hidden">0</span>
         </button>
+        <button class="tab" data-tab="events">📋 イベント</button>
         <button class="tab" data-tab="visits">
           アクセス履歴
           <span id="tabVisitsCount" class="tab-count hidden">0</span>
@@ -289,6 +290,14 @@
       <div id="queueView" class="hidden">
         <p class="queue-bar-help">ブックマーク要約・ディグ・ワードクラウド・日記・週報・ドメイン分類・ページメタの作業をすべて 1 件ずつ順次処理しています。</p>
         <div id="queueGroups" class="queue-groups"></div>
+      </div>
+
+      <div id="eventsView" class="hidden">
+        <div class="events-bar">
+          <div id="uptimeStatus" class="uptime-status"></div>
+          <button id="eventsRefresh" class="ghost">更新</button>
+        </div>
+        <ul id="eventsList" class="events-list"></ul>
       </div>
     </section>
 
