@@ -42,7 +42,11 @@ function parseSqliteUtc(s) {
  * that signals "heavy activity on that URL" (touched many times today, plus
  * still present in the per-URL touch table).
  */
-export function aggregateDay(db, dateStr) {
+// Initial page size for the bookmark / dig lists in the diary view.
+// Anything beyond this is loaded on-demand via the per-list endpoints.
+const DIARY_LIST_INITIAL = 10;
+
+export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {}) {
   const hourlyVisits = new Array(24).fill(0);
   const domainTally = new Map();
   const domainHours = new Map(); // domain -> Set of hour buckets seen
@@ -116,8 +120,15 @@ export function aggregateDay(db, dateStr) {
 
   const totalEvents = hourlyVisits.reduce((s, n) => s + n, 0);
 
-  const bookmarks = bookmarksForDate(db, dateStr);
-  const digs = digSessionsForDate(db, dateStr).map(d => {
+  // Bookmark + dig lists are paginated for the live response. The
+  // highlights prompt builder calls aggregateDay() with `listLimit: null`
+  // so claude still sees the full picture.
+  const bookmarks = bookmarksForDate(db, dateStr,
+    listLimit == null ? {} : { limit: listLimit, offset: 0 });
+  const allDigs = digSessionsForDate(db, dateStr);
+  const digsTotal = allDigs.length;
+  const digSlice = listLimit == null ? allDigs : allDigs.slice(0, listLimit);
+  const digs = digSlice.map(d => {
     const r = d.result || {};
     return {
       id: d.id,
@@ -154,6 +165,7 @@ export function aggregateDay(db, dateStr) {
     last_event_at: lastSeen,
     bookmarks,
     digs,
+    digs_total: digsTotal,
     downtimes,
     total_downtime_ms: totalDowntimeMs,
     sources: {
@@ -331,14 +343,30 @@ function inferAuthHint({ probes, fmt }) {
 }
 
 /** Bookmarks created or accessed on `dateStr`. */
-export function bookmarksForDate(db, dateStr) {
+// Per-day bookmark lists used by the diary view. `limit/offset` paginate;
+// `null` limit returns everything (used by the highlights prompt builder
+// inside aggregateDay so claude still sees the full picture).
+export function bookmarksForDate(db, dateStr, { limit = null, offset = 0 } = {}) {
+  const limitClause = limit == null ? '' : ' LIMIT ? OFFSET ?';
+  const args = limit == null ? [dateStr] : [dateStr, Number(limit) || 0, Number(offset) || 0];
+
+  const createdTotal = db.prepare(`
+    SELECT COUNT(*) AS n FROM bookmarks WHERE date(created_at, 'localtime') = ?
+  `).get(dateStr).n;
   const created = db.prepare(`
     SELECT id, url, title, summary, created_at
     FROM bookmarks
     WHERE date(created_at, 'localtime') = ?
     ORDER BY created_at ASC
-  `).all(dateStr);
+    ${limitClause}
+  `).all(...args);
 
+  const accessedTotal = db.prepare(`
+    SELECT COUNT(DISTINCT b.id) AS n
+    FROM accesses a
+    JOIN bookmarks b ON b.id = a.bookmark_id
+    WHERE date(a.accessed_at, 'localtime') = ?
+  `).get(dateStr).n;
   const accessedRows = db.prepare(`
     SELECT b.id, b.url, b.title,
            MIN(a.accessed_at) AS first_accessed_at,
@@ -349,9 +377,14 @@ export function bookmarksForDate(db, dateStr) {
     WHERE date(a.accessed_at, 'localtime') = ?
     GROUP BY b.id
     ORDER BY access_count DESC, last_accessed_at DESC
-  `).all(dateStr);
+    ${limitClause}
+  `).all(...args);
 
-  return { created, accessed: accessedRows };
+  return {
+    created, accessed: accessedRows,
+    created_total: createdTotal,
+    accessed_total: accessedTotal,
+  };
 }
 
 /** GitHub commits grouped by repository: { byRepo: {repo: count}, total, repos: [...] }. */

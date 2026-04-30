@@ -1847,54 +1847,16 @@ function renderDiaryDetail() {
     }).join('');
 
   const created = metrics.bookmarks?.created || [];
-  $('diaryBookmarksCreated').innerHTML = created.length === 0
-    ? '<li class="queue-empty">新規ブックマークなし</li>'
-    : created.map(b =>
-      `<li class="diary-bookmark" data-id="${b.id}">
-        <a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer" class="title">${escapeHtml(b.title)}</a>
-        <div class="url">${escapeHtml(b.url)}</div>
-        ${b.summary ? `<div class="summary">${escapeHtml(b.summary.slice(0, 200))}</div>` : ''}
-      </li>`
-    ).join('');
+  const createdTotal = metrics.bookmarks?.created_total ?? created.length;
+  renderDiaryBookmarkList('diaryBookmarksCreated', created, createdTotal, 'created', '新規ブックマークなし');
+
   const accessed = metrics.bookmarks?.accessed || [];
-  $('diaryBookmarksAccessed').innerHTML = accessed.length === 0
-    ? '<li class="queue-empty">再訪なし</li>'
-    : accessed.map(b =>
-      `<li class="diary-bookmark" data-id="${b.id}">
-        <a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer" class="title">${escapeHtml(b.title)}</a>
-        <div class="url">${escapeHtml(b.url)} <span class="access-count">×${b.access_count}</span></div>
-      </li>`
-    ).join('');
-  document.querySelectorAll('.diary-bookmark').forEach(li => {
-    li.addEventListener('click', (ev) => {
-      if (ev.target.tagName === 'A') return;
-      const id = Number(li.dataset.id);
-      switchTab('bookmarks');
-      openDetail(id);
-    });
-  });
+  const accessedTotal = metrics.bookmarks?.accessed_total ?? accessed.length;
+  renderDiaryBookmarkList('diaryBookmarksAccessed', accessed, accessedTotal, 'accessed', '再訪なし');
 
   const digs = metrics.digs || [];
-  if (digs.length === 0) {
-    $('diaryDigs').innerHTML = '<li class="queue-empty">この日のディグはなし</li>';
-  } else {
-    $('diaryDigs').innerHTML = digs.map(dg => `
-      <li class="diary-dig" data-id="${dg.id}">
-        <div class="diary-dig-head">
-          <span class="diary-dig-query">${escapeHtml(dg.query)}</span>
-          <span class="diary-dig-meta">${dg.source_count} 件 · ${escapeHtml(dg.status)}</span>
-        </div>
-        ${dg.summary ? `<div class="diary-dig-summary">${escapeHtml(dg.summary)}</div>` : ''}
-      </li>
-    `).join('');
-    $('diaryDigs').querySelectorAll('.diary-dig').forEach(li => {
-      li.addEventListener('click', () => {
-        const id = Number(li.dataset.id);
-        switchTab('dig');
-        loadDigSession(id);
-      });
-    });
-  }
+  const digsTotal = metrics.digs_total ?? digs.length;
+  renderDiaryDigList(digs, digsTotal);
 
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
@@ -1961,6 +1923,124 @@ function renderDomainPie(domains) {
     startAngle = endAngle;
   });
   return `<svg viewBox="0 0 220 220" preserveAspectRatio="xMidYMid meet">${paths}</svg>`;
+}
+
+// ── Diary list paging helpers ─────────────────────────────────────────────
+
+function bookmarkLi(b, withAccessCount = false) {
+  const accessCount = withAccessCount && b.access_count
+    ? `<span class="access-count">×${b.access_count}</span>`
+    : '';
+  const summary = b.summary ? `<div class="summary">${escapeHtml(String(b.summary).slice(0, 200))}</div>` : '';
+  return `<li class="diary-bookmark" data-id="${b.id}">
+    <a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer" class="title">${escapeHtml(b.title || b.url)}</a>
+    <div class="url">${escapeHtml(b.url)} ${accessCount}</div>
+    ${summary}
+  </li>`;
+}
+function attachBookmarkClicks(scope) {
+  scope.querySelectorAll('.diary-bookmark').forEach(li => {
+    if (li.dataset.bound === '1') return;
+    li.dataset.bound = '1';
+    li.addEventListener('click', (ev) => {
+      if (ev.target.tagName === 'A') return;
+      const id = Number(li.dataset.id);
+      switchTab('bookmarks');
+      openDetail(id);
+    });
+  });
+}
+
+function renderDiaryBookmarkList(elId, items, total, kind, emptyMsg) {
+  const ul = $(elId);
+  if (!items.length) {
+    ul.innerHTML = `<li class="queue-empty">${emptyMsg}</li>`;
+    return;
+  }
+  const withAccess = kind === 'accessed';
+  ul.innerHTML = items.map(b => bookmarkLi(b, withAccess)).join('');
+  attachBookmarkClicks(ul);
+  if (total > items.length) {
+    appendDiaryMoreButton(ul, items.length, total, async (offset) => {
+      const date = state.diaryDetailDate;
+      const r = await api(`/api/diary/${date}/bookmarks?kind=${kind}&offset=${offset}&limit=20`);
+      return { items: (r.items || []).map(b => bookmarkLi(b, withAccess)), total: r.total };
+    });
+  }
+}
+
+function renderDiaryDigList(items, total) {
+  const ul = $('diaryDigs');
+  if (!items.length) {
+    ul.innerHTML = '<li class="queue-empty">この日のディグはなし</li>';
+    return;
+  }
+  ul.innerHTML = items.map(digLi).join('');
+  attachDigClicks(ul);
+  if (total > items.length) {
+    appendDiaryMoreButton(ul, items.length, total, async (offset) => {
+      const date = state.diaryDetailDate;
+      const r = await api(`/api/diary/${date}/digs?offset=${offset}&limit=20`);
+      return { items: (r.items || []).map(digLi), total: r.total };
+    });
+  }
+}
+function digLi(dg) {
+  return `<li class="diary-dig" data-id="${dg.id}">
+    <div class="diary-dig-head">
+      <span class="diary-dig-query">${escapeHtml(dg.query)}</span>
+      <span class="diary-dig-meta">${dg.source_count} 件 · ${escapeHtml(dg.status)}</span>
+    </div>
+    ${dg.summary ? `<div class="diary-dig-summary">${escapeHtml(dg.summary)}</div>` : ''}
+  </li>`;
+}
+function attachDigClicks(scope) {
+  scope.querySelectorAll('.diary-dig').forEach(li => {
+    if (li.dataset.bound === '1') return;
+    li.dataset.bound = '1';
+    li.addEventListener('click', () => {
+      const id = Number(li.dataset.id);
+      switchTab('dig');
+      loadDigSession(id);
+    });
+  });
+}
+
+// Inserts a "more ▽" button at the end of the list. Each click fetches the
+// next page and appends it; when the list is exhausted the button removes
+// itself. `fetchPage(offset) → { items: htmlString[], total }`.
+function appendDiaryMoreButton(ul, currentLen, total, fetchPage) {
+  const li = document.createElement('li');
+  li.className = 'diary-more';
+  let offset = currentLen;
+  const remaining = () => Math.max(0, total - offset);
+  function syncLabel(loading) {
+    li.innerHTML = loading
+      ? '読込中…'
+      : `more ▽ <span class="diary-more-count">残り ${remaining()} 件</span>`;
+  }
+  syncLabel(false);
+  li.addEventListener('click', async () => {
+    if (li.dataset.busy === '1') return;
+    li.dataset.busy = '1';
+    syncLabel(true);
+    try {
+      const { items, total: newTotal } = await fetchPage(offset);
+      const frag = document.createElement('div');
+      frag.innerHTML = items.join('');
+      while (frag.firstChild) ul.insertBefore(frag.firstChild, li);
+      attachBookmarkClicks(ul);
+      attachDigClicks(ul);
+      offset += items.length;
+      if (typeof newTotal === 'number') total = newTotal;
+      if (offset >= total) li.remove();
+      else { syncLabel(false); li.dataset.busy = ''; }
+    } catch (e) {
+      li.innerHTML = `<span class="error">取得失敗: ${escapeHtml(e.message)}</span>`;
+      li.dataset.busy = '';
+    }
+  });
+  ul.appendChild(li);
 }
 
 function renderHourlyChart(hours) {
