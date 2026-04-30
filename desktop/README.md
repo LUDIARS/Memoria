@@ -87,6 +87,43 @@ cargo tauri build
 が、依存 (better-sqlite3 のネイティブビルド) との相性検証が必要なので
 別 PR で扱います。
 
+## GitHub Release への配布
+
+`.github/workflows/desktop-release.yml` がタグ push をトリガに
+
+- Windows: NSIS `.exe` インストーラ
+- macOS arm64: `.dmg`
+- Linux x64: `.AppImage` + `.deb`
+
+をビルドし、それぞれ **zip に固めて** GitHub Release にアタッチします
+(ユーザの要望: 生 exe をそのまま置かない)。
+
+### リリース手順
+
+```bash
+# version を bump して tag
+# (desktop/src-tauri/tauri.conf.json と Cargo.toml の version も合わせる)
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+タグが push された瞬間に GitHub Actions の `Desktop Release` ワークフロー
+が起動し、3 OS で並列ビルド → アーティファクトを集約 →
+`Memoria-v0.1.0-windows-x64.zip` 等の名前で Release にアップロード
+されます。
+
+### 手動トリガ
+
+リリースを切らずに動作確認したい場合は Actions タブから **Run
+workflow** で `tag` を指定すれば、タグが無くても作成 + Release を建てて
+zip を貼り付けます (`v0.0.0-dev` がデフォルト)。
+
+### マシンが足りないとき
+
+GitHub Actions の Windows / macOS / Linux ランナーをそれぞれ使うので
+セルフホストランナーは不要。Release の作成権限のみ必要 (`contents: write`
+は workflow 内で宣言済み、PAT は不要)。
+
 ## 既知の制約
 
 - アイコン: `desktop/src-tauri/icons/` に空のプレースホルダしか入って
