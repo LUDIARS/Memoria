@@ -1997,22 +1997,44 @@ function renderHourlyChart(hours) {
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${bars}</svg>`;
 }
 
-async function generateDiary() {
+async function generateDiary({ improve = '' } = {}) {
   const date = state.diaryDetailDate;
   if (!date) return;
-  const btn = $('diaryGenerate');
+  const btn = improve ? $('diaryImproveBtn') : $('diaryGenerate');
+  const baseLabel = btn.textContent;
   btn.disabled = true;
   btn.textContent = '投入中…';
+  const status = $('diaryImproveStatus');
+  if (improve && status) { status.textContent = ''; }
   try {
-    await api(`/api/diary/${date}/generate`, { method: 'POST' });
-    flashToast(`${date} の日記を生成キューに投入しました`);
+    await api(`/api/diary/${date}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ improve }),
+    });
+    flashToast(`${date} の日記を生成キューに投入しました${improve ? ' (改善指示込み)' : ''}`);
+    if (improve) {
+      // One-shot — clear the textarea so the next click is a fresh prompt.
+      $('diaryImproveInput').value = '';
+      if (status) status.textContent = '✓ 投入しました';
+    }
     await loadDiaryDetail(date);
   } catch (e) {
-    alert(`失敗: ${e.message}`);
+    if (improve && status) status.textContent = `✗ ${e.message}`;
+    else alert(`失敗: ${e.message}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = '再生成';
+    btn.textContent = baseLabel;
   }
+}
+
+async function improveDiary() {
+  const text = ($('diaryImproveInput')?.value || '').trim();
+  if (!text) {
+    alert('改善したい内容を書いてから押してください。');
+    return;
+  }
+  await generateDiary({ improve: text });
 }
 
 async function deleteDiaryEntry() {
@@ -2541,7 +2563,8 @@ $('diaryToday')?.addEventListener('click', () => {
   refreshDiaryMonth();
   loadDiaryDetail(todayLocalDate());
 });
-$('diaryGenerate')?.addEventListener('click', generateDiary);
+$('diaryGenerate')?.addEventListener('click', () => generateDiary());
+$('diaryImproveBtn')?.addEventListener('click', improveDiary);
 $('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
 $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
 $('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
@@ -2638,6 +2661,7 @@ async function openAiSettings() {
     $('aiOpenaiKey').value = '';
     $('aiOpenaiModel').value = cfg.openai_model || '';
     $('aiOpenaiKeyStatus').textContent = cfg.openai_api_key_set ? '✓ API key 設定済み (再入力で上書き)' : '(未設定)';
+    if ($('aiDiaryGlobalMemo')) $('aiDiaryGlobalMemo').value = cfg.diary_global_memo || '';
     if (r.runtime) {
       const rt = r.runtime;
       $('aiRuntimeInfo').innerHTML = `
@@ -2797,6 +2821,7 @@ async function saveAiSettings() {
     },
     openai_model: $('aiOpenaiModel').value.trim() || 'gpt-4o-mini',
     git_bash_path: $('aiGitBashPath').value.trim(),
+    diary_global_memo: $('aiDiaryGlobalMemo')?.value || '',
   };
   const k = $('aiOpenaiKey').value;
   if (k && k !== '***') body.openai_api_key = k;

@@ -573,24 +573,37 @@ function formatUrlLine(ts, url) {
   return `${m ? m[1] : '??:??'} ${url}`;
 }
 
+function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
+  const tail = [];
+  if (globalMemo && globalMemo.trim()) {
+    tail.push('', '## ユーザの常設メモ (毎回参照)', globalMemo.trim());
+  }
+  if (improve && improve.trim()) {
+    tail.push('', '## このターンだけの改善指示 (最優先)', improve.trim());
+  }
+  return tail.length > 0 ? `${prompt}\n${tail.join('\n')}` : prompt;
+}
+
 /** Stage 1: Sonnet (default) writes 作業内容 from the URL timeline. */
-export async function generateWorkContent({ db, dateStr, metrics, timeoutMs = 180_000 }) {
+export async function generateWorkContent({ db, dateStr, metrics, globalMemo, improve, timeoutMs = 180_000 }) {
   const urlList = buildUrlList(db, dateStr);
   if (!urlList.trim()) return '';
-  const prompt = WORK_CONTENT_PROMPT({
+  const base = WORK_CONTENT_PROMPT({
     dateStr,
     urlList,
     totalEvents: metrics.total_events,
     totalDomains: metrics.unique_domains,
   });
+  const prompt = appendMemoAndImprove(base, { globalMemo, improve });
   return await runLlm({ task: 'diary_work', prompt, timeoutMs });
 }
 
 /** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits + dig into highlights. */
-export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics, timeoutMs = 240_000 }) {
-  const prompt = HIGHLIGHTS_PROMPT({
+export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics, globalMemo, improve, timeoutMs = 240_000 }) {
+  const base = HIGHLIGHTS_PROMPT({
     dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
   });
+  const prompt = appendMemoAndImprove(base, { globalMemo, improve });
   return await runLlm({ task: 'diary_highlights', prompt, timeoutMs });
 }
 
