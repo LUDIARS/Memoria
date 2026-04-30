@@ -944,6 +944,34 @@ app.post('/api/multi/disconnect', (c) => {
   return c.json({ ok: true });
 });
 
+// Read-only proxy for the multi server's GET endpoints. Forwards path +
+// query through with the saved JWT so the SPA can browse Hub content
+// without needing CORS or a second login.
+app.get('/api/multi/proxy/*', async (c) => {
+  const state = readMultiState(db);
+  if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
+  const path = c.req.path.replace('/api/multi/proxy', '');
+  const qs = new URL(c.req.url).search;
+  const upstream = `${state.url.replace(/\/$/, '')}${path}${qs}`;
+  try {
+    const res = await fetch(upstream, {
+      headers: {
+        'Authorization': `Bearer ${state.jwt}`,
+        'Accept': 'application/json',
+      },
+    });
+    const text = await res.text();
+    return new Response(text, {
+      status: res.status,
+      headers: {
+        'Content-Type': res.headers.get('content-type') || 'application/json',
+      },
+    });
+  } catch (e) {
+    return c.json({ error: `proxy failed: ${e.message}` }, 502);
+  }
+});
+
 // Body: { kind: 'bookmark' | 'dig' | 'dict', id }
 app.post('/api/multi/share', async (c) => {
   const body = await c.req.json().catch(() => null);
