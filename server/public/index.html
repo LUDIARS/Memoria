@@ -91,7 +91,8 @@
           <button class="tab" data-tab="domain">🏷 ドメ</button>
           <button class="tab" data-tab="diary">📅 日記</button>
           <button class="tab" data-tab="tracks">🗺 軌跡</button>
-          <button class="tab tab-multi-only" data-tab="multi" hidden>🌐 マルチ</button>
+          <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
+               機能タブからは外す (PC/スマホ共通)。 -->
         </div>
         <button type="button" id="tabMoreBtn" class="tab tab-more-btn" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
         <ul id="tabMoreMenu" class="tab-more-menu" hidden role="menu"></ul>

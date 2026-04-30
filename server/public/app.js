@@ -602,10 +602,24 @@ function tabsInUsageOrder() {
     return sb - sa;
   });
 }
-// Mobile tab nav is "top 3 most-used (active stays visible) + ⋯ More".
-// strip 全体は 3 タブ + More の 4 アイテム。 active が top-3 圏外なら
-// top-3 の最下位を 1 件 evict して active と入れ替える。
-const TABS_VISIBLE_ON_MOBILE = 3;
+// Mobile tab nav is "top 4 most-used + ⋯ More". active は必ず strip に
+// 表示される。 More から選択したタブは promote されて leftmost に来る
+// (= 旧 4 位を More に押し出す)。
+const TABS_VISIBLE_ON_MOBILE = 4;
+
+/// More メニューから選ばれたタブを strip の 1 番左に持ってくる。
+/// 仕組みは「現状の最大 usage + 1 を割り当てる」 ことで、 既存の usage 並び
+/// では誰よりも上に来る。 通常の strip クリックは bumpTabUsage で +1 され
+/// るので、 promoted タブは新しい promote が起きるまで leftmost を保つ。
+function promoteTabToTop(tab) {
+  const u = readTabUsage();
+  let max = 0;
+  for (const v of Object.values(u)) {
+    if (typeof v === 'number' && v > max) max = v;
+  }
+  u[tab] = max + 1;
+  try { localStorage.setItem(TAB_USAGE_KEY, JSON.stringify(u)); } catch {}
+}
 
 function isNarrowViewport() {
   return window.innerWidth <= 760;
@@ -689,6 +703,9 @@ function reflowTabsForViewport() {
       item.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // More から選んだタブは leftmost に promote。 reflow 時にこのタブが
+        // top-4 のトップに来て、 旧 4 位の機能が More に押し出される。
+        promoteTabToTop(t.dataset.tab);
         switchTab(t.dataset.tab);
         closeTabMoreMenu();
       });
