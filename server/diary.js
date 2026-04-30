@@ -4,8 +4,12 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate } from './db.js';
+import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate } from './db.js';
 import { runLlm } from './llm.js';
+
+// Downtimes >5 min make it into the diary; shorter gaps are treated as
+// restarts (e.g. process kill + npm start) and silently ignored.
+const DIARY_DOWNTIME_THRESHOLD_MS = 5 * 60 * 1000;
 
 // Default models per task are configured in llm.js (sonnet for diary_work,
 // opus 1M for diary_highlights / diary_weekly). The user can override per task
@@ -115,6 +119,17 @@ export function aggregateDay(db, dateStr) {
     };
   });
 
+  // Surface significant server downtimes so claude knows the data is partial.
+  const serverEvents = listServerEventsForDate(db, dateStr);
+  const downtimes = serverEvents
+    .filter(e => e.type === 'downtime' && (e.duration_ms || 0) > DIARY_DOWNTIME_THRESHOLD_MS)
+    .map(e => ({
+      from: e.occurred_at,
+      to: e.ended_at,
+      duration_ms: e.duration_ms,
+    }));
+  const totalDowntimeMs = downtimes.reduce((s, d) => s + (d.duration_ms || 0), 0);
+
   return {
     date: dateStr,
     total_events: totalEvents,
@@ -126,6 +141,8 @@ export function aggregateDay(db, dateStr) {
     last_event_at: lastSeen,
     bookmarks,
     digs,
+    downtimes,
+    total_downtime_ms: totalDowntimeMs,
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
@@ -360,6 +377,17 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) =>
   urlList,
 ].join('\n');
 
+function formatDowntimeBlock(metrics) {
+  const dts = metrics?.downtimes || [];
+  if (!dts.length) return '(なし)';
+  return dts.map(d => {
+    const from = (d.from || '').replace('T', ' ').slice(0, 19);
+    const to = (d.to || '').replace('T', ' ').slice(0, 19);
+    const mins = Math.round((d.duration_ms || 0) / 60_000);
+    return `- ${from} 〜 ${to} (${mins} 分間 Memoria サーバ停止 → アクセスログ取得なし)`;
+  }).join('\n');
+}
+
 const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics }) => [
   `あなたは ${dateStr} の「ハイライト」セクションを書きます。`,
   '以下の情報を統合し、その日の重要なポイントを箇条書きで 3〜6 個。',
@@ -389,6 +417,10 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   '',
   '## メタ情報',
   `総アクセス: ${metrics.total_events} / アクティブ時間帯: ${metrics.active_hours.join(',')}`,
+  '',
+  '## サーバ停止 (5 分超のダウンタイム)',
+  formatDowntimeBlock(metrics),
+  '上記時間帯はアクセスログが欠落しているので、その時間帯の活動についてはデータがない旨を簡潔に注記してください。',
   '',
   notes ? `## ユーザのメモ・補足 (反映してください)\n${notes}\n` : '',
   '',
