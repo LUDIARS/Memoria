@@ -71,7 +71,8 @@ import {
 } from './db.js';
 import {
   readMultiState, isConnected,
-  saveMultiUrl, saveMultiSession, clearMultiSession,
+  readMultiServers, persistServers, upsertServer, removeServer,
+  saveServerSession, clearServerSession, setActive, listConnectedActive,
   fetchMe, shareBookmark, shareDig, shareDictionary,
   multiFetch,
 } from './local/multi-client.js';
@@ -979,50 +980,101 @@ app.patch('/api/llm/config', async (c) => {
 // JWT in app_settings and forwards local resources through /api/shared/*.
 
 app.get('/api/multi/status', (c) => {
-  const state = readMultiState(db);
+  // Returns every registered server + which are active. The legacy
+  // `connected/url/user` triple is kept on the response so existing
+  // callers keep working: they reflect the FIRST active+connected one.
+  const { servers, active } = readMultiServers(db);
+  const list = servers.map(s => ({
+    label: s.label, url: s.url,
+    active: active.has(s.url),
+    connected: !!(s.jwt && s.userId),
+    user: s.userId ? { id: s.userId, name: s.userName, role: s.role } : null,
+    connected_at: s.connectedAt,
+  }));
+  const primary = readMultiState(db);
   return c.json({
-    connected: isConnected(state),
-    url: state.url,
-    user: isConnected(state)
-      ? { id: state.userId, name: state.userName, role: state.role }
-      : null,
-    connected_at: state.connectedAt,
+    servers: list,
+    connected: isConnected(primary),
+    url: primary.url,
+    user: isConnected(primary) ? { id: primary.userId, name: primary.userName, role: primary.role } : null,
+    connected_at: primary.connectedAt,
   });
 });
 
-app.post('/api/multi/connect', async (c) => {
+app.post('/api/multi/servers', async (c) => {
+  // Add or update a registered server entry (label + url). Doesn't
+  // touch JWT — that's set by the OAuth /finish handler.
   const body = await c.req.json().catch(() => null);
   if (!body?.url) return c.json({ error: 'url required' }, 400);
-  saveMultiUrl(db, body.url);
-  // The browser drives the OAuth dance — we just hand back the URL it
-  // should bounce through, plus the redirect that Cernere/Hub will use.
+  const { servers, active } = readMultiServers(db);
+  const updated = upsertServer(servers, { label: body.label || body.url, url: body.url });
+  persistServers(db, updated, active);
+  return c.json({ ok: true });
+});
+
+app.delete('/api/multi/servers', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.url) return c.json({ error: 'url required' }, 400);
+  const { servers, active } = readMultiServers(db);
+  active.delete(String(body.url).replace(/\/$/, ''));
+  persistServers(db, removeServer(servers, body.url), active);
+  return c.json({ ok: true });
+});
+
+app.post('/api/multi/active', async (c) => {
+  // Body: { urls: string[] } — replaces the active set.
+  const body = await c.req.json().catch(() => null);
+  if (!Array.isArray(body?.urls)) return c.json({ error: 'urls[] required' }, 400);
+  setActive(db, body.urls);
+  return c.json({ ok: true });
+});
+
+app.post('/api/multi/connect', async (c) => {
+  // Kicks off the OAuth dance for a specific server URL. The URL is
+  // registered (no-op if already there) and the SPA bounces through the
+  // returned authorize URL.
+  const body = await c.req.json().catch(() => null);
+  if (!body?.url) return c.json({ error: 'url required' }, 400);
+  const { servers, active } = readMultiServers(db);
+  const updated = upsertServer(servers, { label: body.label || body.url, url: body.url });
+  persistServers(db, updated, active);
   const redirectBack = body.redirect_uri || 'http://localhost:5180/?multi=connected';
   const start = `${body.url.replace(/\/$/, '')}/api/auth/start?redirect_uri=${encodeURIComponent(redirectBack)}`;
   return c.json({ ok: true, authorize_url: start });
 });
 
 app.post('/api/multi/finish', async (c) => {
-  // Called by the SPA after it pulls `memoria_hub_jwt` out of the URL
-  // hash/query that Cernere → Hub forwarded back. Verifies + stashes.
+  // SPA hands back the JWT after Cernere → Hub redirect. We need to know
+  // WHICH server URL it belongs to. The SPA passes `url`; if missing we
+  // fall back to the most-recently-touched registered server.
   const body = await c.req.json().catch(() => null);
   if (!body?.jwt) return c.json({ error: 'jwt required' }, 400);
-  const state = { ...readMultiState(db), jwt: body.jwt };
-  if (!state.url) return c.json({ error: 'multi url not configured' }, 400);
-  // Round-trip /api/me to validate the token and pull the user info.
+  const { servers } = readMultiServers(db);
+  const target = body.url
+    ? servers.find(s => s.url === String(body.url).replace(/\/$/, ''))
+    : servers[servers.length - 1];
+  if (!target) return c.json({ error: 'no multi server registered' }, 400);
   let me;
-  try { me = await fetchMe(state); }
+  try { me = await fetchMe({ ...target, jwt: body.jwt }); }
   catch (e) { return c.json({ error: `verify failed: ${e.message}` }, 401); }
-  saveMultiSession(db, {
+  saveServerSession(db, target.url, {
     jwt: body.jwt,
     userId: me.userId,
     userName: me.displayName,
     role: me.role,
   });
-  return c.json({ ok: true, user: me });
+  return c.json({ ok: true, url: target.url, user: me });
 });
 
-app.post('/api/multi/disconnect', (c) => {
-  clearMultiSession(db);
+app.post('/api/multi/disconnect', async (c) => {
+  // Body: { url? } — disconnect a specific server, or all if omitted.
+  const body = await c.req.json().catch(() => null);
+  if (body?.url) {
+    clearServerSession(db, body.url);
+  } else {
+    const { servers } = readMultiServers(db);
+    for (const s of servers) clearServerSession(db, s.url);
+  }
   return c.json({ ok: true });
 });
 

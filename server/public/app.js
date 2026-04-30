@@ -93,8 +93,32 @@ function renderCategories() {
     li.addEventListener('click', () => {
       const cat = li.dataset.cat || null;
       state.category = cat;
+      // Mobile drawer: collapse after picking.
+      $('bookmarksView')?.classList.remove('cat-open');
       load();
     });
+  });
+}
+
+// Mobile only: ☰ カテゴリ in the bookmarks toolbar toggles a floating
+// drawer over the cards. Clicking outside the drawer (and not on the
+// toggle itself) closes it.
+function setupCategoriesDrawer() {
+  const toggle = $('categoriesToggle');
+  const view = $('bookmarksView');
+  const drawer = $('bookmarksCategories');
+  if (!toggle || !view || !drawer) return;
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = !view.classList.contains('cat-open');
+    view.classList.toggle('cat-open', willOpen);
+    toggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  });
+  document.addEventListener('click', (e) => {
+    if (!view.classList.contains('cat-open')) return;
+    if (e.target.closest('#bookmarksCategories, #categoriesToggle')) return;
+    view.classList.remove('cat-open');
+    toggle.setAttribute('aria-expanded', 'false');
   });
 }
 
@@ -573,8 +597,10 @@ function reflowTabsForViewport() {
   if (!scroll || !moreWrap || !moreMenu) return;
 
   const allTabs = [...scroll.querySelectorAll('.tab[data-tab]')];
+
+  // Reset every state from any previous run.
   for (const t of allTabs) t.style.display = '';
-  moreMenu.innerHTML = '';
+  moreMenu.replaceChildren();
 
   const isNarrow = window.innerWidth <= 760;
   if (!isNarrow) {
@@ -593,13 +619,20 @@ function reflowTabsForViewport() {
     if (visible.has(t.dataset.tab)) {
       t.style.display = '';
     } else {
-      // Clone BEFORE hiding the original — otherwise cloneNode(true)
-      // captures `display: none` and the More menu renders empty.
-      const clone = t.cloneNode(true);
-      clone.style.display = '';
-      clone.classList.toggle('active', t.dataset.tab === active);
-      clone.addEventListener('click', () => switchTab(t.dataset.tab));
-      moreMenu.appendChild(clone);
+      // Build a fresh button instead of cloning — cloneNode used to
+      // copy the `display: none` we set on the original, which made
+      // the More menu silently empty.
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'tab' + (t.dataset.tab === active ? ' active' : '');
+      item.dataset.tab = t.dataset.tab;
+      item.textContent = (t.textContent || t.dataset.tab).trim();
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        switchTab(t.dataset.tab);
+      });
+      moreMenu.appendChild(item);
       t.style.display = 'none';
       overflowCount += 1;
     }
@@ -2731,6 +2764,7 @@ document.addEventListener('click', (e) => {
 });
 window.addEventListener('resize', reflowTabsForViewport);
 reflowTabsForViewport();
+setupCategoriesDrawer();
 
 $('visitsRefresh').addEventListener('click', loadVisits);
 $('visitsRange').addEventListener('change', (e) => {
@@ -2886,41 +2920,165 @@ async function refreshMultiStatus() {
   try {
     const s = await api('/api/multi/status');
     state.multi = s;
-    if ($('multiUrl')) $('multiUrl').value = s.url || '';
+    renderMultiSwitch(s);
+    renderMultiServersList(s);
     const status = $('multiStatus');
-    if (s.connected) {
-      status.innerHTML = `✓ <b>${escapeHtml(s.user.name)}</b> (${escapeHtml(s.user.role)}) として接続中 — ${escapeHtml(s.url)}`;
-      $('multiDisconnectBtn').hidden = false;
-      $('multiConnectBtn').textContent = '再接続';
-    } else {
-      status.textContent = s.url ? '未接続' : '(URL を入力して接続)';
-      $('multiDisconnectBtn').hidden = true;
-      $('multiConnectBtn').textContent = '接続';
+    if (status) {
+      const activeCount = (s.servers || []).filter(x => x.active && x.connected).length;
+      if (activeCount > 0) {
+        status.innerHTML = `✓ ${activeCount} サーバが接続中`;
+      } else if ((s.servers || []).length === 0) {
+        status.textContent = '(URL を追加してください)';
+      } else {
+        status.textContent = '未接続';
+      }
     }
-    // Share buttons reflect connection state.
+    // Share buttons reflect whether ANY server is active+connected.
+    const anyConnected = !!(s.servers || []).some(x => x.active && x.connected);
     document.querySelectorAll('#dShare, #dictShareBtn, #digShareBtn').forEach(b => {
-      b.hidden = !s.connected;
+      b.hidden = !anyConnected;
     });
-    if (!s.connected && $('digShareBar')) $('digShareBar').hidden = true;
+    if (!anyConnected && $('digShareBar')) $('digShareBar').hidden = true;
     if (typeof refreshMultiTabVisibility === 'function') refreshMultiTabVisibility();
   } catch (e) { console.error(e); }
 }
 
-async function multiConnect() {
-  const url = $('multiUrl').value.trim();
-  if (!url) { alert('URL を入力してください'); return; }
-  const r = await api('/api/multi/connect', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
+function renderMultiSwitch(s) {
+  const root = $('multiSwitch');
+  if (!root) return;
+  const servers = s?.servers || [];
+  if (!servers.length) {
+    root.hidden = true;
+    root.innerHTML = '';
+    return;
+  }
+  root.hidden = false;
+  // ローカル baseline pill (always-on, just visual reminder) +
+  // one toggleable pill per registered remote.
+  const items = [
+    `<span class="ms-pill ms-local active" title="ローカル DB は常に有効">🏠 ローカル</span>`,
+    ...servers.map(sv => {
+      const cls = sv.active ? 'active' : '';
+      const labelTxt = sv.label || sv.url;
+      const tip = sv.connected
+        ? `${sv.url} (${sv.user?.name || ''})`
+        : `${sv.url} — 未認証`;
+      return `<button type="button" class="ms-pill ${cls}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
+    }),
+  ];
+  root.innerHTML = items.join('');
+  root.querySelectorAll('.ms-pill[data-url]').forEach(btn => {
+    btn.addEventListener('click', () => toggleMultiActive(btn.dataset.url));
   });
-  // Bounce through Cernere via the Hub.
-  location.href = r.authorize_url;
 }
 
-async function multiDisconnect() {
-  if (!confirm('マルチサーバから切断しますか?')) return;
-  await api('/api/multi/disconnect', { method: 'POST' });
+async function toggleMultiActive(url) {
+  // Multi-select: clicking flips this server's membership in the active set.
+  const s = state.multi;
+  if (!s) return;
+  const active = (s.servers || []).filter(x => x.active).map(x => x.url);
+  const set = new Set(active);
+  if (set.has(url)) set.delete(url);
+  else set.add(url);
+  // If the server isn't yet authenticated, kick off OAuth instead.
+  const target = (s.servers || []).find(x => x.url === url);
+  if (target && set.has(url) && !target.connected) {
+    const r = await api('/api/multi/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
+    });
+    location.href = r.authorize_url;
+    return;
+  }
+  await api('/api/multi/active', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls: [...set] }),
+  });
+  await refreshMultiStatus();
+}
+
+function renderMultiServersList(s) {
+  const list = $('multiServersList');
+  if (!list) return;
+  const servers = s?.servers || [];
+  if (!servers.length) {
+    list.innerHTML = '<li class="multi-server-empty">登録されたマルチサーバはありません。下のフォームから追加してください。</li>';
+    return;
+  }
+  list.innerHTML = servers.map(sv => {
+    const status = sv.connected
+      ? `<span class="ms-status ok">✓ ${escapeHtml(sv.user?.name || '')} (${escapeHtml(sv.user?.role || '')})</span>`
+      : '<span class="ms-status">未認証</span>';
+    return `<li class="multi-server-row" data-url="${escapeHtml(sv.url)}">
+      <label class="ms-active-toggle">
+        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${sv.active ? 'checked' : ''} />
+        有効
+      </label>
+      <div class="ms-row-body">
+        <div class="ms-label">${escapeHtml(sv.label)}</div>
+        <div class="ms-url"><code>${escapeHtml(sv.url)}</code></div>
+        <div>${status}</div>
+      </div>
+      <div class="ms-row-actions">
+        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : '接続'}</button>
+        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>切断</button>
+        <button class="danger ghost-sm" data-action="remove" data-url="${escapeHtml(sv.url)}">削除</button>
+      </div>
+    </li>`;
+  }).join('');
+  list.querySelectorAll('input[type=checkbox][data-url]').forEach(cb => {
+    cb.addEventListener('change', () => toggleMultiActive(cb.dataset.url));
+  });
+  list.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => multiServerAction(btn.dataset.action, btn.dataset.url));
+  });
+}
+
+async function multiServerAction(action, url) {
+  if (action === 'connect') {
+    const r = await api('/api/multi/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
+    });
+    location.href = r.authorize_url;
+    return;
+  }
+  if (action === 'disconnect') {
+    if (!confirm(`「${url}」から切断しますか?`)) return;
+    await api('/api/multi/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    await refreshMultiStatus();
+    return;
+  }
+  if (action === 'remove') {
+    if (!confirm(`「${url}」を登録解除しますか?`)) return;
+    await api('/api/multi/servers', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    await refreshMultiStatus();
+    return;
+  }
+}
+
+async function multiAddServer() {
+  const url = ($('multiAddUrl')?.value || '').trim();
+  const label = ($('multiAddLabel')?.value || '').trim();
+  if (!url) { alert('URL を入力してください'); return; }
+  await api('/api/multi/servers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, label: label || url }),
+  });
+  $('multiAddUrl').value = '';
+  $('multiAddLabel').value = '';
   await refreshMultiStatus();
 }
 
@@ -2929,12 +3087,13 @@ async function multiFinishFromUrl() {
   const jwt = params.get('memoria_hub_jwt');
   if (!jwt) return;
   try {
+    // Use the most-recently-touched server as target if no explicit URL.
     const r = await api('/api/multi/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jwt }),
     });
-    showShareToast(`🌐 ${r.user.displayName} としてマルチサーバに接続しました`);
+    showShareToast(`🌐 ${r.user.displayName} (${r.url}) として接続しました`);
   } catch (e) {
     alert(`マルチ接続失敗: ${e.message}`);
   } finally {
@@ -3045,8 +3204,7 @@ async function saveAiSettings() {
 document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
 document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
 document.getElementById('aiSettingsSave')?.addEventListener('click', saveAiSettings);
-document.getElementById('multiConnectBtn')?.addEventListener('click', multiConnect);
-document.getElementById('multiDisconnectBtn')?.addEventListener('click', multiDisconnect);
+document.getElementById('multiAddBtn')?.addEventListener('click', multiAddServer);
 document.getElementById('dShare')?.addEventListener('click', shareCurrentBookmark);
 document.getElementById('dictShareBtn')?.addEventListener('click', shareCurrentDict);
 document.getElementById('digShareBtn')?.addEventListener('click', shareCurrentDig);
