@@ -479,6 +479,27 @@ export function digSessionsForDate(db, dateStr) {
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
+// ── share metadata --------------------------------------------------------
+//
+// Mark a local row as having been forwarded to a multi server. owner_user_id
+// stays NULL on the local side (NULL = "this is mine") — the multi-side row
+// is the one that carries the Cernere user id. shared_origin records the
+// remote we forwarded to so re-shares can be detected later.
+export function markBookmarkShared(db, id, { sharedAt, sharedOrigin }) {
+  db.prepare(`UPDATE bookmarks SET shared_at = ?, shared_origin = ? WHERE id = ?`)
+    .run(sharedAt, sharedOrigin, id);
+}
+
+export function markDigShared(db, id, { sharedAt, sharedOrigin }) {
+  db.prepare(`UPDATE dig_sessions SET shared_at = ?, shared_origin = ? WHERE id = ?`)
+    .run(sharedAt, sharedOrigin, id);
+}
+
+export function markDictionaryShared(db, id, { sharedAt, sharedOrigin }) {
+  db.prepare(`UPDATE dictionary_entries SET shared_at = ?, shared_origin = ? WHERE id = ?`)
+    .run(sharedAt, sharedOrigin, id);
+}
+
 // ── app settings (key/value) ----------------------------------------------
 
 export function getAppSettings(db) {
