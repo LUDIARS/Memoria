@@ -856,27 +856,40 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   fill: none;
 }
 .dig-graph-node { cursor: pointer; }
+/* Shape backing: circle = abstract domain term, rounded square = concrete
+ * entity (product, version, identifier). Both keep a soft fill so the
+ * edges aren't visually drowned. */
+.dig-graph-node .dig-graph-shape {
+  fill: #fff;
+  stroke: #c5cad4;
+  stroke-width: 1.2;
+  transition: fill .12s ease, stroke .12s ease;
+}
+.dig-graph-node.shape-circle .dig-graph-shape {
+  fill: #f4f7ff;
+  stroke: #b6c3ea;
+}
+.dig-graph-node.shape-square .dig-graph-shape {
+  fill: #fff7e9;
+  stroke: #d6b889;
+}
+.dig-graph-node:hover .dig-graph-shape {
+  fill: var(--accent-bg);
+  stroke: var(--accent);
+}
 .dig-graph-node .dig-graph-label {
-  fill: var(--accent);
+  fill: var(--text);
   font-weight: 600;
-  paint-order: stroke;
-  stroke: var(--bg);
-  stroke-width: 4;
-  stroke-linejoin: round;
+  pointer-events: none;
   transition: fill .12s ease;
 }
-.dig-graph-node:hover .dig-graph-label {
-  fill: #1f56c0;
-  text-decoration: underline;
-}
-/* Past-search node: visually connected to a past dig session. Click
- * navigates to that session rather than starting a new dig. */
-.dig-graph-node.explored .dig-graph-label {
-  fill: #8a5a00;
-  stroke: #fff5e1;
-}
-.dig-graph-node.explored:hover .dig-graph-label {
-  fill: #6b4500;
+.dig-graph-node.shape-circle .dig-graph-label { fill: #1f56c0; }
+.dig-graph-node.shape-square .dig-graph-label { fill: #8a5a00; }
+.dig-graph-node:hover .dig-graph-label { text-decoration: underline; }
+/* Past-search node: dashed outline so it's visually "linked elsewhere". */
+.dig-graph-node.explored .dig-graph-shape {
+  stroke-dasharray: 4 3;
+  stroke-width: 1.5;
 }
 
 /* Pick-hint pill: shown above the textarea when a graph node is clicked. */

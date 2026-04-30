@@ -1314,48 +1314,97 @@ function digWordCloud(session, sources) {
     }
   }
 
-  // Force-directed simulation. The viewBox is 720x440; nodes start near
-  // the centre, then repel/attract for a fixed number of iterations. We
-  // run synchronously here — 30 nodes × 150 iter is < 5 ms.
+  // Force-directed simulation. The viewBox is 720x440; nodes start spread
+  // around the centre, then repel/attract until shapes don't overlap.
+  // Each node carries its visual width / height (computed from wrapped text)
+  // and the simulation uses the half-diagonal as a collision radius — that
+  // keeps both circles AND squares clear of each other.
   const W = 720, H = 440;
   const max = words[0].count;
+  const NODE_PAD_X = 8;     // padding between text and shape edge (horiz)
+  const NODE_PAD_Y = 6;     // padding between text and shape edge (vert)
+  const MAX_TEXT_WIDTH_PX = 88;  // wrap above this; still small enough that
+                                  // 30 nodes fit in 720x440 without crowding
+
   const nodes = words.map((w, i) => {
     const angle = (i / words.length) * Math.PI * 2;
+    const fontSize = 11 + 14 * (w.count / max);   // ~11–25 px
+    const past = pastByQuery.get(w.word);
+    const prefix = past ? '↪ ' : '';
+    const display = `${prefix}${w.word}`;
+    const lines = digCloudWrap(display, fontSize, MAX_TEXT_WIDTH_PX);
+    const isCjk = /[぀-ヿ一-鿿]/.test(w.word);
+    const charW = isCjk ? fontSize * 1.0 : fontSize * 0.55;
+    const longest = lines.reduce((m, l) => Math.max(m, l.length), 0);
+    const textW = longest * charW;
+    const lineH = fontSize * 1.18;
+    const textH = lines.length * lineH;
+    // Square nodes get a bit of extra horizontal padding so the rect
+    // doesn't look squashed; circles stay tight (the circle naturally
+    // wastes corner space).
+    const shape = digCloudShape(w.word);
+    const padX = NODE_PAD_X + (shape === 'square' ? 4 : 0);
+    const padY = NODE_PAD_Y;
+    const halfW = textW / 2 + padX;
+    const halfH = textH / 2 + padY;
+    // Collision radius = circumscribed circle around the shape's bbox.
+    // For a square this slightly over-spaces vs. the visible edges, but
+    // it's the simple, always-correct choice and keeps the simulation
+    // stable.
+    const r = Math.sqrt(halfW * halfW + halfH * halfH);
     return {
       i,
       word: w.word,
       count: w.count,
-      x: W / 2 + Math.cos(angle) * 80,
-      y: H / 2 + Math.sin(angle) * 80,
+      shape,
+      lines,
+      fontSize,
+      lineH,
+      halfW, halfH, r,
+      x: W / 2 + Math.cos(angle) * 120,
+      y: H / 2 + Math.sin(angle) * 90,
       vx: 0, vy: 0,
-      r: 18 + 28 * (w.count / max),         // visual radius / font size
     };
   });
-  const REPEL = 1400;
+
   const SPRING = 0.012;
-  const SPRING_LEN = 100;
+  const SPRING_LEN = 110;
   const CENTER_PULL = 0.0025;
-  const DAMP = 0.84;
-  const ITER = 180;
+  const DAMP = 0.86;
+  const COLLISION_PAD = 4;       // gap in px between any two shapes
+  const ITER = 240;
   for (let step = 0; step < ITER; step++) {
+    for (const a of nodes) { a.fx = 0; a.fy = 0; }
+    // Pairwise: hard collision push when shapes (would) overlap, plus a
+    // gentle inverse-square repel beyond the collision distance so the
+    // graph keeps breathing room between disconnected clusters.
     for (let i = 0; i < nodes.length; i++) {
       const a = nodes[i];
-      let fx = (W / 2 - a.x) * CENTER_PULL;
-      let fy = (H / 2 - a.y) * CENTER_PULL;
-      for (let j = 0; j < nodes.length; j++) {
-        if (i === j) continue;
+      a.fx += (W / 2 - a.x) * CENTER_PULL;
+      a.fy += (H / 2 - a.y) * CENTER_PULL;
+      for (let j = i + 1; j < nodes.length; j++) {
         const b = nodes[j];
         let dx = a.x - b.x;
         let dy = a.y - b.y;
         let d2 = dx * dx + dy * dy;
-        if (d2 < 1) { d2 = 1; dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); }
+        if (d2 < 0.01) { dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); d2 = 1; }
         const d = Math.sqrt(d2);
-        const f = REPEL / d2;
-        fx += (dx / d) * f;
-        fy += (dy / d) * f;
+        const minDist = a.r + b.r + COLLISION_PAD;
+        if (d < minDist) {
+          // Hard separation — proportional to overlap.
+          const overlap = (minDist - d);
+          const push = overlap * 0.5;
+          const ux = dx / d, uy = dy / d;
+          a.fx += ux * push; a.fy += uy * push;
+          b.fx -= ux * push; b.fy -= uy * push;
+        } else {
+          // Soft repel for spacing.
+          const f = 600 / d2;
+          const ux = dx / d, uy = dy / d;
+          a.fx += ux * f; a.fy += uy * f;
+          b.fx -= ux * f; b.fy -= uy * f;
+        }
       }
-      a.fx = fx;
-      a.fy = fy;
     }
     for (const e of edges) {
       const a = nodes[e.a], b = nodes[e.b];
@@ -1371,12 +1420,11 @@ function digWordCloud(session, sources) {
       a.vy = (a.vy + a.fy) * DAMP;
       a.x += a.vx;
       a.y += a.vy;
-      // Soft viewport clamp so labels never escape the SVG.
-      const margin = a.r + 4;
-      if (a.x < margin) { a.x = margin; a.vx = 0; }
-      if (a.x > W - margin) { a.x = W - margin; a.vx = 0; }
-      if (a.y < margin) { a.y = margin; a.vy = 0; }
-      if (a.y > H - margin) { a.y = H - margin; a.vy = 0; }
+      // Viewport clamp: shape's bounding box stays inside the SVG.
+      if (a.x - a.halfW < 2)        { a.x = 2 + a.halfW;       a.vx = 0; }
+      if (a.x + a.halfW > W - 2)    { a.x = W - 2 - a.halfW;   a.vx = 0; }
+      if (a.y - a.halfH < 2)        { a.y = 2 + a.halfH;       a.vy = 0; }
+      if (a.y + a.halfH > H - 2)    { a.y = H - 2 - a.halfH;   a.vy = 0; }
     }
   }
 
@@ -1391,19 +1439,33 @@ function digWordCloud(session, sources) {
 
   const nodeSvg = nodes.map(n => {
     const past = pastByQuery.get(n.word);
-    const cls = past ? 'dig-graph-node explored' : 'dig-graph-node';
-    const prefix = past ? '↪ ' : '';
+    const cls = `dig-graph-node ${n.shape === 'square' ? 'shape-square' : 'shape-circle'}${past ? ' explored' : ''}`;
     const titleAttr = past
       ? `過去のディグ「${past.query}」に連結 — クリックでそのセッションへ`
-      : `${n.count} 回出現 — クリックで深堀の入力欄へ送る`;
+      : `${n.count} 回出現 (${n.shape === 'square' ? '具体' : '抽象'}) — クリックで深堀の入力欄へ送る`;
     const dataAttr = past
       ? `data-explored-id="${past.id}"`
       : `data-word="${escapeHtml(n.word)}"`;
-    const fontSize = (12 + 18 * (n.count / max)).toFixed(1);
+    // Shape: circle for abstract terms, rounded square for concrete things.
+    const shapeSvg = n.shape === 'square'
+      ? `<rect class="dig-graph-shape"
+              x="${(-n.halfW).toFixed(1)}" y="${(-n.halfH).toFixed(1)}"
+              width="${(n.halfW * 2).toFixed(1)}" height="${(n.halfH * 2).toFixed(1)}"
+              rx="6" ry="6" />`
+      : `<ellipse class="dig-graph-shape"
+              cx="0" cy="0"
+              rx="${n.halfW.toFixed(1)}" ry="${n.halfH.toFixed(1)}" />`;
+    // Multiline text: tspans stacked vertically, centred.
+    const totalH = n.lines.length * n.lineH;
+    const startY = -totalH / 2 + n.lineH / 2;
+    const tspans = n.lines.map((line, idx) =>
+      `<tspan x="0" y="${(startY + idx * n.lineH).toFixed(1)}">${escapeHtml(line)}</tspan>`
+    ).join('');
     return `<g class="${cls}" ${dataAttr} transform="translate(${n.x.toFixed(1)},${n.y.toFixed(1)})">
       <title>${escapeHtml(titleAttr)}</title>
+      ${shapeSvg}
       <text class="dig-graph-label" text-anchor="middle" dominant-baseline="middle"
-            font-size="${fontSize}">${prefix}${escapeHtml(n.word)}</text>
+            font-size="${n.fontSize.toFixed(1)}">${tspans}</text>
     </g>`;
   }).join('');
 
