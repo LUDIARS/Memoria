@@ -2760,6 +2760,14 @@ function refreshMultiTabVisibility() {
     const badge = $('multiUserBadge');
     if (badge) badge.textContent = `🌐 ${state.multi.user.name} (${state.multi.user.role})`;
   }
+  const role = state.multi?.user?.role;
+  const isMod = role === 'admin' || role === 'moderator';
+  document.querySelectorAll('.multi-mod-only').forEach(t => { t.hidden = !(visible && isMod); });
+}
+
+function isCurrentUserModerator() {
+  const role = state.multi?.user?.role;
+  return role === 'admin' || role === 'moderator';
 }
 
 async function loadMulti() {
@@ -2772,6 +2780,9 @@ async function loadMulti() {
   document.querySelectorAll('.multi-subtab').forEach(b => {
     b.classList.toggle('active', b.dataset.mtab === sub);
   });
+  if (sub === 'moderation') {
+    return loadModeration();
+  }
   let url;
   if (sub === 'bookmarks') url = '/api/multi/proxy/api/shared/bookmarks?limit=50';
   else if (sub === 'digs') url = '/api/multi/proxy/api/shared/digs?limit=50';
@@ -2809,6 +2820,89 @@ async function loadMulti() {
       }
     });
   });
+  $('multiList').querySelectorAll('[data-hide]').forEach(btn => {
+    btn.addEventListener('click', () => moderate('hide', btn.dataset.hide, Number(btn.dataset.id)));
+  });
+}
+
+async function moderate(action, kind, id) {
+  if (action === 'hide') {
+    const reason = prompt('非表示にする理由 (任意):') ?? '';
+    if (reason === null) return;
+    try {
+      await api('/api/multi/proxy/api/shared/moderation/hide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id, reason }),
+      });
+      showShareToast('🛡 非表示にしました');
+      loadMulti();
+    } catch (e) { alert(`失敗: ${e.message}`); }
+    return;
+  }
+  if (action === 'unhide') {
+    try {
+      await api('/api/multi/proxy/api/shared/moderation/unhide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id }),
+      });
+      showShareToast('✓ 復元しました');
+      loadModeration();
+    } catch (e) { alert(`失敗: ${e.message}`); }
+  }
+}
+
+async function loadModeration() {
+  if (!isCurrentUserModerator()) {
+    $('multiList').innerHTML = '<div class="queue-empty">モデレーション権限がありません</div>';
+    return;
+  }
+  let hidden, log;
+  try {
+    [hidden, log] = await Promise.all([
+      api('/api/multi/proxy/api/shared/moderation/hidden?limit=100'),
+      api('/api/multi/proxy/api/shared/moderation/log?limit=100'),
+    ]);
+  } catch (e) {
+    $('multiList').innerHTML = `<div class="queue-empty">取得失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const hiddenItems = hidden.items || [];
+  const logItems = log.items || [];
+  $('multiList').innerHTML = `
+    <h3 class="mod-h">非表示中 (${hiddenItems.length})</h3>
+    ${hiddenItems.length === 0 ? '<div class="queue-empty">非表示エントリなし</div>'
+      : hiddenItems.map(i => `<div class="multi-card mod-hidden-card">
+          <div class="title">${KIND_LABEL[i.kind] || i.kind} — ${escapeHtml(i.label || `id=${i.id}`)}</div>
+          <div class="multi-meta">
+            <span>owner: ${escapeHtml(i.owner_user_name || i.owner_user_id)}</span>
+            <span>hidden ${fmtDate(i.hidden_at)} by ${escapeHtml(i.hidden_by || '?')}</span>
+            ${i.hidden_reason ? `<span>${escapeHtml(i.hidden_reason)}</span>` : ''}
+            <button class="ghost ghost-sm" data-unhide="${i.kind}" data-id="${i.id}">↺ 復元</button>
+          </div>
+        </div>`).join('')}
+    <h3 class="mod-h">監査ログ (最新 ${logItems.length})</h3>
+    <ul class="mod-log">
+      ${logItems.map(e => `<li>
+        <span class="mono">${escapeHtml(e.occurred_at)}</span>
+        <b>${escapeHtml(e.action)}</b> ${escapeHtml(e.resource_kind)}#${e.resource_id}
+        by ${escapeHtml(e.acting_user_id)}
+        ${e.details_json ? `<span class="mod-det">${escapeHtml(JSON.stringify(e.details_json))}</span>` : ''}
+      </li>`).join('')}
+    </ul>
+  `;
+  $('multiList').querySelectorAll('[data-unhide]').forEach(btn => {
+    btn.addEventListener('click', () => moderate('unhide', btn.dataset.unhide, Number(btn.dataset.id)));
+  });
+}
+
+const KIND_LABEL = { bookmark: '📑', dig: '⛏', dict: '📖' };
+
+function modHideButton(kind, id) {
+  return isCurrentUserModerator()
+    ? `<button class="ghost ghost-sm danger" data-hide="${kind}" data-id="${id}">🛡 非表示</button>`
+    : '';
 }
 
 function renderMultiBookmark(b) {
@@ -2821,6 +2915,7 @@ function renderMultiBookmark(b) {
       <span>by ${escapeHtml(b.owner_user_name || b.owner_user_id || '?')}</span>
       <span>${fmtDate(b.shared_at)}</span>
       <button class="ghost ghost-sm" data-download="bookmark" data-id="${b.id}">📥 ローカルへ取込</button>
+      ${modHideButton('bookmark', b.id)}
     </div>
   </div>`;
 }
@@ -2835,6 +2930,7 @@ function renderMultiDig(d) {
       <span>by ${escapeHtml(d.owner_user_name || d.owner_user_id || '?')}</span>
       <span>${fmtDate(d.shared_at)}</span>
       <button class="ghost ghost-sm" data-download="dig" data-id="${d.id}">📥 ローカルへ取込</button>
+      ${modHideButton('dig', d.id)}
     </div>
   </div>`;
 }
@@ -2847,6 +2943,7 @@ function renderMultiDict(e) {
       <span>by ${escapeHtml(e.owner_user_name || e.owner_user_id || '?')}</span>
       <span>${fmtDate(e.shared_at)}</span>
       <button class="ghost ghost-sm" data-download="dict" data-id="${e.id}">📥 ローカルへ取込</button>
+      ${modHideButton('dict', e.id)}
     </div>
   </div>`;
 }
