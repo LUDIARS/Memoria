@@ -1023,12 +1023,15 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   max-height: 88vh;
   overflow-y: auto;
   z-index: 100;
-  background: var(--panel);                /* 説明テキストが白背景で読める */
+  /* 説明テキストが白背景で読める。 後ろのバックドロップ (alpha 0.4) を
+   * 透かさないよう !important で確実に opaque にする。 */
+  background: var(--panel) !important;
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 18px 22px;
   box-shadow: 0 12px 48px rgba(0,0,0,0.2);
 }
+.modal-panel.ext-setup { background: var(--panel) !important; }
 .modal-close {
   /* 右上ピン留めの×。 スマホでも押しやすいよう 44x44 を確保。 */
   position: absolute;
@@ -2048,13 +2051,31 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     width: calc(100vw - 8px) !important;
     max-width: calc(100vw - 8px);
     box-sizing: border-box;
+    padding: 14px 12px;
   }
   .diary-settings { right: 4px; bottom: 4px; }
+
+  /* AI タスク行 (label / provider / model) は PC で 130 / 160 / 1fr の 3 列
+   * grid。 スマホ幅では 290px+ 確保できないので 2 行に再構成: 1 行目は
+   * label を全幅、 2 行目は provider + model を 2 列。 */
+  .ai-task-row {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "label label"
+      "provider model";
+    gap: 6px 8px;
+  }
+  .ai-task-row label { grid-area: label; font-size: 13px; }
+  .ai-task-row select { grid-area: provider; min-width: 0; }
+  .ai-task-row input { grid-area: model; min-width: 0; }
+  .ai-task-row select, .ai-task-row input { width: 100%; }
 
   /* モーダルやドロワー類 (.modal-panel) も同様に。 */
   .modal-panel {
     max-width: calc(100vw - 8px);
+    width: calc(100vw - 8px);
     box-sizing: border-box;
+    padding: 14px 12px;
   }
 }
 
