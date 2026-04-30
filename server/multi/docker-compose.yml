@@ -1,0 +1,53 @@
+# Memoria Hub deploy stack — Phase 7.
+#
+# Brings up Postgres + the Hub container. Reads secrets from `./.env`
+# (copied from `.env.example`). Postgres data is persisted in a named
+# volume.
+#
+# Usage:
+#   cd server/multi
+#   cp .env.example .env  # then edit
+#   docker compose up -d
+#
+# Once healthy, point the local server's "マルチサーバ URL" at this Hub
+# (defaults to http://localhost:5280) and walk through the Cernere OAuth
+# flow.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-memoria}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-memoria}
+      POSTGRES_DB: ${POSTGRES_DB:-memoria_hub}
+    volumes:
+      - memoria-hub-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-memoria} -d ${POSTGRES_DB:-memoria_hub}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # No host port mapping by default — only the hub container needs it.
+
+  hub:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MEMORIA_HUB_PORT: 5280
+      MEMORIA_HUB_BASE: ${MEMORIA_HUB_BASE}
+      MEMORIA_PG_URL: postgres://${POSTGRES_USER:-memoria}:${POSTGRES_PASSWORD:-memoria}@postgres:5432/${POSTGRES_DB:-memoria_hub}
+      MEMORIA_PG_POOL: 10
+      MEMORIA_CERNERE_BASE: ${MEMORIA_CERNERE_BASE}
+      MEMORIA_CERNERE_CLIENT_ID: ${MEMORIA_CERNERE_CLIENT_ID}
+      MEMORIA_CERNERE_CLIENT_SECRET: ${MEMORIA_CERNERE_CLIENT_SECRET}
+      MEMORIA_JWT_SECRET: ${MEMORIA_JWT_SECRET}
+      MEMORIA_HUB_ALLOWED_ORIGINS: ${MEMORIA_HUB_ALLOWED_ORIGINS}
+    ports:
+      - "${MEMORIA_HUB_HOST_PORT:-5280}:5280"
+
+volumes:
+  memoria-hub-pg:
