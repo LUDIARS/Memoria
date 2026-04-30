@@ -198,6 +198,7 @@
       <div id="domainView" class="hidden">
         <div class="dict-bar">
           <input id="domainSearch" type="search" placeholder="ドメイン・サイト名・概要で検索" />
+          <button id="domainRecatalogBtn" class="ghost" title="アクセス記録に出てきた全ドメインのうち、まだ辞書に無いものを fetch + 分類キューに積む">🔄 全走査</button>
         </div>
         <div class="dict-layout">
           <ul id="domainList" class="dict-list"></ul>
@@ -394,6 +395,14 @@
     <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." /></label>
     <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
     <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+    <h4>🧹 メンテナンス</h4>
+    <p class="ai-settings-help">過去のアクセス記録に出てきたドメインのうち、まだドメイン辞書に登録されていないものを fetch + 分類キューに積みます。 force にすると既存行も再分類します (user_edited 列は保護)。</p>
+    <div class="ai-settings-actions">
+      <button id="recatalogAllBtn">アクセス記録から全ドメインを走査</button>
+      <button id="recatalogAllForceBtn" class="ghost" title="既存の辞書行も含めて全部再分類する">force 再分類</button>
+    </div>
+    <div id="recatalogAllStatus" class="multi-status"></div>
+
     <h4>🛠 ランタイム情報 (読み取り専用)</h4>
     <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
     <div id="aiRuntimeInfo" class="ai-runtime-info"></div>

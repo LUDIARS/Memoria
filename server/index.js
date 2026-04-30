@@ -1297,6 +1297,82 @@ app.delete('/api/domains/:domain', (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * page_visits + visit_events に蓄積されたアクセス記録の全ドメインを走査し、
+ * domain_catalog にまだ無いものを fetch + 分類キューに積む。
+ *
+ * - 既存 catalog 行 (status=done/pending/error) は skip
+ * - localhost / 127.0.0.1 等の skip 対象も skip
+ * - body の `force=true` で既存行も強制的に再キュー (regenerate と同じ挙動を一括適用)
+ *
+ * 既存の lazy `maybeQueueDomain` (アクセス時に 1 件ずつ enqueue) を補完する
+ * メンテナンス用 batch。「過去のアクセスのうち未分類のドメインを今すぐ全部分類」
+ * という用途。
+ */
+app.post('/api/domains/recatalog-all', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const force = body && body.force === true;
+
+  // 2 ソースから unique URL を集める
+  const visitedUrls = new Set();
+  for (const r of db.prepare(`SELECT DISTINCT url FROM page_visits`).all()) {
+    if (r.url) visitedUrls.add(r.url);
+  }
+  for (const r of db.prepare(`SELECT DISTINCT url FROM visit_events`).all()) {
+    if (r.url) visitedUrls.add(r.url);
+  }
+
+  // URL → unique domain
+  const seenDomains = new Map(); // domain -> sample url
+  for (const url of visitedUrls) {
+    const domain = extractDomainFromUrl(url);
+    if (!domain) continue;
+    if (!seenDomains.has(domain)) seenDomains.set(domain, url);
+  }
+
+  let queued = 0;
+  let skippedExisting = 0;
+  let skippedHost = 0;
+  for (const [domain, sampleUrl] of seenDomains) {
+    if (shouldSkipDomain(domain)) { skippedHost++; continue; }
+    if (!force && getDomainCatalog(db, domain)) { skippedExisting++; continue; }
+    if (force) {
+      // regenerate と同じ流れ: pending 行を立てて、queue に積む
+      insertDomainPending(db, domain);
+      domainCatalogQueue.enqueue(async () => {
+        const result = await classifyDomain({ domain });
+        if (result.skip || result.dropRow) {
+          deleteDomainCatalog(db, domain);
+          return;
+        }
+        if (!result.ok) {
+          setDomainCatalog(db, domain, { status: 'error', error: result.error });
+          return;
+        }
+        setDomainCatalog(db, domain, {
+          title: result.title, site_name: result.site_name,
+          description: result.description, can_do: result.can_do,
+          kind: result.kind, status: 'done', error: null,
+        });
+      }, { kind: 'domain', domain, title: domain });
+    } else {
+      // dedup 任せ (新ドメインだけが pending 行として入る)
+      maybeQueueDomain(sampleUrl);
+    }
+    queued++;
+  }
+
+  return c.json({
+    scanned_urls: visitedUrls.size,
+    unique_domains: seenDomains.size,
+    queued,
+    skipped_existing: skippedExisting,
+    skipped_host: skippedHost,
+    queue_depth: domainCatalogQueue.depth,
+    force,
+  });
+});
+
 app.get('/api/visits/suggested', (c) => {
   const days = Number(c.req.query('days')) || 30;
   return c.json({ items: listSuggestedVisits(db, { sinceDays: days }) });
