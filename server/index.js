@@ -84,7 +84,7 @@ function maybeQueuePageMetadata(url) {
   if (getPageMetadata(db, url)) return;
   insertPageMetadataPending(db, url);
   pageMetadataQueue.enqueue(async () => {
-    const result = await fetchPageMetadata({ url, claudeBin: CLAUDE_BIN });
+    const result = await fetchPageMetadata({ url });
     if (result.skip) {
       deletePageMetadata(db, url);
       return;
@@ -138,7 +138,7 @@ function maybeQueueDomain(url) {
   if (getDomainCatalog(db, domain)) return;
   insertDomainPending(db, domain);
   domainCatalogQueue.enqueue(async () => {
-    const result = await classifyDomain({ domain, claudeBin: CLAUDE_BIN });
+    const result = await classifyDomain({ domain });
     if (result.skip) {
       deleteDomainCatalog(db, domain);
       return;
@@ -1004,7 +1004,7 @@ app.post('/api/domains/:domain/regenerate', (c) => {
   // protects manual fields.
   insertDomainPending(db, d);
   domainCatalogQueue.enqueue(async () => {
-    const result = await classifyDomain({ domain: d, claudeBin: CLAUDE_BIN });
+    const result = await classifyDomain({ domain: d });
     if (result.skip || result.dropRow) {
       deleteDomainCatalog(db, d);
       return;
@@ -1218,7 +1218,7 @@ async function runDiaryGeneration(dateStr) {
   let result;
   try {
     result = await generateDiary({
-      db, dateStr, metrics, github, notes, claudeBin: CLAUDE_BIN,
+      db, dateStr, metrics, github, notes,
     });
   } catch (e) {
     upsertDiary(db, {
@@ -1373,7 +1373,7 @@ async function runWeeklyGeneration(weekStart) {
   try {
     summary = await generateWeekly({
       weekStart: range.start, weekEnd: range.end,
-      dailyDiaries, githubByRepo, claudeBin: CLAUDE_BIN,
+      dailyDiaries, githubByRepo,
     });
   } catch (e) {
     upsertWeekly(db, {

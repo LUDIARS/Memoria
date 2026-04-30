@@ -4,11 +4,27 @@
 //
 // Per-task config is loaded once at startup (and re-loaded on PATCH) from
 // app_settings. Tasks recognised at the moment:
-//   summarize / dig / dig_preview / cloud_extract / cloud_validate
+//   summarize, dig, dig_preview, cloud_extract, cloud_validate,
+//   domain_classify, page_summary,
+//   diary_work, diary_highlights, diary_weekly
 
 import { spawn } from 'node:child_process';
 
-export const TASKS = ['summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate'];
+export const TASKS = [
+  'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
+  'domain_classify', 'page_summary',
+  'diary_work', 'diary_highlights', 'diary_weekly',
+];
+
+// When the user hasn't explicitly chosen a model for a task, fall back to these.
+// Sonnet for cheap repeated work; Opus 1M for the integrative narratives.
+const TASK_DEFAULT_MODELS = {
+  domain_classify: 'sonnet',
+  page_summary: 'sonnet',
+  diary_work: 'sonnet',
+  diary_highlights: 'claude-opus-4-7[1m]',
+  diary_weekly: 'claude-opus-4-7[1m]',
+};
 
 export const PROVIDERS = {
   claude: {
@@ -118,7 +134,8 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }) {
   // CLI providers
   const bin = cfg.bins[provider] || p.defaultBin;
   const args = ['-p'];
-  if (taskCfg.model && p.supportsModel) args.push('--model', taskCfg.model);
+  const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || '';
+  if (modelToUse && p.supportsModel) args.push('--model', modelToUse);
   if (tools && p.supportsTools) args.push('--allowedTools', tools.join(','));
   return runCli({ bin, args, prompt, timeoutMs, label: provider });
 }
