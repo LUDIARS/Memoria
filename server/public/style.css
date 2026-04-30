@@ -106,17 +106,29 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .layout > .content { flex: 1 1 auto; min-width: 0; }
 .layout > .detail  { flex: 0 0 360px; }
 
-/* Categories live INSIDE the bookmarks page, below the cards. They sit in
- * normal document flow — no sticky positioning, no layout-level sidebar —
- * so the sticky tab nav cannot collide with them. Other tabs never render
- * this section because it lives inside #bookmarksView. */
+/* Bookmarks tab gets a 2-pane flex inside #bookmarksView: a fixed-width
+ * left rail with the category list and a flexible cards pane on the
+ * right. This is scoped to the bookmarks tab — other tabs don't render
+ * the rail because the markup lives inside #bookmarksView.
+ * `min-width: 0` on the cards pane lets it shrink as needed when the
+ * detail aside is open. */
+.bookmarks-layout {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
 .bookmarks-categories {
-  margin: 0 0 16px;
-  padding: 10px 14px;
+  flex: 0 0 170px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
+  padding: 12px;
   box-shadow: var(--shadow);
+  align-self: flex-start;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
 }
 .bookmarks-categories h3 {
   font-size: 12px;
@@ -130,43 +142,40 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   padding: 0;
   margin: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
 }
 .bookmarks-categories li {
-  display: inline-flex;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: transparent;
   color: var(--text);
-  border-radius: 999px;
-  padding: 4px 12px;
+  border-radius: 6px;
+  padding: 5px 8px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
 }
 .bookmarks-categories li:hover { background: #f0f2f7; }
 .bookmarks-categories li.active {
   background: var(--accent-bg);
-  border-color: var(--accent);
   color: var(--accent);
   font-weight: 600;
 }
 .bookmarks-categories li .count {
-  background: var(--panel);
-  border: 1px solid var(--border);
   color: var(--muted);
-  border-radius: 999px;
-  padding: 0 6px;
   font-size: 11px;
   min-width: 18px;
-  text-align: center;
+  text-align: right;
 }
 .bookmarks-categories li.active .count {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  color: var(--accent);
+}
+.bookmarks-main {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .content { padding: 16px; overflow-y: auto; position: relative; }
@@ -1695,6 +1704,22 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   /* On mobile the detail aside is positioned as a fullscreen overlay
    * (see .detail rule below) so it doesn't need a flex slot. */
   .layout > .detail { flex: 0 0 auto; }
+
+  /* Categories rail collapses to a horizontal chip strip on mobile. */
+  .bookmarks-layout { flex-direction: column; gap: 12px; }
+  .bookmarks-categories {
+    flex: 0 0 auto;
+    position: static;
+    max-height: none;
+  }
+  .bookmarks-categories ul { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .bookmarks-categories li {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 12px;
+  }
+  .bookmarks-categories li .count { min-width: auto; padding-left: 4px; }
 
   .detail {
     position: fixed;

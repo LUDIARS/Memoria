@@ -2410,17 +2410,29 @@ function renderVisits() {
     });
   });
   list.querySelectorAll('.visits-domain-link').forEach(a => {
-    a.addEventListener('click', (e) => {
+    a.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const domain = a.dataset.domain;
       if (!domain) return;
       switchTab('domain');
-      // loadDomainCatalog runs from switchTab's tab handler; await its
-      // completion before pinning the entry so the list highlights it.
-      Promise.resolve().then(async () => {
-        try { await loadDomainEntry(domain); } catch (err) { console.error(err); }
-      });
+      // Wait for loadDomainCatalog (kicked off by switchTab) to settle
+      // so the list is populated before we pin the entry.
+      await new Promise(r => setTimeout(r, 0));
+      try {
+        await loadDomainEntry(domain);
+      } catch (err) {
+        // 404: domain hasn't been catalogued yet. Queue a fresh
+        // classification + show a placeholder.
+        try {
+          await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
+          flashToast(`「${domain}」を分類キューに追加しました`);
+          await loadDomainCatalog();
+        } catch (err2) {
+          console.error(err2);
+          alert(`ドメイン情報の取得失敗: ${err2.message}`);
+        }
+      }
     });
   });
 }
