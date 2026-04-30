@@ -11,7 +11,7 @@
 
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { insertServerEvent } from './db.js';
+import { insertServerEvent } from '../db/index.js';
 
 const TICK_MS = 1000;
 const RESTART_GRACE_MS = 5 * 60 * 1000; // 5 minutes — see DOWNTIME_THRESHOLD_MS
