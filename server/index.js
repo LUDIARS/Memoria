@@ -33,9 +33,10 @@ import {
 import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
-import { runDig, runDigPreview, listSearchEngines } from './dig.js';
+import { runDig, runDigPreview, listSearchEngines, deriveDigTheme } from './dig.js';
 import {
   insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
+  listDigThemes, digThemeContext,
   digSessionsForDate,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
   getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
@@ -466,8 +467,12 @@ app.delete('/api/recommendations/dismissals', (c) => {
 // strictly one job at a time so the user can watch progress in 作業リスト.
 const digQueue = new FifoQueue();
 
-function enqueueDig(id, query, searchEngine = 'default') {
+function enqueueDig(id, query, { searchEngine = 'default', theme = null } = {}) {
   digQueue.enqueue(async () => {
+    // 同テーマの過去セッションから topics / sources / queries を集めて、
+    // LLM プロンプトに 「これまで掘った領域」 として注入。 テーマ無しなら空。
+    const themeCtx = theme ? digThemeContext(db, theme) : null;
+
     // Phase 1: SERP preview (fast — no page fetches). Persisted as soon as
     // it lands so the FE can render before the deep claude pass finishes.
     runDigPreview({ query, searchEngine })
@@ -475,13 +480,13 @@ function enqueueDig(id, query, searchEngine = 'default') {
       .catch(err => console.warn(`[dig#${id}] preview failed: ${err.message}`));
     // Phase 2: full deep analysis with WebFetch (existing behavior).
     try {
-      const result = await runDig({ query, searchEngine });
+      const result = await runDig({ query, searchEngine, theme, themeContext: themeCtx });
       setDigResult(db, id, { status: 'done', result });
     } catch (e) {
       setDigResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
       throw e;
     }
-  }, { kind: 'dig', sessionId: id, title: query, search_engine: searchEngine });
+  }, { kind: 'dig', sessionId: id, title: theme ? `[${theme}] ${query}` : query, search_engine: searchEngine });
 }
 
 app.post('/api/dig', async (c) => {
@@ -489,17 +494,27 @@ app.post('/api/dig', async (c) => {
   const query = body?.query;
   if (!query || typeof query !== 'string') return c.json({ error: 'query required' }, 400);
   const searchEngine = typeof body.search_engine === 'string' ? body.search_engine : 'default';
-  const id = insertDigSession(db, query);
-  enqueueDig(id, query, searchEngine);
-  return c.json({ id, queued: true, search_engine: searchEngine });
+  // テーマ: フロントから明示指定があればそれを採用。 無ければ query から
+  // 簡易抽出 (先頭の意味のあるフレーズ)。
+  const theme = (typeof body.theme === 'string' && body.theme.trim())
+    ? body.theme.trim().slice(0, 60)
+    : deriveDigTheme(query);
+  const id = insertDigSession(db, query, theme);
+  enqueueDig(id, query, { searchEngine, theme });
+  return c.json({ id, queued: true, theme, search_engine: searchEngine });
 });
 
 app.get('/api/dig/engines', (c) => {
   return c.json({ items: listSearchEngines() });
 });
 
+app.get('/api/dig/themes', (c) => {
+  return c.json({ items: listDigThemes(db) });
+});
+
 app.get('/api/dig', (c) => {
-  return c.json({ items: listDigSessions(db) });
+  const theme = c.req.query('theme');
+  return c.json({ items: listDigSessions(db, theme ? { theme } : {}) });
 });
 
 app.get('/api/dig/:id', (c) => {

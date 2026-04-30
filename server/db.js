@@ -244,6 +244,11 @@ export function openDb(dbPath) {
   if (!dsCols.includes('preview_json')) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN preview_json TEXT`);
   }
+  if (!dsCols.includes('theme')) {
+    db.exec(`ALTER TABLE dig_sessions ADD COLUMN theme TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_dig_sessions_theme
+              ON dig_sessions(theme, created_at DESC)`);
+  }
 
   const deCols = db.prepare(`PRAGMA table_info(diary_entries)`).all().map(c => c.name);
   if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
@@ -453,8 +458,10 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
 
 // ── dig sessions ----------------------------------------------------------
 
-export function insertDigSession(db, query) {
-  return db.prepare(`INSERT INTO dig_sessions (query) VALUES (?)`).run(query).lastInsertRowid;
+export function insertDigSession(db, query, theme = null) {
+  return db
+    .prepare(`INSERT INTO dig_sessions (query, theme) VALUES (?, ?)`)
+    .run(query, theme || null).lastInsertRowid;
 }
 
 export function setDigResult(db, id, { status, result, error }) {
@@ -479,11 +486,70 @@ export function getDigSession(db, id) {
   };
 }
 
-export function listDigSessions(db, limit = 30) {
+export function listDigSessions(db, { theme, limit = 30 } = {}) {
+  if (theme) {
+    return db.prepare(`
+      SELECT id, query, theme, status, created_at FROM dig_sessions
+      WHERE theme = ?
+      ORDER BY id DESC LIMIT ?
+    `).all(theme, limit);
+  }
   return db.prepare(`
-    SELECT id, query, status, created_at FROM dig_sessions
+    SELECT id, query, theme, status, created_at FROM dig_sessions
     ORDER BY id DESC LIMIT ?
   `).all(limit);
+}
+
+/// テーマ一覧 (各テーマのセッション数 + 最新時刻 + 直近クエリ)。
+/// theme = NULL のセッションは除外。
+export function listDigThemes(db, limit = 60) {
+  return db.prepare(`
+    SELECT
+      theme                      AS theme,
+      COUNT(*)                   AS session_count,
+      MAX(created_at)            AS last_at,
+      (SELECT query FROM dig_sessions s2
+        WHERE s2.theme = s.theme
+        ORDER BY s2.created_at DESC LIMIT 1) AS last_query
+    FROM dig_sessions s
+    WHERE theme IS NOT NULL AND theme <> ''
+    GROUP BY theme
+    ORDER BY last_at DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+/// あるテーマで過去に取得した topics / source 情報をまとめる。
+/// LLM プロンプトに渡すコンテキスト用。
+export function digThemeContext(db, theme, { limit = 8 } = {}) {
+  const sessions = db.prepare(`
+    SELECT id, query, result_json FROM dig_sessions
+    WHERE theme = ? AND status = 'done' AND result_json IS NOT NULL
+    ORDER BY id DESC LIMIT ?
+  `).all(theme, limit);
+  const topics = new Map(); // topic -> count
+  const sources = []; // {url, title}
+  const queries = [];
+  for (const s of sessions) {
+    queries.push(s.query);
+    const r = safeParse(s.result_json);
+    if (!r) continue;
+    for (const src of r.sources || []) {
+      if (src.url && sources.length < 30) {
+        sources.push({ url: src.url, title: src.title || '' });
+      }
+      for (const t of src.topics || []) {
+        const k = String(t).trim().toLowerCase();
+        if (!k) continue;
+        topics.set(k, (topics.get(k) || 0) + 1);
+      }
+    }
+  }
+  const topTopics = [...topics.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([word, count]) => ({ word, count }));
+  return { queries, topics: topTopics, sources };
 }
 
 /** Dig sessions whose created_at falls on the given local date. */

@@ -33,9 +33,46 @@ function engineInstruction(engine, query) {
   ].join('\n');
 }
 
-const PROMPT_TEMPLATE = ({ query, engine }) => [
+function themeContextBlock(theme, themeContext) {
+  if (!theme || !themeContext) return '';
+  const { queries = [], topics = [], sources = [] } = themeContext;
+  if (!queries.length && !topics.length && !sources.length) {
+    return [
+      '',
+      `THEME: "${theme}" (まだ過去のディグなし — 最初の調査)`,
+      '',
+    ].join('\n');
+  }
+  const lines = [''];
+  lines.push(`THEME: "${theme}"`);
+  lines.push('THIS IS PART OF AN ONGOING THEME — 既に取得済の文脈は以下:');
+  if (queries.length) {
+    lines.push('  過去のクエリ:');
+    for (const q of queries.slice(0, 6)) {
+      lines.push(`    - ${q}`);
+    }
+  }
+  if (topics.length) {
+    const top = topics.slice(0, 16).map(t => t.word).join(', ');
+    lines.push(`  既知のキーワード: ${top}`);
+  }
+  if (sources.length) {
+    lines.push('  既出のソース (重複は避ける):');
+    for (const s of sources.slice(0, 8)) {
+      lines.push(`    - ${s.url}`);
+    }
+  }
+  lines.push(
+    '注意: 既出のキーワード / ソースを単純に再掲しない。 上記文脈と差分を生む新しい視点 / 新しいソースを優先せよ。'
+  );
+  lines.push('');
+  return lines.join('\n');
+}
+
+const PROMPT_TEMPLATE = ({ query, engine, theme, themeContext }) => [
   'You are a research agent. Use Web search and fetching to gather authoritative sources for the topic the user provides.',
   engineInstruction(engine, query),
+  themeContextBlock(theme, themeContext),
   'Return STRICTLY one JSON object and nothing else (no prose, no code fences):',
   '',
   '{',
@@ -56,9 +93,10 @@ const PROMPT_TEMPLATE = ({ query, engine }) => [
   '- ドメインや視点が偏らないよう多様性を意識する。',
   '- 各ソースの topics は 2〜4 個。後でグラフ化に使う。',
   '- 重複 URL や無関係な広告ページは除外。',
+  theme ? '- THEME 文脈の既出ソースは含めない (上の THEME ブロック参照)。' : '',
   '',
   `QUERY: ${query}`,
-].join('\n');
+].filter(Boolean).join('\n');
 
 const PREVIEW_PROMPT_TEMPLATE = ({ query, engine }) => [
   'You are returning a SERP-style preview as fast as possible.',
@@ -97,13 +135,46 @@ export async function runDigPreview({ query, searchEngine = 'default', timeoutMs
   return parsePreview(stdout);
 }
 
-export async function runDig({ query, searchEngine = 'default', timeoutMs = 600_000 }) {
+export async function runDig({
+  query, searchEngine = 'default', timeoutMs = 600_000,
+  theme = null, themeContext = null,
+}) {
   const engine = engineFor(searchEngine);
-  const prompt = PROMPT_TEMPLATE({ query, engine });
+  const prompt = PROMPT_TEMPLATE({ query, engine, theme, themeContext });
   const stdout = await runLlm({
     task: 'dig', prompt, tools: ['WebSearch', 'WebFetch'], timeoutMs,
   });
   return parseJsonStrict(stdout);
+}
+
+/// ユーザーの query から軽量にテーマ文字列を抽出する。
+/// クライアント / API 双方が同じロジックで揃えられるよう pure 関数。
+///
+/// 方針: 改行や 「。」 で区切った最初のセンテンスから
+///   - URL を除去
+///   - 末尾の助詞 / 句読点を削る
+///   - 30 文字以内に丸める
+///   - 空なら null を返す (= テーマ未設定として扱う)
+export function deriveDigTheme(query) {
+  if (typeof query !== 'string') return null;
+  let text = query.trim();
+  if (!text) return null;
+  // URL を除去
+  text = text.replace(/https?:\/\/\S+/g, ' ');
+  // 改行 / 句点 / ? で最初の塊を取る
+  const first = text.split(/[\n。.\?？]/)[0].trim();
+  // 連続スペースを 1 つに
+  let theme = first.replace(/\s+/g, ' ').trim();
+  if (!theme) return null;
+  // 末尾の助詞 / お願い文をざっくり削る (フォーマルでなく十分)
+  // - について教えて / について調べて / に関して / を教えて / を調べて
+  // - の話 / の件 / とは
+  theme = theme
+    .replace(/(について|に関して)?(教えて|調べて|まとめて|お願い|して?ほしい)?$/u, '')
+    .replace(/(について|に関して|を調べて|を教えて|の話|の件|とは)$/u, '')
+    .trim();
+  if (theme.length > 30) theme = theme.slice(0, 30);
+  return theme || null;
 }
 
 function parsePreview(raw) {
