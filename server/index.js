@@ -946,22 +946,33 @@ app.post('/api/multi/disconnect', (c) => {
   return c.json({ ok: true });
 });
 
-// Read-only proxy for the multi server's GET endpoints. Forwards path +
-// query through with the saved JWT so the SPA can browse Hub content
-// without needing CORS or a second login.
-app.get('/api/multi/proxy/*', async (c) => {
+// Proxy for the multi server. Forwards path + query through with the saved
+// JWT so the SPA can call the Hub without dealing with CORS or a second
+// login. GET / POST are both allowed; POST is restricted to the
+// `/api/shared/moderation/*` endpoints since every other write should go
+// through `/api/multi/share` (which also updates the local row).
+async function proxyMulti(c, method) {
   const state = readMultiState(db);
   if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
   const path = c.req.path.replace('/api/multi/proxy', '');
+  if (method === 'POST' && !path.startsWith('/api/shared/moderation/')) {
+    return c.json({ error: 'forbidden_proxy_write' }, 403);
+  }
   const qs = new URL(c.req.url).search;
   const upstream = `${state.url.replace(/\/$/, '')}${path}${qs}`;
+  const init = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${state.jwt}`,
+      'Accept': 'application/json',
+    },
+  };
+  if (method === 'POST') {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = await c.req.text();
+  }
   try {
-    const res = await fetch(upstream, {
-      headers: {
-        'Authorization': `Bearer ${state.jwt}`,
-        'Accept': 'application/json',
-      },
-    });
+    const res = await fetch(upstream, init);
     const text = await res.text();
     return new Response(text, {
       status: res.status,
@@ -972,7 +983,9 @@ app.get('/api/multi/proxy/*', async (c) => {
   } catch (e) {
     return c.json({ error: `proxy failed: ${e.message}` }, 502);
   }
-});
+}
+app.get('/api/multi/proxy/*', (c) => proxyMulti(c, 'GET'));
+app.post('/api/multi/proxy/*', (c) => proxyMulti(c, 'POST'));
 
 // Body: { kind: 'bookmark' | 'dig' | 'dict', id }
 app.post('/api/multi/share', async (c) => {
