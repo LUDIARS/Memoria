@@ -62,6 +62,14 @@ import {
   getLlmConfig, loadLlmConfigFromSettings, settingsPatchFromConfig,
 } from './llm.js';
 import { getAppSettings, setAppSettings } from './db.js';
+import {
+  markBookmarkShared, markDigShared, markDictionaryShared,
+} from './db.js';
+import {
+  readMultiState, isConnected,
+  saveMultiUrl, saveMultiSession, clearMultiSession,
+  fetchMe, shareBookmark, shareDig, shareDictionary,
+} from './local/multi-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -881,6 +889,97 @@ app.patch('/api/llm/config', async (c) => {
   setAppSettings(db, patch);
   loadLlmConfigFromSettings(getAppSettings(db));
   return c.json({ ok: true });
+});
+
+// ---- multi server (Memoria Hub) integration --------------------------------
+//
+// Phase 3: 📤 share button + connection management. The local server keeps a
+// JWT in app_settings and forwards local resources through /api/shared/*.
+
+app.get('/api/multi/status', (c) => {
+  const state = readMultiState(db);
+  return c.json({
+    connected: isConnected(state),
+    url: state.url,
+    user: isConnected(state)
+      ? { id: state.userId, name: state.userName, role: state.role }
+      : null,
+    connected_at: state.connectedAt,
+  });
+});
+
+app.post('/api/multi/connect', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.url) return c.json({ error: 'url required' }, 400);
+  saveMultiUrl(db, body.url);
+  // The browser drives the OAuth dance — we just hand back the URL it
+  // should bounce through, plus the redirect that Cernere/Hub will use.
+  const redirectBack = body.redirect_uri || 'http://localhost:5180/?multi=connected';
+  const start = `${body.url.replace(/\/$/, '')}/api/auth/start?redirect_uri=${encodeURIComponent(redirectBack)}`;
+  return c.json({ ok: true, authorize_url: start });
+});
+
+app.post('/api/multi/finish', async (c) => {
+  // Called by the SPA after it pulls `memoria_hub_jwt` out of the URL
+  // hash/query that Cernere → Hub forwarded back. Verifies + stashes.
+  const body = await c.req.json().catch(() => null);
+  if (!body?.jwt) return c.json({ error: 'jwt required' }, 400);
+  const state = { ...readMultiState(db), jwt: body.jwt };
+  if (!state.url) return c.json({ error: 'multi url not configured' }, 400);
+  // Round-trip /api/me to validate the token and pull the user info.
+  let me;
+  try { me = await fetchMe(state); }
+  catch (e) { return c.json({ error: `verify failed: ${e.message}` }, 401); }
+  saveMultiSession(db, {
+    jwt: body.jwt,
+    userId: me.userId,
+    userName: me.displayName,
+    role: me.role,
+  });
+  return c.json({ ok: true, user: me });
+});
+
+app.post('/api/multi/disconnect', (c) => {
+  clearMultiSession(db);
+  return c.json({ ok: true });
+});
+
+// Body: { kind: 'bookmark' | 'dig' | 'dict', id }
+app.post('/api/multi/share', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.kind || body.id == null) return c.json({ error: 'kind+id required' }, 400);
+  const state = readMultiState(db);
+  if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
+
+  try {
+    if (body.kind === 'bookmark') {
+      const b = getBookmark(db, body.id);
+      if (!b) return c.json({ error: 'not_found' }, 404);
+      const r = await shareBookmark(state, b);
+      markBookmarkShared(db, body.id, { sharedAt: r.shared_at, sharedOrigin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
+    if (body.kind === 'dig') {
+      const d = getDigSession(db, body.id);
+      if (!d) return c.json({ error: 'not_found' }, 404);
+      const r = await shareDig(state, {
+        query: d.query, status: d.status, result: d.result,
+      });
+      markDigShared(db, body.id, { sharedAt: r.shared_at, sharedOrigin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
+    if (body.kind === 'dict') {
+      const e = getDictionaryEntry(db, body.id);
+      if (!e) return c.json({ error: 'not_found' }, 404);
+      const r = await shareDictionary(state, e);
+      markDictionaryShared(db, body.id, { sharedAt: r.shared_at, sharedOrigin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
+    return c.json({ error: 'unknown kind' }, 400);
+  } catch (e) {
+    console.error('[multi/share]', e);
+    return c.json({ error: e.message }, e.status || 500);
+  }
 });
 
 // ---- server events / uptime -----------------------------------------------
