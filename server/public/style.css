@@ -107,38 +107,36 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .layout > .content { flex: 1 1 auto; min-width: 0; }
 .layout > .detail  { flex: 0 0 360px; }
 
-/* Bookmarks tab gets a 2-pane flex inside #bookmarksView: a fixed-width
- * left rail with the category list and a flexible cards pane on the
- * right. This is scoped to the bookmarks tab — other tabs don't render
- * the rail because the markup lives inside #bookmarksView.
- * `min-width: 0` on the cards pane lets it shrink as needed when the
- * detail aside is open. */
-.bookmarks-layout {
-  display: flex;
+/* Bookmarks tab: 2-pane left/right.
+ *   .bookmarks-categories — fixed-width rail on the left
+ *   .bookmarks-main       — flexible cards pane on the right
+ * Scoped to #bookmarksView so other tabs don't render this. */
+#bookmarksView .bookmarks-layout {
+  display: flex !important;
+  flex-direction: row !important;
   gap: 16px;
-  align-items: stretch;
+  align-items: flex-start;
+  width: 100%;
 }
-.bookmarks-categories {
-  flex: 0 0 170px;
+#bookmarksView .bookmarks-categories {
+  flex: 0 0 170px !important;
+  width: 170px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
   box-shadow: var(--shadow);
-  align-self: flex-start;
-  position: sticky;
-  top: 0;
-  max-height: calc(100vh - 140px);
-  overflow-y: auto;
+  /* No sticky — keeps layout simple and avoids interactions with the
+   * sticky tab nav above. The rail just scrolls with the cards. */
 }
-.bookmarks-categories h3 {
+#bookmarksView .bookmarks-categories h3 {
   font-size: 12px;
   text-transform: uppercase;
   color: var(--muted);
   margin: 0 0 8px;
   letter-spacing: 0.04em;
 }
-.bookmarks-categories ul {
+#bookmarksView .bookmarks-categories ul {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -146,7 +144,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   flex-direction: column;
   gap: 2px;
 }
-.bookmarks-categories li {
+#bookmarksView .bookmarks-categories li {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -159,24 +157,25 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   font-size: 13px;
   line-height: 1.4;
 }
-.bookmarks-categories li:hover { background: #f0f2f7; }
-.bookmarks-categories li.active {
+#bookmarksView .bookmarks-categories li:hover { background: #f0f2f7; }
+#bookmarksView .bookmarks-categories li.active {
   background: var(--accent-bg);
   color: var(--accent);
   font-weight: 600;
 }
-.bookmarks-categories li .count {
+#bookmarksView .bookmarks-categories li .count {
   color: var(--muted);
   font-size: 11px;
   min-width: 18px;
   text-align: right;
 }
-.bookmarks-categories li.active .count {
+#bookmarksView .bookmarks-categories li.active .count {
   color: var(--accent);
 }
-.bookmarks-main {
-  flex: 1 1 auto;
+#bookmarksView .bookmarks-main {
+  flex: 1 1 auto !important;
   min-width: 0;
+  width: 100%;
 }
 
 .content { padding: 16px; overflow-y: auto; position: relative; }
@@ -184,13 +183,14 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   display: flex;
   gap: 4px;
   margin: -16px -16px 16px;
-  padding: 6px 12px 0;
+  padding: 8px 12px 0;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--panel);
   position: sticky;
   top: -16px;
   z-index: 6;
   align-items: stretch;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
 }
 .tabs-scroll {
   display: flex;

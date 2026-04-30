@@ -21,6 +21,19 @@ function extractDomain(url) {
   try { return new URL(String(url)).hostname.toLowerCase(); } catch { return null; }
 }
 
+// SQLite stores datetime() values as UTC strings without a timezone marker
+// ("2026-04-27 02:00:00"). new Date() on that string parses it as local
+// time — wrong by the local TZ offset. Append `Z` so JS parses it as UTC,
+// then standard accessors (getHours(), toLocaleString(), etc.) return the
+// correct LOCAL values.
+function parseSqliteUtc(s) {
+  if (!s) return null;
+  const iso = String(s).replace(' ', 'T');
+  // Already has TZ info — leave it alone.
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) return new Date(iso);
+  return new Date(iso + 'Z');
+}
+
 /**
  * Aggregate the day from BOTH sources together (no URL-level dedup).
  * - visit_events: per-event log. 1 row = 1 hit at its precise hour.
@@ -39,7 +52,7 @@ export function aggregateDay(db, dateStr) {
   // 1) Per-event log
   const events = visitEventsForDate(db, dateStr);
   for (const e of events) {
-    const localHour = new Date(e.visited_at.replace(' ', 'T')).getHours();
+    const localHour = parseSqliteUtc(e.visited_at)?.getHours();
     const hour = Number.isFinite(localHour) ? localHour : 0;
     hourlyVisits[hour] += 1;
     if (!firstSeen || e.visited_at < firstSeen) firstSeen = e.visited_at;
@@ -63,7 +76,7 @@ export function aggregateDay(db, dateStr) {
     if (!domain) continue;
     let hour = 0;
     try {
-      hour = new Date(v.last_seen_at.replace(' ', 'T')).getHours();
+      hour = parseSqliteUtc(v.last_seen_at)?.getHours();
       if (!Number.isFinite(hour)) hour = 0;
     } catch {}
     hourlyVisits[hour] += 1;
@@ -557,7 +570,7 @@ function buildUrlList(db, dateStr) {
   let lastUrl = '';
   let lastTs = 0;
   for (const e of events) {
-    const ts = new Date(e.visited_at.replace(' ', 'T')).getTime();
+    const ts = parseSqliteUtc(e.visited_at)?.getTime() || 0;
     if (e.url === lastUrl && Math.abs(ts - lastTs) < 120_000) continue; // collapse <2min
     lines.push(formatUrlLine(e.visited_at, e.url));
     lastUrl = e.url;
@@ -568,9 +581,14 @@ function buildUrlList(db, dateStr) {
 }
 
 function formatUrlLine(ts, url) {
-  // ts may be 'YYYY-MM-DD HH:MM:SS' (sqlite) — pull HH:MM
-  const m = String(ts).match(/(\d{2}:\d{2})/);
-  return `${m ? m[1] : '??:??'} ${url}`;
+  // ts is a SQLite UTC datetime ('YYYY-MM-DD HH:MM:SS'). Parse as UTC then
+  // emit the local HH:MM so claude sees the user's wall-clock time, not
+  // UTC offset by the local timezone.
+  const d = parseSqliteUtc(ts);
+  if (!d || isNaN(d.getTime())) return `??:?? ${url}`;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm} ${url}`;
 }
 
 function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
