@@ -91,10 +91,15 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 
 .layout {
   display: grid;
-  grid-template-columns: 1fr 360px;
+  /* `minmax(0, 1fr)` instead of plain `1fr`: the latter has implicit
+   * min-width: auto, which shrinks the column when a child overflows
+   * its track (the sticky tab nav with negative margin used to squeeze
+   * the bookmarks view down to ~170px). minmax(0,…) lets the column
+   * fill the remaining space regardless of content min-size. */
+  grid-template-columns: minmax(0, 1fr) 360px;
   height: calc(100vh - 53px);
 }
-.layout:has(.detail.hidden) { grid-template-columns: 1fr; }
+.layout:has(.detail.hidden) { grid-template-columns: minmax(0, 1fr); }
 
 /* Categories live INSIDE the bookmarks page, below the cards. They sit in
  * normal document flow — no sticky positioning, no layout-level sidebar —
