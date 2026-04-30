@@ -55,16 +55,55 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-.topbar-controls { display: flex; gap: 8px; margin-left: auto; align-items: center; flex: 1 1 auto; justify-content: flex-end; }
-.topbar-controls select, .topbar-controls input[type=search] {
+.topbar-controls { display: flex; gap: 8px; margin-left: auto; align-items: center; }
+.topbar-settings { margin-left: auto; }
+
+/* Multi-server switch — registered remote pills next to the brand. */
+.multi-switch {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-left: 8px;
+}
+.multi-switch[hidden] { display: none; }
+.multi-switch .ms-pill {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 80ms, border-color 80ms, color 80ms;
+}
+.multi-switch .ms-pill:hover { background: #f0f2f7; }
+.multi-switch .ms-pill.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Bookmark view toolbar — sort + search + categories hamburger row. */
+.bookmarks-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.bookmarks-toolbar select,
+.bookmarks-toolbar input[type=search] {
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--panel);
   font-size: 13px;
 }
-.topbar-controls input[type=search] { min-width: 240px; flex: 0 1 320px; }
-.topbar-settings { margin-left: auto; }
+.bookmarks-toolbar input[type=search] { flex: 1 1 280px; min-width: 0; }
+.bookmarks-toolbar .categories-toggle { display: none; }
 
 button, .ghost, .file-btn {
   font-size: 13px;
@@ -1762,21 +1801,43 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
    * (see .detail rule below) so it doesn't need a flex slot. */
   .layout > .detail { flex: 0 0 auto; }
 
-  /* Keep the 2-pane left-right layout on mobile too (per user direction
-   * "左右ペインで"). The rail just shrinks to ~120px so the cards still
-   * have room. Sticky positioning is dropped because viewport-height
-   * sticky is awkward on small screens with the URL bar showing. */
-  .bookmarks-layout { gap: 10px; }
-  .bookmarks-categories {
-    flex: 0 0 120px;
-    padding: 8px;
-    position: static;
-    max-height: none;
+  /* Mobile: drop the rail in favour of a hamburger that opens a floating
+   * drawer. Tapping ☰ カテゴリ in the bookmarks toolbar reveals the
+   * category list as an overlay anchored under the toolbar; tapping
+   * outside or selecting a category dismisses it. */
+  #bookmarksView .bookmarks-layout { display: block !important; gap: 0; }
+  .bookmarks-toolbar .categories-toggle { display: inline-block; }
+
+  #bookmarksView .bookmarks-categories {
+    display: none;
+    position: fixed;
+    top: 110px;             /* below sticky topbar (~53px) + tabs (~45px) */
+    left: 12px;
+    right: 12px;
+    width: auto;
+    flex: 0 0 auto !important;
+    max-height: 60vh;
+    overflow-y: auto;
+    z-index: 40;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.18);
+  }
+  #bookmarksView.cat-open .bookmarks-categories { display: block; }
+  #bookmarksView .bookmarks-categories ul {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  #bookmarksView .bookmarks-categories li {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
     font-size: 12px;
   }
-  .bookmarks-categories h3 { font-size: 10px; margin-bottom: 4px; }
-  .bookmarks-categories li { padding: 4px 6px; font-size: 12px; }
-  .bookmarks-categories li .count { font-size: 10px; min-width: 14px; }
 
   .detail {
     position: fixed;
@@ -2038,3 +2099,47 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   box-shadow: 0 4px 14px rgba(0,0,0,0.25);
 }
 .line-chart-tip[hidden] { display: none; }
+
+/* Multi-server settings list (in AI 設定) */
+.multi-servers {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.multi-server-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.ms-active-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.ms-row-body { min-width: 0; }
+.ms-label { font-weight: 600; }
+.ms-url { font-size: 11px; color: var(--muted); word-break: break-all; }
+.ms-status { font-size: 11px; color: var(--muted); }
+.ms-status.ok { color: #1f7a1f; }
+.ms-row-actions { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.ms-row-actions .ghost-sm { padding: 3px 10px; font-size: 11px; }
+.multi-server-empty { color: var(--muted); padding: 8px; font-style: italic; font-size: 12px; }
+
+.multi-add-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.multi-add-row input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
