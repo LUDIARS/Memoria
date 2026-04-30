@@ -201,6 +201,41 @@ function maybeQueueDomain(url) {
   }, { kind: 'domain', domain, title: domain });
 }
 
+// ブクマ AI 要約完了の push 通知は batch 化する。 個別通知は頻度過多
+// (一度に 10〜30 件まとめて入れる運用) なので、 5 件 or 5 分でまとめて 1 回。
+const bookmarkPushState = { items: /** @type {{id: number; title: string}[]} */ ([]), timer: /** @type {NodeJS.Timeout | null} */ (null) };
+const BOOKMARK_PUSH_BATCH_SIZE = 5;
+const BOOKMARK_PUSH_DEBOUNCE_MS = 5 * 60_000;
+
+function flushBookmarkSummaryPush() {
+  if (bookmarkPushState.items.length === 0) return;
+  const items = bookmarkPushState.items;
+  bookmarkPushState.items = [];
+  if (bookmarkPushState.timer) {
+    clearTimeout(bookmarkPushState.timer);
+    bookmarkPushState.timer = null;
+  }
+  const titleLines = items.slice(0, 5).map((it) => `・${(it.title || '').slice(0, 60)}`).join('\n');
+  const more = items.length > 5 ? `\n…他 ${items.length - 5} 件` : '';
+  sendPushToAll(db, {
+    title: `📚 AI 要約完了 (${items.length} 件)`,
+    body: titleLines + more,
+    url: '/?tab=bookmarks',
+    tag: 'memoria-bookmark-summary',
+  }).catch((err) => console.warn(`[push] bookmark batch failed: ${err.message}`));
+}
+
+function notifyBookmarkSummaryDone(id, title) {
+  bookmarkPushState.items.push({ id, title: title || '(untitled)' });
+  if (bookmarkPushState.items.length >= BOOKMARK_PUSH_BATCH_SIZE) {
+    flushBookmarkSummaryPush();
+    return;
+  }
+  if (!bookmarkPushState.timer) {
+    bookmarkPushState.timer = setTimeout(flushBookmarkSummaryPush, BOOKMARK_PUSH_DEBOUNCE_MS);
+  }
+}
+
 function enqueueSummary(id) {
   const b = getBookmark(db, id);
   summaryQueue.enqueue(async () => {
@@ -217,6 +252,8 @@ function enqueueSummary(id) {
         url: cur.url, title: cur.title, html,
       });
       setSummary(db, id, { summary, categories, status: 'done' });
+      // batch 化された push 通知 (5 件 or 5 分)
+      notifyBookmarkSummaryDone(id, cur.title);
     } catch (e) {
       setSummary(db, id, { summary: null, categories: [], status: 'error', error: e.message.slice(0, 500) });
       throw e;
