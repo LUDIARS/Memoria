@@ -593,11 +593,14 @@ function reflowTabsForViewport() {
     if (visible.has(t.dataset.tab)) {
       t.style.display = '';
     } else {
-      t.style.display = 'none';
+      // Clone BEFORE hiding the original — otherwise cloneNode(true)
+      // captures `display: none` and the More menu renders empty.
       const clone = t.cloneNode(true);
+      clone.style.display = '';
       clone.classList.toggle('active', t.dataset.tab === active);
       clone.addEventListener('click', () => switchTab(t.dataset.tab));
       moreMenu.appendChild(clone);
+      t.style.display = 'none';
       overflowCount += 1;
     }
   }

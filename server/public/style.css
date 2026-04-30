@@ -55,7 +55,7 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-.topbar-controls { display: flex; gap: 8px; margin-left: auto; align-items: center; }
+.topbar-controls { display: flex; gap: 8px; margin-left: auto; align-items: center; flex: 1 1 auto; justify-content: flex-end; }
 .topbar-controls select, .topbar-controls input[type=search] {
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -63,7 +63,8 @@ body {
   background: var(--panel);
   font-size: 13px;
 }
-.topbar-controls input[type=search] { min-width: 240px; }
+.topbar-controls input[type=search] { min-width: 240px; flex: 0 1 320px; }
+.topbar-settings { margin-left: auto; }
 
 button, .ghost, .file-btn {
   font-size: 13px;
@@ -1738,16 +1739,25 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     gap: 8px;
     padding: 8px 12px;
   }
-  .topbar-controls { width: 100%; flex-wrap: wrap; margin-left: 0; }
-  .topbar-controls input[type=search] { flex: 1 1 100%; min-width: 0; }
+  .topbar-controls { width: 100%; flex-wrap: wrap; margin-left: 0; gap: 6px; }
+  .topbar-controls input[type=search] { flex: 1 1 100%; min-width: 0; order: 3; }
+  .topbar-controls select { flex: 1 1 0; min-width: 0; order: 2; }
+  .topbar-settings {
+    /* Anchor the gear to the top-right corner of the topbar even when
+     * the controls wrap onto the next row. */
+    order: 1;
+    margin-left: auto;
+  }
 
-  /* Right-hand detail rail collapses on mobile. */
+  /* Keep the layout itself viewport-bound on mobile so .content remains
+   * the scroll container — that's what makes the sticky tab nav and
+   * the categories rail behave consistently. (Falling back to body
+   * scroll caused the tabs to disappear behind the sticky topbar.) */
   .layout {
     flex-direction: column;
-    height: auto;
-    min-height: calc(100vh - 53px);
+    height: calc(100vh - 53px);
   }
-  .layout > .content { flex: 1 1 auto; }
+  .layout > .content { flex: 1 1 auto; min-height: 0; }
   /* On mobile the detail aside is positioned as a fullscreen overlay
    * (see .detail rule below) so it doesn't need a flex slot. */
   .layout > .detail { flex: 0 0 auto; }

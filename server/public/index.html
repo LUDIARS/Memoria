@@ -16,7 +16,7 @@
     <div class="brand">Memoria</div>
     <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
-      <select id="sort">
+      <select id="sort" title="ブックマークの並び順">
         <option value="created_desc">追加日 (新しい順)</option>
         <option value="created_asc">追加日 (古い順)</option>
         <option value="accessed_desc">最終アクセス (新しい順)</option>
@@ -24,11 +24,7 @@
         <option value="title_asc">タイトル (A→Z)</option>
       </select>
       <input id="search" type="search" placeholder="検索 (タイトル・URL・要約)" />
-      <button id="exportBtn" class="ghost" title="選択中をエクスポート">Export</button>
-      <label class="ghost file-btn">
-        Import<input id="importInput" type="file" accept="application/json" hidden />
-      </label>
-      <button id="aiSettingsBtn" class="ghost" title="モデル/プロバイダ設定">⚙ AI</button>
+      <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定 / Export / Import">⚙ 設定</button>
     </div>
   </header>
 
@@ -409,6 +405,15 @@
     <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." /></label>
     <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
     <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+    <h4>📤 エクスポート / 📥 インポート</h4>
+    <p class="ai-settings-help">ブックマークを JSON で書き出し / 取り込み (URL 重複はスキップ)。エクスポートはチェックを入れたカードのみ。</p>
+    <div class="ai-settings-actions">
+      <button id="exportBtn" class="ghost" title="選択中をエクスポート">Export</button>
+      <label class="ghost file-btn">
+        Import<input id="importInput" type="file" accept="application/json" hidden />
+      </label>
+    </div>
+
     <h4>📝 日記の常設メモ</h4>
     <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
     <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
