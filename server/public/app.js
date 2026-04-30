@@ -1268,7 +1268,7 @@ function renderDictionaryList() {
   ul.innerHTML = state.dictEntries.map(e => `
     <li class="dict-item ${state.dictDetail?.id === e.id ? 'selected' : ''}" data-id="${e.id}">
       <div class="dict-term">${escapeHtml(e.term)}</div>
-      <div class="dict-snippet">${escapeHtml((e.definition || '').slice(0, 120))}</div>
+      <div class="dict-snippet">${escapeHtml((e.definition || e.notes || '').slice(0, 320))}</div>
       <div class="dict-meta">
         <span>${e.link_count} 件リンク</span>
         <span>${fmtDate(e.updated_at)}</span>
@@ -1292,8 +1292,8 @@ async function loadDictionaryEntry(id) {
 async function renderDictionaryDetail() {
   const e = state.dictDetail;
   const panel = $('dictDetail');
-  if (!e) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
+  if (!e) { hideModal('dictDetail'); return; }
+  showModal('dictDetail');
   $('dictTerm').value = e.term || '';
   $('dictDefinition').value = e.definition || '';
   $('dictNotes').value = e.notes || '';
@@ -1390,7 +1390,7 @@ async function deleteDictionaryEntry() {
   try {
     await api(`/api/dictionary/${e.id}`, { method: 'DELETE' });
     state.dictDetail = null;
-    $('dictDetail').classList.add('hidden');
+    hideModal('dictDetail');
     await loadDictionary();
   } catch (e) {
     alert(`削除失敗: ${e.message}`);
@@ -1430,16 +1430,20 @@ function renderDomainList() {
     ul.innerHTML = '<li class="dict-empty">ドメイン辞書はまだ空です。アクセス履歴の生成によって自動で追加されます。</li>';
     return;
   }
-  ul.innerHTML = state.domainEntries.map(e => `
+  ul.innerHTML = state.domainEntries.map(e => {
+    const desc = (e.description || '').trim();
+    const can = (e.can_do || '').trim();
+    const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
+    return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
-      <div class="dict-snippet">${escapeHtml((e.description || '').slice(0, 100))}</div>
+      <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">
         <span>${escapeHtml(e.domain)}</span>
         <span>本日 ${e.visits_today} / 週 ${e.visits_week}</span>
       </div>
-    </li>
-  `).join('');
+    </li>`;
+  }).join('');
   ul.querySelectorAll('.dict-item').forEach(li => {
     li.addEventListener('click', () => loadDomainEntry(li.dataset.domain));
   });
@@ -1459,8 +1463,8 @@ async function loadDomainEntry(domain) {
 function renderDomainDetail() {
   const e = state.domainDetail;
   const panel = $('domainDetail');
-  if (!e) { panel.classList.add('hidden'); return; }
-  panel.classList.remove('hidden');
+  if (!e) { hideModal('domainDetail'); return; }
+  showModal('domainDetail');
   $('domainKey').value = e.domain;
   $('domainSiteName').value = e.site_name || '';
   $('domainDesc').value = e.description || '';
@@ -1516,7 +1520,7 @@ async function deleteDomainEntry() {
   if (!confirm(`「${e.domain}」をドメイン辞書から削除しますか？`)) return;
   await api(`/api/domains/${encodeURIComponent(e.domain)}`, { method: 'DELETE' });
   state.domainDetail = null;
-  $('domainDetail').classList.add('hidden');
+  hideModal('domainDetail');
   await loadDomainCatalog();
 }
 
@@ -2556,6 +2560,39 @@ $('domainDeleteBtn')?.addEventListener('click', deleteDomainEntry);
 $('domainRecatalogBtn')?.addEventListener('click', () => recatalogAllDomains({ force: false }));
 $('recatalogAllBtn')?.addEventListener('click', () => recatalogAllDomains({ force: false }));
 $('recatalogAllForceBtn')?.addEventListener('click', () => recatalogAllDomains({ force: true }));
+
+// ── modal panels (dict + domain edit) ─────────────────────────────────────
+function showModal(panelId) {
+  $(panelId).classList.remove('hidden');
+  $('modalBackdrop').hidden = false;
+}
+function hideModal(panelId) {
+  if (panelId) $(panelId).classList.add('hidden');
+  // If neither panel is open after this hide, drop the backdrop too.
+  const dictOpen = !$('dictDetail').classList.contains('hidden');
+  const domOpen  = !$('domainDetail').classList.contains('hidden');
+  $('modalBackdrop').hidden = !(dictOpen || domOpen);
+}
+function closeAllModals() {
+  state.dictDetail = null;
+  state.domainDetail = null;
+  hideModal('dictDetail');
+  hideModal('domainDetail');
+}
+$('dictDetailClose')?.addEventListener('click', () => {
+  state.dictDetail = null;
+  hideModal('dictDetail');
+});
+$('domainDetailClose')?.addEventListener('click', () => {
+  state.domainDetail = null;
+  hideModal('domainDetail');
+});
+$('modalBackdrop')?.addEventListener('click', closeAllModals);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('modalBackdrop').hidden) {
+    closeAllModals();
+  }
+});
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {
