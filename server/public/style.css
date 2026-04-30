@@ -1462,3 +1462,18 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .ai-keystatus { font-size: 11px; color: var(--muted); display: block; margin-top: -4px; margin-bottom: 8px; }
 .ai-settings-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+
+.diary-digs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.diary-dig {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.diary-dig:hover { border-color: var(--accent); }
+.diary-dig-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.diary-dig-query { font-weight: 600; }
+.diary-dig-meta { font-size: 11px; color: var(--muted); }
+.diary-dig-summary { font-size: 11px; color: #2c3344; line-height: 1.5; margin-top: 4px; }

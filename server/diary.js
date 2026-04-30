@@ -4,7 +4,7 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { visitEventsForDate, getDiary, getDomainCatalogMap } from './db.js';
+import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate } from './db.js';
 import { runLlm } from './llm.js';
 
 // Default models per task are configured in llm.js (sonnet for diary_work,
@@ -100,6 +100,20 @@ export function aggregateDay(db, dateStr) {
   const totalEvents = hourlyVisits.reduce((s, n) => s + n, 0);
 
   const bookmarks = bookmarksForDate(db, dateStr);
+  const digs = digSessionsForDate(db, dateStr).map(d => {
+    const r = d.result || {};
+    return {
+      id: d.id,
+      query: d.query,
+      status: d.status,
+      created_at: d.created_at,
+      summary: (r.summary || '').slice(0, 600),
+      source_count: (r.sources || []).length,
+      sources: (r.sources || []).slice(0, 8).map(s => ({
+        url: s.url, title: s.title, snippet: (s.snippet || '').slice(0, 200),
+      })),
+    };
+  });
 
   return {
     date: dateStr,
@@ -111,6 +125,7 @@ export function aggregateDay(db, dateStr) {
     first_event_at: firstSeen,
     last_event_at: lastSeen,
     bookmarks,
+    digs,
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
@@ -345,9 +360,9 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) =>
   urlList,
 ].join('\n');
 
-const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics }) => [
+const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics }) => [
   `あなたは ${dateStr} の「ハイライト」セクションを書きます。`,
-  '以下の 3 種類の情報を統合し、その日の重要なポイントを箇条書きで 3〜6 個。',
+  '以下の情報を統合し、その日の重要なポイントを箇条書きで 3〜6 個。',
   '事実ベース。憶測や創作はしない。重要度の高い順。',
   '',
   '## 入力 1: 作業内容 (時系列)',
@@ -362,6 +377,14 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   '## 入力 3: GitHub commits (リポジトリごとの件数)',
   githubByRepo.repos.length
     ? githubByRepo.repos.map(r => `- ${r.repo}: ${r.count} commits`).join('\n')
+    : '(なし)',
+  '',
+  '## 入力 4: 当日のディグ調査 (検索 + 取得した情報源)',
+  (digs && digs.length > 0)
+    ? digs.map(d => {
+        const summary = d.summary ? `\n  ${d.summary.slice(0, 300)}` : '';
+        return `- 「${d.query}」 (${d.source_count} 件のソース, ${d.status})${summary}`;
+      }).join('\n')
     : '(なし)',
   '',
   '## メタ情報',
@@ -508,10 +531,10 @@ export async function generateWorkContent({ db, dateStr, metrics, timeoutMs = 18
   return await runLlm({ task: 'diary_work', prompt, timeoutMs });
 }
 
-/** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits into highlights. */
-export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics, timeoutMs = 240_000 }) {
+/** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits + dig into highlights. */
+export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics, timeoutMs = 240_000 }) {
   const prompt = HIGHLIGHTS_PROMPT({
-    dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics,
+    dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
   });
   return await runLlm({ task: 'diary_highlights', prompt, timeoutMs });
 }
@@ -537,13 +560,14 @@ export async function generateDiary({ db, dateStr, metrics, github, notes }) {
   }
 
   const workContent = await generateWorkContent({ db, dateStr, metrics });
+  const digs = metrics.digs || [];
   const highlights = await generateHighlights({
-    dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics,
+    dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
   });
 
   // Combined summary for legacy display.
-  const summary = composeSummary({ workContent, githubByRepo, highlights });
-  return { workContent, githubByRepo, highlights, summary };
+  const summary = composeSummary({ workContent, githubByRepo, highlights, digs });
+  return { workContent, githubByRepo, highlights, summary, digs };
 }
 
 function buildBookmarkSummary(metrics) {
@@ -560,9 +584,16 @@ function buildBookmarkSummary(metrics) {
   };
 }
 
-function composeSummary({ workContent, githubByRepo, highlights }) {
+function composeSummary({ workContent, githubByRepo, highlights, digs }) {
   const parts = [];
   if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
+  if (digs && digs.length > 0) {
+    const digLines = digs.map(d => {
+      const head = `- 「${d.query}」 (${d.source_count} 件のソース)`;
+      return d.summary ? `${head}\n  ${d.summary.slice(0, 250)}` : head;
+    }).join('\n');
+    parts.push(`## ディグ調査\n${digLines}`);
+  }
   if (githubByRepo.repos.length) {
     const repoLines = githubByRepo.repos
       .map(r => `- ${r.repo}: ${r.count} commits`)

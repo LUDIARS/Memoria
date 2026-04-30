@@ -450,6 +450,20 @@ export function listDigSessions(db, limit = 30) {
   `).all(limit);
 }
 
+/** Dig sessions whose created_at falls on the given local date. */
+export function digSessionsForDate(db, dateStr) {
+  const rows = db.prepare(`
+    SELECT * FROM dig_sessions
+    WHERE date(created_at, 'localtime') = ?
+    ORDER BY created_at ASC
+  `).all(dateStr);
+  return rows.map(r => ({
+    ...r,
+    result: r.result_json ? safeParse(r.result_json) : null,
+    preview: r.preview_json ? safeParse(r.preview_json) : null,
+  }));
+}
+
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
 // ── app settings (key/value) ----------------------------------------------
