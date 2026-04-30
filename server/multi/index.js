@@ -31,6 +31,7 @@ import {
   listSharedBookmarks, insertSharedBookmark, deleteSharedBookmark,
   listSharedDigs, insertSharedDig, deleteSharedDig,
   listSharedDictionary, insertSharedDictionary, deleteSharedDictionary,
+  getSharedBookmark, getSharedDig, getSharedDictionary,
   recordShareEvent,
 } from './db.js';
 
@@ -160,6 +161,12 @@ app.post('/api/shared/bookmarks', async (c) => {
   return c.json(r, 201);
 });
 
+app.get('/api/shared/bookmarks/:id', async (c) => {
+  const r = await getSharedBookmark(Number(c.req.param('id')));
+  if (!r) return c.json({ error: 'not_found' }, 404);
+  return c.json(r);
+});
+
 app.delete('/api/shared/bookmarks/:id', async (c) => {
   const u = await authedUser(c);
   if (!u) return c.json({ error: 'unauthorized' }, 401);
@@ -198,6 +205,12 @@ app.post('/api/shared/digs', async (c) => {
   return c.json(r, 201);
 });
 
+app.get('/api/shared/digs/:id', async (c) => {
+  const r = await getSharedDig(Number(c.req.param('id')));
+  if (!r) return c.json({ error: 'not_found' }, 404);
+  return c.json(r);
+});
+
 app.delete('/api/shared/digs/:id', async (c) => {
   const u = await authedUser(c);
   if (!u) return c.json({ error: 'unauthorized' }, 401);
@@ -234,6 +247,12 @@ app.post('/api/shared/dictionary', async (c) => {
     actingUserId: u.userId, details: { term: body.term },
   });
   return c.json(r, 201);
+});
+
+app.get('/api/shared/dictionary/:id', async (c) => {
+  const r = await getSharedDictionary(Number(c.req.param('id')));
+  if (!r) return c.json({ error: 'not_found' }, 404);
+  return c.json(r);
 });
 
 app.delete('/api/shared/dictionary/:id', async (c) => {
