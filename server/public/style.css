@@ -2185,3 +2185,21 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .ext-setup-steps { padding-left: 18px; margin: 8px 0; line-height: 1.7; font-size: 13px; }
 .ext-setup-steps li { margin-bottom: 4px; }
 
+
+.diary-more {
+  list-style: none;
+  text-align: center;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 6px;
+  user-select: none;
+  transition: background 80ms;
+}
+.diary-more:hover { background: var(--accent-bg); }
+.diary-more-count { color: var(--muted); margin-left: 6px; font-size: 11px; }
+.diary-more .error { color: var(--danger); }

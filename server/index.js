@@ -35,6 +35,7 @@ import { recommendationsFor, dismissRecommendation, clearDismissals } from './re
 import { runDig, runDigPreview, listSearchEngines } from './dig.js';
 import {
   insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
+  digSessionsForDate,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
   getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
   listDictionaryEntries, getDictionaryEntry, findDictionaryEntryByTerm,
@@ -58,6 +59,7 @@ import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
   generateDiary, generateWorkContent, generateHighlights,
   generateWeekly, summarizeGithubByRepo,
+  bookmarksForDate,
   formatLocalDate, yesterdayLocal, weekRangeFor, weekOfMonth, pingGithub,
 } from './diary.js';
 import {
@@ -1730,7 +1732,10 @@ function enqueueDiaryStages(dateStr, opts = {}) {
   // diary entering the pipeline immediately.
   diaryQueue.enqueue(async () => {
     if (ctx.failed) return;
-    ctx.metrics = aggregateDay(db, dateStr);
+    // Highlights/summary need the full bookmark+dig lists for accurate
+    // counts and topDomains; the API response uses the default 10-per-list
+    // limit so the SPA isn't asked to render hundreds of <li>s up front.
+    ctx.metrics = aggregateDay(db, dateStr, { listLimit: null });
     const prior = getDiary(db, dateStr);
     ctx.notes = prior?.notes || '';
     ctx.globalMemo = (getAppSettings(db)['diary.global_memo'] || '').trim();
@@ -1925,8 +1930,48 @@ app.get('/api/diary/:date', (c) => {
   // past 1.8 MB and made the Tauri WebView freeze. Keep only live_metrics
   // (which is what the SPA actually reads) and drop the redundancies.
   const { metrics_json: _mj, metrics: _m, ...slim } = entry;
+  // listLimit defaults to 10 — keeps the response small enough for the
+  // Tauri WebView even on days with hundreds of bookmarks. Full lists
+  // come from /api/diary/:date/bookmarks and /api/diary/:date/digs.
   const liveMetrics = aggregateDay(db, date);
   return c.json({ ...slim, live_metrics: liveMetrics });
+});
+
+// Paginated bookmark list for the diary panel's "more ▽" button.
+//   ?kind=created|accessed&limit=20&offset=10
+app.get('/api/diary/:date/bookmarks', (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  const kind = c.req.query('kind') === 'accessed' ? 'accessed' : 'created';
+  const limit = Math.min(Number(c.req.query('limit')) || 20, 200);
+  const offset = Math.max(Number(c.req.query('offset')) || 0, 0);
+  const r = bookmarksForDate(db, date, { limit, offset });
+  return c.json({
+    items: r[kind],
+    total: kind === 'accessed' ? r.accessed_total : r.created_total,
+    offset, limit,
+  });
+});
+
+// Paginated dig list for the diary panel.
+app.get('/api/diary/:date/digs', (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  const limit = Math.min(Number(c.req.query('limit')) || 20, 200);
+  const offset = Math.max(Number(c.req.query('offset')) || 0, 0);
+  const all = digSessionsForDate(db, date);
+  const slice = all.slice(offset, offset + limit).map(d => {
+    const r = d.result || {};
+    return {
+      id: d.id, query: d.query, status: d.status, created_at: d.created_at,
+      summary: (r.summary || '').slice(0, 600),
+      source_count: (r.sources || []).length,
+      sources: (r.sources || []).slice(0, 8).map(s => ({
+        url: s.url, title: s.title, snippet: (s.snippet || '').slice(0, 200),
+      })),
+    };
+  });
+  return c.json({ items: slice, total: all.length, offset, limit });
 });
 
 app.post('/api/diary/:date/generate', async (c) => {
