@@ -1773,19 +1773,41 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 @media (max-width: 760px) {
   body { font-size: 13px; }
 
+  /* Mobile topbar: pin .topbar-controls to the top-right via absolute
+   * positioning so the ⚙ 設定 + 💡 やり方 buttons always sit in the
+   * top-right corner regardless of how brand / multi-switch /
+   * extension badge / queue badge wrap. */
   .topbar {
     flex-wrap: wrap;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 8px 56px 8px 12px;        /* leave room on the right */
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
-  .topbar-controls { width: 100%; flex-wrap: wrap; margin-left: 0; gap: 6px; }
-  .topbar-controls input[type=search] { flex: 1 1 100%; min-width: 0; order: 3; }
-  .topbar-controls select { flex: 1 1 0; min-width: 0; order: 2; }
-  .topbar-settings {
-    /* Anchor the gear to the top-right corner of the topbar even when
-     * the controls wrap onto the next row. */
-    order: 1;
-    margin-left: auto;
+  .topbar-controls {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: auto;
+    margin-left: 0;
+    gap: 4px;
+  }
+  .topbar-controls .ghost {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+  .topbar-howto[hidden] { display: none !important; }
+
+  /* Mobile shows the <select> dropdown for tabs. The horizontal button
+   * strip and the legacy More menu are hidden so we never have to fight
+   * with empty-overflow rendering on small screens. */
+  .mobile-tab-select { display: block; }
+  .tabs-scroll { display: none !important; }
+  .tabs-more { display: none !important; }
+  .tabs {
+    margin: 0 -12px 12px;
+    padding: 6px 8px;
   }
 
   /* Keep the layout itself viewport-bound on mobile so .content remains
@@ -2157,4 +2179,45 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 13px;
+}
+
+/* Extension status badge (Tauri only) */
+.ext-badge {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 12px;
+  cursor: default;
+  margin-left: 4px;
+}
+.ext-badge[hidden] { display: none; }
+.ext-badge.ext-ok { border-color: #1f7a1f; color: #1f7a1f; background: #eafbe9; cursor: default; }
+.ext-badge.ext-warn { border-color: #c0392b; color: #c0392b; background: #fae6e6; cursor: pointer; }
+.ext-badge.ext-warn:hover { background: #f5d0d0; }
+
+.ext-setup .ext-setup-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ext-setup .ext-setup-head h3 { margin: 0; flex: 1; }
+.ext-setup-help { font-size: 13px; line-height: 1.6; color: var(--text); margin: 6px 0; }
+.ext-setup-help code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.ext-setup-steps { padding-left: 18px; margin: 8px 0; line-height: 1.7; font-size: 13px; }
+.ext-setup-steps li { margin-bottom: 4px; }
+
+/* Mobile tab select (hidden on desktop). */
+.mobile-tab-select {
+  display: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 14px;
 }

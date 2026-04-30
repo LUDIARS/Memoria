@@ -1302,6 +1302,33 @@ app.get('/api/categories', (c) => {
 
 // ---- access ping (from extension) -----------------------------------------
 
+// Lightweight status used by the SPA to badge whether the Chrome extension
+// is actually feeding us /api/access pings. "Recent" = something landed in
+// the last 24h; "active" = within the last 5 min (extension is running
+// right now). The desktop app uses this to nudge first-run users to
+// install the extension; a regular browser tab hides the badge entirely.
+app.get('/api/extension/status', (c) => {
+  const row = db.prepare(`
+    SELECT visited_at FROM visit_events
+    ORDER BY visited_at DESC
+    LIMIT 1
+  `).get();
+  if (!row) {
+    return c.json({ configured: false, last_seen: null, active: false });
+  }
+  const lastUtcMs = new Date(String(row.visited_at).replace(' ', 'T') + 'Z').getTime();
+  if (!Number.isFinite(lastUtcMs)) {
+    return c.json({ configured: false, last_seen: null, active: false });
+  }
+  const ageMs = Date.now() - lastUtcMs;
+  return c.json({
+    configured: ageMs < 24 * 60 * 60_000,
+    active: ageMs < 5 * 60_000,
+    last_seen: new Date(lastUtcMs).toISOString(),
+    age_ms: ageMs,
+  });
+});
+
 app.post('/api/access', async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);

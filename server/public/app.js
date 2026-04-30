@@ -564,6 +564,9 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
   if (tab === 'multi') loadMulti();
+  // Keep mobile tab select in sync with the active tab.
+  const sel = $('mobileTabSelect');
+  if (sel && sel.value !== tab) sel.value = tab;
   bumpTabUsage(tab);
   reflowTabsForViewport();
   closeTabMoreMenu();
@@ -2765,6 +2768,92 @@ document.addEventListener('click', (e) => {
 window.addEventListener('resize', reflowTabsForViewport);
 reflowTabsForViewport();
 setupCategoriesDrawer();
+setupExtensionBadge();
+setupMobileTabSelect();
+setupHowToBookmark();
+
+// Mobile <select> for tabs — fires switchTab() on change.
+function setupMobileTabSelect() {
+  const sel = $('mobileTabSelect');
+  if (!sel) return;
+  sel.value = state.tab || 'bookmarks';
+  sel.addEventListener('change', () => switchTab(sel.value));
+}
+
+// 💡 やり方 button — only shows on mobile (no Chrome extension available).
+function setupHowToBookmark() {
+  const btn = $('howToBookmarkBtn');
+  const overlay = $('howToBookmarkOverlay');
+  const close = $('howToBookmarkClose');
+  if (!btn || !overlay) return;
+  // Show only when viewport is mobile-ish — desktop uses the Chrome
+  // extension, so this prompt isn't relevant.
+  function syncVisibility() {
+    btn.hidden = window.innerWidth > 760;
+  }
+  syncVisibility();
+  window.addEventListener('resize', syncVisibility);
+  btn.addEventListener('click', () => { overlay.hidden = false; });
+  close?.addEventListener('click', () => { overlay.hidden = true; });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.hidden = true;
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !overlay.hidden) overlay.hidden = true;
+  });
+}
+
+// Extension status badge — only meaningful when running inside the Tauri
+// desktop wrapper (a regular browser tab doesn't need the prompt). Polls
+// /api/extension/status every 30 s and updates the topbar pill.
+function isTauri() {
+  return !!(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.__TAURI_METADATA__);
+}
+async function refreshExtensionBadge() {
+  const badge = $('extensionBadge');
+  if (!badge) return;
+  if (!isTauri()) {
+    badge.hidden = true;
+    return;
+  }
+  try {
+    const s = await api('/api/extension/status');
+    badge.hidden = false;
+    if (s.configured) {
+      badge.className = 'ext-badge ext-ok';
+      badge.textContent = s.active ? '✓ 拡張 OK' : '✓ 拡張接続済';
+      badge.title = s.last_seen ? `最終 ping: ${new Date(s.last_seen).toLocaleString()}` : '';
+    } else {
+      badge.className = 'ext-badge ext-warn';
+      badge.textContent = '⚠ 拡張未設定 (クリック)';
+      badge.title = 'クリックしてセットアップ手順を表示';
+    }
+  } catch (e) {
+    console.error('extension status failed', e);
+  }
+}
+function setupExtensionBadge() {
+  const badge = $('extensionBadge');
+  const overlay = $('extensionSetupOverlay');
+  const close = $('extensionSetupClose');
+  if (!badge || !overlay) return;
+  badge.addEventListener('click', () => {
+    if (badge.classList.contains('ext-warn')) {
+      const urlEl = $('extensionSetupUrl');
+      if (urlEl) urlEl.textContent = location.origin || 'http://localhost:5180';
+      overlay.hidden = false;
+    }
+  });
+  close?.addEventListener('click', () => { overlay.hidden = true; });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.hidden = true;
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !overlay.hidden) overlay.hidden = true;
+  });
+  refreshExtensionBadge();
+  setInterval(refreshExtensionBadge, 30_000);
+}
 
 $('visitsRefresh').addEventListener('click', loadVisits);
 $('visitsRange').addEventListener('change', (e) => {
