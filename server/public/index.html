@@ -121,13 +121,25 @@
           </section>
 
           <section class="trend-card">
-            <h3>カテゴリ別 保存数</h3>
-            <div id="trendCategories" class="chart"></div>
+            <h3>1 日の作業時間 (推定)</h3>
+            <p class="trend-help">アクセス記録から 30 分以上空くまでを 1 セッションとして合計した分数 (1 セッションは最大 4 時間でクリップ)。</p>
+            <div id="trendWorkHours" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>カテゴリ別 保存数 (クリックでブクマに絞り込み)</h3>
+            <div id="trendCategories" class="chart trend-categories-chart"></div>
           </section>
 
           <section class="trend-card">
             <h3>増えた・減ったカテゴリ (7 日比較)</h3>
             <ul id="trendDiff" class="trend-diff"></ul>
+          </section>
+
+          <section class="trend-card">
+            <h3>最近よく見ているキーワード</h3>
+            <p class="trend-help">直近のアクセス履歴・ブクマ・ディグ・辞書から抽出した語の頻度。</p>
+            <div id="trendKeywords" class="trend-keywords"></div>
           </section>
 
           <section class="trend-card">
@@ -138,6 +150,13 @@
           <section class="trend-card">
             <h3>よく訪れているサイト (ブクマ未保存含む)</h3>
             <div id="trendVisitDomains" class="chart"></div>
+          </section>
+
+          <section id="trendGithubCard" class="trend-card" hidden>
+            <h3>GitHub commits</h3>
+            <div id="trendGithubSummary" class="trend-help"></div>
+            <div id="trendGithubChart" class="chart"></div>
+            <ul id="trendGithubRepos" class="trend-github-repos"></ul>
           </section>
         </div>
       </div>
