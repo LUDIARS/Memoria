@@ -55,6 +55,7 @@
           <button class="tab" data-tab="dict">📖 辞書</button>
           <button class="tab" data-tab="domain">🏷 ドメイン</button>
           <button class="tab" data-tab="diary">📅 日記</button>
+          <button class="tab tab-multi-only" data-tab="multi" hidden>🌐 マルチ</button>
         </div>
         <div class="tabs-more">
           <button type="button" class="tab tab-more-btn" id="tabMoreBtn" aria-haspopup="true" aria-expanded="false" title="他のタブ">⋯</button>
@@ -314,6 +315,21 @@
           <button id="eventsRefresh" class="ghost">更新</button>
         </div>
         <ul id="eventsList" class="events-list"></ul>
+      </div>
+
+      <div id="multiView" class="hidden">
+        <div class="multi-bar">
+          <span id="multiUserBadge" class="multi-user-badge"></span>
+          <span class="grow"></span>
+          <button id="multiRefresh" class="ghost">更新</button>
+        </div>
+        <nav class="multi-subtabs">
+          <button class="multi-subtab active" data-mtab="bookmarks">📑 ブックマーク</button>
+          <button class="multi-subtab" data-mtab="digs">⛏ ディグ</button>
+          <button class="multi-subtab" data-mtab="dictionary">📖 辞書</button>
+        </nav>
+        <div id="multiList" class="multi-list"></div>
+        <div id="multiEmpty" class="queue-empty hidden">該当エントリなし</div>
       </div>
     </section>
 
