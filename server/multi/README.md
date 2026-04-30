@@ -72,13 +72,74 @@ JWT は HS256 / 30 日 / `iss=memoria-hub`。リフレッシュは無し (再ロ
 `/api/*` は cross-origin から呼べない。同一オリジン (Hub の Web UI) からは
 当然動く。
 
+## デプロイ (Phase 7)
+
+`docker-compose.yml` で Postgres + Hub を 1 コマンド起動。
+
+```bash
+cd server/multi
+cp .env.example .env
+# 編集 — MEMORIA_CERNERE_*, MEMORIA_JWT_SECRET, MEMORIA_HUB_BASE,
+#         POSTGRES_PASSWORD は最低限変更すること。
+
+docker compose up -d --build
+docker compose logs -f hub          # マイグレーション + 起動ログ
+curl -fsS http://localhost:5280/healthz
+```
+
+ストレージは名前付きボリューム `memoria-hub-pg` に永続化。バックアップは
+通常の `pg_dump`:
+
+```bash
+docker compose exec postgres pg_dump -U memoria memoria_hub > backup.sql
+```
+
+### Cernere OAuth クライアント登録ランブック
+
+本番の Cernere 側で OAuth クライアントを登録する手順。
+
+1. Cernere admin UI で **新規 OAuth client** を作成。
+   - `client_id`: `memoria-hub-prod` 等
+   - `redirect_uris`: `https://<HUB_BASE>/api/auth/callback` (本番) と
+     `http://localhost:5280/api/auth/callback` (開発)
+   - `scopes`: `profile`
+   - `pkce_required`: ✅ (S256)
+   - `client_secret`: 自動生成された値を控える
+2. Cernere admin UI で対象ユーザに `memoria-hub` クライアントへの権限を
+   付与 (各ユーザは自分のリソースのみ書ける。`role=moderator` /
+   `role=admin` を付けると非表示操作が可能)。
+3. 上記値を `server/multi/.env` に書き込む:
+   - `MEMORIA_CERNERE_BASE`
+   - `MEMORIA_CERNERE_CLIENT_ID`
+   - `MEMORIA_CERNERE_CLIENT_SECRET`
+   - `MEMORIA_HUB_BASE` (Cernere に登録した redirect_uri のホスト部と
+     一致させる)
+   - `MEMORIA_JWT_SECRET` (`openssl rand -base64 48` 程度)
+4. `docker compose up -d --build` で適用、ローカル Memoria の AI 設定から
+   接続テスト → トークン取得 → `/api/shared/*` 動作確認。
+
+### TLS / リバースプロキシ
+
+Hub は HTTPS を実装しない。本番では Caddy / nginx / Cloudflare Tunnel 等
+で TLS 終端し、127.0.0.1:5280 にプロキシする。
+
+```caddy
+hub.memoria.example.com {
+  reverse_proxy 127.0.0.1:5280
+  encode zstd gzip
+}
+```
+
+`MEMORIA_HUB_ALLOWED_ORIGINS` に Memoria ローカルの公開オリジンを列挙する
+こと (例 `https://memoria.example.com`)。
+
 ## 進捗
 
 - **Phase 0**: ✅ db façade + core/local/multi seam (PR #40)
 - **Phase 1**: ✅ ローカル SQLite に共有メタカラム追加 + Postgres 初期スキーマ (PR #35)
-- **Phase 2**: ✅ MVP (Cernere SSO + /api/shared/*) — このディレクトリ
-- **Phase 3**: 📤 ローカル UI からの share button (#34)
-- **Phase 4**: 🌐 ローカル UI からの multi タブ + proxy (#34)
-- **Phase 5**: 📥 multi → ローカル ダウンロード (#34)
-- **Phase 6**: モデレーション (admin/mod) (#34)
-- **Phase 7**: Cernere OAuth クライアント本番登録 + docker-compose 一式 (#34)
+- **Phase 2**: ✅ MVP (Cernere SSO + /api/shared/*) — PR #41
+- **Phase 3**: ✅ 📤 ローカル UI からの share button — PR #42
+- **Phase 4**: ✅ 🌐 ローカル UI からの multi タブ + proxy — PR #43
+- **Phase 5**: ✅ 📥 multi → ローカル ダウンロード — PR #44
+- **Phase 6**: ✅ モデレーション (admin/mod) — PR #46
+- **Phase 7**: ✅ docker-compose stack + Cernere 登録ランブック — このディレクトリ
