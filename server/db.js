@@ -249,10 +249,20 @@ export function openDb(dbPath) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_dig_sessions_theme
               ON dig_sessions(theme, created_at DESC)`);
   }
+  // Raw SERP scrape (no LLM) — populated within ~2s of dig submit so the UI
+  // can show Google-style hits instantly. Lives alongside `preview_json`
+  // (Claude's annotated overview) and `result_json` (full deep dig).
+  if (!dsCols.includes('raw_results_json')) {
+    db.exec(`ALTER TABLE dig_sessions ADD COLUMN raw_results_json TEXT`);
+  }
 
   const deCols = db.prepare(`PRAGMA table_info(diary_entries)`).all().map(c => c.name);
   if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
   if (!deCols.includes('highlights'))   db.exec(`ALTER TABLE diary_entries ADD COLUMN highlights TEXT`);
+  // Sonnet (`diary_work`) infers focused work minutes from the URL timeline
+  // and writes it here. Replaces the visit_events session heuristic, which
+  // over-counted days with long idle browser tabs (see trendsWorkHours).
+  if (!deCols.includes('work_minutes')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_minutes INTEGER`);
 
   const dcCols = db.prepare(`PRAGMA table_info(domain_catalog)`).all().map(c => c.name);
   if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);
@@ -476,6 +486,29 @@ export function setDigPreview(db, id, preview) {
     .run(preview ? JSON.stringify(preview) : null, id);
 }
 
+/** Persist the no-AI SERP scrape (`runDigRawSerp` output). Called as soon
+ * as the scrape lands so the FE can render Google-style results before any
+ * Claude phase finishes. */
+export function setDigRawResults(db, id, raw) {
+  db.prepare(`UPDATE dig_sessions SET raw_results_json = ? WHERE id = ?`)
+    .run(raw ? JSON.stringify(raw) : null, id);
+}
+
+/**
+ * Drop a dig session. Used to clean up 誤 Dig (mis-typed query, junk results,
+ * etc.). 関連レコード:
+ *   - dictionary_links (source_kind='dig', source_id=id) — 残しても 「Dig
+ *     ソース消失」 と表示されるだけなので壊れない
+ *   - word_clouds (origin_dig_id=id) — 同上 (origin_dig_id が orphan になる
+ *     だけ)
+ * 走行中の queue ジョブが後から `setDigResult` を呼んでも、 行が無いので
+ * UPDATE が何もしないだけで安全。
+ */
+export function deleteDigSession(db, id) {
+  const info = db.prepare(`DELETE FROM dig_sessions WHERE id = ?`).run(id);
+  return info.changes;
+}
+
 export function getDigSession(db, id) {
   const row = db.prepare(`SELECT * FROM dig_sessions WHERE id = ?`).get(id);
   if (!row) return null;
@@ -483,6 +516,7 @@ export function getDigSession(db, id) {
     ...row,
     result: row.result_json ? safeParse(row.result_json) : null,
     preview: row.preview_json ? safeParse(row.preview_json) : null,
+    raw_results: row.raw_results_json ? safeParse(row.raw_results_json) : null,
   };
 }
 
@@ -1052,7 +1086,7 @@ export function listDiariesInRange(db, { start, end }) {
   `).all(start, end);
 }
 
-export function upsertDiary(db, { date, summary, workContent, highlights, notes, metrics, githubCommits, status, error }) {
+export function upsertDiary(db, { date, summary, workContent, workMinutes, highlights, notes, metrics, githubCommits, status, error }) {
   const tx = db.transaction(() => {
     const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date);
     if (exists) {
@@ -1060,6 +1094,7 @@ export function upsertDiary(db, { date, summary, workContent, highlights, notes,
         UPDATE diary_entries
            SET summary = COALESCE(?, summary),
                work_content = COALESCE(?, work_content),
+               work_minutes = COALESCE(?, work_minutes),
                highlights = COALESCE(?, highlights),
                notes = COALESCE(?, notes),
                metrics_json = COALESCE(?, metrics_json),
@@ -1071,6 +1106,7 @@ export function upsertDiary(db, { date, summary, workContent, highlights, notes,
       `).run(
         summary ?? null,
         workContent ?? null,
+        Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
         highlights ?? null,
         notes ?? null,
         metrics ? JSON.stringify(metrics) : null,
@@ -1082,12 +1118,13 @@ export function upsertDiary(db, { date, summary, workContent, highlights, notes,
     } else {
       db.prepare(`
         INSERT INTO diary_entries
-          (date, summary, work_content, highlights, notes, metrics_json, github_commits_json, status, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (date, summary, work_content, work_minutes, highlights, notes, metrics_json, github_commits_json, status, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         date,
         summary ?? null,
         workContent ?? null,
+        Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
         highlights ?? null,
         notes ?? null,
         metrics ? JSON.stringify(metrics) : null,
@@ -1329,64 +1366,27 @@ export function trendsDomains(db, { sinceDays = 30, limit = 12 } = {}) {
 }
 
 /**
- * Per-day estimated work minutes derived from visit_events. Cuts each visitor
- * timeline at gaps > GAP_MS (idle); the remaining intra-session deltas are
- * summed and capped per session at SESSION_CAP_MS (long single visits would
- * otherwise inflate the metric).
+ * Per-day estimated work minutes — sourced from `diary_entries.work_minutes`,
+ * which is filled by Sonnet (`diary_work` task) when reading the day's URL
+ * timeline. The previous algorithm derived sessions from visit_events alone
+ * and over-counted days with long idle browser tabs (one open tab refreshing
+ * itself for hours could push a single day past 24h).
+ *
+ * Days without a generated diary (or where Sonnet declined to estimate)
+ * report `null` minutes — the chart skips them rather than misleading with 0.
  */
 export function trendsWorkHours(db, { sinceDays = 30 } = {}) {
   const days = Number(sinceDays) || 30;
-  const GAP_MS = 30 * 60_000;          // 30 min idle = session boundary
-  const SESSION_CAP_MS = 4 * 60 * 60_000; // single session capped at 4h
-  const rows = db.prepare(`
-    SELECT visited_at FROM visit_events
-    WHERE visited_at >= datetime('now', ?)
-    ORDER BY visited_at ASC
-  `).all(`-${days} days`);
-  // Bucket per local-date.
-  const perDay = new Map();
   function dateKeyLocal(d) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
-  function parseUtc(s) {
-    return new Date(String(s).replace(' ', 'T') + 'Z');
-  }
-  let prevTs = null;
-  let sessionStart = null;
-  let prevDateKey = null;
-  function flush(endTs) {
-    if (sessionStart != null) {
-      const dur = Math.min(endTs - sessionStart, SESSION_CAP_MS);
-      perDay.set(prevDateKey, (perDay.get(prevDateKey) || 0) + dur);
-    }
-    sessionStart = null;
-    prevTs = null;
-    prevDateKey = null;
-  }
-  for (const r of rows) {
-    const d = parseUtc(r.visited_at);
-    const ts = d.getTime();
-    if (!Number.isFinite(ts)) continue;
-    const key = dateKeyLocal(d);
-    if (prevTs == null) {
-      sessionStart = ts;
-      prevTs = ts;
-      prevDateKey = key;
-      continue;
-    }
-    const gap = ts - prevTs;
-    if (gap > GAP_MS || key !== prevDateKey) {
-      flush(prevTs);
-      sessionStart = ts;
-      prevTs = ts;
-      prevDateKey = key;
-    } else {
-      prevTs = ts;
-    }
-  }
-  if (prevTs != null) flush(prevTs);
+  const rows = db.prepare(`
+    SELECT date, work_minutes FROM diary_entries
+    WHERE date >= ? AND work_minutes IS NOT NULL
+  `).all(dateKeyLocal(new Date(Date.now() - (days - 1) * 86400_000)));
+  const perDay = new Map();
+  for (const r of rows) perDay.set(r.date, r.work_minutes);
 
-  // Zero-fill so the chart shows all days in the window.
   const out = [];
   const today = new Date();
   for (let i = days - 1; i >= 0; i--) {
@@ -1395,7 +1395,97 @@ export function trendsWorkHours(db, { sinceDays = 30 } = {}) {
     const k = dateKeyLocal(dt);
     out.push({
       date: k,
-      minutes: Math.round((perDay.get(k) || 0) / 60_000),
+      minutes: perDay.has(k) ? perDay.get(k) : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Per-day walking summary derived from `gps_locations` (OwnTracks 由来):
+ *   - distance_km: 連続点の haversine 合計 (accuracy < 200m / Δt < 10min で
+ *     ノイズフィルタ)
+ *   - walking_minutes: 0.5〜3.5 m/s の区間 Δt 合計 (徒歩速度帯)
+ *   - travel_minutes: 0.5 m/s 以上で動いていた区間 Δt 合計 (移動全体、
+ *     乗り物含む)
+ *
+ * 静止判定は速度ベース。停車中の jitter は accuracy で弾く。
+ */
+export function trendsGpsWalking(db, { sinceDays = 30, userId = 'me' } = {}) {
+  const days = Number(sinceDays) || 30;
+  function dateKeyLocal(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  function parseUtc(s) {
+    return new Date(String(s).replace(' ', 'T') + 'Z');
+  }
+  function haversineMeters(a, b) {
+    const R = 6_371_008;
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lon - a.lon);
+    const sa = Math.sin(dLat / 2);
+    const so = Math.sin(dLon / 2);
+    const h = sa * sa + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * so * so;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  const SEG_DT_MAX_MS = 10 * 60_000;       // > 10 分の隙間は信頼しない
+  const ACC_MAX_M = 200;                   // accuracy 200m 超は jitter とみなす
+  const WALK_MIN_MPS = 0.5;                // 1.8 km/h
+  const WALK_MAX_MPS = 3.5;                // 12.6 km/h (上限 = ジョギング以下)
+  const TRAVEL_MIN_MPS = 0.5;              // 動いている扱いの下限
+
+  const startDate = new Date(Date.now() - (days - 1) * 86400_000);
+  const startKey = dateKeyLocal(startDate);
+  const rows = db.prepare(`
+    SELECT recorded_at, lat, lon, accuracy_m
+    FROM gps_locations
+    WHERE user_id = ? AND date(recorded_at, 'localtime') >= ?
+    ORDER BY recorded_at ASC
+  `).all(userId, startKey);
+
+  const perDay = new Map();
+  function bucket(key) {
+    let b = perDay.get(key);
+    if (!b) {
+      b = { distance_m: 0, walking_ms: 0, travel_ms: 0 };
+      perDay.set(key, b);
+    }
+    return b;
+  }
+  let prev = null;
+  for (const r of rows) {
+    const d = parseUtc(r.recorded_at);
+    const ts = d.getTime();
+    if (!Number.isFinite(ts)) { prev = null; continue; }
+    const key = dateKeyLocal(d);
+    const accOk = !r.accuracy_m || r.accuracy_m < ACC_MAX_M;
+    if (prev && prev.key === key && accOk && prev.accOk) {
+      const dt = ts - prev.ts;
+      if (dt > 0 && dt <= SEG_DT_MAX_MS) {
+        const dist = haversineMeters(prev, { lat: r.lat, lon: r.lon });
+        const speed = dist / (dt / 1000); // m/s
+        const b = bucket(key);
+        b.distance_m += dist;
+        if (speed >= TRAVEL_MIN_MPS) b.travel_ms += dt;
+        if (speed >= WALK_MIN_MPS && speed <= WALK_MAX_MPS) b.walking_ms += dt;
+      }
+    }
+    prev = { ts, key, lat: r.lat, lon: r.lon, accOk };
+  }
+
+  const out = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const dt = new Date(today);
+    dt.setDate(today.getDate() - i);
+    const k = dateKeyLocal(dt);
+    const b = perDay.get(k);
+    out.push({
+      date: k,
+      distance_km: b ? Number((b.distance_m / 1000).toFixed(2)) : 0,
+      walking_minutes: b ? Math.round(b.walking_ms / 60_000) : 0,
+      travel_minutes: b ? Math.round(b.travel_ms / 60_000) : 0,
     });
   }
   return out;

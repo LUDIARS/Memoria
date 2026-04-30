@@ -452,41 +452,43 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .trends-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 12px;
+  margin-bottom: 24px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 18px;
 }
 .trends-bar .grow { flex: 1; }
 .trends-bar select {
-  padding: 4px 8px;
+  padding: 8px 14px;
+  font-size: 16px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel);
 }
 .trends-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-  gap: 12px;
+  /* User asked the trend cards to be 2x — was minmax(420px, 1fr). */
+  grid-template-columns: repeat(auto-fill, minmax(840px, 1fr));
+  gap: 24px;
 }
 .trend-card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 16px;
+  padding: 24px 32px;
   box-shadow: var(--shadow);
 }
 .trend-card h3 {
-  font-size: 12px;
+  font-size: 18px;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 12px;
+  margin: 0 0 18px;
 }
-.chart { width: 100%; min-height: 180px; }
-.chart svg { width: 100%; height: 220px; display: block; }
+.chart { width: 100%; min-height: 360px; }
+.chart svg { width: 100%; height: 440px; display: block; }
 .chart svg .axis { stroke: var(--border); stroke-width: 1; }
 .chart svg .grid { stroke: var(--border); stroke-dasharray: 2 3; opacity: 0.5; }
-.chart svg .label { fill: var(--muted); font-size: 10px; }
+.chart svg .label { fill: var(--muted); font-size: 14px; }
 .chart svg .bar { fill: var(--accent); }
 .chart svg .bar.alt { fill: #f0a04b; }
 .chart svg .line-saves { stroke: var(--accent); stroke-width: 2; fill: none; }
@@ -517,16 +519,16 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .trend-diff li {
   display: grid;
   grid-template-columns: 1fr auto auto;
-  gap: 12px;
-  padding: 6px 0;
+  gap: 16px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 18px;
 }
 .trend-diff li:last-child { border-bottom: 0; }
-.trend-diff .delta { font-weight: 600; min-width: 48px; text-align: right; }
+.trend-diff .delta { font-weight: 600; min-width: 72px; text-align: right; }
 .trend-diff .delta.up { color: #2a8847; }
 .trend-diff .delta.down { color: var(--danger); }
-.trend-diff .ratio { color: var(--muted); font-size: 11px; }
+.trend-diff .ratio { color: var(--muted); font-size: 14px; }
 
 .rec-bar {
   display: flex;
@@ -714,23 +716,91 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   color: var(--muted);
 }
 .dig-history {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
   margin-bottom: 16px;
 }
-.dig-history .pill {
-  background: var(--accent-bg);
-  color: var(--accent);
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  cursor: pointer;
-  border: 1px solid transparent;
+.dig-history-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 0;
 }
-.dig-history .pill:hover { border-color: var(--accent); }
-.dig-history .pill.pending { background: #fff5e1; color: #8a5a00; }
-.dig-history .pill.error { background: #fae6e6; color: var(--danger); }
+.dig-history-h {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.dig-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.dig-history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.dig-history-item:last-child { border-bottom: 0; }
+.dig-history-item:hover { background: var(--accent-bg); }
+.dig-history-item.active { background: var(--accent-bg); border-left: 3px solid var(--accent); padding-left: 9px; }
+.dig-history-item .status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); flex: 0 0 auto;
+}
+.dig-history-item .status-dot.pending { background: #f0a040; }
+.dig-history-item .status-dot.error { background: var(--danger); }
+.dig-history-item .query {
+  flex: 1;
+  color: var(--text);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.dig-history-item .theme {
+  flex: 0 0 auto;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.dig-history-item .time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.dig-history-item .dig-history-del {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity .12s ease, color .12s ease, background .12s ease;
+}
+.dig-history-item:hover .dig-history-del,
+.dig-history-item.active .dig-history-del { opacity: 1; }
+.dig-history-item .dig-history-del:hover {
+  color: #fff;
+  background: var(--danger);
+}
 .dig-result .summary {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -741,18 +811,125 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   line-height: 1.6;
   font-size: 13px;
 }
-.dig-graph {
+/* Inline graph shown right after a dig completes — node = frequent word,
+ * edge = co-occurrence in source text. Force-directed layout. */
+.dig-cloud-inline {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   margin-bottom: 12px;
-  padding: 8px;
+  padding: 14px 18px;
 }
-.dig-graph svg { width: 100%; height: 360px; display: block; }
-.dig-graph .edge { stroke: #c5cad4; stroke-width: 1; }
-.dig-graph .node { fill: var(--accent); }
-.dig-graph .node.center { fill: #1f56c0; }
-.dig-graph .node-label { fill: var(--text); font-size: 11px; pointer-events: none; }
+.dig-cloud-title {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dig-cloud-explored-hint {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.dig-graph-wrap {
+  width: 100%;
+  overflow: hidden;
+}
+.dig-graph-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--bg);
+  border-radius: 6px;
+}
+.dig-graph-edge {
+  stroke: #c5cad4;
+  fill: none;
+}
+.dig-graph-node { cursor: pointer; }
+.dig-graph-node .dig-graph-label {
+  fill: var(--accent);
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 4;
+  stroke-linejoin: round;
+  transition: fill .12s ease;
+}
+.dig-graph-node:hover .dig-graph-label {
+  fill: #1f56c0;
+  text-decoration: underline;
+}
+/* Past-search node: visually connected to a past dig session. Click
+ * navigates to that session rather than starting a new dig. */
+.dig-graph-node.explored .dig-graph-label {
+  fill: #8a5a00;
+  stroke: #fff5e1;
+}
+.dig-graph-node.explored:hover .dig-graph-label {
+  fill: #6b4500;
+}
+
+/* Pick-hint pill: shown above the textarea when a graph node is clicked. */
+.dig-pick-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(135deg, #e8f0ff 0%, #f0f5ff 100%);
+  border: 1px solid #c8d8ff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #1f56c0;
+  line-height: 1.45;
+}
+.dig-pick-hint[hidden] { display: none; }
+.dig-pick-icon { font-size: 16px; flex: 0 0 auto; }
+.dig-pick-text { flex: 1; word-break: break-word; }
+.dig-pick-clear {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.dig-pick-clear:hover { color: var(--text); }
+
+.dig-input-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+.dig-input-actions .dig-run-btn {
+  width: 100%;
+  padding: 0 22px;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+.dig-run-new {
+  background: var(--panel);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.dig-run-new:hover {
+  background: var(--accent-bg);
+}
 .dig-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
 .dig-source {
   background: var(--panel);
@@ -1007,6 +1184,47 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   text-align: center;
   margin-top: 4px;
 }
+
+/* Raw SERP scrape — shown FIRST (within ~2 s, no AI). Visually similar to
+ * the AI preview block but tagged so the user can tell them apart. */
+.dig-raw {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.dig-raw-h {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #2a8847;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dig-raw-tag {
+  background: #e6f5ec;
+  color: #2a8847;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.dig-raw-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dig-raw-result .title { font-weight: 500; line-height: 1.3; }
+.dig-raw-result .title a { color: var(--text); text-decoration: none; }
+.dig-raw-result .title a:hover { color: var(--accent); text-decoration: underline; }
+.dig-raw-result .url { font-size: 11px; color: var(--muted); word-break: break-all; }
+.dig-raw-result .snippet { font-size: 12px; color: #2c3344; line-height: 1.5; margin-top: 2px; }
 
 .dig-preview {
   background: var(--panel);
@@ -2196,6 +2414,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   }
   .dig-input { flex-direction: column; }
   .dig-input .dig-run-btn { width: 100%; padding: 10px; }
+  .dig-input-actions { flex-direction: row; flex-wrap: wrap; }
+  .dig-input-actions .dig-run-btn { padding: 10px; flex: 1 1 auto; }
 
   /* Bookmark cards stack rather than tile. ブックマーク (とそれ以外の
    * すべての主要ビュー) は viewport - 8px 内に収める。 */
@@ -2220,8 +2440,23 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     width: 100%;
   }
 
-  /* Trends grid → single column. */
-  .trends-grid { grid-template-columns: 1fr; }
+  /* Trends grid → single column. PC で 2x にしたサイズはスマホでは
+   * 過剰なので、 mobile のときだけ従来のコンパクトな寸法に戻す。 */
+  .trends-grid { grid-template-columns: 1fr; gap: 12px; }
+  .trends-bar { font-size: 13px; gap: 8px; margin-bottom: 12px; }
+  .trends-bar select { font-size: 13px; padding: 4px 8px; }
+  .trend-card { padding: 12px 16px; }
+  .trend-card h3 { font-size: 12px; margin: 0 0 12px; }
+  .trend-help { font-size: 11px; margin: 0 0 8px; }
+  .trend-diff li { font-size: 13px; padding: 6px 0; gap: 12px; }
+  .trend-diff .ratio { font-size: 11px; }
+  .trend-kw { padding: 2px 10px; }
+  .trend-kw .trend-kw-n { font-size: 10px; }
+  .trend-github-repos li { font-size: 12px; padding: 3px 0; }
+  .line-chart-tip { font-size: 11px; padding: 4px 10px; }
+  .chart { min-height: 180px; }
+  .chart svg { height: 220px; }
+  .chart svg .label { font-size: 10px; }
 
   /* Dictionary / domain detail panes float over the list. */
   .dict-layout { grid-template-columns: 1fr; }
@@ -2410,7 +2645,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 /* ──────────────────────────────────────────────────────────────────────
  * Trends — extra cards + line chart tooltips
  * ────────────────────────────────────────────────────────────────────── */
-.trend-help { font-size: 11px; color: var(--muted); margin: 0 0 8px; line-height: 1.5; }
+.trend-help { font-size: 16px; color: var(--muted); margin: 0 0 16px; line-height: 1.55; }
 
 .trend-categories-chart .bar-row.clickable:hover .bar { fill: var(--accent); }
 .trend-categories-chart .bar-row.clickable:hover .label { fill: var(--accent); font-weight: 600; }
@@ -2427,14 +2662,14 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 4px 16px;
   color: var(--text);
 }
 .trend-kw .trend-kw-n {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 400;
-  margin-left: 4px;
+  margin-left: 6px;
 }
 
 .trend-github-repos {
@@ -2448,8 +2683,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .trend-github-repos li {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
-  padding: 3px 0;
+  font-size: 16px;
+  padding: 6px 0;
   border-bottom: 1px dashed var(--border);
 }
 .trend-github-repos .repo { color: var(--text); }
@@ -2462,9 +2697,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   position: absolute;
   background: var(--text);
   color: #fff;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 16px;
   white-space: nowrap;
   pointer-events: none;
   z-index: 5;

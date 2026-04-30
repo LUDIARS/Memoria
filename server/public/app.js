@@ -665,6 +665,15 @@ function reflowTabsForViewport() {
   for (const t of allTabs) t.style.display = '';
   moreMenu.replaceChildren();
 
+  // PC は data-full ラベル、 narrow viewport (mobile) は data-short ラベルへ
+  // 切り替える。 機能タブの正式名称を PC で短縮しないというユーザー指示に対応。
+  const narrow = isNarrowViewport();
+  for (const lbl of scroll.querySelectorAll('.tab-label')) {
+    const full = lbl.dataset.full ?? lbl.textContent;
+    const short = lbl.dataset.short ?? full;
+    lbl.textContent = narrow ? short : full;
+  }
+
   if (!isNarrowViewport()) {
     moreBtn.hidden = true;
     moreMenu.hidden = true;
@@ -821,31 +830,102 @@ function renderDigHistory() {
     const msg = state.digTheme
       ? `テーマ "${escapeHtml(state.digTheme)}" のディグなし`
       : '過去のディグなし';
-    el.innerHTML = `<span style="color:var(--muted);font-size:11px">${msg}</span>`;
+    el.innerHTML = `<div class="dig-history-empty">${msg}</div>`;
     return;
   }
-  el.innerHTML = state.digHistory.map(s =>
-    `<span class="pill ${s.status}" data-id="${s.id}" title="${escapeHtml(s.created_at)}${s.theme ? ` [${escapeHtml(s.theme)}]` : ''}">
-      ${escapeHtml(s.query.slice(0, 30))}${s.query.length > 30 ? '…' : ''}
-    </span>`
-  ).join('');
-  el.querySelectorAll('.pill').forEach(p => {
-    p.addEventListener('click', () => loadDigSession(Number(p.dataset.id)));
+  // 過去のディグはリスト形式 (タイトル付き ul)。 クリックで該当セッションを開く。
+  // 旧 pill strip は短すぎてクエリ全文が見えなかったので置き換え。
+  el.innerHTML = `
+    <div class="dig-history-h">過去のディグ (${state.digHistory.length} 件)</div>
+    <ul class="dig-history-list">
+      ${state.digHistory.map(s => {
+        const active = state.digSession?.id === s.id ? ' active' : '';
+        const themeChip = s.theme ? `<span class="theme">${escapeHtml(s.theme)}</span>` : '';
+        return `
+          <li class="dig-history-item ${s.status}${active}" data-id="${s.id}">
+            <span class="status-dot ${s.status}" title="${escapeHtml(s.status)}"></span>
+            <span class="query">${escapeHtml(s.query)}</span>
+            ${themeChip}
+            <span class="time">${escapeHtml(formatDigTime(s.created_at))}</span>
+            <button type="button" class="dig-history-del" title="この誤 Dig を削除">×</button>
+          </li>
+        `;
+      }).join('')}
+    </ul>
+  `;
+  el.querySelectorAll('.dig-history-item').forEach(li => {
+    li.addEventListener('click', (e) => {
+      // delete ボタンは行クリック扱いしない (loadDigSession を抑止)。
+      if (e.target.closest('.dig-history-del')) return;
+      loadDigSession(Number(li.dataset.id));
+    });
+    const delBtn = li.querySelector('.dig-history-del');
+    if (delBtn) {
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = Number(li.dataset.id);
+        const item = state.digHistory.find(h => h.id === id);
+        const queryLabel = (item?.query || '').slice(0, 60);
+        if (!confirm(`このディグを削除しますか?\n「${queryLabel}」`)) return;
+        await deleteDigSessionFromUi(id);
+      });
+    }
   });
 }
 
-async function startDig({ chainCloudId, chainParentWord } = {}) {
+async function deleteDigSessionFromUi(id) {
+  try {
+    await api(`/api/dig/${id}`, { method: 'DELETE' });
+  } catch (e) {
+    alert(`削除失敗: ${e.message}`);
+    return;
+  }
+  // 表示中のセッションだったら結果ペインも閉じる + ポーリングを止める。
+  if (state.digSession?.id === id) {
+    if (state.digPolling) { clearInterval(state.digPolling); state.digPolling = null; }
+    state.digSession = null;
+    state.digSelected = new Set();
+    const el = $('digResult');
+    if (el) el.innerHTML = '';
+    const shareBar = $('digShareBar');
+    if (shareBar) shareBar.hidden = true;
+  }
+  await loadDigHistory();
+  // テーマペインの件数表示も更新 (最後の 1 件を消したらテーマも消える)。
+  loadDigThemes().catch(() => {});
+}
+
+function formatDigTime(ts) {
+  if (!ts) return '';
+  // SQLite stores as 'YYYY-MM-DD HH:MM:SS' UTC. Parse-as-UTC, format local MM/DD HH:MM.
+  const iso = String(ts).replace(' ', 'T') + (/[zZ]|[+-]\d{2}:?\d{2}$/.test(ts) ? '' : 'Z');
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return ts;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}/${dd} ${hh}:${mi}`;
+}
+
+async function startDig({ chainCloudId, chainParentWord, forceNewTheme } = {}) {
   const q = $('digQuery').value.trim();
   if (!q) return;
-  $('digRun').disabled = true;
-  $('digRun').textContent = '掘削中…';
+  // ディグ開始と同時に textarea / pick-hint を空にする (ユーザ指示)。 過去の
+  // クエリは下のリストで参照できる。
+  $('digQuery').value = '';
+  clearDigPick();
+  const runBtn = $('digRun');
+  const newBtn = $('digRunNewTheme');
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = '掘削中…'; }
+  if (newBtn) newBtn.disabled = true;
   try {
     const engineSel = $('digEngine');
     const search_engine = engineSel ? engineSel.value : 'default';
-    // 現在テーマペインで選んでいるテーマを引き継ぐ。 「全部」 なら未指定で
-    // バックエンドに自動導出させる。
+    // 通常: 現在テーマを引き継ぐ。 forceNewTheme なら theme を渡さず、
+    // バックエンドに deriveDigTheme(query) で新規テーマを起こさせる。
     const body = { query: q, search_engine };
-    if (state.digTheme) body.theme = state.digTheme;
+    if (!forceNewTheme && state.digTheme) body.theme = state.digTheme;
     const r = await api('/api/dig', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -856,7 +936,9 @@ async function startDig({ chainCloudId, chainParentWord } = {}) {
       parentWord: chainParentWord ?? null,
     };
     // 新規 dig が落ち着いたテーマがあれば、 それを current として引き継ぐ。
-    if (r.theme && !state.digTheme) {
+    // forceNewTheme の場合は backend が新規テーマを返してくるので state を
+    // それに切り替える。
+    if (r.theme && (forceNewTheme || !state.digTheme)) {
       state.digTheme = r.theme;
       renderDigThemeBadge();
     }
@@ -865,8 +947,45 @@ async function startDig({ chainCloudId, chainParentWord } = {}) {
   } catch (e) {
     alert(`dig 失敗: ${e.message}`);
   } finally {
-    $('digRun').disabled = false;
-    $('digRun').textContent = '🔎 ディグる';
+    if (runBtn) { runBtn.disabled = false; runBtn.textContent = '🔎 ディグる'; }
+    if (newBtn) newBtn.disabled = false;
+  }
+}
+
+/**
+ * ノードクリック時のワンクッション。 textarea にプロンプトを下書きして
+ * フォーカスを移し、 ユーザに 「○○ について何を知りたいか?」 を書き足して
+ * もらう。 「ディグる」 でテーマ内深堀、 「別テーマとして検索」 で新規テーマ。
+ */
+function digOnWordPick(session, word) {
+  state.digPickedWord = word;
+  const ta = $('digQuery');
+  if (!ta) return;
+  // 既に何か書きかけならスペース区切りで継ぎ足す。 空なら「<word> について 」。
+  const prefix = ta.value.trim() ? `${ta.value.trim()} ${word} ` : `${word} について `;
+  ta.value = prefix;
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  // ヒント帯 (textarea 直上) を表示。
+  const hint = $('digPickHint');
+  if (hint) {
+    const themeLabel = session?.theme || state.digTheme || '';
+    const themeHint = themeLabel ? `テーマ「${themeLabel}」内` : '同じテーマ';
+    hint.querySelector('.dig-pick-text').textContent =
+      `「${word}」 について何を知りたい? ${themeHint}で深堀する場合は ディグる、 別テーマで検索する場合は 別テーマとして検索 を押してください。`;
+    hint.hidden = false;
+  }
+  // 軽くスクロール: textarea が見えるように。
+  ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function clearDigPick() {
+  state.digPickedWord = null;
+  const hint = $('digPickHint');
+  if (hint) {
+    hint.hidden = true;
+    const tx = hint.querySelector('.dig-pick-text');
+    if (tx) tx.textContent = '';
   }
 }
 
@@ -908,11 +1027,18 @@ function renderDigSession() {
   if ($('digShareStatus')) $('digShareStatus').textContent = '';
   if (!s) { el.innerHTML = ''; return; }
   if (s.status === 'pending') {
-    if (s.preview) {
-      el.innerHTML = renderDigPreview(s) + `<div class="dig-pending dig-pending-tight"><div class="pulse"></div>詳細解析を続行中…完了するとさらに整理された結果が表示されます。</div>`;
-    } else {
-      el.innerHTML = `<div class="dig-pending"><div class="pulse"></div>「${escapeHtml(s.query)}」を検索中…まずは Google の AI overview と上位結果のみを取得し、続けて詳細を解析します。</div>`;
-    }
+    // Show whatever we have RIGHT NOW. Three layers in increasing latency:
+    //   raw_results (no AI, ~2 s)  →  preview (AI overview, ~30 s)  →
+    //   full result (deep AI dig, minutes).
+    const layers = [];
+    if (s.raw_results) layers.push(renderDigRawResults(s));
+    if (s.preview) layers.push(renderDigPreview(s));
+    const tail = s.preview
+      ? '詳細解析を続行中…完了するとさらに整理された結果が表示されます。'
+      : (s.raw_results
+        ? 'AI overview を取得中…続けて詳細解析が走ります。'
+        : `「${escapeHtml(s.query)}」を検索中…数秒で生の検索結果、その後に AI 解析が来ます。`);
+    el.innerHTML = layers.join('') + `<div class="dig-pending dig-pending-tight"><div class="pulse"></div>${escapeHtml(tail)}</div>`;
     return;
   }
   if (s.status === 'error') {
@@ -924,7 +1050,7 @@ function renderDigSession() {
   const summaryBlock = r.summary
     ? `<div class="summary">${escapeHtml(r.summary)}</div>`
     : '';
-  const graph = sources.length > 0 ? digGraph(s.query, sources) : '';
+  const graph = sources.length > 0 ? digWordCloud(s, sources) : '';
   const sourceCards = sources.map((src, i) => {
     const sel = state.digSelected.has(src.url);
     const topics = (src.topics || []).map(t => `<span class="topic">${escapeHtml(t)}</span>`).join('');
@@ -953,10 +1079,27 @@ function renderDigSession() {
       <span class="grow"></span>
       <button id="digCloudBtn" class="ghost" title="このディグの記事からワードクラウドを生成">🌐 このディグから雲を抽出</button>
       <button id="digDictBtn" class="ghost" title="このディグを辞書エントリとして記録">📖 辞書に追加</button>
+      <button id="digDeleteBtn" class="danger" title="この誤 Dig を削除">🗑 削除</button>
       <button id="digSaveBtn">選択をブックマーク化</button>
     </div>
     <div class="dig-sources">${sourceCards}</div>
   `;
+  // Cloud node clicks — explored word jumps to its past session, new word
+  // hands off to digOnWordPick (one-cushion flow: focus the textarea with a
+  // prefilled "○○ について 何を知りたいか?" prompt, plus a "別テーマとして
+  // 検索" button alongside the regular ディグる).
+  const handleNodeClick = (target) => {
+    const exploredId = target.dataset.exploredId;
+    if (exploredId) {
+      loadDigSession(Number(exploredId));
+      return;
+    }
+    const word = target.dataset.word;
+    if (word) digOnWordPick(s, word);
+  };
+  el.querySelectorAll('.dig-graph-node, .dig-cloud-word').forEach(node => {
+    node.addEventListener('click', () => handleNodeClick(node));
+  });
   el.querySelectorAll('.dig-source').forEach(card => {
     const url = card.dataset.url;
     card.addEventListener('click', (e) => {
@@ -976,6 +1119,11 @@ function renderDigSession() {
     startCloudFromDig(s.id, chain.cloudId, chain.parentWord);
   });
   $('digDictBtn')?.addEventListener('click', () => addDigToDictionary(s));
+  $('digDeleteBtn')?.addEventListener('click', async () => {
+    const queryLabel = (s.query || '').slice(0, 60);
+    if (!confirm(`このディグを削除しますか?\n「${queryLabel}」`)) return;
+    await deleteDigSessionFromUi(s.id);
+  });
   $('digSaveBtn')?.addEventListener('click', async () => {
     const urls = [...state.digSelected];
     if (!urls.length) return;
@@ -998,34 +1146,303 @@ function renderDigSession() {
   });
 }
 
-function digGraph(query, sources) {
-  const w = 700, h = 360, cx = w / 2, cy = h / 2, r = 130;
-  const center = { x: cx, y: cy, label: query.slice(0, 24), klass: 'center', size: 10 };
-  const nodes = sources.map((s, i) => {
-    const a = (i / sources.length) * Math.PI * 2 - Math.PI / 2;
-    return {
-      x: cx + Math.cos(a) * r,
-      y: cy + Math.sin(a) * r,
-      label: shortDomain(s.url),
-      klass: '',
-      size: 6,
-    };
-  });
-  const edges = nodes.map(n =>
-    `<line class="edge" x1="${cx}" y1="${cy}" x2="${n.x.toFixed(1)}" y2="${n.y.toFixed(1)}" />`
-  ).join('');
-  const dots = [center, ...nodes].map(n =>
-    `<circle class="node ${n.klass}" cx="${n.x}" cy="${n.y}" r="${n.size}" />`
-  ).join('');
-  const labels = [center, ...nodes].map(n => {
-    const dy = n === center ? -16 : (n.y < cy ? -10 : 18);
-    return `<text class="node-label" x="${n.x}" y="${n.y + dy}" text-anchor="middle">${escapeHtml(n.label)}</text>`;
-  }).join('');
-  return `<div class="dig-graph"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${edges}${dots}${labels}</svg></div>`;
+// Stopwords for the inline dig word cloud — mirror of server/db.js
+// `KEYWORD_STOPWORDS` plus a few search-result chrome words ("article",
+// "page" 等) we don't want surfacing as "key terms".
+const DIG_CLOUD_STOPWORDS = new Set([
+  'the','and','for','with','from','that','this','your','you','our','have','has','was','were','will',
+  'what','when','where','which','who','about','into','than','then','also','but','not','are','can',
+  'use','using','how','why','etc','its','their','they','there','here','been','being','one','two',
+  'more','most','some','any','all','out','off','per','via','new','old','top','best','vs',
+  'http','https','www','com','net','org','jp','html','htm','php','asp',
+  'について','として','による','によって','などの','する','して','です','ます','ない','ある','こと',
+  'もの','よう','これ','それ','ため','など','とは','では','での','さん','さま','様','記事','ページ',
+  'こちら','そして','しかし','ただし','ここ','以下','以上','について','詳しく','一覧','まとめ',
+]);
+
+// Upper bounds for "is this still a word, not a sentence?". A CJK run that's
+// 13 chars long is almost always a phrase (e.g. 「機械学習による画像分類」),
+// not a single term. Same for very long latin runs — usually URL fragments
+// or run-on text from a snippet that lost its delimiters.
+const DIG_CLOUD_MAX_ASCII_LEN = 24;
+const DIG_CLOUD_MAX_CJK_LEN   = 12;
+
+/**
+ * Tokenise a blob of text into a frequency map of "key" words.
+ *  - ASCII / Latin: ≥ 3 chars, ≤ DIG_CLOUD_MAX_ASCII_LEN.
+ *  - CJK (kana, hiragana, katakana, kanji): runs ≥ 2 chars,
+ *    ≤ DIG_CLOUD_MAX_CJK_LEN.
+ * Stopwords (English filler + Japanese filler) are dropped, and overly long
+ * runs are dropped as "this is a sentence, not a word".
+ */
+function digCloudTokenize(text) {
+  const t = String(text || '').toLowerCase();
+  const freq = new Map();
+  for (const m of t.matchAll(/[a-z][a-z0-9_+#.-]{2,}/g)) {
+    const w = m[0];
+    if (w.length > DIG_CLOUD_MAX_ASCII_LEN) continue;
+    if (DIG_CLOUD_STOPWORDS.has(w)) continue;
+    freq.set(w, (freq.get(w) || 0) + 1);
+  }
+  for (const m of String(text || '').matchAll(/[぀-ヿ一-鿿]{2,}/g)) {
+    const w = m[0];
+    if (w.length > DIG_CLOUD_MAX_CJK_LEN) continue;
+    if (DIG_CLOUD_STOPWORDS.has(w)) continue;
+    freq.set(w, (freq.get(w) || 0) + 1);
+  }
+  return freq;
 }
 
-function shortDomain(url) {
-  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url.slice(0, 20); }
+/**
+ * Classify a token into 'circle' (abstract / domain term) or 'square'
+ * (concrete entity — product, brand, version, identifier).
+ *
+ * Heuristic: anything that looks proper-noun-shaped is concrete.
+ *   - has a digit                         → square (versions, IDs)
+ *   - mixed case English (CamelCase)      → square (product names)
+ *   - all-caps acronym (≥ 2 chars)        → square (DRY, GPU, …)
+ *   - katakana-dominant short run (≤ 6)   → square (ブランド名 / 製品名)
+ *   - everything else                     → circle (general concept)
+ *
+ * Imperfect, but quick and stable. We deliberately avoid an LLM call
+ * here — the user wants the graph to render instantly with the dig.
+ */
+function digCloudShape(word) {
+  if (!word) return 'circle';
+  if (/\d/.test(word)) return 'square';
+  if (/[A-Z]/.test(word) && /[a-z]/.test(word)) return 'square';
+  if (/^[A-Z]{2,}$/.test(word)) return 'square';
+  // Pure katakana run — typically loanword-as-product/brand. Long katakana
+  // (e.g. 「アーキテクチャ」) is more often a concept, so cap at 6.
+  if (/^[ァ-ヿー]+$/.test(word) && word.length <= 6) return 'square';
+  return 'circle';
+}
+
+/**
+ * Wrap a single token across at most 2 lines so the label fits inside its
+ * shape. Estimates per-char width by script (CJK ≈ font-size, ASCII ≈ 0.55
+ * font-size). If 2 lines still don't fit, the second line is truncated
+ * with an ellipsis — the full word remains in the tooltip / data-word.
+ */
+function digCloudWrap(word, fontSize, maxWidthPx) {
+  if (!word) return [''];
+  const isCjk = /[぀-ヿ一-鿿]/.test(word);
+  const charW = isCjk ? fontSize * 1.0 : fontSize * 0.55;
+  const maxChars = Math.max(2, Math.floor(maxWidthPx / charW));
+  if (word.length <= maxChars) return [word];
+  // Two lines max — anything more is unreadable inside a node.
+  const first = word.slice(0, maxChars);
+  let second = word.slice(maxChars);
+  if (second.length > maxChars) second = second.slice(0, Math.max(1, maxChars - 1)) + '…';
+  return [first, second];
+}
+
+/**
+ * Build a word-cloud GRAPH from this dig's sources. Each node is a frequent
+ * word; edge = co-occurrence within the same source's text. Replaces the
+ * old text-only cloud and the even older "center + ring of domains" graph.
+ *
+ *  - Node font-size scales with word frequency (頻出単語ほど大きく).
+ *  - Edges are drawn between words that co-occur in ≥ 2 sources, capped at
+ *    the top 3 partners per node so we don't end up with a hairball.
+ *  - Layout: simple force-directed simulation (~150 iter) — fine for 30
+ *    nodes, no library needed.
+ *  - 過去のディグに同じ語があればノードを「↪」 でマークし、クリック時の
+ *    挙動を変える (one-cushion flow — see digOnWordPick callers).
+ */
+function digWordCloud(session, sources) {
+  const TOP_N = 30;
+  const sourceTokens = sources.map(s => digCloudTokenize(
+    `${s.title || ''} ${s.snippet || ''} ${(s.topics || []).join(' ')}`
+  ));
+  const queryTokens = digCloudTokenize(session.query || '');
+
+  // Global frequency = total occurrences across all sources.
+  const freq = new Map();
+  for (const ft of sourceTokens) {
+    for (const [w, n] of ft) freq.set(w, (freq.get(w) || 0) + n);
+  }
+  for (const k of queryTokens.keys()) freq.delete(k);
+
+  const words = [...freq.entries()]
+    .map(([word, count]) => ({ word, count }))
+    .filter(w => w.count >= 2 || w.word.length >= 4)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, TOP_N);
+  if (!words.length) return '';
+
+  const wordIndex = new Map(words.map((w, i) => [w.word, i]));
+
+  // Co-occurrence: for each source, every pair of present words → +1.
+  const pairWeight = new Map();
+  function pairKey(a, b) { return a < b ? `${a}|||${b}` : `${b}|||${a}`; }
+  for (const ft of sourceTokens) {
+    const present = [...ft.keys()].filter(w => wordIndex.has(w));
+    for (let i = 0; i < present.length; i++) {
+      for (let j = i + 1; j < present.length; j++) {
+        const k = pairKey(present[i], present[j]);
+        pairWeight.set(k, (pairWeight.get(k) || 0) + 1);
+      }
+    }
+  }
+  // Reduce to top-3 partners per node — stops the layout becoming a blob.
+  const adjPicks = new Map(words.map(w => [w.word, []]));
+  for (const [k, w] of pairWeight) {
+    if (w < 2) continue;
+    const [a, b] = k.split('|||');
+    adjPicks.get(a).push({ other: b, w });
+    adjPicks.get(b).push({ other: a, w });
+  }
+  const edges = [];
+  const seenEdge = new Set();
+  for (const [word, picks] of adjPicks) {
+    picks.sort((x, y) => y.w - x.w);
+    for (const p of picks.slice(0, 3)) {
+      const k = pairKey(word, p.other);
+      if (seenEdge.has(k)) continue;
+      seenEdge.add(k);
+      edges.push({ a: wordIndex.get(word), b: wordIndex.get(p.other), w: p.w });
+    }
+  }
+
+  // Past-search index (token → most recent past session containing it).
+  const pastByQuery = new Map();
+  for (const h of state.digHistory || []) {
+    if (!h || h.id === session.id) continue;
+    for (const tok of digCloudTokenize(h.query || '').keys()) {
+      if (!pastByQuery.has(tok)) pastByQuery.set(tok, h);
+    }
+  }
+
+  // Force-directed simulation. The viewBox is 720x440; nodes start near
+  // the centre, then repel/attract for a fixed number of iterations. We
+  // run synchronously here — 30 nodes × 150 iter is < 5 ms.
+  const W = 720, H = 440;
+  const max = words[0].count;
+  const nodes = words.map((w, i) => {
+    const angle = (i / words.length) * Math.PI * 2;
+    return {
+      i,
+      word: w.word,
+      count: w.count,
+      x: W / 2 + Math.cos(angle) * 80,
+      y: H / 2 + Math.sin(angle) * 80,
+      vx: 0, vy: 0,
+      r: 18 + 28 * (w.count / max),         // visual radius / font size
+    };
+  });
+  const REPEL = 1400;
+  const SPRING = 0.012;
+  const SPRING_LEN = 100;
+  const CENTER_PULL = 0.0025;
+  const DAMP = 0.84;
+  const ITER = 180;
+  for (let step = 0; step < ITER; step++) {
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      let fx = (W / 2 - a.x) * CENTER_PULL;
+      let fy = (H / 2 - a.y) * CENTER_PULL;
+      for (let j = 0; j < nodes.length; j++) {
+        if (i === j) continue;
+        const b = nodes[j];
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) { d2 = 1; dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); }
+        const d = Math.sqrt(d2);
+        const f = REPEL / d2;
+        fx += (dx / d) * f;
+        fy += (dy / d) * f;
+      }
+      a.fx = fx;
+      a.fy = fy;
+    }
+    for (const e of edges) {
+      const a = nodes[e.a], b = nodes[e.b];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = SPRING * (d - SPRING_LEN) * Math.min(1, e.w / 4);
+      const fxs = (dx / d) * f, fys = (dy / d) * f;
+      a.fx += fxs; a.fy += fys;
+      b.fx -= fxs; b.fy -= fys;
+    }
+    for (const a of nodes) {
+      a.vx = (a.vx + a.fx) * DAMP;
+      a.vy = (a.vy + a.fy) * DAMP;
+      a.x += a.vx;
+      a.y += a.vy;
+      // Soft viewport clamp so labels never escape the SVG.
+      const margin = a.r + 4;
+      if (a.x < margin) { a.x = margin; a.vx = 0; }
+      if (a.x > W - margin) { a.x = W - margin; a.vx = 0; }
+      if (a.y < margin) { a.y = margin; a.vy = 0; }
+      if (a.y > H - margin) { a.y = H - margin; a.vy = 0; }
+    }
+  }
+
+  // Render edges first (under nodes).
+  const maxEdgeW = edges.reduce((m, e) => Math.max(m, e.w), 1);
+  const edgeSvg = edges.map(e => {
+    const a = nodes[e.a], b = nodes[e.b];
+    const opacity = 0.18 + 0.6 * (e.w / maxEdgeW);
+    const stroke = (1 + 2 * (e.w / maxEdgeW)).toFixed(1);
+    return `<line class="dig-graph-edge" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke-width="${stroke}" opacity="${opacity.toFixed(2)}" />`;
+  }).join('');
+
+  const nodeSvg = nodes.map(n => {
+    const past = pastByQuery.get(n.word);
+    const cls = past ? 'dig-graph-node explored' : 'dig-graph-node';
+    const prefix = past ? '↪ ' : '';
+    const titleAttr = past
+      ? `過去のディグ「${past.query}」に連結 — クリックでそのセッションへ`
+      : `${n.count} 回出現 — クリックで深堀の入力欄へ送る`;
+    const dataAttr = past
+      ? `data-explored-id="${past.id}"`
+      : `data-word="${escapeHtml(n.word)}"`;
+    const fontSize = (12 + 18 * (n.count / max)).toFixed(1);
+    return `<g class="${cls}" ${dataAttr} transform="translate(${n.x.toFixed(1)},${n.y.toFixed(1)})">
+      <title>${escapeHtml(titleAttr)}</title>
+      <text class="dig-graph-label" text-anchor="middle" dominant-baseline="middle"
+            font-size="${fontSize}">${prefix}${escapeHtml(n.word)}</text>
+    </g>`;
+  }).join('');
+
+  const exploredCount = nodes.filter(n => pastByQuery.has(n.word)).length;
+  const exploredHint = exploredCount
+    ? `<span class="dig-cloud-explored-hint" title="↪ 印付きノードは過去のディグに連結 — クリックでそのセッションへ">↪ ${exploredCount} 語が過去ディグに連結</span>`
+    : '';
+
+  return `<div class="dig-cloud-inline">
+    <div class="dig-cloud-title">関連ワードグラフ (${words.length} 語 / ${edges.length} エッジ) ${exploredHint}</div>
+    <div class="dig-graph-wrap">
+      <svg class="dig-graph-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+        <g class="edges">${edgeSvg}</g>
+        <g class="nodes">${nodeSvg}</g>
+      </svg>
+    </div>
+  </div>`;
+}
+
+function renderDigRawResults(session) {
+  // Pure-scrape SERP results (no AI). First thing the user sees after
+  // pressing ディグる — usually within ~2 s of submission.
+  const raw = session.raw_results || {};
+  const items = (raw.results || []);
+  if (!items.length) return '';
+  const engineLabel = raw.engine === 'bing' ? 'Bing' : 'DuckDuckGo';
+  const list = items.map(r => `
+    <li class="dig-raw-result">
+      <div class="title"><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.title || r.url)}</a></div>
+      <div class="url">${escapeHtml(r.domain || r.url)}</div>
+      ${r.snippet ? `<div class="snippet">${escapeHtml(r.snippet)}</div>` : ''}
+    </li>
+  `).join('');
+  return `
+    <div class="dig-raw">
+      <h3 class="dig-raw-h">⚡ 生の検索結果 <span class="dig-raw-tag">${escapeHtml(engineLabel)} スクレイプ — AI なし</span></h3>
+      <ol class="dig-raw-list">${list}</ol>
+    </div>
+  `;
 }
 
 function renderDigPreview(session) {
@@ -1382,10 +1799,10 @@ async function onCloudWordClick(word) {
     await addCloudWordToDictionary(word, c);
     return;
   }
-  // Drilling from cloud: words are pre-validated (kept=true). Run a dig with this word as query.
+  // ワンクッション: 即ディグらず、 textarea にプロンプトを下書きして
+  // ユーザに 「○○ について何を知りたいか?」 を書き足させる。
   switchTab('dig');
-  $('digQuery').value = word;
-  await startDig({ chainCloudId: c?.id, chainParentWord: word });
+  digOnWordPick({ query: c?.label || '', theme: c?.parent_word || null }, word);
 }
 
 async function addCloudWordToDictionary(word, cloud) {
@@ -2021,6 +2438,22 @@ function renderDiaryDetail() {
   statusEl.textContent = statusLabels[status] || status;
   statusEl.className = `diary-status-tag status-${status}`;
 
+  // Show Sonnet's inferred focused-work time as a small tag next to status.
+  // Hidden when the diary hasn't run yet or Sonnet declined to estimate.
+  const wmEl = $('diaryWorkMinutes');
+  if (wmEl) {
+    const wm = Number(d.work_minutes);
+    if (Number.isFinite(wm) && wm >= 0) {
+      const h = Math.floor(wm / 60);
+      const m = wm % 60;
+      wmEl.textContent = `推定作業 ${h}h ${m}m`;
+      wmEl.hidden = false;
+    } else {
+      wmEl.hidden = true;
+      wmEl.textContent = '';
+    }
+  }
+
   const generateBtn = $('diaryGenerate');
   generateBtn.textContent = (status === 'absent') ? '作成' : '再生成';
   generateBtn.disabled = (status === 'pending');
@@ -2489,7 +2922,7 @@ function renderRecommendations() {
 async function loadTrends() {
   const days = state.trendsRange;
   try {
-    const [cats, diff, timeline, domains, visitDomains, workHours, keywords, github] = await Promise.all([
+    const [cats, diff, timeline, domains, visitDomains, workHours, keywords, github, gps] = await Promise.all([
       api(`/api/trends/categories?days=${encodeURIComponent(days)}`),
       api(`/api/trends/category-diff?days=7`),
       api(`/api/trends/timeline?days=${encodeURIComponent(days)}`),
@@ -2498,6 +2931,7 @@ async function loadTrends() {
       api(`/api/trends/work-hours?days=${encodeURIComponent(days)}`),
       api(`/api/trends/keywords?days=${encodeURIComponent(days)}`),
       api(`/api/trends/github?days=${encodeURIComponent(days)}`).catch(() => ({ enabled: false })),
+      api(`/api/trends/gps-walking?days=${encodeURIComponent(days)}`).catch(() => ({ items: [] })),
     ]);
     renderTrendCategories(cats.items);
     renderTrendDiff(diff.items);
@@ -2507,6 +2941,7 @@ async function loadTrends() {
     renderTrendWorkHours(workHours.items);
     renderTrendKeywords(keywords.items);
     renderTrendGithub(github);
+    renderTrendGpsWalking(gps.items);
   } catch (e) {
     console.error('trends load failed', e);
   }
@@ -2583,14 +3018,50 @@ function renderTrendKeywords(items) {
 function renderTrendWorkHours(items) {
   const el = $('trendWorkHours');
   if (!el) return;
-  if (!items?.length) { el.innerHTML = '<div class="queue-empty">データなし</div>'; return; }
-  // items: [{date: 'YYYY-MM-DD', minutes}]
-  const data = items.map(d => ({ date: d.date, value: d.minutes / 60, raw: d.minutes }));
+  // items: [{date: 'YYYY-MM-DD', minutes: number|null}]
+  // null = no diary generated for that day → drop from the line, don't draw 0.
+  const present = (items || []).filter(d => Number.isFinite(d.minutes));
+  if (!present.length) {
+    el.innerHTML = '<div class="queue-empty">作業時間が記録された日記がまだありません</div>';
+    return;
+  }
+  const data = present.map(d => ({ date: d.date, value: d.minutes / 60, raw: d.minutes }));
   el.innerHTML = renderLineChartSvg(data, {
     yLabel: (v) => `${v.toFixed(1)}h`,
     pointLabel: (d) => `${d.date} : ${(d.value).toFixed(1)} 時間 (${d.raw} 分)`,
   });
   attachLineChartTooltip(el);
+}
+
+function renderTrendGpsWalking(items) {
+  // items: [{date, distance_km, walking_minutes, travel_minutes}]
+  const distEl = $('trendWalkDistance');
+  const minsEl = $('trendWalkMinutes');
+  if (!distEl && !minsEl) return;
+
+  const list = items || [];
+  const hasAny = list.some(d => d.distance_km > 0 || d.walking_minutes > 0);
+  if (!hasAny) {
+    if (distEl) distEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
+    if (minsEl) minsEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
+    return;
+  }
+  if (distEl) {
+    const data = list.map(d => ({ date: d.date, value: d.distance_km, raw: d }));
+    distEl.innerHTML = renderLineChartSvg(data, {
+      yLabel: (v) => `${v.toFixed(1)}km`,
+      pointLabel: (d) => `${d.date} : ${d.value.toFixed(2)} km (歩行 ${d.raw.walking_minutes} 分 / 移動 ${d.raw.travel_minutes} 分)`,
+    });
+    attachLineChartTooltip(distEl);
+  }
+  if (minsEl) {
+    const data = list.map(d => ({ date: d.date, value: d.walking_minutes, raw: d }));
+    minsEl.innerHTML = renderLineChartSvg(data, {
+      yLabel: (v) => `${Math.round(v)}分`,
+      pointLabel: (d) => `${d.date} : 歩行 ${d.value} 分 (距離 ${d.raw.distance_km.toFixed(2)} km / 移動 ${d.raw.travel_minutes} 分)`,
+    });
+    attachLineChartTooltip(minsEl);
+  }
 }
 
 function renderTrendGithub(payload) {
@@ -3113,6 +3584,8 @@ $('trendsRange').addEventListener('change', (e) => {
 });
 $('recRefresh').addEventListener('click', () => loadRecommendations(true));
 $('digRun').addEventListener('click', () => startDig());
+$('digRunNewTheme')?.addEventListener('click', () => startDig({ forceNewTheme: true }));
+$('digPickClear')?.addEventListener('click', () => clearDigPick());
 // textarea で Cmd/Ctrl+Enter は ディグる、 通常 Enter は改行のままにする
 // (5 行 textarea で複数行クエリを書けるようにするため)。
 $('digQuery').addEventListener('keydown', (e) => {
