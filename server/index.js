@@ -1933,6 +1933,15 @@ function enqueueDiaryStages(dateStr, opts = {}) {
         status: 'done',
         error: null,
       });
+      // 日記が完成したら登録済端末に push 通知。 失敗しても本体には影響させない。
+      sendPushToAll(db, {
+        title: `📝 ${dateStr} の日記が完成しました`,
+        body: ctx.highlights ? ctx.highlights.split('\n').slice(0, 2).join(' ').slice(0, 140) : '作業内容とハイライトが揃いました',
+        url: `/?tab=diary&date=${encodeURIComponent(dateStr)}`,
+        tag: `memoria-diary-${dateStr}`,
+      }).catch((err) => {
+        console.warn(`[push] diary notification failed: ${err.message}`);
+      });
     } catch (e) {
       rememberFailure('highlights', e);
       throw e;
