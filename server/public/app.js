@@ -17,6 +17,8 @@ const state = {
   digHistory: [],
   digSelected: new Set(),
   digPolling: null,
+  digTheme: '',           // 現在選んでいるテーマ ('' = 全部)
+  digThemes: [],          // GET /api/dig/themes の結果
   cloud: null,           // {id, status, label, result, parent_cloud_id, parent_word, origin, ...}
   cloudPolling: null,
   cloudShowDropped: false,
@@ -719,14 +721,88 @@ function reflowTabsForViewport() {
 }
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
+//
+// テーマドリブン:
+//  - state.digTheme: 現在選んでいるテーマ ('' = 全部)
+//  - 左のテーマペインはセッションが付いたテーマを最新順に並べる
+//  - 「ディグる」 押下時、 state.digTheme があればそれを引き継ぐ。 無ければ
+//    バックエンドが query から自動で導出してくれる。
 
 async function loadDigHistory() {
   try {
-    const { items } = await api('/api/dig');
+    const qs = state.digTheme ? `?theme=${encodeURIComponent(state.digTheme)}` : '';
+    const { items } = await api(`/api/dig${qs}`);
     state.digHistory = items;
     renderDigHistory();
     if (!state.digEnginesLoaded) loadDigEngines();
+    loadDigThemes();
   } catch (e) { console.error(e); }
+}
+
+async function loadDigThemes() {
+  try {
+    const { items } = await api('/api/dig/themes');
+    state.digThemes = items;
+    renderDigThemes();
+  } catch (e) { console.error(e); }
+}
+
+function renderDigThemes() {
+  const list = $('digThemeList');
+  if (!list) return;
+  // Build the "全部" first item, then one per theme.
+  const totalCount = state.digThemes
+    ? state.digThemes.reduce((acc, t) => acc + (t.session_count || 0), 0)
+    : 0;
+  const themes = state.digThemes || [];
+  const items = [
+    `<li class="dig-theme-item ${state.digTheme ? '' : 'active'}" data-theme="">
+       <span class="theme-name">全部</span>
+       <span class="count">${totalCount || ''}</span>
+     </li>`,
+    ...themes.map(t => {
+      const active = state.digTheme === t.theme ? 'active' : '';
+      return `<li class="dig-theme-item ${active}" data-theme="${escapeHtml(t.theme)}"
+                  title="${escapeHtml(t.last_query || '')}\n最終: ${escapeHtml(t.last_at || '')}">
+        <span class="theme-name">${escapeHtml(t.theme)}</span>
+        <span class="count">${t.session_count}</span>
+      </li>`;
+    }),
+  ];
+  list.innerHTML = items.join('');
+  list.querySelectorAll('.dig-theme-item').forEach(li => {
+    li.addEventListener('click', () => {
+      state.digTheme = li.dataset.theme || '';
+      // Theme 切替で履歴 + バッジ + 結果ペインをクリア
+      state.digSession = null;
+      state.digSelected = new Set();
+      const result = $('digResult');
+      if (result) result.innerHTML = '';
+      renderDigThemeBadge();
+      renderDigThemes();
+      loadDigHistory();
+    });
+  });
+}
+
+function renderDigThemeBadge() {
+  const badge = $('digThemeBadge');
+  if (!badge) return;
+  if (state.digTheme) {
+    badge.hidden = false;
+    badge.innerHTML = `<span class="dig-theme-badge-label">テーマ:</span>
+      <strong>${escapeHtml(state.digTheme)}</strong>
+      <button id="digThemeBadgeClear" class="ghost" title="テーマ選択を解除">×</button>`;
+    badge.querySelector('#digThemeBadgeClear')?.addEventListener('click', () => {
+      state.digTheme = '';
+      renderDigThemeBadge();
+      renderDigThemes();
+      loadDigHistory();
+    });
+  } else {
+    badge.hidden = true;
+    badge.innerHTML = '';
+  }
 }
 
 async function loadDigEngines() {
@@ -742,11 +818,14 @@ async function loadDigEngines() {
 function renderDigHistory() {
   const el = $('digHistory');
   if (!state.digHistory.length) {
-    el.innerHTML = '<span style="color:var(--muted);font-size:11px">過去のディグなし</span>';
+    const msg = state.digTheme
+      ? `テーマ "${escapeHtml(state.digTheme)}" のディグなし`
+      : '過去のディグなし';
+    el.innerHTML = `<span style="color:var(--muted);font-size:11px">${msg}</span>`;
     return;
   }
   el.innerHTML = state.digHistory.map(s =>
-    `<span class="pill ${s.status}" data-id="${s.id}" title="${escapeHtml(s.created_at)}">
+    `<span class="pill ${s.status}" data-id="${s.id}" title="${escapeHtml(s.created_at)}${s.theme ? ` [${escapeHtml(s.theme)}]` : ''}">
       ${escapeHtml(s.query.slice(0, 30))}${s.query.length > 30 ? '…' : ''}
     </span>`
   ).join('');
@@ -763,22 +842,31 @@ async function startDig({ chainCloudId, chainParentWord } = {}) {
   try {
     const engineSel = $('digEngine');
     const search_engine = engineSel ? engineSel.value : 'default';
+    // 現在テーマペインで選んでいるテーマを引き継ぐ。 「全部」 なら未指定で
+    // バックエンドに自動導出させる。
+    const body = { query: q, search_engine };
+    if (state.digTheme) body.theme = state.digTheme;
     const r = await api('/api/dig', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, search_engine }),
+      body: JSON.stringify(body),
     });
     state.digChain = {
       cloudId: chainCloudId ?? null,
       parentWord: chainParentWord ?? null,
     };
+    // 新規 dig が落ち着いたテーマがあれば、 それを current として引き継ぐ。
+    if (r.theme && !state.digTheme) {
+      state.digTheme = r.theme;
+      renderDigThemeBadge();
+    }
     await loadDigHistory();
     pollDigSession(r.id);
   } catch (e) {
     alert(`dig 失敗: ${e.message}`);
   } finally {
     $('digRun').disabled = false;
-    $('digRun').textContent = 'ディグる';
+    $('digRun').textContent = '🔎 ディグる';
   }
 }
 
@@ -3025,10 +3113,14 @@ $('trendsRange').addEventListener('change', (e) => {
 });
 $('recRefresh').addEventListener('click', () => loadRecommendations(true));
 $('digRun').addEventListener('click', () => startDig());
+// textarea で Cmd/Ctrl+Enter は ディグる、 通常 Enter は改行のままにする
+// (5 行 textarea で複数行クエリを書けるようにするため)。
 $('digQuery').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); startDig(); }
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    startDig();
+  }
 });
-$('digFromBookmarks')?.addEventListener('click', startCloudFromBookmarks);
 $('dictNewBtn')?.addEventListener('click', createDictionaryEntry);
 $('dictSaveBtn')?.addEventListener('click', saveDictionaryEntry);
 $('dictDeleteBtn')?.addEventListener('click', deleteDictionaryEntry);

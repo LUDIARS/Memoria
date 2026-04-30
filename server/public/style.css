@@ -578,19 +578,141 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-left: 6px;
 }
 
+/* ─── Dig view: テーマドリブン 2 ペイン ─────────────────────────────── */
+
+.dig-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  width: 100%;
+}
+.dig-themes {
+  flex: 0 0 170px;
+  width: 170px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: var(--shadow);
+}
+.dig-themes h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+  letter-spacing: 0.04em;
+}
+.dig-theme-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dig-theme-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.dig-theme-item:hover { background: #f0f2f7; }
+.dig-theme-item.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+.dig-theme-item .theme-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dig-theme-item .count {
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.dig-theme-item.active .count { color: var(--accent); }
+
+.dig-main { flex: 1 1 auto; min-width: 0; }
+.dig-head h2 { margin: 0 0 6px; font-size: 18px; }
+.dig-howto {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+.dig-theme-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.dig-theme-badge[hidden] { display: none; }
+.dig-theme-badge-label { color: var(--muted); }
+.dig-theme-badge .ghost {
+  padding: 0 6px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
 .dig-input {
   display: flex;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+  align-items: stretch;
 }
-.dig-input input {
-  flex: 1;
+.dig-input textarea {
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
 }
-.dig-input button { padding: 12px 20px; font-size: 14px; }
+.dig-input textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.dig-input .dig-run-btn {
+  padding: 0 22px;
+  font-size: 15px;
+  font-weight: 600;
+  flex: 0 0 auto;
+  align-self: stretch;
+  white-space: nowrap;
+}
+.dig-input-row2 {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.dig-engine-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .dig-history {
   display: flex;
   gap: 6px;
@@ -2047,6 +2169,33 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   }
   .diary-detail { padding: 12px; }
   .diary-pie-row { flex-direction: column; }
+
+  /* Dig view: スマホでは左テーマペインを上に積む (PC の 2 ペインから
+   * 縦 2 段構成へ)。 テーマペインは少し低めにして横スクロール可能にする。 */
+  .dig-layout {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .dig-themes {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .dig-theme-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 6px;
+    scrollbar-width: none;
+  }
+  .dig-theme-list::-webkit-scrollbar { display: none; }
+  .dig-theme-item {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+  }
+  .dig-input { flex-direction: column; }
+  .dig-input .dig-run-btn { width: 100%; padding: 10px; }
 
   /* Bookmark cards stack rather than tile. ブックマーク (とそれ以外の
    * すべての主要ビュー) は viewport - 8px 内に収める。 */
