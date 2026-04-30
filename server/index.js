@@ -54,7 +54,8 @@ import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './loc
 import { listServerEvents, listServerEventsForDate } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
-  generateDiary, generateWeekly, summarizeGithubByRepo,
+  generateDiary, generateWorkContent, generateHighlights,
+  generateWeekly, summarizeGithubByRepo,
   formatLocalDate, yesterdayLocal, weekRangeFor, weekOfMonth, pingGithub,
 } from './diary.js';
 import {
@@ -1465,7 +1466,153 @@ function settingsAsObject() {
   };
 }
 
+// Diary generation is split across several sub-stages so each one shows up
+// in the queue UI as its own work item:
+//   1. 📥 GitHub fetch (if configured) — diary_github
+//   2. 📝 作業内容    (Sonnet)         — diary_work
+//   3. ✨ ハイライト  (Opus 1M)         — diary_highlights
+//
+// Stages share a context object that is closed over by every queued task,
+// so later stages can read what earlier stages produced. Failure in any
+// stage marks the diary row as `error` and stops the chain.
+function enqueueDiaryStages(dateStr) {
+  const ctx = {
+    metrics: null,
+    github: null,
+    notes: '',
+    workContent: '',
+    githubByRepo: null,
+    highlights: '',
+    bookmarkSummary: null,
+    failed: false,
+  };
+
+  function rememberFailure(stage, e) {
+    ctx.failed = true;
+    upsertDiary(db, {
+      date: dateStr, status: 'error', metrics: ctx.metrics || aggregateDay(db, dateStr),
+      githubCommits: ctx.github, error: `[${stage}] ${e.message}`.slice(0, 500),
+    });
+  }
+
+  // Stage 0: snapshot metrics + reset diary row to pending. This is the
+  // cheap first step but lives in the queue too so the user sees the
+  // diary entering the pipeline immediately.
+  diaryQueue.enqueue(async () => {
+    if (ctx.failed) return;
+    ctx.metrics = aggregateDay(db, dateStr);
+    const prior = getDiary(db, dateStr);
+    ctx.notes = prior?.notes || '';
+    upsertDiary(db, { date: dateStr, status: 'pending', metrics: ctx.metrics, error: null });
+  }, { kind: 'diary_prepare', date: dateStr, title: `📅 ${dateStr} 集計` });
+
+  // Stage 1: GitHub fetch (only if configured, otherwise no-op).
+  diaryQueue.enqueue(async () => {
+    if (ctx.failed) return;
+    const settings = settingsAsObject();
+    if (!settings.github_user) return;
+    try {
+      ctx.github = await fetchGithubActivity({
+        token: settings.github_token,
+        user: settings.github_user,
+        repos: settings.github_repos,
+        dateStr,
+      });
+    } catch (e) {
+      rememberFailure('github', e);
+      throw e;
+    }
+  }, { kind: 'diary_github', date: dateStr, title: `📥 ${dateStr} GitHub commits` });
+
+  // Stage 2: 作業内容 (Sonnet by default).
+  diaryQueue.enqueue(async () => {
+    if (ctx.failed) return;
+    try {
+      ctx.workContent = await generateWorkContent({ db, dateStr, metrics: ctx.metrics });
+      upsertDiary(db, {
+        date: dateStr,
+        workContent: ctx.workContent,
+        metrics: ctx.metrics,
+        githubCommits: ctx.github,
+        status: 'pending',
+        error: null,
+      });
+    } catch (e) {
+      rememberFailure('work', e);
+      throw e;
+    }
+  }, { kind: 'diary_work', date: dateStr, title: `📝 ${dateStr} 作業内容 (Sonnet)` });
+
+  // Stage 3: ハイライト (Opus 1M by default) — depends on stage 2.
+  diaryQueue.enqueue(async () => {
+    if (ctx.failed) return;
+    try {
+      ctx.githubByRepo = summarizeGithubByRepo(ctx.github);
+      const created = ctx.metrics?.bookmarks?.created || [];
+      const accessed = ctx.metrics?.bookmarks?.accessed || [];
+      const domSet = new Set();
+      for (const b of [...created, ...accessed]) {
+        try { domSet.add(new URL(b.url).hostname); } catch {}
+      }
+      ctx.bookmarkSummary = {
+        created: created.length,
+        accessed: accessed.length,
+        topDomains: [...domSet].slice(0, 8),
+      };
+      const digs = ctx.metrics.digs || [];
+      ctx.highlights = await generateHighlights({
+        dateStr,
+        workContent: ctx.workContent,
+        githubByRepo: ctx.githubByRepo,
+        bookmarkSummary: ctx.bookmarkSummary,
+        digs, notes: ctx.notes, metrics: ctx.metrics,
+      });
+      const summary = composeDiarySummary({
+        workContent: ctx.workContent,
+        githubByRepo: ctx.githubByRepo,
+        highlights: ctx.highlights,
+        digs,
+      });
+      upsertDiary(db, {
+        date: dateStr,
+        summary,
+        workContent: ctx.workContent,
+        highlights: ctx.highlights,
+        metrics: ctx.metrics,
+        githubCommits: ctx.github,
+        status: 'done',
+        error: null,
+      });
+    } catch (e) {
+      rememberFailure('highlights', e);
+      throw e;
+    }
+  }, { kind: 'diary_highlights', date: dateStr, title: `✨ ${dateStr} ハイライト (Opus 1M)` });
+}
+
+// Mirror of `composeSummary` from diary.js — extracted here so we can run
+// the highlights stage independently in the queue chain.
+function composeDiarySummary({ workContent, githubByRepo, highlights, digs }) {
+  const parts = [];
+  if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
+  if (digs && digs.length > 0) {
+    const digLines = digs.map(d => {
+      const head = `- 「${d.query}」 (${d.source_count} 件のソース)`;
+      return d.summary ? `${head}\n  ${d.summary.slice(0, 250)}` : head;
+    }).join('\n');
+    parts.push(`## ディグ調査\n${digLines}`);
+  }
+  if (githubByRepo?.repos?.length) {
+    const repoLines = githubByRepo.repos.map(r => `- ${r.repo}: ${r.count} commits`).join('\n');
+    parts.push(`## GitHub commits (${githubByRepo.total} 件)\n${repoLines}`);
+  }
+  if (highlights) parts.push(`## ハイライト\n${highlights.trim()}`);
+  return parts.join('\n\n');
+}
+
 async function runDiaryGeneration(dateStr) {
+  // Legacy single-step path kept for the weekly job, which orchestrates
+  // its own run. The queued user-facing path goes through enqueueDiaryStages.
   const metrics = aggregateDay(db, dateStr);
   const settings = settingsAsObject();
   upsertDiary(db, { date: dateStr, status: 'pending', metrics, error: null });
@@ -1509,9 +1656,10 @@ async function runDiaryGeneration(dateStr) {
 }
 
 function enqueueDiary(dateStr) {
-  diaryQueue.enqueue(async () => {
-    await runDiaryGeneration(dateStr);
-  }, { kind: 'diary', date: dateStr, title: dateStr });
+  // User-facing diary regenerate. Splits into prepare → github → work →
+  // highlights so each LLM/IO step is its own queue entry. The legacy
+  // single-task path (runDiaryGeneration) is kept for the weekly cron.
+  enqueueDiaryStages(dateStr);
 }
 
 app.get('/api/diary', (c) => {
