@@ -581,10 +581,26 @@ function bumpTabUsage(tab) {
   u[tab] = (u[tab] || 0) + 1;
   try { localStorage.setItem(TAB_USAGE_KEY, JSON.stringify(u)); } catch {}
 }
+// 既定の表示優先度。 履歴が空 (= 新規ユーザ / localStorage クリア直後) の時は
+// この順で上位 4 件が strip に出る。 何かを 1 度でも触れば実 usage が必ず勝つ
+// よう、 default score は 1 click 未満に収めている。
+const TAB_DEFAULT_PRIORITY = [
+  'bookmarks', 'dig', 'diary', 'tracks', 'dict', 'domain',
+  'visits', 'trends', 'recommend', 'queue', 'events', 'multi',
+];
+function tabDefaultScore(name) {
+  const idx = TAB_DEFAULT_PRIORITY.indexOf(name);
+  if (idx < 0) return 0;
+  return (TAB_DEFAULT_PRIORITY.length - idx) / 1000;  // 0.001 〜 0.012
+}
 function tabsInUsageOrder() {
   const tabs = [...document.querySelectorAll('.tabs-scroll .tab[data-tab]')];
   const u = readTabUsage();
-  return tabs.slice().sort((a, b) => (u[b.dataset.tab] || 0) - (u[a.dataset.tab] || 0));
+  return tabs.slice().sort((a, b) => {
+    const sa = (u[a.dataset.tab] || 0) + tabDefaultScore(a.dataset.tab);
+    const sb = (u[b.dataset.tab] || 0) + tabDefaultScore(b.dataset.tab);
+    return sb - sa;
+  });
 }
 // Mobile tab nav is "top 4 most-used + active visible inline, the rest
 // tucked into a ⋯ More dropdown". Desktop shows every tab inline. The
