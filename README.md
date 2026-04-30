@@ -1,301 +1,208 @@
 # Memoria
 
-ローカルで完結する Web ブックマーキングツール。Chrome 拡張で「いま見ているページ」を保存すると、ローカルで動く [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) (`claude` CLI) が**要約とカテゴリを自動生成**し、自前の Web UI から検索・整理・メモできる。
+ローカル完結型のブックマーク + ディグ (deep research) + 日記 + ドメイン辞書ツール。
+Chrome 拡張で「いま見ているページ」を保存すると、ローカルで動く Claude Code
+(`claude` CLI) が要約・カテゴリ・タイトル・サイトの分類を自動生成し、自前の
+Web UI から検索・整理・調査・日記化できる。
 
-外部クラウドにはデータを送らない（クラウドに行くのは Claude Code 経由の要約リクエストだけ）。
+外部に出るのはユーザが意図的にシェアしたものだけ。デフォルトの個人モード
+ではブックマーク本体・履歴・日記など個人データはすべて手元の SQLite に
+留まる。
 
-## 主な機能
+---
 
-- **保存**: Chrome 拡張から HTML / URL / タイトルをローカルサーバーに送信
-- **要約 + カテゴリ自動生成**: ローカル `claude -p` をサブプロセスで起動、3〜5 個の日本語カテゴリと約 200〜400 字の要約を生成
-- **保存ストレージ**: HTML はファイル (`data/html/`)、メタデータは SQLite (`data/memoria.db`)
-- **カテゴリ別 UI**: 左サイドバーで絞り込み、カードに要約とカテゴリチップを表示
-- **メモ機能**: 各ブックマークに自由記述のメモを追加
-- **エクスポート / インポート**: 選択ブックマークを JSON で書き出し / 取り込み（共有用途）
-- **アクセス追跡**: 追加日 + 最終アクセス日 + アクセス回数を記録、Chrome 拡張がアクティブタブの URL をサーバーに通知
-- **要約キュー**: `claude` CLI 呼び出しを直列化、サーバー再起動時の `pending` 復旧、UI で実行中・順番待ち・履歴を可視化
-- **本日の未保存履歴タブ**: 今日アクセスして未保存の URL をリスト → チェックして一括ブックマーク化（サーバー側で fetch）
-- **再要約**: 保存済の HTML から要約をやり直す
-- **フローティング保存ボタン**: 全ページ右下に常駐、ドラッグで位置移動、クリックで保存
+## 3 つの動かし方
 
-## 構成
+| | 誰向け | やること |
+|---|---|---|
+| **デスクトップアプリ** | ふつうのユーザ | インストーラを実行するだけ。Node もサーバも同梱、設定はアプリ内 UI |
+| **server 直起動** | 開発者 / カスタム運用 | `npm install && npm start`。Chrome 拡張は別途 |
+| **マルチサーバ (Memoria Hub)** | 共有ハブを建てたい人 | `docker compose up`。Cernere SSO 必須、ローカルとは別物 |
 
-```
-Memoria/
-├ extension/              Chrome 拡張 (Manifest V3)
-│  ├ manifest.json
-│  ├ background.js        access ping / 拡張<->サーバー間プロキシ
-│  ├ content.js           各ページに floating button を Shadow DOM で注入
-│  ├ popup.html / .js     ツールバーアイコンの保存ボタン
-│  └ options.html / .js   サーバー URL 設定
-│
-├ server/                 Node.js + Hono + better-sqlite3
-│  ├ index.js             HTTP API + 静的配信
-│  ├ db.js                SQLite スキーマ + クエリ
-│  ├ claude.js            HTML→テキスト抽出 + claude CLI 呼び出し
-│  ├ queue.js             FIFO 要約キュー
-│  └ public/              SPA (vanilla JS)
-│
-├ data/                   ★ git 管理外
-│  ├ html/                保存 HTML 本体 (1 ページ = 1 ファイル)
-│  └ memoria.db           SQLite DB
-│
-└ README.md
-```
+ふつうの利用は **デスクトップアプリ** で完結する。サーバを直に立てる
+必要はない。
 
-## インストール
+---
+
+## A. デスクトップアプリ (推奨)
+
+[Tauri 2.x](https://tauri.app/) 製。インストーラには Memoria サーバ + Node
+ランタイムが同梱されているので、ユーザは何もインストールしなくていい。
+
+### 1. インストール
+
+リリースから配布物を取得 (Windows: `.msi` / macOS: `.dmg` / Linux: `.deb` 等)。
+リリースがまだない場合の自前ビルドは [`desktop/README.md`](desktop/README.md) 参照。
+
+### 2. 起動 → ほぼ何もしない
+
+アプリを起動すると裏で Memoria サーバが立ち上がり、WebView が
+`http://localhost:5180/` を表示する。
+
+最低限必要な設定はぜんぶ右上 **⚙ AI** ボタンの中:
+
+- **タスク別プロバイダ** (Claude / Gemini / Codex / OpenAI API)
+- **CLI バイナリパス** (PATH に通っていない場合のみ)
+- **🐚 Bash (Windows のみ)** — git-bash の絶対パス。Memoria が一般的な
+  インストール先 (`C:\Program Files\Git\bin\bash.exe` 等) を自動検出
+  するので、空欄のままで大体動く
+- **OpenAI API Key** (gpt 系を使うとき)
+- **🌐 マルチサーバ URL** (共有ハブに接続するとき)
+- **🛠 ランタイム情報** (port / data dir / platform — 表示のみ)
+
+これらはすべて SQLite の `app_settings` に保存され、再起動しても残る。
+環境変数の手動設定は **不要**。
+
+### 3. Chrome 拡張のインストール
+
+ブラウザから保存するには Chrome 拡張が必要。
+
+1. Chrome で `chrome://extensions`
+2. 右上 **デベロッパーモード** ON
+3. **「パッケージ化されていない拡張機能を読み込む」** → このリポの `extension/`
+4. ツールバーに Memoria アイコンが出る
+
+拡張のサーバ URL は既定で `http://localhost:5180`。
+
+---
+
+## B. server 直起動 (開発者向け)
+
+CI を回したり、コードを触ったり、複数台で運用したいとき。
 
 ### 必要環境
 
 | ツール | バージョン | 備考 |
-|--------|-----------|------|
-| Node.js | 18 以上 | `fetch` / `--watch` 内蔵 |
-| npm | 9 以上 | Node.js 同梱で OK |
-| Google Chrome | 116 以上 | MV3 対応版 |
-| Claude Code CLI | 2.0 以上 | [公式インストール手順](https://docs.claude.com/en/docs/claude-code/quickstart) |
-| (Windows のみ) Git for Windows | 任意 | `bash.exe` を `claude` CLI が要求 |
+|---|---|---|
+| Node.js | 22 LTS+ | `--env-file-if-exists` を使う |
+| npm | 10+ | Node 同梱 |
+| Claude Code CLI | 最新 | `claude -p "hi"` が動くこと |
+| Chrome | MV3 対応版 | 拡張を読み込むときだけ |
+| Git for Windows | 任意 | Windows で `claude` CLI が `bash.exe` を要求するため |
 
-### 1. リポジトリ取得
+### 起動
 
 ```bash
 git clone https://github.com/LUDIARS/Memoria.git
-cd Memoria
-```
-
-### 2. サーバーのセットアップ
-
-```bash
-cd server
+cd Memoria/server
 npm install
-```
-
-### 3. 環境変数 (.env)
-
-リポジトリ直下の `.env.example` をコピーして、必要な行だけ有効化:
-
-```bash
-cp .env.example .env
-# 編集
-```
-
-`server/npm start` は **Node 21.7+ の `--env-file-if-exists`** で `server/.env` または `<repo>/.env` を自動的に読み込みます (dotenv 等の依存は不要)。インラインで渡した env (例: `MEMORIA_PORT=6000 npm start`) が `.env` より優先されます。
-
-### 4. サーバー起動
-
-```bash
-cd server
 npm start
-# → http://localhost:5180
+# → http://localhost:5180/
 ```
 
-**Windows 注意:** `claude` CLI が PATH 上にあっても、Node の `spawn()` から呼ぶときは **`bash.exe` の絶対パス** を `CLAUDE_CODE_GIT_BASH_PATH` で渡す必要があります (claude が PATH 経由で bash を見つけないため)。`.env` に書いておけば毎回指定不要:
+開発時は `npm run dev` (Node の `--watch` で自動再起動)。
 
-```dotenv
-CLAUDE_CODE_GIT_BASH_PATH=C:\Program Files\Git\bin\bash.exe
-```
+### 設定はすべて UI から
 
-未設定だと要約処理が `status=error` になり、UI 詳細パネルにエラー文が表示されます。
+`MEMORIA_PORT` / `MEMORIA_DATA` / `MEMORIA_CLAUDE_BIN` /
+`CLAUDE_CODE_GIT_BASH_PATH` を環境変数で渡してもいいが、**通常は
+不要** で、起動後 ⚙ AI 設定パネルから入力するだけで十分。env と UI
+両方に値があれば UI の値が優先される。
 
-### 5. Chrome 拡張の読み込み
-
-1. Chrome で `chrome://extensions` を開く
-2. 右上の **「デベロッパーモード」** を ON
-3. **「パッケージ化されていない拡張機能を読み込む」** → このリポジトリの `extension/` ディレクトリを選択
-4. Chrome ツールバーに Memoria アイコンが表示される
-
-### 6. 動作確認
-
-1. ブラウザで http://localhost:5180/ を開く（Memoria UI）
-2. 別タブで任意の Web ページを開く
-3. 右下のフローティングボタン or ツールバーアイコンの「このページを保存」をクリック
-4. UI に戻ると新しいカードが「要約中」で現れ、数秒後に要約とカテゴリが入る
-
-## 環境変数
-
-| 変数 | 既定値 | 用途 |
-|------|--------|------|
-| `MEMORIA_PORT` | `5180` | リッスンポート |
-| `MEMORIA_DATA` | `<repo>/data` | DB と HTML 保存ディレクトリ |
-| `MEMORIA_CLAUDE_BIN` | `claude` | claude CLI のパス |
-| `CLAUDE_CODE_GIT_BASH_PATH` | (未設定) | Windows 用、bash.exe の絶対パス |
-| `MEMORIA_RAG` | `1` | RAG (意味検索 + Q&A) の有効/無効。`0` で完全に無効化 |
-
-例:
+ポート / データディレクトリだけは起動前に決まるので、変更したい場合
+だけ env で渡す:
 
 ```bash
 MEMORIA_PORT=6000 MEMORIA_DATA=/var/memoria npm start
 ```
 
-## 拡張機能の設定
+### ディレクトリ構成
 
-サーバー URL を変更する場合: `chrome://extensions` → Memoria Bookmarker → **詳細** → **拡張機能のオプション**
-
-既定値は `http://localhost:5180`。
-
-## 使い方
-
-### ページを保存する
-
-- フローティングボタン（右下、常駐、ドラッグ移動可）
-- ツールバーの Memoria アイコン → 「このページを保存」
-
-どちらでも HTML / URL / タイトルがサーバーに送られ、要約キューに投入されます。同じ URL は二重保存されず、アクセス回数だけ加算されます。
-
-### カテゴリで絞り込む
-
-UI 左サイドバー。各カテゴリには件数バッジが付きます。「すべて」で全件表示。
-
-### メモを書く
-
-カードをクリックして詳細パネルを開き、「メモ」欄に入力 → **保存** ボタン。
-カテゴリも同パネルでカンマ区切り編集可。
-
-### 再要約
-
-詳細パネルの **再要約** ボタンで保存済 HTML を Claude にかけ直します（要約と Auto カテゴリのみ更新、メモは保持）。
-
-### エクスポート / インポート
-
-- カードのチェックボックスで複数選択 → ヘッダー右の **Export**
-- **Import** → JSON ファイル選択（URL 重複はスキップする merge モード）
-
-### 本日の未保存タブ
-
-- 今日アクセスして未保存の URL を一覧表示
-- チェックして **選択をブックマークに保存** → サーバーが fetch して HTML を取得、要約キューへ投入
-- ログインが必要なページはサーバー fetch では取れません → 拡張ボタン経由で保存してください
-
-### 要約キュータブ
-
-実行中ジョブ・順番待ち・履歴（最新 50 件、所要時間 / 完了時刻 / エラー文）を表示。
-
-## API
-
-| Method | Path | 用途 |
-|--------|------|------|
-| `POST` | `/api/bookmark` | ページ保存 (HTML+URL+title)。重複 URL はアクセスのみ記録 |
-| `GET`  | `/api/bookmarks?category=&sort=` | 一覧 |
-| `GET`  | `/api/bookmarks/:id` | 詳細 |
-| `PATCH`| `/api/bookmarks/:id` | メモ・カテゴリ更新 |
-| `DELETE`| `/api/bookmarks/:id` | 削除 (HTML ファイルも削除) |
-| `GET`  | `/api/bookmarks/:id/html` | 保存 HTML を返す |
-| `GET`  | `/api/bookmarks/:id/accesses` | アクセス履歴 |
-| `POST` | `/api/bookmarks/:id/resummarize` | 再要約 |
-| `GET`  | `/api/categories` | カテゴリ一覧 (件数付き) |
-| `POST` | `/api/access` | URL+title を upsert、ブックマークがあればアクセス記録 |
-| `GET`  | `/api/visits/unsaved` | 本日 & 未ブックマークの URL 一覧 |
-| `GET`  | `/api/visits/unsaved/count` | 件数のみ |
-| `POST` | `/api/visits/bookmark` | `{urls[]}` を fetch して保存 |
-| `DELETE`| `/api/visits` | `{urls[]}` を履歴から削除 |
-| `POST` | `/api/export` | `{ids?, includeHtml?}` → エクスポート JSON |
-| `POST` | `/api/import` | `{bookmarks: [...]}` を取り込み |
-| `GET`  | `/api/queue` | キュー深度 + running |
-| `GET`  | `/api/queue/items` | キューと履歴のスナップショット |
-
-## エクスポートフォーマット
-
-```json
-{
-  "version": 1,
-  "exported_at": "2026-04-27T...",
-  "bookmarks": [
-    {
-      "url": "...",
-      "title": "...",
-      "summary": "...",
-      "memo": "...",
-      "categories": ["..."],
-      "created_at": "...",
-      "last_accessed_at": "...",
-      "access_count": 7,
-      "html": "<!DOCTYPE html>..."
-    }
-  ]
-}
+```
+Memoria/
+├ extension/        Chrome 拡張 (MV3)
+├ server/           Node.js + Hono + better-sqlite3
+│  ├ index.js       HTTP API + 静的配信
+│  ├ db/            SQLite façade (Phase 0 シーム)
+│  ├ db.js          スキーマ + クエリ (legacy export)
+│  ├ claude.js      HTML→テキスト + claude CLI 呼出し
+│  ├ llm.js         プロバイダ切替 (claude/gemini/codex/openai)
+│  ├ dig.js         ディグ deep research
+│  ├ diary.js       日記 + 週報
+│  ├ domain-catalog.js  ドメイン分類 (site_name + できること自動推論)
+│  ├ page-metadata.js   per-URL meta + kind
+│  ├ wordcloud.js   ワードクラウド
+│  ├ recommendations.js おすすめ
+│  ├ queue.js       FIFO キュー
+│  ├ local/         ローカル専用 (uptime, multi-client)
+│  ├ multi/         マルチサーバ (Memoria Hub) — 別 Node プロセス
+│  ├ types/         JSDoc から参照する .d.ts (Phase 1 TS migration)
+│  └ public/        SPA (vanilla JS)
+│
+├ desktop/          Tauri ラッパ + bundle スクリプト
+├ docs/             設計書 (multi-server-architecture.md, mobile-share.md)
+├ mcp-server/       MCP として外部公開する実装 (Claude Desktop / Code 連携)
+└ data/             ★ git 管理外 (HTML + SQLite)
 ```
 
-## トラブルシューティング
+---
 
-### 要約が `status=error` になる
+## C. マルチサーバ (Memoria Hub) を建てる
 
-- **Windows**: `CLAUDE_CODE_GIT_BASH_PATH` が未設定。`bash.exe` のパスを指定して再起動
-- **権限**: `claude` CLI に Anthropic API キー or サブスクリプションが紐付いているか確認 (`claude -p "test"` を手動実行して通るか)
-- **タイムアウト**: 30 KB を超える長文ページは先頭 30,000 字に切り詰めますが、それでも 180 秒で打ち切ります
+辞書 / ディグ / ブックマークを **複数ユーザで共有** するハブ。Cernere
+SSO で認証する別プロセス、Postgres 必須。個人利用の Memoria を 1 人で
+動かすぶんにはいらない。
 
-### Chrome 拡張のフローティングボタンが出ない
+詳細は [`server/multi/README.md`](server/multi/README.md) と
+[`docs/multi-server-architecture.md`](docs/multi-server-architecture.md)。
 
-1. `chrome://extensions` で **Memoria Bookmarker** を **🔄 リロード**
-2. 確認ページを **F5** で再読み込み（content_scripts は新規ロード時のみ注入）
-3. ページで F12 → Console に `[Memoria] content script loaded on ...` が出るか確認
-4. `chrome://`, `chrome-extension://`, PDF ビューア, Web Store では Chrome の制限により注入されない
-
-### サーバーが起動しない
-
-- ポート競合: `MEMORIA_PORT=5181` などで変更
-- `better-sqlite3` ビルド失敗: Windows なら Python 3 + Visual Studio Build Tools、macOS/Linux なら build-essential 系を入れて `npm install` 再実行
-
-### `data/html/` の容量が増えすぎた
-
-ブックマークを削除すると対応 HTML ファイルも削除されます。長期間使うと累積するので、不要なものは UI から削除してください。
-
-## 既知の制限
-
-- 解析は Anthropic 公式 Chrome 拡張「Claude in Chrome」とは連携できない（公開 API なし、2026-04 時点）→ ローカル `claude` CLI を使用
-- `text/html` 系の Content-Type 以外（PDF / JSON / 画像）はサーバー fetch では保存できない
-- 認証が必要なページは Chrome 拡張ボタン経由でしか保存できない（ログイン状態を再現できないため）
-- データ複数端末同期は無し（個人ローカル運用想定）
-
-## MCP (Model Context Protocol) として使う
-
-`mcp-server/` 配下に Memoria を MCP サーバーとして公開する実装が含まれています。Claude Desktop / Claude Code から自分のブックマーク資産を直接検索・保存・要約できます。
-
-### セットアップ
+### docker compose で建てる (Phase 7)
 
 ```bash
-cd mcp-server
-npm install
+cd server/multi
+cp .env.example .env
+# 編集: MEMORIA_CERNERE_*, MEMORIA_JWT_SECRET, MEMORIA_HUB_BASE,
+#       POSTGRES_PASSWORD は最低限変更
+
+docker compose up -d --build
+docker compose logs -f hub
+curl http://localhost:5280/healthz
 ```
 
-Claude Desktop の `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`、Windows: `%APPDATA%\Claude\`) に追加:
+ローカル Memoria の AI 設定 → 🌐 マルチサーバ にこの URL を入れて接続
+すると、
 
-```json
-{
-  "mcpServers": {
-    "memoria": {
-      "command": "node",
-      "args": ["/abs/path/to/Memoria/mcp-server/index.js"],
-      "env": { "MEMORIA_URL": "http://localhost:5180" }
-    }
-  }
-}
-```
+- 自分のブックマーク / ディグ / 辞書を **📤 シェア**
+- ハブの公開エントリを **🌐 マルチタブ** で閲覧
+- 気に入ったエントリを **📥 ダウンロード** してローカルに取り込む
+- admin / mod ロールがあれば **🛡 モデレーション** タブで非表示処理
 
-Claude Code は `~/.claude/mcp.json` (プロジェクト固有なら `.claude/mcp.json`) に同じ形式で書けます。
+ができる。本番 Cernere OAuth クライアント登録は
+[`server/multi/README.md`](server/multi/README.md#cernere-oauth-クライアント登録ランブック)
+の手順を参照。
 
-### 公開している Tools
+---
 
-| name | 用途 |
-|------|------|
-| `search_bookmarks` | タイトル/URL/要約/メモを横断する部分一致検索 |
-| `get_bookmark` | id 指定で詳細取得 (HTML 本体も任意で含める) |
-| `save_url` | サーバー fetch でブックマーク化 |
-| `list_categories` | カテゴリ一覧 + 件数 |
-| `get_unsaved_visits` | 過去 N 日間の未保存訪問 (保存漏れスコア付き) |
-| `recent_bookmarks` | 最新の保存 |
+## 主な機能
 
-`memoria://bookmark/<id>` リソースで個別ブックマークの Markdown 表現も取得できます。
+- **保存**: Chrome 拡張から HTML / URL / タイトルをサーバへ送信
+- **要約 + カテゴリ自動生成**: ローカル `claude` CLI でローカル完結
+- **ワードクラウド + ディグ**: WebSearch + 引用元リスト + 関連語グラフ
+- **日記 + 週報**: 訪問ドメイン + ブックマーク + GitHub commits を統合し
+  Sonnet → 決定論集計 → Opus 1M でハイライト生成
+- **ドメイン辞書**: 各サイトの `site_name`, できること, kind を Sonnet が
+  自動分類
+- **ページメタ**: per-URL の og:* + kind を Sonnet が分類
+- **作業キュー**: 1 件ずつ表示 (running + 待機 + 履歴)
+- **PWA share_target** (Android) + iOS Shortcut テンプレート
+  ([`docs/mobile-share.md`](docs/mobile-share.md))
+- **マルチ LLM プロバイダ**: タスク別に Claude / Gemini / Codex / OpenAI
+- **マルチサーバ連携**: Cernere SSO + シェア / ダウンロード /
+  モデレーション
 
-## ロードマップ
+## 環境変数 (省略可)
 
-将来的に追加を予定している機能。詳細は GitHub Issues 参照。
+UI 設定が無い限り使うのは port / data dir くらい。
 
-- [ ] **検索・閲覧傾向の分析ダッシュボード** ([#1](https://github.com/LUDIARS/Memoria/issues/1)) — カテゴリ・タイトル・要約・アクセス履歴から自分の調査傾向を可視化
-- [ ] **関心領域に基づく技術サイト推薦** ([#2](https://github.com/LUDIARS/Memoria/issues/2)) — 傾向データから未訪問の関連サイトを提案 (#1 をベースに)
-- [ ] **ドメイン基準の保存漏れサジェスト** ([#3](https://github.com/LUDIARS/Memoria/issues/3)) — 同一ドメインで保存済の記事がある未保存 URL をハイライト
-- [ ] **「ディグる」タブ — Deep Research 風の探索 UI** ([#4](https://github.com/LUDIARS/Memoria/issues/4)) — 単語/センテンスを入力 → Web 検索 → ソースをリスト+グラフ表示 → 選択して要約
-- [ ] **Skill / MCP として外部から呼び出せるようにする** ([#5](https://github.com/LUDIARS/Memoria/issues/5)) — Claude Code / Claude Desktop / 他 MCP クライアントから検索・保存・要約を直接利用
-- [ ] **保存済ブックマークの RAG 化 (ベクトル検索)** ([#6](https://github.com/LUDIARS/Memoria/issues/6)) — 本文を埋め込みベクトル化、意味検索 + 自前蔵書を使った Q&A
+| 変数 | 既定 | 用途 |
+|---|---|---|
+| `MEMORIA_PORT` | `5180` | リッスンポート |
+| `MEMORIA_DATA` | `<repo>/data` | DB と HTML 保存先 |
+| `MEMORIA_DB_KIND` | `sqlite` | DB アダプタ (Phase 2 で `postgres` 追加予定) |
+| `MEMORIA_CLAUDE_BIN` | `claude` | claude CLI のパス (UI が優先) |
+| `CLAUDE_CODE_GIT_BASH_PATH` | (Windows のみ) | bash.exe 絶対パス (UI が優先) |
+| `MEMORIA_GH_TOKEN` / `MEMORIA_GH_USER` | – | 日記が GitHub commits を引くとき (UI 優先) |
 
 ## ライセンス
 
-MIT (詳細は LICENSE)
+MIT

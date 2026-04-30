@@ -880,6 +880,14 @@ app.get('/api/llm/config', (c) => {
       kind: v.kind,
       supportsTools: v.supportsTools,
     })),
+    runtime: {
+      // Read-only — these are fixed for the process lifetime. Exposing them
+      // so the AI / Settings panel can show "Memoria is running on port X
+      // with data at Y" without the user resorting to env vars.
+      port: PORT,
+      data_dir: DATA_DIR,
+      platform: process.platform,
+    },
   });
 });
 

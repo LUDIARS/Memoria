@@ -63,6 +63,29 @@ fn bundled_node(app: &tauri::AppHandle) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+#[cfg(target_os = "windows")]
+fn discover_git_bash() -> Option<PathBuf> {
+    // Common Git for Windows installation paths.
+    let candidates = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ];
+    for c in candidates {
+        let p = PathBuf::from(c);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // %USERPROFILE%\AppData\Local\Programs\Git\bin\bash.exe (per-user install).
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let p = PathBuf::from(profile).join(r"AppData\Local\Programs\Git\bin\bash.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 fn bundled_server(app: &tauri::AppHandle) -> Option<PathBuf> {
     let p = app
         .path()
@@ -101,14 +124,27 @@ fn spawn_server(app: &tauri::AppHandle) -> Option<Child> {
         return None;
     }
 
-    match Command::new(&node_bin)
-        .current_dir(&server_dir)
+    let mut cmd = Command::new(&node_bin);
+    cmd.current_dir(&server_dir)
         .arg("index.js")
         .env("MEMORIA_PORT", &port)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+
+    // Windows-only: best-effort discovery of git-bash so the Claude CLI
+    // (spawned from Node) can find its own bash. Settings can override
+    // the discovered path; this just gets first-run users moving.
+    #[cfg(target_os = "windows")]
     {
+        if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_none() {
+            if let Some(found) = discover_git_bash() {
+                cmd.env("CLAUDE_CODE_GIT_BASH_PATH", &found);
+                eprintln!("[memoria-desktop] git-bash → {:?}", found);
+            }
+        }
+    }
+
+    match cmd.spawn() {
         Ok(child) => {
             eprintln!(
                 "[memoria-desktop] spawned {:?} (pid {}) in {:?} (port {})",

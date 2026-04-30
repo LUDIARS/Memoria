@@ -91,29 +91,36 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 
 .layout {
   display: grid;
-  grid-template-columns: 220px 1fr 360px;
+  grid-template-columns: 1fr 360px;
   height: calc(100vh - 53px);
 }
-.layout:has(.detail.hidden) { grid-template-columns: 220px 1fr; }
+.layout:has(.detail.hidden) { grid-template-columns: 1fr; }
 
-/* Categories sidebar is bookmarks-only — collapse on every other tab. */
-.layout:not([data-active-tab="bookmarks"]) > .sidebar { display: none; }
-.layout:not([data-active-tab="bookmarks"]) {
-  grid-template-columns: 1fr 360px;
+/* Categories rail lives inside the bookmarks tab now (not the layout). */
+.bookmarks-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
 }
-.layout:not([data-active-tab="bookmarks"]):has(.detail.hidden) {
-  grid-template-columns: 1fr;
-}
-
-.sidebar {
-  border-right: 1px solid var(--border);
+.bookmarks-categories {
   background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   padding: 12px;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 120px);
   overflow-y: auto;
 }
-.sidebar h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 4px 0 8px; }
-.sidebar ul { list-style: none; padding: 0; margin: 0; }
-.sidebar li {
+.bookmarks-categories h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 4px 0 8px;
+}
+.bookmarks-categories ul { list-style: none; padding: 0; margin: 0; }
+.bookmarks-categories li {
   padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -121,9 +128,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   justify-content: space-between;
   font-size: 13px;
 }
-.sidebar li:hover { background: #f0f2f7; }
-.sidebar li.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
-.sidebar li .count { color: var(--muted); font-size: 12px; }
+.bookmarks-categories li:hover { background: #f0f2f7; }
+.bookmarks-categories li.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.bookmarks-categories li .count { color: var(--muted); font-size: 12px; }
 
 .content { padding: 16px; overflow-y: auto; position: relative; }
 .tabs {
@@ -1473,6 +1480,56 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .qg-icon.error { color: var(--danger); }
 .qg-row .duration { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .qg-row .pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.qg-tag {
+  display: inline-block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.queue-running-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  margin-bottom: 12px;
+}
+.queue-waiting { margin-bottom: 16px; }
+.qw-summary {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.qw-pill {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+.queue-history-h {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 16px 0 6px;
+}
+.queue-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
 
 .domain-stats {
   display: flex;
@@ -1510,6 +1567,18 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .ai-keystatus { font-size: 11px; color: var(--muted); display: block; margin-top: -4px; margin-bottom: 8px; }
 .ai-settings-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.ai-runtime-info {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ai-runtime-info code { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
 
 .diary-digs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .diary-dig {
@@ -1571,17 +1640,18 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   .topbar-controls { width: 100%; flex-wrap: wrap; margin-left: 0; }
   .topbar-controls input[type=search] { flex: 1 1 100%; min-width: 0; }
 
-  /* Drop the categories sidebar and right-hand detail rail by default;
-     bookmark detail becomes a full-screen overlay. */
+  /* Right-hand detail rail and categories rail collapse on mobile. */
   .layout,
-  .layout:not([data-active-tab="bookmarks"]),
-  .layout:has(.detail.hidden),
-  .layout:not([data-active-tab="bookmarks"]):has(.detail.hidden) {
+  .layout:has(.detail.hidden) {
     grid-template-columns: 1fr;
     height: auto;
     min-height: calc(100vh - 53px);
   }
-  .sidebar { display: none; }
+  .bookmarks-layout { grid-template-columns: 1fr; }
+  .bookmarks-categories {
+    position: static;
+    max-height: none;
+  }
 
   .detail {
     position: fixed;
