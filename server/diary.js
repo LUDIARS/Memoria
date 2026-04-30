@@ -510,6 +510,8 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) =>
   'HH:MM～HH:MM： <次の時間帯>',
   '主な作業',
   '・<具体的な内容> (HH:MM頃)',
+  '',
+  'WORK_MINUTES: <整数>',
   '```',
   '',
   '時間帯のルール:',
@@ -525,6 +527,16 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) =>
   '- ドメイン名や URL を直接出さず、内容で書く',
   '- 同じ時間帯で複数テーマがあれば 1 ブロックにまとめて 1 文で言及してから箇条書き',
   '',
+  '## 作業時間の見積もり (最終行に必ず WORK_MINUTES を出す)',
+  '本文の最後に空行 1 つを挟んで `WORK_MINUTES: <整数>` を必ず付けてください。',
+  '- 単位は「分」。整数 (例: 360)。',
+  '- 各時間帯の本文を見て「実際に集中して作業していた時間」を合計してください。',
+  '  単純な開始〜終了の wall clock ではなく、移動・休憩・離席・SNS 流し見等は除く。',
+  '- ブラウザのタブが開きっぱなしでもアクセス記録に動きがない時間は作業していないとみなす。',
+  '- 「記録なし」のブロックは 0 分。',
+  '- 24 時間 (1440 分) を超えてはいけない。実態として 12 時間を超えるのは長時間集中日のみ。',
+  '- 推定材料が足りない (例: 1 件しかアクセスがない) 場合は WORK_MINUTES: 0 と書く。',
+  '',
   `日付: ${dateStr}`,
   `総アクセス: ${totalEvents}`,
   `ユニークドメイン: ${totalDomains}`,
@@ -532,6 +544,29 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) =>
   'URL 履歴 (時刻 + URL):',
   urlList,
 ].join('\n');
+
+/**
+ * Pull `WORK_MINUTES: <int>` off the tail of the Sonnet output and return both
+ * the cleaned narrative and the parsed minutes. Sonnet is asked to put this
+ * line at the very end with a blank line before it; we tolerate any trailing
+ * whitespace and missing blank line. Anything outside [0, 1440] is dropped.
+ */
+export function extractWorkMinutes(raw) {
+  if (!raw) return { content: '', workMinutes: null };
+  const text = String(raw);
+  // Match the last WORK_MINUTES line (case-insensitive, allow whitespace).
+  const re = /^[ \t]*WORK[_ ]MINUTES[ \t]*[:：][ \t]*(\d{1,5})[ \t]*$/im;
+  const matches = [...text.matchAll(new RegExp(re.source, 'gim'))];
+  if (matches.length === 0) {
+    return { content: text.trim(), workMinutes: null };
+  }
+  const last = matches[matches.length - 1];
+  const minutes = Number(last[1]);
+  const cleaned = text.slice(0, last.index).replace(/\s+$/, '').trim();
+  // Reject implausible values rather than persisting nonsense.
+  const valid = Number.isFinite(minutes) && minutes >= 0 && minutes <= 24 * 60;
+  return { content: cleaned, workMinutes: valid ? minutes : null };
+}
 
 function formatGpsBlock(metrics) {
   const g = metrics?.gps;
@@ -749,10 +784,15 @@ function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
   return tail.length > 0 ? `${prompt}\n${tail.join('\n')}` : prompt;
 }
 
-/** Stage 1: Sonnet (default) writes 作業内容 from the URL timeline. */
+/**
+ * Stage 1: Sonnet (default) writes 作業内容 from the URL timeline AND infers
+ * the day's focused work minutes (tail line `WORK_MINUTES: <int>`). Returns
+ * `{ content, workMinutes }` — content is the markdown shown to the user
+ * (tail stripped), workMinutes feeds the trends chart.
+ */
 export async function generateWorkContent({ db, dateStr, metrics, globalMemo, improve, timeoutMs = 180_000 }) {
   const urlList = buildUrlList(db, dateStr);
-  if (!urlList.trim()) return '';
+  if (!urlList.trim()) return { content: '', workMinutes: null };
   const base = WORK_CONTENT_PROMPT({
     dateStr,
     urlList,
@@ -760,7 +800,8 @@ export async function generateWorkContent({ db, dateStr, metrics, globalMemo, im
     totalDomains: metrics.unique_domains,
   });
   const prompt = appendMemoAndImprove(base, { globalMemo, improve });
-  return await runLlm({ task: 'diary_work', prompt, timeoutMs });
+  const raw = await runLlm({ task: 'diary_work', prompt, timeoutMs });
+  return extractWorkMinutes(raw);
 }
 
 /** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits + dig into highlights. */
@@ -792,7 +833,7 @@ export async function generateDiary({ db, dateStr, metrics, github, notes }) {
     };
   }
 
-  const workContent = await generateWorkContent({ db, dateStr, metrics });
+  const { content: workContent, workMinutes } = await generateWorkContent({ db, dateStr, metrics });
   const digs = metrics.digs || [];
   const highlights = await generateHighlights({
     dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
@@ -800,7 +841,7 @@ export async function generateDiary({ db, dateStr, metrics, github, notes }) {
 
   // Combined summary for legacy display.
   const summary = composeSummary({ workContent, githubByRepo, highlights, digs });
-  return { workContent, githubByRepo, highlights, summary, digs };
+  return { workContent, workMinutes, githubByRepo, highlights, summary, digs };
 }
 
 function buildBookmarkSummary(metrics) {
