@@ -4079,6 +4079,8 @@ async function saveAiSettings() {
 document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
 document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
 document.getElementById('aiSettingsSave')?.addEventListener('click', saveAiSettings);
+document.getElementById('pushSubscribeBtn')?.addEventListener('click', () => pushSubscribeFlow().catch(e => setPushStatus(e.message, true)));
+document.getElementById('pushTestBtn')?.addEventListener('click', () => pushTestSend().catch(e => setPushStatus(e.message, true)));
 document.getElementById('multiAddBtn')?.addEventListener('click', multiAddServer);
 document.getElementById('dShare')?.addEventListener('click', shareCurrentBookmark);
 document.getElementById('dictShareBtn')?.addEventListener('click', shareCurrentDict);
@@ -4666,6 +4668,132 @@ function computeDistanceMeters(points) {
   }
   return dist;
 }
+
+// ── WebPush (PWA notifications) ────────────────────────────────────────────
+//
+// iOS Safari は homescreen 追加した PWA でないと PushManager.subscribe を許可
+// しない (16.4+)。 設定画面の「通知を有効化」 ボタンから flow を開始する。
+
+function setPushStatus(msg, isError = false) {
+  const el = document.getElementById('pushStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = isError ? '#b00' : '';
+}
+
+function urlBase64ToUint8Array(base64String) {
+  // VAPID public key (base64url) を Uint8Array に変換 — PushManager.subscribe
+  // は applicationServerKey に Uint8Array か ArrayBuffer を要求する
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function ensureServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    throw new Error('この端末は Service Worker 非対応です');
+  }
+  return navigator.serviceWorker.register('/sw.js', { scope: '/' });
+}
+
+async function pushSubscribeFlow() {
+  if (!('Notification' in window) || !('PushManager' in window)) {
+    throw new Error('この端末は WebPush 非対応です (iOS なら 16.4+ + ホーム画面追加)');
+  }
+  setPushStatus('Service Worker を登録中…');
+  const reg = await ensureServiceWorker();
+
+  setPushStatus('通知許可をリクエスト中…');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') {
+    throw new Error(`通知許可が拒否されました (${perm})`);
+  }
+
+  setPushStatus('VAPID 鍵を取得中…');
+  const { publicKey } = await api('/api/push/vapid-public-key');
+  if (!publicKey) throw new Error('サーバ側 VAPID が未構成です');
+
+  setPushStatus('PushManager.subscribe 中…');
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+  }
+
+  const json = sub.toJSON();
+  setPushStatus('サーバに登録中…');
+  await api('/api/push/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+      keys: json.keys,
+      userAgent: navigator.userAgent,
+    }),
+  });
+
+  setPushStatus('✅ 通知有効化完了');
+  await refreshPushDevices();
+}
+
+async function pushTestSend() {
+  setPushStatus('テスト通知を送信中…');
+  const r = await api('/api/push/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  setPushStatus(`送信: ${r.sent} / 失効: ${r.revoked} / エラー: ${r.errors?.length || 0}`);
+}
+
+async function refreshPushDevices() {
+  const ul = document.getElementById('pushDevicesList');
+  if (!ul) return;
+  try {
+    const r = await api('/api/push/subscriptions');
+    const items = r.items || [];
+    ul.innerHTML = '';
+    if (items.length === 0) {
+      ul.innerHTML = '<li class="hint">登録された端末はまだありません</li>';
+      return;
+    }
+    for (const it of items) {
+      const li = document.createElement('li');
+      const status = it.revoked_at ? '🚫 失効' : '🟢 有効';
+      const ua = it.user_agent ? it.user_agent.slice(0, 60) : '(unknown)';
+      li.innerHTML = `<span>${status} #${it.id} <small>${ua}</small></span>`;
+      const btn = document.createElement('button');
+      btn.className = 'ghost';
+      btn.textContent = '解除';
+      btn.addEventListener('click', async () => {
+        await api(`/api/push/subscriptions/${it.id}`, { method: 'DELETE' });
+        await refreshPushDevices();
+      });
+      li.appendChild(btn);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    ul.innerHTML = `<li class="hint">読み込み失敗: ${e.message}</li>`;
+  }
+}
+
+// 初期 SW register (subscribe ボタンを押す前に load しておくと、 push event
+// を受け取れる状態になる)
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
+    console.warn('[sw] register failed:', err);
+  });
+}
+// 設定画面が開いた時に端末リストを更新する hook (openAiSettings 内に
+// 食い込むより、 メニュー click 経路に被せる)
+document.getElementById('aiSettingsBtn')?.addEventListener('click', () => {
+  refreshPushDevices().catch(() => {});
+});
 
 // ── PWA share_target landing ───────────────────────────────────────────────
 // /share redirects back here with ?share=ok&u=<url> after queueing the save.

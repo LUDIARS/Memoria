@@ -608,6 +608,19 @@
     </div>
     <div id="recatalogAllStatus" class="multi-status"></div>
 
+    <h4>📱 通知 (WebPush)</h4>
+    <p class="ai-settings-help">
+      日記生成完了などをこの端末に通知します。
+      iOS は <strong>「ホーム画面に追加」 して PWA として開いた状態</strong>でないと
+      通知許可ダイアログが出ません (16.4+ の仕様)。
+    </p>
+    <div class="ai-settings-actions">
+      <button id="pushSubscribeBtn">この端末で通知を有効化</button>
+      <button id="pushTestBtn" class="ghost">テスト送信</button>
+    </div>
+    <div id="pushStatus" class="multi-status"></div>
+    <ul id="pushDevicesList" class="multi-servers"></ul>
+
     <h4>🛠 ランタイム情報 (読み取り専用)</h4>
     <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
     <div id="aiRuntimeInfo" class="ai-runtime-info"></div>
