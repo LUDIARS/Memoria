@@ -1833,8 +1833,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 
   /* Mobile uses the same horizontally-scrollable tab strip as desktop. */
   .tabs {
-    margin: 0 -4px 12px;
-    padding: 6px 4px;
+    margin: 0 -12px 12px;
+    padding: 6px 8px;
   }
 
   /* Keep the layout itself viewport-bound on mobile so .content remains
@@ -1924,17 +1924,16 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   /* Sticky tabs on mobile + "top 4 + More" model: only the four most-
    * used tabs (plus the active one) sit in the visible strip; the
    * rest are tucked into the ⋯ More dropdown. The strip itself stops
-   * scrolling horizontally since it always fits. */
+   * scrolling horizontally since it always fits.
+   * 機能ヘッダは viewport-fit (-8px) は適用しない (元の余白を維持)。 */
   .tabs {
-    margin: 0 -4px 12px;
-    padding: 6px 4px 0;
+    margin: 0 -12px 12px;
+    padding: 6px 8px 0;
     top: 0;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
     box-shadow: 0 1px 0 rgba(0,0,0,0.04);
     align-items: center;
-    max-width: 100vw;
-    box-sizing: border-box;
   }
   .tabs-scroll {
     overflow-x: hidden;
