@@ -1716,6 +1716,40 @@ function scheduleSundayEvening() {
 }
 scheduleSundayEvening();
 
+// ---- PWA Web Share Target -------------------------------------------------
+//
+// PWA share_target (manifest.webmanifest) routes the OS share sheet here on
+// Android. iOS has no PWA share_target — the iOS Shortcut template in
+// docs/mobile-share.md drives this same endpoint instead.
+//
+// Inputs (all optional, supplied by the share sheet):
+//   ?title=…  ?text=…  ?url=…
+// We extract the first http(s) URL we can find, kick off a server-side fetch
+// + summarize via the existing bulk-save path, then redirect back to the SPA.
+function extractShareUrl(q) {
+  const direct = (q.get('url') || '').trim();
+  if (/^https?:\/\//i.test(direct)) return direct;
+  for (const key of ['text', 'title']) {
+    const v = (q.get(key) || '').trim();
+    const m = v.match(/https?:\/\/\S+/i);
+    if (m) return m[0].replace(/[.,;:!?)\]]+$/g, '');
+  }
+  return null;
+}
+
+app.get('/share', async (c) => {
+  const q = new URL(c.req.url).searchParams;
+  const target = extractShareUrl(q);
+  if (!target) {
+    return c.redirect('/?share=invalid', 303);
+  }
+  // Fire-and-forget — bulkSaveUrls handles dedup and queues the summary.
+  bulkSaveUrls([target]).catch(err => {
+    console.error('[share] bulkSaveUrls failed:', err.message);
+  });
+  return c.redirect('/?share=ok&u=' + encodeURIComponent(target), 303);
+});
+
 // ---- static UI ------------------------------------------------------------
 
 app.use('/*', serveStatic({ root: './public' }));
