@@ -90,6 +90,7 @@
           <button class="tab" data-tab="dict">📖 辞書</button>
           <button class="tab" data-tab="domain">🏷 ドメイン</button>
           <button class="tab" data-tab="diary">📅 日記</button>
+          <button class="tab" data-tab="tracks">🗺 軌跡</button>
           <button class="tab tab-multi-only" data-tab="multi" hidden>🌐 マルチ</button>
         </div>
         <button type="button" id="tabMoreBtn" class="tab tab-more-btn" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
@@ -360,6 +361,45 @@
           <button id="eventsRefresh" class="ghost">更新</button>
         </div>
         <ul id="eventsList" class="events-list"></ul>
+      </div>
+
+      <div id="tracksView" class="hidden">
+        <div class="tracks-bar">
+          <input id="tracksDate" type="date" />
+          <button id="tracksRefresh" class="ghost">更新</button>
+          <span id="tracksLive" class="tracks-live" title="WebSocket ライブ更新の状態">●</span>
+          <span class="grow"></span>
+          <span id="tracksStats" class="tracks-stats"></span>
+          <button id="tracksKeyToggle" class="ghost" title="ingest key (HTTP モード用)">🔑 key</button>
+        </div>
+        <div id="tracksKeyPanel" class="tracks-key-panel hidden">
+          <div class="tracks-key-row">
+            <strong>ingest key:</strong>
+            <code id="tracksKeyPreview" class="tracks-key-preview">未設定</code>
+            <span id="tracksKeySource" class="muted"></span>
+          </div>
+          <div class="tracks-key-actions">
+            <button id="tracksKeyGenerate">🎲 新しい key を生成</button>
+            <button id="tracksKeyClear" class="ghost">クリア (匿名)</button>
+          </div>
+          <div id="tracksKeyReveal" class="tracks-key-reveal hidden">
+            <div class="muted">⚠ この key は <b>1 度だけ</b> 表示されます。 OwnTracks (HTTP モード) の Password に貼ってください。</div>
+            <code id="tracksKeyRevealValue" class="tracks-key-full"></code>
+            <button id="tracksKeyCopy" class="ghost">📋 copy</button>
+          </div>
+          <p class="muted tracks-key-help">
+            HTTP ingest endpoint (<code>POST /api/locations/ingest</code>) を WAN 公開する場合に必要。 MQTT-over-WSS を使う場合は不要 (broker 側 passwd で認証)。
+          </p>
+        </div>
+        <div id="tracksMissingKey" class="tracks-missing-key hidden">
+          Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
+          を入れるか、 環境変数 <code>GOOGLE_MAPS_API_KEY</code> を設定してください。
+        </div>
+        <div id="tracksMap" class="tracks-map"></div>
+        <div class="tracks-days">
+          <h4>記録のある日</h4>
+          <ul id="tracksDays" class="tracks-days-list"></ul>
+        </div>
       </div>
 
       <div id="multiView" class="hidden">

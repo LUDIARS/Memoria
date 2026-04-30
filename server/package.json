@@ -6,12 +6,16 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
+    "owntracks": "node --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
+    "owntracks:dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 && npx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "better-sqlite3": "^11.3.0",
     "hono": "^4.6.10",
-    "node-html-parser": "^6.1.13"
+    "mqtt": "^5.15.1",
+    "node-html-parser": "^6.1.13",
+    "ws": "^8.20.0"
   }
 }

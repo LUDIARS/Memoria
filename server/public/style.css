@@ -2242,3 +2242,156 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .diary-more:hover { background: var(--accent-bg); }
 .diary-more-count { color: var(--muted); margin-left: 6px; font-size: 11px; }
 .diary-more .error { color: var(--danger); }
+
+/* === Tracks (GPS overlay) ============================================ */
+.tracks-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+.tracks-bar input[type="date"] {
+  font-size: 14px;
+  padding: 4px 8px;
+}
+.tracks-bar .grow { flex: 1; }
+.tracks-stats {
+  font-size: 13px;
+  color: var(--muted);
+}
+.tracks-missing-key {
+  padding: 12px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.tracks-missing-key code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.tracks-map {
+  width: 100%;
+  height: 60vh;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.tracks-days {
+  margin-top: 16px;
+}
+.tracks-days h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tracks-days-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tracks-days-list li {
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.tracks-days-list .link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  font-family: inherit;
+}
+.tracks-days-list .link:hover { text-decoration: underline; }
+
+/* WebSocket ライブステータスインジケータ ─────────────────────────────── */
+.tracks-live {
+  display: inline-block;
+  font-size: 18px;
+  line-height: 1;
+  color: #9ca3af; /* gray (idle) */
+  margin-left: 4px;
+  user-select: none;
+  transition: color 200ms;
+}
+.tracks-live[data-live="open"]       { color: #10b981; /* green */ }
+.tracks-live[data-live="connecting"] { color: #f59e0b; /* amber */ }
+.tracks-live[data-live="closed"],
+.tracks-live[data-live="error"]      { color: #ef4444; /* red   */ }
+
+/* ingest key 管理パネル ────────────────────────────────────────────── */
+.tracks-key-panel {
+  margin: 8px 0;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.tracks-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.tracks-key-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+}
+.tracks-key-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tracks-key-reveal {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+.tracks-key-reveal .muted {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.tracks-key-full {
+  display: block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin: 6px 0;
+  word-break: break-all;
+}
+.tracks-key-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tracks-key-help code {
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}

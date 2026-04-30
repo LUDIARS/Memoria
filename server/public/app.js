@@ -553,6 +553,7 @@ function switchTab(tab) {
   $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('eventsView').classList.toggle('hidden', tab !== 'events');
+  $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
@@ -563,6 +564,7 @@ function switchTab(tab) {
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
+  if (tab === 'tracks') loadTracks();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   closeTabMoreMenu();
@@ -3680,6 +3682,324 @@ document.getElementById('multiRefresh')?.addEventListener('click', loadMulti);
 
 // First paint: surface the multi tab if we're already connected.
 refreshMultiTabVisibility();
+
+// ── Tracks (GPS overlay on Google Maps) ───────────────────────────────────
+//
+// 当日 (or 任意日) の OwnTracks 由来の GPS 軌跡を Google Maps 上に
+// Polyline で重ねる。 Google Maps API key は /api/maps/config で取得 →
+// script を遅延 inject。 key 未設定なら案内メッセージのみ。
+
+const tracksState = {
+  loaded: false,         // google.maps script を読み終えたか
+  map: null,
+  polyline: null,
+  dotMarkers: [],
+  apiKey: '',
+};
+
+function todayLocalIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+async function loadTracks() {
+  const dateInput = $('tracksDate');
+  if (dateInput && !dateInput.value) dateInput.value = todayLocalIso();
+
+  // bind controls (one-time)
+  if (!tracksState._bound) {
+    tracksState._bound = true;
+    dateInput?.addEventListener('change', renderTracksForCurrentDate);
+    $('tracksRefresh')?.addEventListener('click', renderTracksForCurrentDate);
+    $('tracksKeyToggle')?.addEventListener('click', () => {
+      $('tracksKeyPanel').classList.toggle('hidden');
+      refreshTracksKeyPanel();
+    });
+    $('tracksKeyGenerate')?.addEventListener('click', regenerateTracksKey);
+    $('tracksKeyClear')?.addEventListener('click', clearTracksKey);
+    $('tracksKeyCopy')?.addEventListener('click', () => {
+      const v = $('tracksKeyRevealValue')?.textContent ?? '';
+      if (v) navigator.clipboard?.writeText(v).catch(() => {});
+    });
+    document.addEventListener('visibilitychange', () => {
+      // タブに戻ってきたら最新の状態に再同期 + WS 再接続
+      if (document.visibilityState === 'visible' && state.tab === 'tracks') {
+        renderTracksForCurrentDate();
+        ensureLiveSocket();
+      }
+    });
+  }
+
+  try {
+    const [{ apiKey, hasKey }, { days }] = await Promise.all([
+      api('/api/maps/config'),
+      api('/api/locations/days?limit=180'),
+    ]);
+    tracksState.apiKey = apiKey;
+    $('tracksMissingKey').classList.toggle('hidden', !!hasKey);
+    renderTracksDaysList(days);
+    if (hasKey) {
+      await ensureGoogleMapsLoaded(apiKey);
+      ensureMapInstance();
+      renderTracksForCurrentDate();
+    }
+    refreshTracksKeyPanel();
+    ensureLiveSocket();
+  } catch (e) {
+    console.error('[tracks] load failed', e);
+  }
+}
+
+// ── ingest key 管理 (HTTP モード用) ──────────────────────────────────────
+
+async function refreshTracksKeyPanel() {
+  try {
+    const r = await api('/api/locations/settings');
+    $('tracksKeyPreview').textContent = r.has_key ? r.key_preview : '未設定';
+    $('tracksKeySource').textContent = r.has_key
+      ? (r.source === 'env' ? '(env から)' : '(設定済)')
+      : '(匿名 ingest 許可中)';
+    if (!r.has_key) $('tracksKeyReveal').classList.add('hidden');
+  } catch (e) { console.error(e); }
+}
+
+async function regenerateTracksKey() {
+  if (!confirm('新しい ingest key を生成しますか？\n既存の key は無効になり、 OwnTracks 側の Password を更新する必要があります。')) return;
+  try {
+    const r = await fetch('/api/locations/settings/regenerate', { method: 'POST' }).then(x => x.json());
+    if (!r.key) throw new Error('no key in response');
+    $('tracksKeyRevealValue').textContent = r.key;
+    $('tracksKeyReveal').classList.remove('hidden');
+    refreshTracksKeyPanel();
+  } catch (e) {
+    alert('key 生成失敗: ' + (e?.message ?? e));
+  }
+}
+
+async function clearTracksKey() {
+  if (!confirm('ingest key をクリアしますか？\nWAN 公開している場合は誰でも /api/locations/ingest に POST できる状態になります。')) return;
+  try {
+    await fetch('/api/locations/settings/key', { method: 'DELETE' });
+    $('tracksKeyReveal').classList.add('hidden');
+    refreshTracksKeyPanel();
+  } catch (e) { console.error(e); }
+}
+
+// ── WebSocket ライブ更新 ─────────────────────────────────────────────────
+
+function ensureLiveSocket() {
+  if (tracksState.ws && tracksState.ws.readyState === WebSocket.OPEN) return;
+  if (tracksState.ws && tracksState.ws.readyState === WebSocket.CONNECTING) return;
+
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+    + location.host + '/ws/locations';
+  setLiveStatus('connecting');
+  let ws;
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    setLiveStatus('error');
+    return;
+  }
+  tracksState.ws = ws;
+  ws.addEventListener('open',    () => setLiveStatus('open'));
+  ws.addEventListener('close',   () => { setLiveStatus('closed'); scheduleLiveReconnect(); });
+  ws.addEventListener('error',   () => setLiveStatus('error'));
+  ws.addEventListener('message', (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'location' && msg.point) handleLivePoint(msg.point);
+  });
+}
+
+function scheduleLiveReconnect() {
+  if (tracksState.wsReconnectTimer) return;
+  if (document.visibilityState !== 'visible') return;
+  tracksState.wsReconnectTimer = setTimeout(() => {
+    tracksState.wsReconnectTimer = null;
+    if (state.tab === 'tracks') ensureLiveSocket();
+  }, 3000);
+}
+
+function setLiveStatus(s) {
+  const el = $('tracksLive');
+  if (!el) return;
+  el.dataset.live = s;
+  el.title = `WS: ${s}`;
+}
+
+function handleLivePoint(point) {
+  const dateStr = $('tracksDate')?.value;
+  if (!dateStr) return;
+  const localDay = isoToLocalYmd(point.recorded_at);
+  if (localDay !== dateStr) {
+    api('/api/locations/days?limit=180').then(({ days }) => renderTracksDaysList(days)).catch(() => {});
+    return;
+  }
+  if (!tracksState.map) return;
+  tracksState.todayPoints.push(point);
+  appendLivePointToPolyline(point);
+  const km = computeDistanceMeters(tracksState.todayPoints) / 1000;
+  $('tracksStats').textContent = `${tracksState.todayPoints.length} 点 / 概算 ${km.toFixed(2)} km (live)`;
+}
+
+function isoToLocalYmd(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function appendLivePointToPolyline(point) {
+  if (!tracksState.polyline) {
+    drawTracks([point]);
+    return;
+  }
+  const path = tracksState.polyline.getPath();
+  path.push(new google.maps.LatLng(point.lat, point.lon));
+  if (tracksState.dotMarkers[1]) {
+    tracksState.dotMarkers[1].setPosition({ lat: point.lat, lng: point.lon });
+  }
+}
+
+function renderTracksDaysList(days) {
+  const ul = $('tracksDays');
+  if (!ul) return;
+  if (!days || days.length === 0) {
+    ul.innerHTML = '<li class="muted">記録なし</li>';
+    return;
+  }
+  ul.innerHTML = days.map(d =>
+    `<li><button class="link" data-tracks-day="${escapeHtml(d.day)}">${escapeHtml(d.day)}</button>
+       <span class="muted">${d.points} 点</span></li>`
+  ).join('');
+  ul.querySelectorAll('button[data-tracks-day]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dateInput = $('tracksDate');
+      if (dateInput) {
+        dateInput.value = btn.dataset.tracksDay;
+        renderTracksForCurrentDate();
+      }
+    });
+  });
+}
+
+function ensureGoogleMapsLoaded(apiKey) {
+  if (tracksState.loaded || (window.google && window.google.maps)) {
+    tracksState.loaded = true;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const cb = `__memoriaMapsCb_${Date.now()}`;
+    window[cb] = () => {
+      tracksState.loaded = true;
+      delete window[cb];
+      resolve();
+    };
+    const s = document.createElement('script');
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=${cb}&v=weekly`;
+    s.async = true;
+    s.defer = true;
+    s.onerror = () => reject(new Error('Google Maps script failed to load'));
+    document.head.appendChild(s);
+  });
+}
+
+function ensureMapInstance() {
+  if (tracksState.map || !window.google?.maps) return;
+  const el = $('tracksMap');
+  if (!el) return;
+  // 起動時の暫定中心 (東京駅)。最初のロード後に bbox に fit する。
+  tracksState.map = new google.maps.Map(el, {
+    center: { lat: 35.681, lng: 139.767 },
+    zoom: 12,
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: true,
+  });
+}
+
+async function renderTracksForCurrentDate() {
+  if (!tracksState.map) return;
+  const date = $('tracksDate')?.value;
+  if (!date) return;
+  try {
+    const { points } = await api(`/api/locations?date=${encodeURIComponent(date)}`);
+    const pts = points || [];
+    drawTracks(pts);
+    // live append のキャッシュ。 表示中の日付が「今日 (local)」なら使われる。
+    tracksState.todayPoints = (date === todayLocalIso()) ? pts.slice() : [];
+    const km = computeDistanceMeters(pts) / 1000;
+    $('tracksStats').textContent = pts.length
+      ? `${pts.length} 点 / 概算 ${km.toFixed(2)} km`
+      : '点なし';
+  } catch (e) {
+    console.error('[tracks] render failed', e);
+    $('tracksStats').textContent = '取得失敗';
+  }
+}
+
+function drawTracks(points) {
+  // 既存 overlay をクリア
+  if (tracksState.polyline) {
+    tracksState.polyline.setMap(null);
+    tracksState.polyline = null;
+  }
+  for (const m of tracksState.dotMarkers) m.setMap(null);
+  tracksState.dotMarkers = [];
+  if (!points.length) return;
+
+  const path = points.map(p => ({ lat: p.lat, lng: p.lon }));
+  tracksState.polyline = new google.maps.Polyline({
+    path,
+    geodesic: true,
+    strokeColor: '#3b82f6',
+    strokeOpacity: 0.85,
+    strokeWeight: 4,
+    map: tracksState.map,
+  });
+
+  // 始点 / 終点に小さなマーカーを置く (path が長くてもマーカーは 2 個だけ)
+  const start = path[0];
+  const end = path[path.length - 1];
+  tracksState.dotMarkers.push(new google.maps.Marker({
+    position: start, map: tracksState.map, title: '開始',
+    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#10b981', fillOpacity: 1, strokeColor: '#065f46', strokeWeight: 1 },
+  }));
+  tracksState.dotMarkers.push(new google.maps.Marker({
+    position: end, map: tracksState.map, title: '終端',
+    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#7f1d1d', strokeWeight: 1 },
+  }));
+
+  // bbox に fit
+  const b = new google.maps.LatLngBounds();
+  for (const p of path) b.extend(p);
+  tracksState.map.fitBounds(b, 60);
+}
+
+function computeDistanceMeters(points) {
+  if (!points || points.length < 2) return 0;
+  const R = 6_371_008;
+  const toRad = d => (d * Math.PI) / 180;
+  let dist = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    if (b.accuracy_m && b.accuracy_m > 200) continue;
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lon - a.lon);
+    const sa = Math.sin(dLat / 2);
+    const so = Math.sin(dLon / 2);
+    const h = sa * sa + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * so * so;
+    dist += 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  return dist;
+}
 
 // ── PWA share_target landing ───────────────────────────────────────────────
 // /share redirects back here with ?share=ok&u=<url> after queueing the save.
