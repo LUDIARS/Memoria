@@ -231,10 +231,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   align-items: stretch;
   box-shadow: 0 1px 0 rgba(0,0,0,0.04);
 }
-/* Single horizontally-scrollable tab strip on every viewport.
- * Custom More dropdown got dropped — it kept rendering empty in some
- * setups and `overflow-x: auto` on the strip is the simplest reliable
- * fallback for narrow widths. Hide the scrollbar for cosmetics. */
+/* Tabs strip — desktop is horizontally scrollable, mobile is "top 4 +
+ * More" as set up by the @media block at the bottom of this file. */
 .tabs-scroll {
   display: flex;
   gap: 4px;
@@ -244,6 +242,42 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   scrollbar-width: none;
 }
 .tabs-scroll::-webkit-scrollbar { display: none; }
+.tab-more-btn { font-weight: 700; flex: 0 0 auto; }
+.tab-more-btn[hidden] { display: none !important; }
+/* Dropdown is `position: fixed` so it can't be clipped by parent overflow
+ * or sticky stacking quirks. JS positions it under the More button. */
+.tab-more-menu {
+  position: fixed;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  min-width: 180px;
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tab-more-menu[hidden] { display: none; }
+.tab-more-menu .tab {
+  border-bottom: 0 !important;
+  border-radius: 6px;
+  padding: 10px 14px;
+  justify-content: flex-start;
+  text-align: left;
+  font-size: 14px;
+  width: 100%;
+}
+.tab-more-menu .tab.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
 .tab {
   background: transparent;
   border: 0;
@@ -1864,10 +1898,10 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 
   .content { padding: 12px; }
 
-  /* Sticky tabs on mobile. Drop the negative-margin trick because it
-   * makes sticky pin against an offset that's hard to reason about when
-   * the URL bar shows/hides. Just set top:0 inside the .content scroll
-   * container. */
+  /* Sticky tabs on mobile + "top 4 + More" model: only the four most-
+   * used tabs (plus the active one) sit in the visible strip; the
+   * rest are tucked into the ⋯ More dropdown. The strip itself stops
+   * scrolling horizontally since it always fits. */
   .tabs {
     margin: 0 -12px 12px;
     padding: 6px 8px 0;
@@ -1875,12 +1909,17 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     background: var(--panel);
     border-bottom: 1px solid var(--border);
     box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+    align-items: center;
   }
   .tabs-scroll {
-    overflow-x: auto;
-    scrollbar-width: none;
+    overflow-x: hidden;
+    flex-wrap: nowrap;
   }
-  .tabs-scroll::-webkit-scrollbar { display: none; }
+  .tabs-scroll .tab { padding: 8px 10px; font-size: 13px; }
+  .tab-more-btn {
+    /* Make the More button reach the right edge. */
+    margin-left: auto;
+  }
 
   /* Diary collapses to a single column; calendar then detail. */
   .diary-layout {

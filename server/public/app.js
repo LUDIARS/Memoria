@@ -565,6 +565,8 @@ function switchTab(tab) {
   if (tab === 'events') loadEvents();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
+  closeTabMoreMenu();
+  reflowTabsForViewport();
 }
 
 // ── Tab use-count + mobile More menu ──────────────────────────────────────
@@ -582,12 +584,98 @@ function tabsInUsageOrder() {
   const u = readTabUsage();
   return tabs.slice().sort((a, b) => (u[b.dataset.tab] || 0) - (u[a.dataset.tab] || 0));
 }
-// Custom More menu and mobile <select> have been removed — the tab
-// strip now scrolls horizontally on every viewport, which is more
-// reliable than juggling overflow logic. These no-ops stay around so
-// existing call sites (switchTab → reflowTabsForViewport) don't error.
-function closeTabMoreMenu() { /* no-op */ }
-function reflowTabsForViewport() { /* no-op */ }
+// Mobile tab nav is "top 4 most-used + active visible inline, the rest
+// tucked into a ⋯ More dropdown". Desktop shows every tab inline. The
+// dropdown is `position: fixed` and JS positions it under the More
+// button to dodge sticky/overflow clipping.
+const TABS_VISIBLE_ON_MOBILE = 4;
+
+function isNarrowViewport() {
+  return window.innerWidth <= 760;
+}
+
+function closeTabMoreMenu() {
+  const m = $('tabMoreMenu');
+  const b = $('tabMoreBtn');
+  if (m) m.hidden = true;
+  if (b) b.setAttribute('aria-expanded', 'false');
+}
+
+function positionTabMoreMenu() {
+  const btn = $('tabMoreBtn');
+  const menu = $('tabMoreMenu');
+  if (!btn || !menu || menu.hidden) return;
+  const r = btn.getBoundingClientRect();
+  const w = menu.offsetWidth || 200;
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w));
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.left = `${left}px`;
+}
+
+function openTabMoreMenu() {
+  const btn = $('tabMoreBtn');
+  const menu = $('tabMoreMenu');
+  if (!btn || !menu) return;
+  menu.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  positionTabMoreMenu();
+}
+
+function reflowTabsForViewport() {
+  const scroll = document.querySelector('.tabs-scroll');
+  const moreBtn = $('tabMoreBtn');
+  const moreMenu = $('tabMoreMenu');
+  if (!scroll || !moreBtn || !moreMenu) return;
+
+  const allTabs = [...scroll.querySelectorAll('.tab[data-tab]')];
+  // Reset every state.
+  for (const t of allTabs) t.style.display = '';
+  moreMenu.replaceChildren();
+
+  if (!isNarrowViewport()) {
+    moreBtn.hidden = true;
+    moreMenu.hidden = true;
+    return;
+  }
+
+  // Decide which 4 stay visible: most-used first, but always pin the
+  // active tab (so the user never loses sight of where they are).
+  const active = state.tab;
+  const ordered = tabsInUsageOrder()
+    .filter(t => !t.hidden);          // skip hidden tabs (e.g. multi)
+  const visible = new Set(ordered.slice(0, TABS_VISIBLE_ON_MOBILE).map(t => t.dataset.tab));
+  if (active) visible.add(active);
+
+  let overflowCount = 0;
+  for (const t of allTabs) {
+    if (t.hidden) {
+      // tab-multi-only stays out of both strip and menu when not connected.
+      continue;
+    }
+    if (visible.has(t.dataset.tab)) {
+      t.style.display = '';
+    } else {
+      const li = document.createElement('li');
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'tab' + (t.dataset.tab === active ? ' active' : '');
+      item.dataset.tab = t.dataset.tab;
+      // Strip child counts from the cloned label so the menu reads cleanly.
+      item.textContent = (t.textContent || t.dataset.tab).replace(/\s+/g, ' ').trim();
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        switchTab(t.dataset.tab);
+        closeTabMoreMenu();
+      });
+      li.appendChild(item);
+      moreMenu.appendChild(li);
+      t.style.display = 'none';
+      overflowCount += 1;
+    }
+  }
+  moreBtn.hidden = overflowCount === 0;
+}
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
 
@@ -2774,9 +2862,38 @@ async function deleteSelectedVisits() {
   await loadVisits();
 }
 
-document.querySelectorAll('.tabs-scroll .tab').forEach(t => {
+document.querySelectorAll('.tabs-scroll .tab[data-tab]').forEach(t => {
   t.addEventListener('click', () => switchTab(t.dataset.tab));
 });
+{
+  const moreBtn = $('tabMoreBtn');
+  const moreMenu = $('tabMoreMenu');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (moreMenu && moreMenu.hidden === false) {
+        closeTabMoreMenu();
+      } else {
+        openTabMoreMenu();
+      }
+    });
+  }
+  document.addEventListener('click', (e) => {
+    if (!moreMenu || moreMenu.hidden) return;
+    if (e.target === moreBtn || moreBtn?.contains(e.target)) return;
+    if (moreMenu.contains(e.target)) return;
+    closeTabMoreMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeTabMoreMenu();
+  });
+  window.addEventListener('resize', () => {
+    reflowTabsForViewport();
+    positionTabMoreMenu();
+  });
+  reflowTabsForViewport();
+}
 setupCategoriesDrawer();
 setupExtensionBadge();
 setupHowToBookmark();
