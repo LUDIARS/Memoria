@@ -85,7 +85,9 @@ export async function multiFetch(state, path, init = {}) {
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
   if (!res.ok) {
     const msg = (body && body.error) || `HTTP ${res.status}`;
-    const err = new Error(`multi ${path} failed: ${msg}`);
+    const err = /** @type {Error & {status?: number, body?: unknown}} */ (
+      new Error(`multi ${path} failed: ${msg}`)
+    );
     err.status = res.status;
     err.body = body;
     throw err;
