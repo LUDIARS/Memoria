@@ -692,6 +692,9 @@ async function loadDigSession(id) {
 function renderDigSession() {
   const s = state.digSession;
   const el = $('digResult');
+  const shareBar = $('digShareBar');
+  if (shareBar) shareBar.hidden = !(s && s.status === 'done' && state.multi?.connected);
+  if ($('digShareStatus')) $('digShareStatus').textContent = '';
   if (!s) { el.innerHTML = ''; return; }
   if (s.status === 'pending') {
     if (s.preview) {
@@ -2518,6 +2521,133 @@ async function openAiSettings() {
     console.error(e);
     alert(`設定取得失敗: ${e.message}`);
   }
+  await refreshMultiStatus();
+}
+
+// ── Multi-server (Memoria Hub) connection ─────────────────────────────────
+async function refreshMultiStatus() {
+  try {
+    const s = await api('/api/multi/status');
+    state.multi = s;
+    if ($('multiUrl')) $('multiUrl').value = s.url || '';
+    const status = $('multiStatus');
+    if (s.connected) {
+      status.innerHTML = `✓ <b>${escapeHtml(s.user.name)}</b> (${escapeHtml(s.user.role)}) として接続中 — ${escapeHtml(s.url)}`;
+      $('multiDisconnectBtn').hidden = false;
+      $('multiConnectBtn').textContent = '再接続';
+    } else {
+      status.textContent = s.url ? '未接続' : '(URL を入力して接続)';
+      $('multiDisconnectBtn').hidden = true;
+      $('multiConnectBtn').textContent = '接続';
+    }
+    // Share buttons reflect connection state.
+    document.querySelectorAll('#dShare, #dictShareBtn, #digShareBtn').forEach(b => {
+      b.hidden = !s.connected;
+    });
+    if (!s.connected && $('digShareBar')) $('digShareBar').hidden = true;
+  } catch (e) { console.error(e); }
+}
+
+async function multiConnect() {
+  const url = $('multiUrl').value.trim();
+  if (!url) { alert('URL を入力してください'); return; }
+  const r = await api('/api/multi/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
+  });
+  // Bounce through Cernere via the Hub.
+  location.href = r.authorize_url;
+}
+
+async function multiDisconnect() {
+  if (!confirm('マルチサーバから切断しますか?')) return;
+  await api('/api/multi/disconnect', { method: 'POST' });
+  await refreshMultiStatus();
+}
+
+async function multiFinishFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const jwt = params.get('memoria_hub_jwt');
+  if (!jwt) return;
+  try {
+    const r = await api('/api/multi/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jwt }),
+    });
+    showShareToast(`🌐 ${r.user.displayName} としてマルチサーバに接続しました`);
+  } catch (e) {
+    alert(`マルチ接続失敗: ${e.message}`);
+  } finally {
+    history.replaceState({}, '', location.pathname);
+    await refreshMultiStatus();
+  }
+}
+
+function showShareToast(text) {
+  const div = document.createElement('div');
+  div.className = 'share-toast';
+  div.textContent = text;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 4000);
+}
+
+async function shareCurrentBookmark() {
+  if (state.detailId == null) return;
+  const btn = $('dShare');
+  btn.disabled = true;
+  $('dShareStatus').textContent = '送信中…';
+  try {
+    await api('/api/multi/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'bookmark', id: state.detailId }),
+    });
+    $('dShareStatus').textContent = '✓ 共有しました';
+  } catch (e) {
+    $('dShareStatus').textContent = `✗ ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function shareCurrentDict() {
+  if (!state.dictDetail?.id) return;
+  const btn = $('dictShareBtn');
+  btn.disabled = true;
+  $('dictShareStatus').textContent = '送信中…';
+  try {
+    await api('/api/multi/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'dict', id: state.dictDetail.id }),
+    });
+    $('dictShareStatus').textContent = '✓ 共有しました';
+  } catch (e) {
+    $('dictShareStatus').textContent = `✗ ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function shareCurrentDig() {
+  if (!state.digSession?.id) return;
+  const btn = $('digShareBtn');
+  btn.disabled = true;
+  $('digShareStatus').textContent = '送信中…';
+  try {
+    await api('/api/multi/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'dig', id: state.digSession.id }),
+    });
+    $('digShareStatus').textContent = '✓ 共有しました';
+  } catch (e) {
+    $('digShareStatus').textContent = `✗ ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function saveAiSettings() {
@@ -2555,6 +2685,15 @@ async function saveAiSettings() {
 document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
 document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
 document.getElementById('aiSettingsSave')?.addEventListener('click', saveAiSettings);
+document.getElementById('multiConnectBtn')?.addEventListener('click', multiConnect);
+document.getElementById('multiDisconnectBtn')?.addEventListener('click', multiDisconnect);
+document.getElementById('dShare')?.addEventListener('click', shareCurrentBookmark);
+document.getElementById('dictShareBtn')?.addEventListener('click', shareCurrentDict);
+document.getElementById('digShareBtn')?.addEventListener('click', shareCurrentDig);
+
+// Pull JWT out of OAuth redirect on first paint, then prime the share buttons.
+multiFinishFromUrl();
+refreshMultiStatus();
 
 // ── Events / uptime ────────────────────────────────────────────────────
 async function loadEvents() {
