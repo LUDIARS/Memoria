@@ -96,41 +96,68 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .layout:has(.detail.hidden) { grid-template-columns: 1fr; }
 
-/* Categories rail lives inside the bookmarks tab now (not the layout). */
-.bookmarks-layout {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 16px;
-  align-items: start;
-}
+/* Categories live INSIDE the bookmarks page, below the cards. They sit in
+ * normal document flow — no sticky positioning, no layout-level sidebar —
+ * so the sticky tab nav cannot collide with them. Other tabs never render
+ * this section because it lives inside #bookmarksView. */
 .bookmarks-categories {
+  margin-top: 24px;
+  padding: 12px 14px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
-  position: sticky;
-  top: 0;
-  max-height: calc(100vh - 120px);
-  overflow-y: auto;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
 }
 .bookmarks-categories h3 {
   font-size: 12px;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 4px 0 8px;
+  margin: 0 0 8px;
+  letter-spacing: 0.04em;
 }
-.bookmarks-categories ul { list-style: none; padding: 0; margin: 0; }
-.bookmarks-categories li {
-  padding: 6px 8px;
-  border-radius: 6px;
-  cursor: pointer;
+.bookmarks-categories ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
   display: flex;
-  justify-content: space-between;
-  font-size: 13px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bookmarks-categories li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
 }
 .bookmarks-categories li:hover { background: #f0f2f7; }
-.bookmarks-categories li.active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
-.bookmarks-categories li .count { color: var(--muted); font-size: 12px; }
+.bookmarks-categories li.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.bookmarks-categories li .count {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 11px;
+  min-width: 18px;
+  text-align: center;
+}
+.bookmarks-categories li.active .count {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 
 .content { padding: 16px; overflow-y: auto; position: relative; }
 .tabs {
@@ -1640,17 +1667,12 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   .topbar-controls { width: 100%; flex-wrap: wrap; margin-left: 0; }
   .topbar-controls input[type=search] { flex: 1 1 100%; min-width: 0; }
 
-  /* Right-hand detail rail and categories rail collapse on mobile. */
+  /* Right-hand detail rail collapses on mobile. */
   .layout,
   .layout:has(.detail.hidden) {
     grid-template-columns: 1fr;
     height: auto;
     min-height: calc(100vh - 53px);
-  }
-  .bookmarks-layout { grid-template-columns: 1fr; }
-  .bookmarks-categories {
-    position: static;
-    max-height: none;
   }
 
   .detail {
