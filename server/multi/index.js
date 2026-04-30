@@ -32,6 +32,7 @@ import {
   listSharedDigs, insertSharedDig, deleteSharedDig,
   listSharedDictionary, insertSharedDictionary, deleteSharedDictionary,
   getSharedBookmark, getSharedDig, getSharedDictionary,
+  hideShared, unhideShared, listHidden, listShareLog,
   recordShareEvent,
 } from './db.js';
 
@@ -262,6 +263,54 @@ app.delete('/api/shared/dictionary/:id', async (c) => {
   const r = await deleteSharedDictionary(id, { actingUserId: u.userId, role: u.role });
   if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
   return c.json({ ok: true });
+});
+
+// ── /api/shared/moderation/* (admin / moderator only) ──────────────────────
+//
+// Hide soft-removes a row from public listings; unhide reverses it. The row
+// stays in the table either way so the audit trail is not lost.
+function isModerator(u) { return u.role === 'admin' || u.role === 'moderator'; }
+
+app.post('/api/shared/moderation/hide', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  if (!isModerator(u)) return c.json({ error: 'forbidden' }, 403);
+  const body = await c.req.json().catch(() => null);
+  if (!body?.kind || body.id == null) return c.json({ error: 'kind+id required' }, 400);
+  const r = await hideShared(body.kind, Number(body.id), {
+    actingUserId: u.userId, reason: body.reason,
+  });
+  if (!r.ok) return c.json({ error: r.error }, 400);
+  return c.json({ ok: true });
+});
+
+app.post('/api/shared/moderation/unhide', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  if (!isModerator(u)) return c.json({ error: 'forbidden' }, 403);
+  const body = await c.req.json().catch(() => null);
+  if (!body?.kind || body.id == null) return c.json({ error: 'kind+id required' }, 400);
+  const r = await unhideShared(body.kind, Number(body.id), { actingUserId: u.userId });
+  if (!r.ok) return c.json({ error: r.error }, 400);
+  return c.json({ ok: true });
+});
+
+app.get('/api/shared/moderation/hidden', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  if (!isModerator(u)) return c.json({ error: 'forbidden' }, 403);
+  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  const items = await listHidden({ limit });
+  return c.json({ items });
+});
+
+app.get('/api/shared/moderation/log', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  if (!isModerator(u)) return c.json({ error: 'forbidden' }, 403);
+  const limit = Math.min(Number(c.req.query('limit') || 200), 1000);
+  const items = await listShareLog({ limit });
+  return c.json({ items });
 });
 
 // ── boot ───────────────────────────────────────────────────────────────────

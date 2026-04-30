@@ -217,7 +217,89 @@ export async function deleteSharedDictionary(id, { actingUserId, role }) {
   return { ok: true };
 }
 
-// ── moderation (Phase 6 surface, used here only for share_log writes) ──────
+// ── moderation ─────────────────────────────────────────────────────────────
+
+const TABLE_BY_KIND = {
+  bookmark: 'bookmarks',
+  dig: 'dig_sessions',
+  dict: 'dictionary_entries',
+};
+
+function tableForKind(kind) {
+  const t = TABLE_BY_KIND[kind];
+  if (!t) throw new Error(`unknown kind: ${kind}`);
+  return t;
+}
+
+// Soft-hide: row stays in the table but is filtered out of every public list.
+// Only admins/moderators can call this; the route layer enforces that.
+export async function hideShared(kind, id, { actingUserId, reason }) {
+  const t = tableForKind(kind);
+  const r = await query(
+    `UPDATE ${t}
+        SET hidden_at = now(), hidden_by = $1, hidden_reason = $2
+      WHERE id = $3 AND hidden_at IS NULL
+      RETURNING id`,
+    [actingUserId, reason || null, id],
+  );
+  if (!r.rowCount) return { ok: false, error: 'not_found_or_already_hidden' };
+  await query(
+    `INSERT INTO share_log (resource_kind, resource_id, action, acting_user_id, details_json)
+       VALUES ($1, $2, 'hide', $3, $4)`,
+    [kind, id, actingUserId, reason ? JSON.stringify({ reason }) : null],
+  );
+  return { ok: true };
+}
+
+export async function unhideShared(kind, id, { actingUserId }) {
+  const t = tableForKind(kind);
+  const r = await query(
+    `UPDATE ${t}
+        SET hidden_at = NULL, hidden_by = NULL, hidden_reason = NULL
+      WHERE id = $1 AND hidden_at IS NOT NULL
+      RETURNING id`,
+    [id],
+  );
+  if (!r.rowCount) return { ok: false, error: 'not_found_or_not_hidden' };
+  await query(
+    `INSERT INTO share_log (resource_kind, resource_id, action, acting_user_id)
+       VALUES ($1, $2, 'unhide', $3)`,
+    [kind, id, actingUserId],
+  );
+  return { ok: true };
+}
+
+export async function listHidden({ limit = 100 } = {}) {
+  const sql = (kind, t, label) => `
+    SELECT '${kind}' AS kind, id, ${label} AS label,
+           owner_user_id, owner_user_name,
+           hidden_at, hidden_by, hidden_reason
+      FROM ${t}
+     WHERE hidden_at IS NOT NULL`;
+  const r = await query(
+    `${sql('bookmark', 'bookmarks', 'title')}
+     UNION ALL
+     ${sql('dig', 'dig_sessions', 'query')}
+     UNION ALL
+     ${sql('dict', 'dictionary_entries', 'term')}
+     ORDER BY hidden_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return r.rows;
+}
+
+export async function listShareLog({ limit = 200 } = {}) {
+  const r = await query(
+    `SELECT id, resource_kind, resource_id, action, acting_user_id,
+            occurred_at, details_json
+       FROM share_log
+       ORDER BY occurred_at DESC
+       LIMIT $1`,
+    [limit],
+  );
+  return r.rows;
+}
 
 export async function recordShareEvent({ kind, id, action, actingUserId, details }) {
   await query(
