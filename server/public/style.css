@@ -1832,11 +1832,36 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     max-width: 100vw;
   }
   body { overscroll-behavior-x: none; }
-  /* Long URL / コードブロックが画面幅をはみ出さないよう一律 wrap させる。 */
-  pre, code, .url, .bookmark-url, .visits-url, .dig-url {
+  /* 長文 / 長 URL / コードブロック / カード文字列を画面幅で確実に折り返す。
+   * `overflow-wrap: anywhere` を全カード系コンテナに広く適用し、 1 単語が
+   * viewport を超える場合でも強制改行させる。 ピンチズーム禁止前提なので
+   * 横スクロールが出ない = 折り返さない限り読めない、 が要件。 */
+  pre, code, .url, .bookmark-url, .visits-url, .dig-url,
+  .title, .summary, .snippet, .meta, .err,
+  .card, .card *, .rec-card, .rec-card *,
+  .dig-source, .dig-source *, .dig-preview-result, .dig-preview-result *,
+  .visits-list li, .visits-list li *,
+  .multi-card, .multi-card *,
+  .diary-bookmark, .diary-bookmark *,
+  .cloud-related-item, .cloud-related-item *,
+  .qg-row, .qg-row *,
+  .queue-running, .queue-running *,
+  .queue-list li, .queue-list li *,
+  .queue-history li, .queue-history li *,
+  .domain-card, .domain-card *,
+  .dict-card, .dict-card *,
+  .ext-setup-help, .ai-settings-help {
     overflow-wrap: anywhere;
     word-break: break-word;
+    min-width: 0;
   }
+  /* テーブルや input は別軸の制御が必要なので強制 wrap から除外 */
+  .tabs, .tabs *, table, input, select, textarea, button {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+  /* 念のためボタンのラベルは折り返さず ellipsis (タブの幅は管理側で決まる) */
+  .tab { white-space: nowrap; }
 
   /* Mobile topbar: pin .topbar-controls to the top-right via absolute
    * positioning so the ⚙ 設定 + 💡 やり方 buttons always sit in the
