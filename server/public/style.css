@@ -1926,8 +1926,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   /* Mobile uses the same horizontally-scrollable tab strip as desktop.
    * (詳細指定は下の "Sticky tabs on mobile" ブロックで上書き。) */
   .tabs {
-    margin: 0 -4px 12px;
-    padding: 6px 8px;
+    margin: 0 -4px 8px;
+    padding: 2px 8px;
   }
 
   /* Keep the layout itself viewport-bound on mobile so .content remains
@@ -2009,7 +2009,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   .detail.hidden { display: none; }
 
   .content {
-    padding: 12px 4px;             /* 横は 4px ずつ → 計 8px (-8px 要件) */
+    /* タブ strip を topbar の真下にぴったり寄せたいので top padding は 0。
+     * 横は 4px ずつ (= 計 8px) は据え置き。 */
+    padding: 0 4px 12px;
     max-width: 100vw;
     box-sizing: border-box;
   }
@@ -2017,10 +2019,11 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   /* Sticky tabs on mobile + "top 3 + More" model: 上位 3 件 (active を必ず
    * 含む) + ⋯ More を strip に配置。 inner padding は 8px キープ (機能
    * ヘッダ自体は -8px 化しない方針)、 ただし negative margin は親 .content
-   * の padding (4px) に合わせて -4px とし、 viewport を絶対にはみ出さない。 */
+   * の padding (4px) に合わせて -4px とし、 viewport を絶対にはみ出さない。
+   * topbar とくっつける指示に合わせ、 上下 padding と margin-bottom を圧縮。 */
   .tabs {
-    margin: 0 -4px 12px;
-    padding: 6px 8px 0;
+    margin: 0 -4px 8px;
+    padding: 2px 8px 0;
     top: 0;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
