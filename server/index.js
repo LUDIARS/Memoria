@@ -29,13 +29,15 @@ import {
   trendsDomains,
   trendsWorkHours,
   trendsKeywords,
+  trendsGpsWalking,
 } from './db.js';
 import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
 import { runDig, runDigPreview, listSearchEngines, deriveDigTheme } from './dig.js';
+import { runDigRawSerp } from './dig-serp.js';
 import {
-  insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
+  insertDigSession, setDigResult, setDigPreview, setDigRawResults, getDigSession, listDigSessions, deleteDigSession,
   listDigThemes, digThemeContext,
   digSessionsForDate,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
@@ -391,6 +393,13 @@ app.get('/api/trends/keywords', (c) => {
   return c.json({ items: trendsKeywords(db, { sinceDays: days, limit: 30 }) });
 });
 
+// GPS-derived walking trend (distance + walking-time + travel-time per day).
+// Sourced from the OwnTracks ingestion pipeline. Days without points → 0s.
+app.get('/api/trends/gps-walking', (c) => {
+  const days = Number(c.req.query('days')) || 30;
+  return c.json({ items: trendsGpsWalking(db, { sinceDays: days }) });
+});
+
 // GitHub commit trend (only meaningful when a token + user + repos are
 // configured under diary settings). Cached in memory for 5 min so the user
 // can flip the trends-range select without hammering the API.
@@ -468,6 +477,14 @@ app.delete('/api/recommendations/dismissals', (c) => {
 const digQueue = new FifoQueue();
 
 function enqueueDig(id, query, { searchEngine = 'default', theme = null } = {}) {
+  // Phase 0: raw SERP scrape — runs OUTSIDE the digQueue (no LLM, no
+  // serialisation) so it lands within ~2 s regardless of whatever Claude
+  // job is currently in flight. Failures are silent; the UI falls through
+  // to the AI preview if this comes back empty.
+  runDigRawSerp({ query, searchEngine })
+    .then(raw => { if (raw) setDigRawResults(db, id, raw); })
+    .catch(err => console.warn(`[dig#${id}] raw serp failed: ${err.message}`));
+
   digQueue.enqueue(async () => {
     // 同テーマの過去セッションから topics / sources / queries を集めて、
     // LLM プロンプトに 「これまで掘った領域」 として注入。 テーマ無しなら空。
@@ -522,6 +539,17 @@ app.get('/api/dig/:id', (c) => {
   const s = getDigSession(db, id);
   if (!s) return c.json({ error: 'not found' }, 404);
   return c.json(s);
+});
+
+// Delete a 誤 Dig. The row goes; downstream references (word_clouds
+// origin_dig_id, dictionary_links source_kind='dig') become orphan and the
+// existing UI handles missing sessions gracefully.
+app.delete('/api/dig/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
+  const removed = deleteDigSession(db, id);
+  if (!removed) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true, id });
 });
 
 app.post('/api/dig/:id/save', async (c) => {
@@ -1780,18 +1808,23 @@ function enqueueDiaryStages(dateStr, opts = {}) {
     }
   }, { kind: 'diary_github', date: dateStr, title: `📥 ${dateStr} GitHub commits` });
 
-  // Stage 2: 作業内容 (Sonnet by default).
+  // Stage 2: 作業内容 (Sonnet by default). Sonnet also emits a tail
+  // `WORK_MINUTES: <int>` line; generateWorkContent strips it from `content`
+  // and returns it as `workMinutes` so we can persist it for the trends chart.
   diaryQueue.enqueue(async () => {
     if (ctx.failed) return;
     try {
-      ctx.workContent = await generateWorkContent({
+      const work = await generateWorkContent({
         db, dateStr, metrics: ctx.metrics,
         globalMemo: ctx.globalMemo,
         improve: ctx.improve,
       });
+      ctx.workContent = work.content;
+      ctx.workMinutes = work.workMinutes;
       upsertDiary(db, {
         date: dateStr,
         workContent: ctx.workContent,
+        workMinutes: ctx.workMinutes,
         metrics: ctx.metrics,
         githubCommits: ctx.github,
         status: 'pending',
@@ -1839,6 +1872,7 @@ function enqueueDiaryStages(dateStr, opts = {}) {
         date: dateStr,
         summary,
         workContent: ctx.workContent,
+        workMinutes: ctx.workMinutes,
         highlights: ctx.highlights,
         metrics: ctx.metrics,
         githubCommits: ctx.github,
@@ -1909,6 +1943,7 @@ async function runDiaryGeneration(dateStr) {
     date: dateStr,
     summary: result.summary,
     workContent: result.workContent,
+    workMinutes: result.workMinutes,
     highlights: result.highlights,
     metrics,
     githubCommits: github,

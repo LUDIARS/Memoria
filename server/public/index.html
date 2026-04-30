@@ -71,26 +71,42 @@
     <section class="content">
       <nav class="tabs">
         <div class="tabs-scroll">
-          <button class="tab active" data-tab="bookmarks">📚 ブクマ</button>
+          <button class="tab active" data-tab="bookmarks">
+            <span class="tab-label" data-full="📚 ブックマーク" data-short="📚 ブクマ">📚 ブックマーク</span>
+          </button>
           <button class="tab" data-tab="queue">
-            ⚙ キュー
+            <span class="tab-label" data-full="⚙ 作業キュー" data-short="⚙ キュー">⚙ 作業キュー</span>
             <span id="tabQueueCount" class="tab-count hidden">0</span>
           </button>
-          <button class="tab" data-tab="events">📋 予定</button>
+          <button class="tab" data-tab="events">
+            <span class="tab-label" data-full="📋 予定" data-short="📋 予定">📋 予定</span>
+          </button>
           <button class="tab" data-tab="visits">
-            🕘 履歴
+            <span class="tab-label" data-full="🕘 アクセス履歴" data-short="🕘 履歴">🕘 アクセス履歴</span>
             <span id="tabVisitsCount" class="tab-count hidden">0</span>
           </button>
-          <button class="tab" data-tab="trends">📊 傾向</button>
+          <button class="tab" data-tab="trends">
+            <span class="tab-label" data-full="📊 傾向" data-short="📊 傾向">📊 傾向</span>
+          </button>
           <button class="tab" data-tab="recommend">
-            ✨ 推薦
+            <span class="tab-label" data-full="✨ おすすめ" data-short="✨ 推薦">✨ おすすめ</span>
             <span id="tabRecommendCount" class="tab-count hidden">0</span>
           </button>
-          <button class="tab" data-tab="dig">🔎 ディグ</button>
-          <button class="tab" data-tab="dict">📖 辞書</button>
-          <button class="tab" data-tab="domain">🏷 ドメ</button>
-          <button class="tab" data-tab="diary">📅 日記</button>
-          <button class="tab" data-tab="tracks">🗺 軌跡</button>
+          <button class="tab" data-tab="dig">
+            <span class="tab-label" data-full="🔎 ディグる" data-short="🔎 ディグ">🔎 ディグる</span>
+          </button>
+          <button class="tab" data-tab="dict">
+            <span class="tab-label" data-full="📖 辞書" data-short="📖 辞書">📖 辞書</span>
+          </button>
+          <button class="tab" data-tab="domain">
+            <span class="tab-label" data-full="🏷 ドメイン" data-short="🏷 ドメ">🏷 ドメイン</span>
+          </button>
+          <button class="tab" data-tab="diary">
+            <span class="tab-label" data-full="📅 日記" data-short="📅 日記">📅 日記</span>
+          </button>
+          <button class="tab" data-tab="tracks">
+            <span class="tab-label" data-full="🗺 軌跡" data-short="🗺 軌跡">🗺 軌跡</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -172,8 +188,20 @@
 
           <section class="trend-card">
             <h3>1 日の作業時間 (推定)</h3>
-            <p class="trend-help">アクセス記録から 30 分以上空くまでを 1 セッションとして合計した分数 (1 セッションは最大 4 時間でクリップ)。</p>
+            <p class="trend-help">日記生成時に Sonnet が URL タイムラインから推定した実作業時間。日記が未生成の日は表示されません。</p>
             <div id="trendWorkHours" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>1 日の歩いた距離</h3>
+            <p class="trend-help">「軌跡」(OwnTracks GPS) から算出した日別の概算移動距離。accuracy 200m 超は除外。</p>
+            <div id="trendWalkDistance" class="chart"></div>
+          </section>
+
+          <section class="trend-card">
+            <h3>1 日の歩いた時間</h3>
+            <p class="trend-help">徒歩速度帯 (1.8〜12.6 km/h) の区間を合計した分数。乗り物移動は別途ツールチップに「移動時間」として表示。</p>
+            <div id="trendWalkMinutes" class="chart"></div>
           </section>
 
           <section class="trend-card">
@@ -236,10 +264,23 @@
               <div id="digThemeBadge" class="dig-theme-badge" hidden></div>
             </header>
 
+            <!-- ワードグラフのノードを押した時にここに「○○ について何を知りたいか?」
+                 のヒントが乗る。 ユーザは textarea で具体化してから ディグる。 -->
+            <div id="digPickHint" class="dig-pick-hint" hidden>
+              <span class="dig-pick-icon">💡</span>
+              <span class="dig-pick-text"></span>
+              <button type="button" id="digPickClear" class="dig-pick-clear" title="この語の選択を解除">×</button>
+            </div>
             <div class="dig-input">
               <textarea id="digQuery" rows="5"
                 placeholder="例: WebGPU の compute shader で readback を効率化する方法は? ベンチマークやベストプラクティスを集めたい"></textarea>
-              <button id="digRun" class="dig-run-btn">🔎 ディグる</button>
+              <div class="dig-input-actions">
+                <button id="digRun" class="dig-run-btn">🔎 ディグる</button>
+                <button id="digRunNewTheme" class="dig-run-btn dig-run-new" type="button"
+                        title="現在のテーマを引き継がず、 新規テーマでディグる">
+                  🌿 別テーマとして検索
+                </button>
+              </div>
             </div>
             <div class="dig-input-row2">
               <label class="dig-engine-label">
@@ -321,6 +362,7 @@
             <div class="diary-detail-head">
               <h3 id="diaryDate"></h3>
               <span id="diaryStatus" class="diary-status-tag"></span>
+              <span id="diaryWorkMinutes" class="diary-status-tag" hidden></span>
               <span class="grow"></span>
               <button id="diaryGenerate" class="ghost">再生成</button>
               <button id="diaryDelete" class="danger">削除</button>
