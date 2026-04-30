@@ -420,75 +420,82 @@ const QUEUE_GROUP_LABELS = {
   page:      '📄 ページメタ',
 };
 
-function renderQueue() {
-  const root = $('queueGroups');
-  if (!root) return;
-  const snap = state.queue || {};
-  const sections = [];
-  for (const [key, label] of Object.entries(QUEUE_GROUP_LABELS)) {
-    const g = snap[key];
+function collectQueueJobs(snap) {
+  const all = [];
+  for (const key of Object.keys(QUEUE_GROUP_LABELS)) {
+    const g = snap?.[key];
     if (!g) continue;
-    const items = g.items || [];
-    const history = g.history || [];
-    if (items.length === 0 && history.length === 0) continue;
-    sections.push(renderQueueGroup(label, items, history));
+    for (const it of (g.items || [])) all.push({ ...it, group: key });
+    for (const it of (g.history || [])) all.push({ ...it, group: key, _history: true });
   }
-  root.innerHTML = sections.length === 0
-    ? '<div class="queue-empty">作業はありません</div>'
-    : sections.join('');
+  return all;
 }
 
-function renderQueueGroup(label, items, history) {
-  const running = items.find(i => i.status === 'running');
-  const queued = items.filter(i => i.status === 'queued');
-  let runHtml = '';
-  if (running) {
-    const elapsed = running.startedAt ? Date.now() - running.startedAt : 0;
-    runHtml = `
-      <div class="qg-row running">
-        <div class="pulse"></div>
-        <div class="qg-row-body">
-          <div class="title">${escapeHtml(jobLabel(running))}</div>
-          <div class="meta">経過 ${fmtElapsed(elapsed)} · seq #${running.seq}</div>
+function renderQueue() {
+  const snap = state.queue || {};
+  const jobs = collectQueueJobs(snap);
+  const running = jobs.find(j => !j._history && j.status === 'running');
+  const queued = jobs.filter(j => !j._history && j.status === 'queued');
+  const history = jobs
+    .filter(j => j._history)
+    .sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0))
+    .slice(0, 30);
+
+  const runEl = $('queueRunning');
+  if (runEl) {
+    if (!running) {
+      runEl.innerHTML = '<div class="queue-empty">作業はありません</div>';
+    } else {
+      const elapsed = running.startedAt ? Date.now() - running.startedAt : 0;
+      runEl.innerHTML = `
+        <div class="qg-row running">
+          <div class="pulse"></div>
+          <div class="qg-row-body">
+            <div class="qg-tag">${escapeHtml(QUEUE_GROUP_LABELS[running.group] || running.group)}</div>
+            <div class="title">${escapeHtml(jobLabel(running))}</div>
+            <div class="meta">経過 ${fmtElapsed(elapsed)} · seq #${running.seq}</div>
+          </div>
         </div>
-      </div>
-    `;
+      `;
+    }
   }
-  const queuedHtml = queued.length === 0 ? '' : queued.map(i => `
-    <div class="qg-row queued">
-      <div class="qg-row-body">
-        <div class="title">${escapeHtml(jobLabel(i))}</div>
-      </div>
-    </div>
-  `).join('');
-  const histHtml = history.length === 0 ? '' : history.slice(0, 8).map(i => {
-    const dur = i.startedAt && i.finishedAt ? i.finishedAt - i.startedAt : null;
-    const ok = i.status === 'done';
-    return `
-      <div class="qg-row history">
-        <div class="qg-icon ${ok ? 'done' : 'error'}">${ok ? '✓' : '✗'}</div>
-        <div class="qg-row-body">
-          <div class="title">${escapeHtml(jobLabel(i))}</div>
-          ${i.error ? `<div class="err">${escapeHtml(i.error)}</div>` : ''}
-        </div>
-        <div class="duration">${fmtElapsed(dur)}</div>
-      </div>
-    `;
-  }).join('');
-  const nothing = !runHtml && !queuedHtml && !histHtml;
-  return `
-    <section class="qg">
-      <h3 class="qg-h">
-        ${escapeHtml(label)}
-        <span class="qg-count">running ${running ? 1 : 0} · queued ${queued.length} · history ${history.length}</span>
-      </h3>
-      ${nothing ? '<div class="queue-empty">なし</div>' : `
-        ${runHtml}
-        ${queuedHtml}
-        ${histHtml}
-      `}
-    </section>
-  `;
+
+  const waitEl = $('queueWaiting');
+  if (waitEl) {
+    if (queued.length === 0) {
+      waitEl.innerHTML = '';
+    } else {
+      const counts = {};
+      for (const q of queued) counts[q.group] = (counts[q.group] || 0) + 1;
+      const summary = Object.entries(counts)
+        .map(([k, n]) => `<span class="qw-pill">${escapeHtml(QUEUE_GROUP_LABELS[k] || k)} <b>${n}</b></span>`)
+        .join('');
+      waitEl.innerHTML = `<div class="qw-summary">待機中 (${queued.length}): ${summary}</div>`;
+    }
+  }
+
+  const histEl = $('queueHistory');
+  if (histEl) {
+    if (history.length === 0) {
+      histEl.innerHTML = '<div class="queue-empty">履歴はまだありません</div>';
+    } else {
+      histEl.innerHTML = history.map(i => {
+        const dur = i.startedAt && i.finishedAt ? i.finishedAt - i.startedAt : null;
+        const ok = i.status === 'done';
+        return `
+          <div class="qg-row history">
+            <div class="qg-icon ${ok ? 'done' : 'error'}">${ok ? '✓' : '✗'}</div>
+            <div class="qg-row-body">
+              <div class="qg-tag">${escapeHtml(QUEUE_GROUP_LABELS[i.group] || i.group)}</div>
+              <div class="title">${escapeHtml(jobLabel(i))}</div>
+              ${i.error ? `<div class="err">${escapeHtml(i.error)}</div>` : ''}
+            </div>
+            <div class="duration">${fmtElapsed(dur)}</div>
+          </div>
+        `;
+      }).join('');
+    }
+  }
 }
 
 function jobLabel(item) {
@@ -2516,9 +2523,18 @@ async function openAiSettings() {
     $('aiBinClaude').value = cfg.bins?.claude || '';
     $('aiBinGemini').value = cfg.bins?.gemini || '';
     $('aiBinCodex').value  = cfg.bins?.codex  || '';
+    $('aiGitBashPath').value = cfg.git_bash_path || '';
     $('aiOpenaiKey').value = '';
     $('aiOpenaiModel').value = cfg.openai_model || '';
     $('aiOpenaiKeyStatus').textContent = cfg.openai_api_key_set ? '✓ API key 設定済み (再入力で上書き)' : '(未設定)';
+    if (r.runtime) {
+      const rt = r.runtime;
+      $('aiRuntimeInfo').innerHTML = `
+        <div><b>port</b>: ${escapeHtml(String(rt.port))}</div>
+        <div><b>data_dir</b>: <code>${escapeHtml(rt.data_dir)}</code></div>
+        <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
+      `;
+    }
   } catch (e) {
     console.error(e);
     alert(`設定取得失敗: ${e.message}`);
@@ -2669,6 +2685,7 @@ async function saveAiSettings() {
       codex:  $('aiBinCodex').value.trim()  || 'codex',
     },
     openai_model: $('aiOpenaiModel').value.trim() || 'gpt-4o-mini',
+    git_bash_path: $('aiGitBashPath').value.trim(),
   };
   const k = $('aiOpenaiKey').value;
   if (k && k !== '***') body.openai_api_key = k;

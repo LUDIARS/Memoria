@@ -33,11 +33,6 @@
   </header>
 
   <main class="layout" data-active-tab="bookmarks">
-    <aside class="sidebar">
-      <h2>カテゴリ</h2>
-      <ul id="categoryList"></ul>
-    </aside>
-
     <section class="content">
       <nav class="tabs">
         <div class="tabs-scroll">
@@ -74,8 +69,16 @@
           <button id="bulkExport">選択をエクスポート</button>
           <button id="bulkClear" class="ghost">クリア</button>
         </div>
-        <div id="cards" class="cards"></div>
-        <div id="empty" class="empty hidden">ブックマークがありません。Chrome 拡張からページを保存してください。</div>
+        <div class="bookmarks-layout">
+          <aside class="bookmarks-categories">
+            <h3>カテゴリ</h3>
+            <ul id="categoryList"></ul>
+          </aside>
+          <div class="bookmarks-main">
+            <div id="cards" class="cards"></div>
+            <div id="empty" class="empty hidden">ブックマークがありません。Chrome 拡張からページを保存してください。</div>
+          </div>
+        </div>
       </div>
 
       <div id="visitsView" class="hidden">
@@ -310,8 +313,11 @@
       </div>
 
       <div id="queueView" class="hidden">
-        <p class="queue-bar-help">ブックマーク要約・ディグ・ワードクラウド・日記・週報・ドメイン分類・ページメタの作業をすべて 1 件ずつ順次処理しています。</p>
-        <div id="queueGroups" class="queue-groups"></div>
+        <p class="queue-bar-help">ブックマーク要約・ディグ・ワードクラウド・日記・週報・ドメイン分類・ページメタの作業を一件ずつ表示します。</p>
+        <div id="queueRunning" class="queue-running-card"></div>
+        <div id="queueWaiting" class="queue-waiting"></div>
+        <h4 class="queue-history-h">履歴</h4>
+        <div id="queueHistory" class="queue-history-list"></div>
       </div>
 
       <div id="eventsView" class="hidden">
@@ -383,10 +389,16 @@
     <label>claude: <input id="aiBinClaude" type="text" placeholder="claude" /></label>
     <label>gemini: <input id="aiBinGemini" type="text" placeholder="gemini" /></label>
     <label>codex:  <input id="aiBinCodex"  type="text" placeholder="codex" /></label>
+    <h4>🐚 Bash (Windows のみ)</h4>
+    <p class="ai-settings-help">Claude CLI は内部で bash を呼び出します。Windows でデスクトップアプリから動かすときだけ git-bash の絶対パスを指定してください (例: <code>C:\Program Files\Git\bin\bash.exe</code>)。空欄なら環境変数 <code>CLAUDE_CODE_GIT_BASH_PATH</code> を尊重します。</p>
+    <label>git-bash path: <input id="aiGitBashPath" type="text" placeholder="C:\\Program Files\\Git\\bin\\bash.exe" /></label>
     <h4>OpenAI API</h4>
     <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." /></label>
     <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
     <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+    <h4>🛠 ランタイム情報 (読み取り専用)</h4>
+    <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
+    <div id="aiRuntimeInfo" class="ai-runtime-info"></div>
     <div class="ai-settings-actions">
       <button id="aiSettingsSave">保存</button>
     </div>
