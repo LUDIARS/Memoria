@@ -102,7 +102,7 @@ body {
   background: var(--panel);
   font-size: 13px;
 }
-.bookmarks-toolbar input[type=search] { flex: 1 1 280px; min-width: 0; }
+.bookmarks-toolbar input[type=search] { min-width: 240px; flex: 0 1 320px; }
 .bookmarks-toolbar .categories-toggle { display: none; }
 
 button, .ghost, .file-btn {
@@ -1802,9 +1802,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   .layout > .detail { flex: 0 0 auto; }
 
   /* Mobile: drop the rail in favour of a hamburger that opens a floating
-   * drawer. Tapping ☰ カテゴリ in the bookmarks toolbar reveals the
-   * category list as an overlay anchored under the toolbar; tapping
-   * outside or selecting a category dismisses it. */
+   * overlay drawer roughly half the screen tall, with vertically-stacked
+   * larger items (touch-friendly). Tapping outside or selecting a
+   * category dismisses it. */
   #bookmarksView .bookmarks-layout { display: block !important; gap: 0; }
   .bookmarks-toolbar .categories-toggle { display: inline-block; }
 
@@ -1816,27 +1816,42 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     right: 12px;
     width: auto;
     flex: 0 0 auto !important;
-    max-height: 60vh;
+    height: 50vh;
     overflow-y: auto;
     z-index: 40;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.18);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.25);
   }
   #bookmarksView.cat-open .bookmarks-categories { display: block; }
+  #bookmarksView .bookmarks-categories h3 { font-size: 12px; margin-bottom: 10px; }
+  /* Vertical list with chunky tap targets. */
   #bookmarksView .bookmarks-categories ul {
     display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-direction: column;
+    gap: 4px;
   }
   #bookmarksView .bookmarks-categories li {
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 12px;
+    border: 0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #bookmarksView .bookmarks-categories li .count {
     font-size: 12px;
+    background: var(--bg);
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+  #bookmarksView .bookmarks-categories li.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-weight: 600;
   }
 
   .detail {
