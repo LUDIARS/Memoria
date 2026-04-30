@@ -1408,3 +1408,10 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   color: var(--muted);
   margin-left: 4px;
 }
+.dig-engine {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  font-size: 13px;
+}

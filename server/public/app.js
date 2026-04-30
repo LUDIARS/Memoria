@@ -536,6 +536,17 @@ async function loadDigHistory() {
     const { items } = await api('/api/dig');
     state.digHistory = items;
     renderDigHistory();
+    if (!state.digEnginesLoaded) loadDigEngines();
+  } catch (e) { console.error(e); }
+}
+
+async function loadDigEngines() {
+  try {
+    const { items } = await api('/api/dig/engines');
+    const sel = $('digEngine');
+    if (!sel) return;
+    sel.innerHTML = items.map(e => `<option value="${e.key}">${escapeHtml(e.label)}</option>`).join('');
+    state.digEnginesLoaded = true;
   } catch (e) { console.error(e); }
 }
 
@@ -561,10 +572,12 @@ async function startDig({ chainCloudId, chainParentWord } = {}) {
   $('digRun').disabled = true;
   $('digRun').textContent = '掘削中…';
   try {
+    const engineSel = $('digEngine');
+    const search_engine = engineSel ? engineSel.value : 'default';
     const r = await api('/api/dig', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ query: q, search_engine }),
     });
     state.digChain = {
       cloudId: chainCloudId ?? null,

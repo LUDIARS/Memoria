@@ -30,7 +30,7 @@ import {
 import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
-import { runDig, runDigPreview } from './dig.js';
+import { runDig, runDigPreview, listSearchEngines } from './dig.js';
 import {
   insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
@@ -373,31 +373,36 @@ app.delete('/api/recommendations/dismissals', (c) => {
 // strictly one job at a time so the user can watch progress in 作業リスト.
 const digQueue = new FifoQueue();
 
-function enqueueDig(id, query) {
+function enqueueDig(id, query, searchEngine = 'default') {
   digQueue.enqueue(async () => {
     // Phase 1: SERP preview (fast — no page fetches). Persisted as soon as
     // it lands so the FE can render before the deep claude pass finishes.
-    runDigPreview({ query, claudeBin: CLAUDE_BIN })
+    runDigPreview({ query, searchEngine, claudeBin: CLAUDE_BIN })
       .then(preview => setDigPreview(db, id, preview))
       .catch(err => console.warn(`[dig#${id}] preview failed: ${err.message}`));
     // Phase 2: full deep analysis with WebFetch (existing behavior).
     try {
-      const result = await runDig({ query, claudeBin: CLAUDE_BIN });
+      const result = await runDig({ query, searchEngine, claudeBin: CLAUDE_BIN });
       setDigResult(db, id, { status: 'done', result });
     } catch (e) {
       setDigResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
       throw e;
     }
-  }, { kind: 'dig', sessionId: id, title: query });
+  }, { kind: 'dig', sessionId: id, title: query, search_engine: searchEngine });
 }
 
 app.post('/api/dig', async (c) => {
   const body = await c.req.json().catch(() => null);
   const query = body?.query;
   if (!query || typeof query !== 'string') return c.json({ error: 'query required' }, 400);
+  const searchEngine = typeof body.search_engine === 'string' ? body.search_engine : 'default';
   const id = insertDigSession(db, query);
-  enqueueDig(id, query);
-  return c.json({ id, queued: true });
+  enqueueDig(id, query, searchEngine);
+  return c.json({ id, queued: true, search_engine: searchEngine });
+});
+
+app.get('/api/dig/engines', (c) => {
+  return c.json({ items: listSearchEngines() });
 });
 
 app.get('/api/dig', (c) => {

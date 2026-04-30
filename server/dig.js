@@ -1,18 +1,47 @@
 // Dig (deep research) — drive the claude CLI with WebSearch + WebFetch tools
 // allowed, ask it to return a JSON list of sources for a topic.
 //
-// We do NOT depend on a particular search engine API; the heavy lifting is
-// claude's, and the prompt asks for JSON-only output that we then parse.
+// The user can pin a specific search engine (Google / Bing / DuckDuckGo /
+// Brave). The engine is delivered as an instruction in the prompt and as a
+// preferred WebFetch URL pattern so claude actually queries the right SERP.
 
 import { spawn } from 'node:child_process';
 
-const PROMPT_TEMPLATE = (query) => [
+const SEARCH_ENGINES = {
+  default: { name: 'default', label: 'デフォルト (claude が自動選択)', serpUrl: null },
+  google: { name: 'Google', label: 'Google', serpUrl: q => `https://www.google.com/search?q=${encodeURIComponent(q)}` },
+  bing: { name: 'Bing', label: 'Bing', serpUrl: q => `https://www.bing.com/search?q=${encodeURIComponent(q)}` },
+  duckduckgo: { name: 'DuckDuckGo', label: 'DuckDuckGo', serpUrl: q => `https://duckduckgo.com/?q=${encodeURIComponent(q)}` },
+  brave: { name: 'Brave Search', label: 'Brave Search', serpUrl: q => `https://search.brave.com/search?q=${encodeURIComponent(q)}` },
+};
+
+export function listSearchEngines() {
+  return Object.entries(SEARCH_ENGINES).map(([key, v]) => ({ key, name: v.name, label: v.label }));
+}
+
+function engineFor(key) {
+  return SEARCH_ENGINES[key] || SEARCH_ENGINES.default;
+}
+
+function engineInstruction(engine, query) {
+  if (!engine.serpUrl) return '検索エンジンは claude の判断に任せます。';
+  const serp = engine.serpUrl(query);
+  return [
+    `検索エンジンは ${engine.name} を使ってください。`,
+    `WebFetch は最初に ${serp} を取り、SERP から候補を抽出してから個別ページを取得してください。`,
+    `他の検索エンジンや AI overview ジェネレータは使わないこと。`,
+  ].join('\n');
+}
+
+const PROMPT_TEMPLATE = ({ query, engine }) => [
   'You are a research agent. Use Web search and fetching to gather authoritative sources for the topic the user provides.',
+  engineInstruction(engine, query),
   'Return STRICTLY one JSON object and nothing else (no prose, no code fences):',
   '',
   '{',
   '  "query": "<the original query>",',
   '  "summary": "1〜3 段落で領域を概観 (日本語)",',
+  '  "engine": "<used search engine>",',
   '  "sources": [',
   '    {',
   '      "url": "https://...",',
@@ -31,8 +60,9 @@ const PROMPT_TEMPLATE = (query) => [
   `QUERY: ${query}`,
 ].join('\n');
 
-const PREVIEW_PROMPT_TEMPLATE = (query) => [
+const PREVIEW_PROMPT_TEMPLATE = ({ query, engine }) => [
   'You are returning a SERP-style preview as fast as possible.',
+  engineInstruction(engine, query),
   'Use ONLY web search — do NOT fetch or read result pages.',
   'If the search engine displays an AI overview / generative summary, capture it verbatim.',
   '',
@@ -40,6 +70,7 @@ const PREVIEW_PROMPT_TEMPLATE = (query) => [
   '',
   '{',
   '  "ai_overview": "search engine の AI overview があればその文章 (なければ空文字)",',
+  '  "engine": "<used search engine>",',
   '  "results": [',
   '    {',
   '      "title": "...",',
@@ -57,14 +88,16 @@ const PREVIEW_PROMPT_TEMPLATE = (query) => [
   `QUERY: ${query}`,
 ].join('\n');
 
-export async function runDigPreview({ query, claudeBin = 'claude', timeoutMs = 90_000 }) {
-  const prompt = PREVIEW_PROMPT_TEMPLATE(query);
-  const stdout = await spawnClaudeWithTools(claudeBin, prompt, ['WebSearch'], timeoutMs);
+export async function runDigPreview({ query, searchEngine = 'default', claudeBin = 'claude', timeoutMs = 90_000 }) {
+  const engine = engineFor(searchEngine);
+  const prompt = PREVIEW_PROMPT_TEMPLATE({ query, engine });
+  const stdout = await spawnClaudeWithTools(claudeBin, prompt, ['WebSearch', 'WebFetch'], timeoutMs);
   return parsePreview(stdout);
 }
 
-export async function runDig({ query, claudeBin = 'claude', timeoutMs = 600_000 }) {
-  const prompt = PROMPT_TEMPLATE(query);
+export async function runDig({ query, searchEngine = 'default', claudeBin = 'claude', timeoutMs = 600_000 }) {
+  const engine = engineFor(searchEngine);
+  const prompt = PROMPT_TEMPLATE({ query, engine });
   const stdout = await spawnClaude(claudeBin, prompt, timeoutMs);
   return parseJsonStrict(stdout);
 }
