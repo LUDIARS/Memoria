@@ -602,10 +602,10 @@ function tabsInUsageOrder() {
     return sb - sa;
   });
 }
-// Mobile tab nav is "top 3 most-used (active stays visible) + the rest in
-// a ⋯ More dropdown". 合計 strip にいるタブは常に <= 3 件。 active が
-// top-3 圏外なら top-3 の最下位を 1 件 evict して active を入れる。
-const TABS_VISIBLE_ON_MOBILE = 3;
+// Mobile tab nav is "top 4 most-used (active stays visible) + the rest in
+// a ⋯ More dropdown". 合計 strip にいるタブは常に <= 4 件。 active が
+// top-4 圏外なら top-4 の最下位を 1 件 evict して active を入れる。
+const TABS_VISIBLE_ON_MOBILE = 4;
 
 function isNarrowViewport() {
   return window.innerWidth <= 760;
