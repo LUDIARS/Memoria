@@ -510,6 +510,8 @@ function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
   });
+  const layout = document.querySelector('.layout');
+  if (layout) layout.dataset.activeTab = tab;
   $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
   $('visitsView').classList.toggle('hidden', tab !== 'visits');
@@ -529,6 +531,68 @@ function switchTab(tab) {
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
+  bumpTabUsage(tab);
+  reflowTabsForViewport();
+  closeTabMoreMenu();
+}
+
+// ── Tab use-count + mobile More menu ──────────────────────────────────────
+const TAB_USAGE_KEY = 'memoria.tabUsage.v1';
+function readTabUsage() {
+  try { return JSON.parse(localStorage.getItem(TAB_USAGE_KEY)) || {}; } catch { return {}; }
+}
+function bumpTabUsage(tab) {
+  const u = readTabUsage();
+  u[tab] = (u[tab] || 0) + 1;
+  try { localStorage.setItem(TAB_USAGE_KEY, JSON.stringify(u)); } catch {}
+}
+function tabsInUsageOrder() {
+  const tabs = [...document.querySelectorAll('.tabs-scroll .tab[data-tab]')];
+  const u = readTabUsage();
+  return tabs.slice().sort((a, b) => (u[b.dataset.tab] || 0) - (u[a.dataset.tab] || 0));
+}
+function closeTabMoreMenu() {
+  const m = $('tabMoreMenu');
+  const b = $('tabMoreBtn');
+  if (m) m.classList.add('hidden');
+  if (b) b.setAttribute('aria-expanded', 'false');
+}
+function reflowTabsForViewport() {
+  const scroll = document.querySelector('.tabs-scroll');
+  const moreWrap = document.querySelector('.tabs-more');
+  const moreMenu = $('tabMoreMenu');
+  if (!scroll || !moreWrap || !moreMenu) return;
+
+  const allTabs = [...scroll.querySelectorAll('.tab[data-tab]')];
+  for (const t of allTabs) t.style.display = '';
+  moreMenu.innerHTML = '';
+
+  const isNarrow = window.innerWidth <= 760;
+  if (!isNarrow) {
+    moreWrap.classList.add('hidden');
+    return;
+  }
+
+  const active = state.tab;
+  const ordered = tabsInUsageOrder();
+  const visibleN = 4;
+  const visible = new Set(ordered.slice(0, visibleN).map(t => t.dataset.tab));
+  if (active) visible.add(active);
+
+  let overflowCount = 0;
+  for (const t of allTabs) {
+    if (visible.has(t.dataset.tab)) {
+      t.style.display = '';
+    } else {
+      t.style.display = 'none';
+      const clone = t.cloneNode(true);
+      clone.classList.toggle('active', t.dataset.tab === active);
+      clone.addEventListener('click', () => switchTab(t.dataset.tab));
+      moreMenu.appendChild(clone);
+      overflowCount += 1;
+    }
+  }
+  moreWrap.classList.toggle('hidden', overflowCount === 0);
 }
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
@@ -2335,9 +2399,25 @@ async function deleteSelectedVisits() {
   await loadVisits();
 }
 
-document.querySelectorAll('.tab').forEach(t => {
+document.querySelectorAll('.tabs-scroll .tab').forEach(t => {
   t.addEventListener('click', () => switchTab(t.dataset.tab));
 });
+$('tabMoreBtn')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = $('tabMoreMenu');
+  const btn = $('tabMoreBtn');
+  const open = menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+document.addEventListener('click', (e) => {
+  const menu = $('tabMoreMenu');
+  if (!menu || menu.classList.contains('hidden')) return;
+  if (e.target.closest('.tabs-more')) return;
+  closeTabMoreMenu();
+});
+window.addEventListener('resize', reflowTabsForViewport);
+reflowTabsForViewport();
 
 $('visitsRefresh').addEventListener('click', loadVisits);
 $('visitsRange').addEventListener('change', (e) => {

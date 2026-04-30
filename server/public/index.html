@@ -27,7 +27,7 @@
     </div>
   </header>
 
-  <main class="layout">
+  <main class="layout" data-active-tab="bookmarks">
     <aside class="sidebar">
       <h2>カテゴリ</h2>
       <ul id="categoryList"></ul>
@@ -35,25 +35,31 @@
 
     <section class="content">
       <nav class="tabs">
-        <button class="tab active" data-tab="bookmarks">ブックマーク</button>
-        <button class="tab" data-tab="queue">
-          作業キュー
-          <span id="tabQueueCount" class="tab-count hidden">0</span>
-        </button>
-        <button class="tab" data-tab="events">📋 イベント</button>
-        <button class="tab" data-tab="visits">
-          アクセス履歴
-          <span id="tabVisitsCount" class="tab-count hidden">0</span>
-        </button>
-        <button class="tab" data-tab="trends">傾向</button>
-        <button class="tab" data-tab="recommend">
-          おすすめ
-          <span id="tabRecommendCount" class="tab-count hidden">0</span>
-        </button>
-        <button class="tab" data-tab="dig">ディグる</button>
-        <button class="tab" data-tab="dict">📖 辞書</button>
-        <button class="tab" data-tab="domain">🏷 ドメイン</button>
-        <button class="tab" data-tab="diary">📅 日記</button>
+        <div class="tabs-scroll">
+          <button class="tab active" data-tab="bookmarks">ブックマーク</button>
+          <button class="tab" data-tab="queue">
+            作業キュー
+            <span id="tabQueueCount" class="tab-count hidden">0</span>
+          </button>
+          <button class="tab" data-tab="events">📋 イベント</button>
+          <button class="tab" data-tab="visits">
+            アクセス履歴
+            <span id="tabVisitsCount" class="tab-count hidden">0</span>
+          </button>
+          <button class="tab" data-tab="trends">傾向</button>
+          <button class="tab" data-tab="recommend">
+            おすすめ
+            <span id="tabRecommendCount" class="tab-count hidden">0</span>
+          </button>
+          <button class="tab" data-tab="dig">ディグる</button>
+          <button class="tab" data-tab="dict">📖 辞書</button>
+          <button class="tab" data-tab="domain">🏷 ドメイン</button>
+          <button class="tab" data-tab="diary">📅 日記</button>
+        </div>
+        <div class="tabs-more">
+          <button type="button" class="tab tab-more-btn" id="tabMoreBtn" aria-haspopup="true" aria-expanded="false" title="他のタブ">⋯</button>
+          <div id="tabMoreMenu" class="tab-more-menu hidden" role="menu"></div>
+        </div>
       </nav>
 
       <div id="bookmarksView">
