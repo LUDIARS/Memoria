@@ -219,6 +219,17 @@ export function openDb(dbPath) {
   if (!dcCols.includes('notes'))       db.exec(`ALTER TABLE domain_catalog ADD COLUMN notes TEXT`);
   if (!dcCols.includes('user_edited')) db.exec(`ALTER TABLE domain_catalog ADD COLUMN user_edited INTEGER NOT NULL DEFAULT 0`);
 
+  // Phase 1 (multi-server): ownership / share metadata on the three shareable
+  // resources. NULL owner_user_id = "this is mine" on a local server.
+  // Same columns exist on the multi-server schema (Postgres) — see docs/.
+  const shareCols = ['owner_user_id', 'owner_user_name', 'shared_at', 'shared_origin'];
+  for (const tbl of ['bookmarks', 'dictionary_entries', 'dig_sessions']) {
+    const existing = db.prepare(`PRAGMA table_info(${tbl})`).all().map(c => c.name);
+    for (const col of shareCols) {
+      if (!existing.includes(col)) db.exec(`ALTER TABLE ${tbl} ADD COLUMN ${col} TEXT`);
+    }
+  }
+
   // Forward-compat: ensure newer columns exist on older DBs.
   const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
   if (!cols.includes('last_accessed_at')) {
