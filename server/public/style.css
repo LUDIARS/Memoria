@@ -2203,3 +2203,79 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .diary-more:hover { background: var(--accent-bg); }
 .diary-more-count { color: var(--muted); margin-left: 6px; font-size: 11px; }
 .diary-more .error { color: var(--danger); }
+
+/* === Tracks (GPS overlay) ============================================ */
+.tracks-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+.tracks-bar input[type="date"] {
+  font-size: 14px;
+  padding: 4px 8px;
+}
+.tracks-bar .grow { flex: 1; }
+.tracks-stats {
+  font-size: 13px;
+  color: var(--muted);
+}
+.tracks-missing-key {
+  padding: 12px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.tracks-missing-key code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.tracks-map {
+  width: 100%;
+  height: 60vh;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.tracks-days {
+  margin-top: 16px;
+}
+.tracks-days h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tracks-days-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tracks-days-list li {
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.tracks-days-list .link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  font-family: inherit;
+}
+.tracks-days-list .link:hover { text-decoration: underline; }

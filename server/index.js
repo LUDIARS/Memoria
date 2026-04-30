@@ -72,6 +72,10 @@ import {
   setBookmarkOwner, setDigOwner, setDictionaryOwner,
 } from './db.js';
 import {
+  insertGpsLocation, listGpsLocationsInRange, listGpsLocationDays,
+  listGpsLocationsForDate, deleteGpsLocationsOlderThan,
+} from './db.js';
+import {
   readMultiState, isConnected,
   readMultiServers, persistServers, upsertServer, removeServer,
   saveServerSession, clearServerSession, setActive, listConnectedActive,
@@ -2194,6 +2198,143 @@ app.get('/share', async (c) => {
     console.error('[share] bulkSaveUrls failed:', err.message);
   });
   return c.redirect('/?share=ok&u=' + encodeURIComponent(target), 303);
+});
+
+// ---- Google Maps client config -------------------------------------------
+//
+// API key は app_settings.`maps.api_key` か環境変数 GOOGLE_MAPS_API_KEY。
+// ブラウザに渡す必要があるため masked 値ではなく実値を返す。
+// Google Maps の鍵は HTTP referrer 制限 + API 制限を Google Cloud Console で
+// かけて運用するのが筋。
+
+app.get('/api/maps/config', (c) => {
+  const settings = getAppSettings(db);
+  const key = settings['maps.api_key'] || process.env.GOOGLE_MAPS_API_KEY || '';
+  return c.json({ apiKey: key, hasKey: !!key });
+});
+
+app.patch('/api/maps/config', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.apiKey !== 'string') {
+    return c.json({ error: 'apiKey (string) required' }, 400);
+  }
+  setAppSettings(db, { 'maps.api_key': body.apiKey.trim() });
+  return c.json({ ok: true });
+});
+
+// ---- GPS locations (OwnTracks) -------------------------------------------
+//
+// 個人用の歩いた軌跡を記録する。MQTT subscriber (server/owntracks-server.js)
+// が別 process で挿入するのが本流だが、ここでも HTTP 直投入を許可する
+// (テスト + OwnTracks の HTTP モードからの直接 POST 用)。
+//
+// MQTT 経路で動かすには docker-compose で mosquitto を起動して
+// `npm run owntracks` を別シェルで走らせること。
+//
+// 個人ツール想定なので auth は緩め: 環境変数 LOCATIONS_INGEST_KEY が設定
+// されていれば X-Memoria-Ingest-Key header と一致を要求、未設定なら
+// 認証なし (LAN-only バインドが前提)。
+
+const LOCATIONS_INGEST_KEY = process.env.LOCATIONS_INGEST_KEY ?? '';
+
+function checkIngestKey(c) {
+  if (!LOCATIONS_INGEST_KEY) return null;
+  const got = c.req.header('x-memoria-ingest-key') ?? '';
+  if (got !== LOCATIONS_INGEST_KEY) {
+    return c.json({ error: 'invalid ingest key' }, 401);
+  }
+  return null;
+}
+
+/**
+ * 直接 1 点の位置を投入する (OwnTracks HTTP モード or 手動テスト)。
+ * 受け取れる形式:
+ *   - OwnTracks 形式: { _type:'location', lat, lon, tst, acc?, alt?, vel?, cog?, batt?, conn? }
+ *   - 簡易形式:       { lat, lon, recorded_at?, device_id?, accuracy_m?, ... }
+ */
+app.post('/api/locations/ingest', async (c) => {
+  const denied = checkIngestKey(c);
+  if (denied) return denied;
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return c.json({ error: 'json body required' }, 400);
+  }
+  const lat = Number(body.lat);
+  const lon = Number(body.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return c.json({ error: 'lat / lon required (number)' }, 400);
+  }
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return c.json({ error: 'lat / lon out of range' }, 400);
+  }
+
+  const deviceId = body.device_id ?? body.tid ?? c.req.header('x-limit-d') ?? null;
+  const tst = typeof body.tst === 'number' ? body.tst : undefined;
+  const recordedAt = body.recorded_at ?? null;
+
+  const rec = {
+    userId: body.user_id ?? 'me',
+    deviceId,
+    tst,
+    recordedAt,
+    lat,
+    lon,
+    accuracy:  body.accuracy_m ?? body.acc ?? null,
+    altitude:  body.altitude_m ?? body.alt ?? null,
+    velocity:  body.velocity_kmh ?? body.vel ?? null,
+    course:    body.course_deg ?? body.cog ?? null,
+    battery:   body.battery_pct ?? body.batt ?? null,
+    conn:      body.conn ?? null,
+    rawJson:   JSON.stringify(body),
+  };
+
+  const result = insertGpsLocation(db, rec);
+  return c.json({ ok: true, id: result.id, skipped: result.skipped });
+});
+
+/**
+ * 期間内の点を時系列順で返す。
+ *   GET /api/locations?from=ISO&to=ISO&device=iphone
+ *   GET /api/locations?date=YYYY-MM-DD              (local TZ)
+ */
+app.get('/api/locations', (c) => {
+  const url = new URL(c.req.url);
+  const date = url.searchParams.get('date');
+  if (date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return c.json({ error: 'date must be YYYY-MM-DD' }, 400);
+    }
+    const points = listGpsLocationsForDate(db, date);
+    return c.json({ date, points });
+  }
+  const from = url.searchParams.get('from');
+  const to   = url.searchParams.get('to');
+  const deviceId = url.searchParams.get('device') ?? undefined;
+  const points = listGpsLocationsInRange(db, { from, to, deviceId });
+  return c.json({ from, to, deviceId: deviceId ?? null, points });
+});
+
+/**
+ * 位置情報を持っている日と件数。 UI の date picker 用。
+ */
+app.get('/api/locations/days', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') ?? 365) || 365, 3650);
+  const days = listGpsLocationDays(db, { limit });
+  return c.json({ days });
+});
+
+/**
+ * 古い位置情報を一括削除。 retention 用。
+ *   DELETE /api/locations?older_than=ISO
+ */
+app.delete('/api/locations', (c) => {
+  const denied = checkIngestKey(c);
+  if (denied) return denied;
+  const olderThan = c.req.query('older_than');
+  if (!olderThan) return c.json({ error: 'older_than (ISO) required' }, 400);
+  const removed = deleteGpsLocationsOlderThan(db, olderThan);
+  return c.json({ removed });
 });
 
 // ---- static UI ------------------------------------------------------------

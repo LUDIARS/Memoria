@@ -553,6 +553,7 @@ function switchTab(tab) {
   $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('eventsView').classList.toggle('hidden', tab !== 'events');
+  $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
@@ -563,6 +564,7 @@ function switchTab(tab) {
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
+  if (tab === 'tracks') loadTracks();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
 }
@@ -3563,6 +3565,188 @@ document.getElementById('multiRefresh')?.addEventListener('click', loadMulti);
 
 // First paint: surface the multi tab if we're already connected.
 refreshMultiTabVisibility();
+
+// ── Tracks (GPS overlay on Google Maps) ───────────────────────────────────
+//
+// 当日 (or 任意日) の OwnTracks 由来の GPS 軌跡を Google Maps 上に
+// Polyline で重ねる。 Google Maps API key は /api/maps/config で取得 →
+// script を遅延 inject。 key 未設定なら案内メッセージのみ。
+
+const tracksState = {
+  loaded: false,         // google.maps script を読み終えたか
+  map: null,
+  polyline: null,
+  dotMarkers: [],
+  apiKey: '',
+};
+
+function todayLocalIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+async function loadTracks() {
+  const dateInput = $('tracksDate');
+  if (dateInput && !dateInput.value) dateInput.value = todayLocalIso();
+
+  // bind controls (one-time)
+  if (!tracksState._bound) {
+    tracksState._bound = true;
+    dateInput?.addEventListener('change', renderTracksForCurrentDate);
+    $('tracksRefresh')?.addEventListener('click', renderTracksForCurrentDate);
+  }
+
+  // load API key + days list in parallel
+  try {
+    const [{ apiKey, hasKey }, { days }] = await Promise.all([
+      api('/api/maps/config'),
+      api('/api/locations/days?limit=180'),
+    ]);
+    tracksState.apiKey = apiKey;
+    $('tracksMissingKey').classList.toggle('hidden', !!hasKey);
+    renderTracksDaysList(days);
+    if (hasKey) {
+      await ensureGoogleMapsLoaded(apiKey);
+      ensureMapInstance();
+      renderTracksForCurrentDate();
+    }
+  } catch (e) {
+    console.error('[tracks] load failed', e);
+  }
+}
+
+function renderTracksDaysList(days) {
+  const ul = $('tracksDays');
+  if (!ul) return;
+  if (!days || days.length === 0) {
+    ul.innerHTML = '<li class="muted">記録なし</li>';
+    return;
+  }
+  ul.innerHTML = days.map(d =>
+    `<li><button class="link" data-tracks-day="${escapeHtml(d.day)}">${escapeHtml(d.day)}</button>
+       <span class="muted">${d.points} 点</span></li>`
+  ).join('');
+  ul.querySelectorAll('button[data-tracks-day]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dateInput = $('tracksDate');
+      if (dateInput) {
+        dateInput.value = btn.dataset.tracksDay;
+        renderTracksForCurrentDate();
+      }
+    });
+  });
+}
+
+function ensureGoogleMapsLoaded(apiKey) {
+  if (tracksState.loaded || (window.google && window.google.maps)) {
+    tracksState.loaded = true;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const cb = `__memoriaMapsCb_${Date.now()}`;
+    window[cb] = () => {
+      tracksState.loaded = true;
+      delete window[cb];
+      resolve();
+    };
+    const s = document.createElement('script');
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=${cb}&v=weekly`;
+    s.async = true;
+    s.defer = true;
+    s.onerror = () => reject(new Error('Google Maps script failed to load'));
+    document.head.appendChild(s);
+  });
+}
+
+function ensureMapInstance() {
+  if (tracksState.map || !window.google?.maps) return;
+  const el = $('tracksMap');
+  if (!el) return;
+  // 起動時の暫定中心 (東京駅)。最初のロード後に bbox に fit する。
+  tracksState.map = new google.maps.Map(el, {
+    center: { lat: 35.681, lng: 139.767 },
+    zoom: 12,
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: true,
+  });
+}
+
+async function renderTracksForCurrentDate() {
+  if (!tracksState.map) return;
+  const date = $('tracksDate')?.value;
+  if (!date) return;
+  try {
+    const { points } = await api(`/api/locations?date=${encodeURIComponent(date)}`);
+    drawTracks(points || []);
+    const km = computeDistanceMeters(points || []) / 1000;
+    $('tracksStats').textContent = points && points.length
+      ? `${points.length} 点 / 概算 ${km.toFixed(2)} km`
+      : '点なし';
+  } catch (e) {
+    console.error('[tracks] render failed', e);
+    $('tracksStats').textContent = '取得失敗';
+  }
+}
+
+function drawTracks(points) {
+  // 既存 overlay をクリア
+  if (tracksState.polyline) {
+    tracksState.polyline.setMap(null);
+    tracksState.polyline = null;
+  }
+  for (const m of tracksState.dotMarkers) m.setMap(null);
+  tracksState.dotMarkers = [];
+  if (!points.length) return;
+
+  const path = points.map(p => ({ lat: p.lat, lng: p.lon }));
+  tracksState.polyline = new google.maps.Polyline({
+    path,
+    geodesic: true,
+    strokeColor: '#3b82f6',
+    strokeOpacity: 0.85,
+    strokeWeight: 4,
+    map: tracksState.map,
+  });
+
+  // 始点 / 終点に小さなマーカーを置く (path が長くてもマーカーは 2 個だけ)
+  const start = path[0];
+  const end = path[path.length - 1];
+  tracksState.dotMarkers.push(new google.maps.Marker({
+    position: start, map: tracksState.map, title: '開始',
+    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#10b981', fillOpacity: 1, strokeColor: '#065f46', strokeWeight: 1 },
+  }));
+  tracksState.dotMarkers.push(new google.maps.Marker({
+    position: end, map: tracksState.map, title: '終端',
+    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#7f1d1d', strokeWeight: 1 },
+  }));
+
+  // bbox に fit
+  const b = new google.maps.LatLngBounds();
+  for (const p of path) b.extend(p);
+  tracksState.map.fitBounds(b, 60);
+}
+
+function computeDistanceMeters(points) {
+  if (!points || points.length < 2) return 0;
+  const R = 6_371_008;
+  const toRad = d => (d * Math.PI) / 180;
+  let dist = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    if (b.accuracy_m && b.accuracy_m > 200) continue;
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lon - a.lon);
+    const sa = Math.sin(dLat / 2);
+    const so = Math.sin(dLon / 2);
+    const h = sa * sa + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * so * so;
+    dist += 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  return dist;
+}
 
 // ── PWA share_target landing ───────────────────────────────────────────────
 // /share redirects back here with ?share=ok&u=<url> after queueing the save.

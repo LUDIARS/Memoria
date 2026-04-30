@@ -90,6 +90,7 @@
           <button class="tab" data-tab="dict">📖 辞書</button>
           <button class="tab" data-tab="domain">🏷 ドメイン</button>
           <button class="tab" data-tab="diary">📅 日記</button>
+          <button class="tab" data-tab="tracks">🗺 軌跡</button>
           <button class="tab tab-multi-only" data-tab="multi" hidden>🌐 マルチ</button>
         </div>
       </nav>
@@ -358,6 +359,24 @@
           <button id="eventsRefresh" class="ghost">更新</button>
         </div>
         <ul id="eventsList" class="events-list"></ul>
+      </div>
+
+      <div id="tracksView" class="hidden">
+        <div class="tracks-bar">
+          <input id="tracksDate" type="date" />
+          <button id="tracksRefresh" class="ghost">更新</button>
+          <span class="grow"></span>
+          <span id="tracksStats" class="tracks-stats"></span>
+        </div>
+        <div id="tracksMissingKey" class="tracks-missing-key hidden">
+          Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
+          を入れるか、 環境変数 <code>GOOGLE_MAPS_API_KEY</code> を設定してください。
+        </div>
+        <div id="tracksMap" class="tracks-map"></div>
+        <div class="tracks-days">
+          <h4>記録のある日</h4>
+          <ul id="tracksDays" class="tracks-days-list"></ul>
+        </div>
       </div>
 
       <div id="multiView" class="hidden">

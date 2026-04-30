@@ -1,0 +1,40 @@
+# Memoria 個人用インフラ
+#
+# OwnTracks (iOS/Android) → mosquitto → memoria-owntracks-server (別 process)
+# → SQLite (data/memoria.db)
+#
+# Iv (Imperativus) の mosquitto と衝突しないように既定 host port を 1884 (TCP)
+# / 9002 (WS) にしている。LAN 内で他 broker と共存しない場合は
+# `MEMORIA_MQTT_PORT=1883` で上書き可能。
+#
+# 起動: `docker compose up -d mosquitto`
+# 停止: `docker compose down`
+#
+# 認証 (任意):
+#   1. mosquitto-passwd で passwd を生成
+#      docker compose run --rm --entrypoint mosquitto_passwd mosquitto -b /tmp/passwd alice <PASSWORD>
+#      cat tmp/passwd >> config/mosquitto/passwd  (起動コンテナにコピーする経路はホスト側で)
+#   2. config/mosquitto/acl を編集
+#   3. mosquitto.conf の `allow_anonymous` を false に切り替え
+#
+# 個人用途では LAN 限定 + anonymous 許可 (default) のままでも実用できる。
+# ただし WAN 公開する場合は必ず認証 + TLS を有効化すること。
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: memoria-mosquitto
+    restart: unless-stopped
+    ports:
+      - "${MEMORIA_MQTT_PORT:-1884}:1883"
+      - "${MEMORIA_MQTT_WS_PORT:-9002}:9001"
+    volumes:
+      - ./config/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./config/mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./config/mosquitto/acl:/mosquitto/config/acl:ro
+      - memoria-mosquitto-data:/mosquitto/data
+      - memoria-mosquitto-log:/mosquitto/log
+
+volumes:
+  memoria-mosquitto-data:
+  memoria-mosquitto-log:
