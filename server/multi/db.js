@@ -50,6 +50,44 @@ export async function listSharedBookmarks({ limit = 50, before = null } = {}) {
   return r.rows;
 }
 
+export async function getSharedBookmark(id) {
+  const r = await query(
+    `SELECT b.id, b.url, b.title, b.summary, b.memo,
+            b.owner_user_id, b.owner_user_name,
+            b.shared_at, b.shared_origin,
+            COALESCE(
+              (SELECT json_agg(category ORDER BY category)
+                 FROM bookmark_categories WHERE bookmark_id = b.id), '[]'::json
+            ) AS categories
+       FROM bookmarks b
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rows[0] || null;
+}
+
+export async function getSharedDig(id) {
+  const r = await query(
+    `SELECT id, query, status, result_json, owner_user_id, owner_user_name,
+            shared_at, shared_origin
+       FROM dig_sessions
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rows[0] || null;
+}
+
+export async function getSharedDictionary(id) {
+  const r = await query(
+    `SELECT id, term, definition, notes, owner_user_id, owner_user_name,
+            shared_at, shared_origin
+       FROM dictionary_entries
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rows[0] || null;
+}
+
 export async function insertSharedBookmark({ url, title, summary, memo, categories, ownerUserId, ownerUserName, sharedOrigin }) {
   const r = await query(
     `INSERT INTO bookmarks (url, title, summary, memo, owner_user_id, owner_user_name, shared_origin)

@@ -64,11 +64,13 @@ import {
 import { getAppSettings, setAppSettings } from './db.js';
 import {
   markBookmarkShared, markDigShared, markDictionaryShared,
+  setBookmarkOwner, setDigOwner, setDictionaryOwner,
 } from './db.js';
 import {
   readMultiState, isConnected,
   saveMultiUrl, saveMultiSession, clearMultiSession,
   fetchMe, shareBookmark, shareDig, shareDictionary,
+  multiFetch,
 } from './local/multi-client.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1006,6 +1008,105 @@ app.post('/api/multi/share', async (c) => {
     return c.json({ error: 'unknown kind' }, 400);
   } catch (e) {
     console.error('[multi/share]', e);
+    return c.json({ error: e.message }, e.status || 500);
+  }
+});
+
+// Body: { kind: 'bookmark' | 'dig' | 'dict', remote_id }
+//
+// Pulls a single resource from the connected Hub and writes it into the
+// local SQLite. owner_user_id / owner_user_name are populated from the
+// Hub row so the UI can render "by <user>" when the local owner is
+// somebody else. shared_origin is set to the Hub URL.
+app.post('/api/multi/download', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.kind || body.remote_id == null) return c.json({ error: 'kind+remote_id required' }, 400);
+  const state = readMultiState(db);
+  if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
+
+  try {
+    if (body.kind === 'bookmark') {
+      const remote = await multiFetch(state,`/api/shared/bookmarks/${body.remote_id}`);
+      // Bookmarks need an HTML body locally — fetch the URL ourselves.
+      // Fall back to a placeholder if the page is unreachable; the user
+      // can re-fetch via the existing 再要約 button.
+      const escapeHtml = (s = '') => String(s).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[ch]));
+      let htmlBody;
+      try { htmlBody = (await fetchPageHtml(remote.url)).html; }
+      catch (e) {
+        htmlBody = `<!-- downloaded from ${state.url}; original fetch failed: ${e.message} -->\n<html><head><title>${escapeHtml(remote.title || '')}</title></head><body></body></html>`;
+      }
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const safe = ts + '_' + Math.random().toString(36).slice(2, 8) + '.html';
+      writeFileSync(join(HTML_DIR, safe), htmlBody, 'utf8');
+      const ins = insertImportedBookmark(db, {
+        url: remote.url,
+        title: remote.title,
+        html_path: safe,
+        summary: remote.summary,
+        memo: remote.memo,
+        categories: remote.categories || [],
+      });
+      if (ins.skipped) return c.json({ ok: true, duplicate: true, id: ins.id });
+      setBookmarkOwner(db, ins.id, {
+        ownerUserId: remote.owner_user_id,
+        ownerUserName: remote.owner_user_name,
+        sharedAt: remote.shared_at,
+        sharedOrigin: state.url,
+      });
+      return c.json({ ok: true, id: ins.id });
+    }
+    if (body.kind === 'dig') {
+      const remote = await multiFetch(state,`/api/shared/digs/${body.remote_id}`);
+      const id = insertDigSession(db, remote.query);
+      setDigResult(db, id, {
+        status: remote.status || 'done',
+        result: remote.result_json || remote.result || null,
+        error: null,
+      });
+      setDigOwner(db, id, {
+        ownerUserId: remote.owner_user_id,
+        ownerUserName: remote.owner_user_name,
+        sharedAt: remote.shared_at,
+        sharedOrigin: state.url,
+      });
+      return c.json({ ok: true, id });
+    }
+    if (body.kind === 'dict') {
+      const remote = await multiFetch(state,`/api/shared/dictionary/${body.remote_id}`);
+      // Dictionary terms are unique locally — namespace remote-owned terms
+      // with the owner so a download doesn't clobber a local entry.
+      const namespacedTerm = remote.owner_user_id
+        ? `${remote.term} (@${remote.owner_user_name || remote.owner_user_id})`
+        : remote.term;
+      const existing = findDictionaryEntryByTerm(db, namespacedTerm);
+      let id;
+      if (existing) {
+        updateDictionaryEntry(db, existing.id, {
+          definition: remote.definition,
+          notes: remote.notes,
+        });
+        id = existing.id;
+      } else {
+        id = insertDictionaryEntry(db, {
+          term: namespacedTerm,
+          definition: remote.definition,
+          notes: remote.notes,
+        });
+      }
+      setDictionaryOwner(db, id, {
+        ownerUserId: remote.owner_user_id,
+        ownerUserName: remote.owner_user_name,
+        sharedAt: remote.shared_at,
+        sharedOrigin: state.url,
+      });
+      return c.json({ ok: true, id });
+    }
+    return c.json({ error: 'unknown kind' }, 400);
+  } catch (e) {
+    console.error('[multi/download]', e);
     return c.json({ error: e.message }, e.status || 500);
   }
 });
