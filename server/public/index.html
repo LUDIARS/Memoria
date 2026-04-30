@@ -14,17 +14,10 @@
 <body>
   <header class="topbar">
     <div class="brand">Memoria</div>
+    <div id="multiSwitch" class="multi-switch" hidden></div>
     <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
-      <select id="sort" title="ブックマークの並び順">
-        <option value="created_desc">追加日 (新しい順)</option>
-        <option value="created_asc">追加日 (古い順)</option>
-        <option value="accessed_desc">最終アクセス (新しい順)</option>
-        <option value="accessed_asc">最終アクセス (古い順)</option>
-        <option value="title_asc">タイトル (A→Z)</option>
-      </select>
-      <input id="search" type="search" placeholder="検索 (タイトル・URL・要約)" />
-      <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定 / Export / Import">⚙ 設定</button>
+      <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定">⚙ 設定</button>
     </div>
   </header>
 
@@ -60,13 +53,24 @@
       </nav>
 
       <div id="bookmarksView">
+        <div class="bookmarks-toolbar">
+          <button id="categoriesToggle" class="ghost categories-toggle" title="カテゴリを表示" aria-expanded="false">☰ カテゴリ</button>
+          <select id="sort" title="ブックマークの並び順">
+            <option value="created_desc">追加日 (新しい順)</option>
+            <option value="created_asc">追加日 (古い順)</option>
+            <option value="accessed_desc">最終アクセス (新しい順)</option>
+            <option value="accessed_asc">最終アクセス (古い順)</option>
+            <option value="title_asc">タイトル (A→Z)</option>
+          </select>
+          <input id="search" type="search" placeholder="検索 (タイトル・URL・要約)" />
+        </div>
         <div id="bulkBar" class="bulkbar hidden">
           <span id="bulkCount">0</span> 件選択中
           <button id="bulkExport">選択をエクスポート</button>
           <button id="bulkClear" class="ghost">クリア</button>
         </div>
         <div class="bookmarks-layout">
-          <aside class="bookmarks-categories">
+          <aside class="bookmarks-categories" id="bookmarksCategories">
             <h3>カテゴリ</h3>
             <ul id="categoryList"></ul>
           </aside>
@@ -452,13 +456,14 @@
       <button id="aiSettingsSave">保存</button>
     </div>
     <h4>🌐 マルチサーバ (Memoria Hub)</h4>
-    <p class="ai-settings-help">他のユーザの辞書 / ディグ / ブックマークを共有できるハブに接続します。Cernere ログインが必要です。</p>
-    <label>マルチサーバ URL <input id="multiUrl" type="text" placeholder="https://memoria-hub.example.com" /></label>
-    <div id="multiStatus" class="multi-status"></div>
-    <div class="ai-settings-actions">
-      <button id="multiConnectBtn">接続</button>
-      <button id="multiDisconnectBtn" class="danger" hidden>切断</button>
+    <p class="ai-settings-help">辞書 / ディグ / ブックマークを共有できるハブを複数登録できます。各エントリは独立した Cernere ログインを持ち、左の topbar スイッチで個別 ON/OFF (複数同時 ON 可)。</p>
+    <ul id="multiServersList" class="multi-servers"></ul>
+    <div class="multi-add-row">
+      <input id="multiAddLabel" type="text" placeholder="ラベル (例: 社内ハブ)" />
+      <input id="multiAddUrl" type="text" placeholder="https://memoria-hub.example.com" />
+      <button id="multiAddBtn">＋ 追加</button>
     </div>
+    <div id="multiStatus" class="multi-status"></div>
   </div>
   <script src="app.js"></script>
 </body>
