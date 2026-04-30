@@ -45,9 +45,11 @@ export async function summarizeWithClaude({ url, title, html, claudeBin = 'claud
 }
 
 function runClaude(bin, prompt, timeoutMs) {
+  // Pass the prompt via stdin instead of as an argv entry — Windows command
+  // lines top out around 8 KB and long prompts hit ENAMETOOLONG otherwise.
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p', prompt], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const child = spawn(bin, ['-p'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
     });
     let stdout = '';
@@ -70,6 +72,7 @@ function runClaude(bin, prompt, timeoutMs) {
       }
       resolve(stdout);
     });
+    child.stdin.end(prompt, 'utf8');
   });
 }
 

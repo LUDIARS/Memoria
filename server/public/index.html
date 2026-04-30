@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <div class="brand">Memoria</div>
-    <div id="queueBadge" class="queue-badge hidden" title="要約待ちのジョブ数">要約待ち <span id="queueCount">0</span></div>
+    <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
       <select id="sort">
         <option value="created_desc">追加日 (新しい順)</option>
@@ -36,11 +36,11 @@
       <nav class="tabs">
         <button class="tab active" data-tab="bookmarks">ブックマーク</button>
         <button class="tab" data-tab="queue">
-          要約キュー
+          作業リスト
           <span id="tabQueueCount" class="tab-count hidden">0</span>
         </button>
         <button class="tab" data-tab="visits">
-          未保存履歴
+          アクセス履歴
           <span id="tabVisitsCount" class="tab-count hidden">0</span>
         </button>
         <button class="tab" data-tab="trends">傾向</button>
@@ -48,9 +48,10 @@
           おすすめ
           <span id="tabRecommendCount" class="tab-count hidden">0</span>
         </button>
-        <button class="tab" data-tab="rag">RAG</button>
         <button class="tab" data-tab="dig">ディグる</button>
         <button class="tab" data-tab="dict">📖 辞書</button>
+        <button class="tab" data-tab="domain">🏷 ドメイン</button>
+        <button class="tab" data-tab="diary">📅 日記</button>
       </nav>
 
       <div id="bookmarksView">
@@ -65,7 +66,7 @@
 
       <div id="visitsView" class="hidden">
         <div class="visits-bar">
-          <span>アクセスした URL のうち、まだ保存していないもの。同ドメインで既にブックマークがあるものほど上位。</span>
+          <span>ブラウザで開いた URL の履歴。各ドメインの説明は裏で Sonnet が分類して付与しています。</span>
           <span class="grow"></span>
           <select id="visitsRange">
             <option value="today">今日のみ</option>
@@ -139,19 +140,6 @@
         <div id="digResult" class="dig-result"></div>
       </div>
 
-      <div id="ragView" class="hidden">
-        <div class="rag-status" id="ragStatus">読み込み中…</div>
-
-        <div class="rag-search">
-          <input id="ragQuery" type="search" placeholder="保存済みブックマークから意味検索…" />
-          <button id="ragSearchBtn">検索</button>
-          <button id="ragAskBtn" class="ghost">この質問で答える</button>
-        </div>
-
-        <div id="ragAnswer" class="rag-answer hidden"></div>
-        <div id="ragResults" class="rag-results"></div>
-      </div>
-
       <div id="recommendView" class="hidden">
         <div class="rec-bar">
           <span>保存済 HTML から外部リンクを抽出し、未訪問のサイトを推薦。スコアは「同じリンクが何件の保存記事に出現したか」。</span>
@@ -185,15 +173,122 @@
         </div>
       </div>
 
+      <div id="domainView" class="hidden">
+        <div class="dict-bar">
+          <input id="domainSearch" type="search" placeholder="ドメイン・サイト名・概要で検索" />
+        </div>
+        <div class="dict-layout">
+          <ul id="domainList" class="dict-list"></ul>
+          <div id="domainDetail" class="dict-detail hidden">
+            <div class="dict-detail-head">
+              <input id="domainKey" type="text" placeholder="ドメイン" disabled />
+              <button id="domainSaveBtn">保存</button>
+              <button id="domainRegenBtn" class="ghost" title="claude に再分類させる">再分類</button>
+              <button id="domainDeleteBtn" class="danger">削除</button>
+            </div>
+            <div id="domainStats" class="domain-stats"></div>
+            <h4>Webサイト名</h4>
+            <input id="domainSiteName" type="text" placeholder="サービス名 / プロダクト名" />
+            <h4>概要</h4>
+            <textarea id="domainDesc" rows="3" placeholder="このドメインの 1〜2 文の説明"></textarea>
+            <h4>できること</h4>
+            <textarea id="domainCanDo" rows="4" placeholder="- できること1\n- できること2"></textarea>
+            <h4>カテゴリ</h4>
+            <input id="domainKind" type="text" placeholder="例: ドキュメント / SaaS / ブログ" />
+            <h4>メモ</h4>
+            <textarea id="domainNotes" rows="3" placeholder="自分用のメモ"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div id="diaryView" class="hidden">
+        <div class="diary-bar">
+          <button id="diaryPrevMonth" class="ghost">◀</button>
+          <span id="diaryMonthLabel" class="diary-month-label"></span>
+          <button id="diaryNextMonth" class="ghost">▶</button>
+          <button id="diaryToday" class="ghost">今日</button>
+          <span class="grow"></span>
+          <button id="diarySettingsBtn" class="ghost">⚙ GitHub設定</button>
+        </div>
+        <div class="diary-layout">
+          <div class="diary-calendar-wrap">
+            <div class="diary-weekdays">
+              <span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span>
+            </div>
+            <div id="diaryCalendar" class="diary-calendar"></div>
+            <h4 class="diary-week-h">週報</h4>
+            <ul id="diaryWeekList" class="diary-week-list"></ul>
+          </div>
+          <div id="weeklyDetail" class="diary-detail hidden">
+            <div class="diary-detail-head">
+              <h3 id="weeklyTitle"></h3>
+              <span id="weeklyStatus" class="diary-status-tag"></span>
+              <span class="grow"></span>
+              <button id="weeklyGenerate" class="ghost">再生成</button>
+              <button id="weeklyDelete" class="danger">削除</button>
+            </div>
+            <h4>週報サマリ</h4>
+            <div id="weeklySummary" class="diary-summary"></div>
+            <h4>GitHub commits (リポ別)</h4>
+            <ul id="weeklyGithub" class="diary-github"></ul>
+          </div>
+
+          <div id="diaryDetail" class="diary-detail hidden">
+            <div class="diary-detail-head">
+              <h3 id="diaryDate"></h3>
+              <span id="diaryStatus" class="diary-status-tag"></span>
+              <span class="grow"></span>
+              <button id="diaryGenerate" class="ghost">再生成</button>
+              <button id="diaryDelete" class="danger">削除</button>
+            </div>
+            <h4>作業内容 (Sonnet)</h4>
+            <div id="diaryWork" class="diary-summary"></div>
+            <h4>ハイライト (Opus 1M)</h4>
+            <div id="diaryHighlights" class="diary-summary"></div>
+            <h4>時間帯別アクセス (0-24時)</h4>
+            <div id="diaryHourly" class="diary-hourly"></div>
+            <div class="diary-pie-row">
+              <div class="diary-pie-wrap">
+                <h4>ドメイン内訳</h4>
+                <div id="diaryPie" class="diary-pie"></div>
+              </div>
+              <div class="diary-pie-legend-wrap">
+                <h4>よく見たドメイン</h4>
+                <ul id="diaryDomains" class="diary-domains"></ul>
+              </div>
+            </div>
+            <h4>新規ブックマーク</h4>
+            <ul id="diaryBookmarksCreated" class="diary-bookmarks"></ul>
+            <h4>再訪したブックマーク</h4>
+            <ul id="diaryBookmarksAccessed" class="diary-bookmarks"></ul>
+            <h4>GitHub commits (リポ別件数)</h4>
+            <ul id="diaryGithub" class="diary-github"></ul>
+            <h4>メモ・補足</h4>
+            <textarea id="diaryNotes" rows="6" placeholder="補足や訂正を書くと、次の再生成で反映されます。"></textarea>
+            <div class="diary-detail-actions">
+              <button id="diaryNotesSave">メモを保存</button>
+            </div>
+          </div>
+        </div>
+        <div id="diarySettingsPanel" class="diary-settings hidden">
+          <h4>GitHub 設定</h4>
+          <p class="diary-settings-help">GitHub の commit ツリーを日報に取り込むときだけ設定してください。トークンはサーバーの SQLite に保存されます。</p>
+          <label>ユーザ名 <input id="diaryGhUser" type="text" placeholder="example" /></label>
+          <label>リポジトリ (カンマ区切り。空欄なら全リポ) <input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
+          <label>Personal access token (公開リポのみなら不要) <input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
+          <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
+          <div class="diary-settings-actions">
+            <button id="diarySettingsSave">保存</button>
+            <button id="diarySettingsTest" class="ghost">PAT を検証</button>
+            <button id="diarySettingsClose" class="ghost">閉じる</button>
+          </div>
+          <div id="diaryGhTestResult" class="diary-settings-tokenstatus"></div>
+        </div>
+      </div>
+
       <div id="queueView" class="hidden">
-        <h2 class="queue-h">実行中</h2>
-        <div id="queueRunning" class="queue-running"></div>
-
-        <h2 class="queue-h">順番待ち <span id="queueQueuedCount" class="queue-h-count">0</span></h2>
-        <ol id="queueQueued" class="queue-list"></ol>
-
-        <h2 class="queue-h">履歴 <span id="queueHistoryCount" class="queue-h-count">0</span></h2>
-        <ul id="queueHistory" class="queue-history"></ul>
+        <p class="queue-bar-help">ブックマーク要約・ディグ・ワードクラウド・日記・週報・ドメイン分類・ページメタの作業をすべて 1 件ずつ順次処理しています。</p>
+        <div id="queueGroups" class="queue-groups"></div>
       </div>
     </section>
 

@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
-    "@huggingface/transformers": "^3.0.0",
     "better-sqlite3": "^11.3.0",
     "hono": "^4.6.10",
     "node-html-parser": "^6.1.13"
