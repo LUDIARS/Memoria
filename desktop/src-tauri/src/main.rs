@@ -5,9 +5,16 @@
 // app window is closed we kill the child so the port is freed.
 //
 // Spawn behaviour is controlled by env vars / build mode:
-//   MEMORIA_SERVER_DIR  — absolute path to the server/ directory
-//                          (default: <exe_dir>/server)
-//   MEMORIA_NODE_BIN    — Node executable (default: "node")
+//   MEMORIA_SERVER_DIR  — absolute path to the server/ directory.
+//                          Default lookup order:
+//                            1. <resources>/server/   (production bundle)
+//                            2. <exe_dir>/server/     (legacy dev sidecar)
+//   MEMORIA_NODE_BIN    — Node executable.
+//                          Default lookup order:
+//                            1. <resources>/node/<plat>/{node,bin/node[.exe]}
+//                               (production bundle, prepared by
+//                                desktop/scripts/bundle-server.mjs)
+//                            2. "node" on PATH
 //   MEMORIA_PORT        — port the server listens on (default: 5180)
 //
 // In `cargo tauri dev` the user is expected to run the server themselves;
@@ -15,24 +22,75 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
-use tauri::Manager;
+use tauri::{path::BaseDirectory, Manager};
 
 struct ServerHandle(Mutex<Option<Child>>);
 
-fn spawn_server() -> Option<Child> {
+fn target_node_subdir() -> &'static str {
+    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        return "win-x64";
+    }
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return "darwin-arm64";
+    }
+    if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        return "darwin-x64";
+    }
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        return "linux-x64";
+    }
+    if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        return "linux-arm64";
+    }
+    "unknown"
+}
+
+fn bundled_node(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let base = app
+        .path()
+        .resolve("resources/node", BaseDirectory::Resource)
+        .ok()?;
+    let plat = base.join(target_node_subdir());
+    let candidates = [
+        plat.join("node.exe"),
+        plat.join("bin").join("node"),
+        plat.join("node"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn bundled_server(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let p = app
+        .path()
+        .resolve("resources/server", BaseDirectory::Resource)
+        .ok()?;
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+fn spawn_server(app: &tauri::AppHandle) -> Option<Child> {
     let server_dir = std::env::var("MEMORIA_SERVER_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
+        .ok()
+        .or_else(|| bundled_server(app))
+        .unwrap_or_else(|| {
             let mut p = std::env::current_exe().unwrap_or_default();
             p.pop();
             p.push("server");
             p
         });
-    let node_bin = std::env::var("MEMORIA_NODE_BIN").unwrap_or_else(|_| "node".to_string());
+    let node_bin: PathBuf = std::env::var("MEMORIA_NODE_BIN")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| bundled_node(app))
+        .unwrap_or_else(|| Path::new("node").to_path_buf());
     let port = std::env::var("MEMORIA_PORT").unwrap_or_else(|_| "5180".to_string());
 
     if !server_dir.exists() {
@@ -53,7 +111,7 @@ fn spawn_server() -> Option<Child> {
     {
         Ok(child) => {
             eprintln!(
-                "[memoria-desktop] spawned {} (pid {}) in {:?} (port {})",
+                "[memoria-desktop] spawned {:?} (pid {}) in {:?} (port {})",
                 node_bin,
                 child.id(),
                 server_dir,
@@ -63,7 +121,7 @@ fn spawn_server() -> Option<Child> {
         }
         Err(e) => {
             eprintln!(
-                "[memoria-desktop] failed to spawn server ({} index.js in {:?}): {}",
+                "[memoria-desktop] failed to spawn server ({:?} index.js in {:?}): {}",
                 node_bin, server_dir, e
             );
             None
@@ -76,8 +134,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(ServerHandle(Mutex::new(None)))
         .setup(|app| {
+            let app_handle = app.handle().clone();
             let handle: tauri::State<ServerHandle> = app.state();
-            *handle.0.lock().unwrap() = spawn_server();
+            *handle.0.lock().unwrap() = spawn_server(&app_handle);
             Ok(())
         })
         .on_window_event(|window, event| {
