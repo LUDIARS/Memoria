@@ -900,39 +900,86 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   align-items: center;
 }
 .dict-bar input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
-.dict-layout {
-  display: grid;
-  grid-template-columns: minmax(280px, 360px) 1fr;
-  gap: 12px;
-  align-items: start;
-}
-.dict-list {
+/* Dictionary + domain catalog: Pinterest-style tile grid filling the
+ * viewport. Each entry is a card; clicking opens the edit form as a
+ * modal overlay (.dict-detail.modal-panel). */
+.dict-list.pin-grid {
   list-style: none;
   padding: 0;
   margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: start;
 }
 .dict-item {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 10px;
+  padding: 12px 14px;
   cursor: pointer;
   box-shadow: var(--shadow);
+  transition: border-color 80ms, transform 80ms, box-shadow 80ms;
 }
-.dict-item:hover { border-color: var(--accent); }
+.dict-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+}
 .dict-item.selected { border-color: var(--accent); background: var(--accent-bg); }
-.dict-term { font-weight: 600; line-height: 1.3; }
-.dict-snippet { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+.dict-term { font-weight: 600; line-height: 1.35; word-break: break-word; }
+.dict-snippet {
+  font-size: 12px;
+  color: var(--text);
+  margin-top: 6px;
+  line-height: 1.5;
+  /* Clamp to ~5 lines so tiles stay roughly comparable in height. */
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .dict-meta {
   font-size: 10px;
   color: var(--muted);
   display: flex;
   justify-content: space-between;
-  margin-top: 6px;
+  margin-top: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
+.dict-empty { padding: 32px; color: var(--muted); font-style: italic; text-align: center; }
+
+/* Modal overlay used for the edit panels. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 90;
+}
+.modal-backdrop[hidden] { display: none; }
+.modal-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(680px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  z-index: 100;
+}
+.modal-close {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.modal-close:hover { background: #f0f2f7; color: var(--text); }
 .dict-empty {
   font-size: 12px;
   color: var(--muted);

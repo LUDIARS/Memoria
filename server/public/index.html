@@ -177,24 +177,7 @@
           <input id="dictSearch" type="search" placeholder="辞書を検索 (term / 説明 / メモ)" />
           <button id="dictNewBtn">＋ 新規エントリ</button>
         </div>
-        <div class="dict-layout">
-          <ul id="dictList" class="dict-list"></ul>
-          <div id="dictDetail" class="dict-detail hidden">
-            <div class="dict-detail-head">
-              <input id="dictTerm" type="text" placeholder="単語" />
-              <button id="dictSaveBtn">保存</button>
-              <button id="dictShareBtn" class="ghost" title="マルチサーバに共有" hidden>📤 シェア</button>
-              <span id="dictShareStatus" class="share-status"></span>
-              <button id="dictDeleteBtn" class="danger">削除</button>
-            </div>
-            <h4>説明</h4>
-            <textarea id="dictDefinition" rows="6" placeholder="調査内容・定義 (Markdown 可)"></textarea>
-            <h4>メモ</h4>
-            <textarea id="dictNotes" rows="4" placeholder="追加メモ"></textarea>
-            <h4>リンクされた調査記録</h4>
-            <ul id="dictLinks" class="dict-links"></ul>
-          </div>
-        </div>
+        <ul id="dictList" class="dict-list pin-grid"></ul>
       </div>
 
       <div id="domainView" class="hidden">
@@ -202,28 +185,7 @@
           <input id="domainSearch" type="search" placeholder="ドメイン・サイト名・概要で検索" />
           <button id="domainRecatalogBtn" class="ghost" title="アクセス記録に出てきた全ドメインのうち、まだ辞書に無いものを fetch + 分類キューに積む">🔄 全走査</button>
         </div>
-        <div class="dict-layout">
-          <ul id="domainList" class="dict-list"></ul>
-          <div id="domainDetail" class="dict-detail hidden">
-            <div class="dict-detail-head">
-              <input id="domainKey" type="text" placeholder="ドメイン" disabled />
-              <button id="domainSaveBtn">保存</button>
-              <button id="domainRegenBtn" class="ghost" title="claude に再分類させる">再分類</button>
-              <button id="domainDeleteBtn" class="danger">削除</button>
-            </div>
-            <div id="domainStats" class="domain-stats"></div>
-            <h4>Webサイト名</h4>
-            <input id="domainSiteName" type="text" placeholder="サービス名 / プロダクト名" />
-            <h4>概要</h4>
-            <textarea id="domainDesc" rows="3" placeholder="このドメインの 1〜2 文の説明"></textarea>
-            <h4>できること</h4>
-            <textarea id="domainCanDo" rows="4" placeholder="- できること1\n- できること2"></textarea>
-            <h4>カテゴリ</h4>
-            <input id="domainKind" type="text" placeholder="例: ドキュメント / SaaS / ブログ" />
-            <h4>メモ</h4>
-            <textarea id="domainNotes" rows="3" placeholder="自分用のメモ"></textarea>
-          </div>
-        </div>
+        <ul id="domainList" class="dict-list pin-grid"></ul>
       </div>
 
       <div id="diaryView" class="hidden">
@@ -378,6 +340,48 @@
       <ul id="dAccesses" class="accesses"></ul>
     </aside>
   </main>
+
+  <!-- Modal backdrop is shared between dict and domain detail panels.
+       Click on the backdrop or Escape closes whichever modal is open. -->
+  <div id="modalBackdrop" class="modal-backdrop" hidden></div>
+
+  <div id="dictDetail" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <input id="dictTerm" type="text" placeholder="単語" />
+      <button id="dictSaveBtn">保存</button>
+      <button id="dictShareBtn" class="ghost" title="マルチサーバに共有" hidden>📤 シェア</button>
+      <span id="dictShareStatus" class="share-status"></span>
+      <button id="dictDeleteBtn" class="danger">削除</button>
+      <button id="dictDetailClose" class="modal-close" title="閉じる">×</button>
+    </div>
+    <h4>説明</h4>
+    <textarea id="dictDefinition" rows="6" placeholder="調査内容・定義 (Markdown 可)"></textarea>
+    <h4>メモ</h4>
+    <textarea id="dictNotes" rows="4" placeholder="追加メモ"></textarea>
+    <h4>リンクされた調査記録</h4>
+    <ul id="dictLinks" class="dict-links"></ul>
+  </div>
+
+  <div id="domainDetail" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <input id="domainKey" type="text" placeholder="ドメイン" disabled />
+      <button id="domainSaveBtn">保存</button>
+      <button id="domainRegenBtn" class="ghost" title="claude に再分類させる">再分類</button>
+      <button id="domainDeleteBtn" class="danger">削除</button>
+      <button id="domainDetailClose" class="modal-close" title="閉じる">×</button>
+    </div>
+    <div id="domainStats" class="domain-stats"></div>
+    <h4>Webサイト名</h4>
+    <input id="domainSiteName" type="text" placeholder="サービス名 / プロダクト名" />
+    <h4>概要</h4>
+    <textarea id="domainDesc" rows="3" placeholder="このドメインの 1〜2 文の説明"></textarea>
+    <h4>できること</h4>
+    <textarea id="domainCanDo" rows="4" placeholder="- できること1\n- できること2"></textarea>
+    <h4>カテゴリ</h4>
+    <input id="domainKind" type="text" placeholder="例: ドキュメント / SaaS / ブログ" />
+    <h4>メモ</h4>
+    <textarea id="domainNotes" rows="3" placeholder="自分用のメモ"></textarea>
+  </div>
 
   <div id="aiSettingsPanel" class="ai-settings hidden">
     <div class="ai-settings-head">
