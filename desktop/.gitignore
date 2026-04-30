@@ -1,3 +1,6 @@
 src-tauri/target/
 src-tauri/Cargo.lock
 src-tauri/gen/
+src-tauri/resources/server/
+src-tauri/resources/node/
+.cache/

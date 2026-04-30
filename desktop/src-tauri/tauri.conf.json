@@ -5,7 +5,7 @@
   "identifier": "com.ludiars.memoria",
   "build": {
     "beforeDevCommand": "",
-    "beforeBuildCommand": "",
+    "beforeBuildCommand": "node ../scripts/bundle-server.mjs",
     "devUrl": "http://localhost:5180",
     "frontendDist": "../dist-stub"
   },
@@ -35,6 +35,10 @@
     ],
     "category": "Productivity",
     "shortDescription": "Web bookmarking + research + diary",
-    "longDescription": "Memoria desktop wrapper. Runs the Memoria Node server as a child process and shows its UI in a WebView."
+    "longDescription": "Memoria desktop wrapper. Runs the Memoria Node server as a child process and shows its UI in a WebView.",
+    "resources": [
+      "resources/server",
+      "resources/node"
+    ]
   }
 }
