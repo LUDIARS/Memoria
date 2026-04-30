@@ -2279,3 +2279,80 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   font-family: inherit;
 }
 .tracks-days-list .link:hover { text-decoration: underline; }
+
+/* WebSocket ライブステータスインジケータ ─────────────────────────────── */
+.tracks-live {
+  display: inline-block;
+  font-size: 18px;
+  line-height: 1;
+  color: #9ca3af; /* gray (idle) */
+  margin-left: 4px;
+  user-select: none;
+  transition: color 200ms;
+}
+.tracks-live[data-live="open"]       { color: #10b981; /* green */ }
+.tracks-live[data-live="connecting"] { color: #f59e0b; /* amber */ }
+.tracks-live[data-live="closed"],
+.tracks-live[data-live="error"]      { color: #ef4444; /* red   */ }
+
+/* ingest key 管理パネル ────────────────────────────────────────────── */
+.tracks-key-panel {
+  margin: 8px 0;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.tracks-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.tracks-key-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+}
+.tracks-key-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tracks-key-reveal {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+.tracks-key-reveal .muted {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.tracks-key-full {
+  display: block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin: 6px 0;
+  word-break: break-all;
+}
+.tracks-key-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tracks-key-help code {
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}

@@ -2497,3 +2497,59 @@ setInterval(() => {
     }
   }
 }, 30_000).unref?.();
+
+// ---- in-process MQTT subscriber (任意) ----------------------------------
+//
+// MEMORIA_MQTT_URL が設定されていれば、 main server process 内で OwnTracks
+// subscriber を立てる。 別 process の owntracks-server.js は legacy として
+// 残るが、 in-process にすると WebSocket broadcaster (broadcastLocation) を
+// 直接呼べるので UI も即時更新される。
+//
+// 構成例 (Cloudflare Tunnel + MQTT over WSS):
+//   [iOS/Android OwnTracks (WSS mode)]
+//      │ wss://memoria.example.com/mqtt
+//      ▼
+//   [Cloudflare Tunnel ingress: /mqtt → ws://localhost:9002]
+//      │
+//      ▼
+//   [mosquitto (docker compose、 host port 9002 → container 9001)]
+//      │
+//      ▼
+//   [この process の subscriber → insertGpsLocation + broadcastLocation]
+
+if (process.env.MEMORIA_MQTT_URL) {
+  try {
+    const { loadOwntracksConfig } = await import('./owntracks/config.js');
+    const { startOwntracksClient } = await import('./owntracks/client.js');
+    const { locationToDbRecord } = await import('./owntracks/payload.js');
+    const cfg = loadOwntracksConfig();
+    console.log(`[mqtt] in-process subscriber starting (url=${cfg.mqtt.url}, topic=${cfg.mqtt.topic})`);
+    startOwntracksClient(cfg, async (topic, loc, ctx) => {
+      const rec = locationToDbRecord(topic, loc, {
+        userId: cfg.userId,
+        rawJson: ctx.rawJson,
+      });
+      const result = insertGpsLocation(db, rec);
+      if (!result.skipped) {
+        broadcastLocation({
+          id: result.id,
+          user_id: rec.userId,
+          device_id: rec.deviceId,
+          recorded_at: new Date(rec.tst * 1000).toISOString(),
+          lat: rec.lat,
+          lon: rec.lon,
+          accuracy_m: rec.accuracy ?? null,
+          altitude_m: rec.altitude ?? null,
+          velocity_kmh: rec.velocity ?? null,
+          course_deg: rec.course ?? null,
+        });
+        console.log(
+          `[mqtt] insert id=${result.id} ${rec.deviceId ?? '?'} ` +
+          `(${rec.lat.toFixed(5)}, ${rec.lon.toFixed(5)})`
+        );
+      }
+    });
+  } catch (e) {
+    console.error(`[mqtt] in-process subscriber failed to start: ${e?.message ?? e}`);
+  }
+}

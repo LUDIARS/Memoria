@@ -3597,9 +3597,25 @@ async function loadTracks() {
     tracksState._bound = true;
     dateInput?.addEventListener('change', renderTracksForCurrentDate);
     $('tracksRefresh')?.addEventListener('click', renderTracksForCurrentDate);
+    $('tracksKeyToggle')?.addEventListener('click', () => {
+      $('tracksKeyPanel').classList.toggle('hidden');
+      refreshTracksKeyPanel();
+    });
+    $('tracksKeyGenerate')?.addEventListener('click', regenerateTracksKey);
+    $('tracksKeyClear')?.addEventListener('click', clearTracksKey);
+    $('tracksKeyCopy')?.addEventListener('click', () => {
+      const v = $('tracksKeyRevealValue')?.textContent ?? '';
+      if (v) navigator.clipboard?.writeText(v).catch(() => {});
+    });
+    document.addEventListener('visibilitychange', () => {
+      // タブに戻ってきたら最新の状態に再同期 + WS 再接続
+      if (document.visibilityState === 'visible' && state.tab === 'tracks') {
+        renderTracksForCurrentDate();
+        ensureLiveSocket();
+      }
+    });
   }
 
-  // load API key + days list in parallel
   try {
     const [{ apiKey, hasKey }, { days }] = await Promise.all([
       api('/api/maps/config'),
@@ -3613,8 +3629,125 @@ async function loadTracks() {
       ensureMapInstance();
       renderTracksForCurrentDate();
     }
+    refreshTracksKeyPanel();
+    ensureLiveSocket();
   } catch (e) {
     console.error('[tracks] load failed', e);
+  }
+}
+
+// ── ingest key 管理 (HTTP モード用) ──────────────────────────────────────
+
+async function refreshTracksKeyPanel() {
+  try {
+    const r = await api('/api/locations/settings');
+    $('tracksKeyPreview').textContent = r.has_key ? r.key_preview : '未設定';
+    $('tracksKeySource').textContent = r.has_key
+      ? (r.source === 'env' ? '(env から)' : '(設定済)')
+      : '(匿名 ingest 許可中)';
+    if (!r.has_key) $('tracksKeyReveal').classList.add('hidden');
+  } catch (e) { console.error(e); }
+}
+
+async function regenerateTracksKey() {
+  if (!confirm('新しい ingest key を生成しますか？\n既存の key は無効になり、 OwnTracks 側の Password を更新する必要があります。')) return;
+  try {
+    const r = await fetch('/api/locations/settings/regenerate', { method: 'POST' }).then(x => x.json());
+    if (!r.key) throw new Error('no key in response');
+    $('tracksKeyRevealValue').textContent = r.key;
+    $('tracksKeyReveal').classList.remove('hidden');
+    refreshTracksKeyPanel();
+  } catch (e) {
+    alert('key 生成失敗: ' + (e?.message ?? e));
+  }
+}
+
+async function clearTracksKey() {
+  if (!confirm('ingest key をクリアしますか？\nWAN 公開している場合は誰でも /api/locations/ingest に POST できる状態になります。')) return;
+  try {
+    await fetch('/api/locations/settings/key', { method: 'DELETE' });
+    $('tracksKeyReveal').classList.add('hidden');
+    refreshTracksKeyPanel();
+  } catch (e) { console.error(e); }
+}
+
+// ── WebSocket ライブ更新 ─────────────────────────────────────────────────
+
+function ensureLiveSocket() {
+  if (tracksState.ws && tracksState.ws.readyState === WebSocket.OPEN) return;
+  if (tracksState.ws && tracksState.ws.readyState === WebSocket.CONNECTING) return;
+
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+    + location.host + '/ws/locations';
+  setLiveStatus('connecting');
+  let ws;
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    setLiveStatus('error');
+    return;
+  }
+  tracksState.ws = ws;
+  ws.addEventListener('open',    () => setLiveStatus('open'));
+  ws.addEventListener('close',   () => { setLiveStatus('closed'); scheduleLiveReconnect(); });
+  ws.addEventListener('error',   () => setLiveStatus('error'));
+  ws.addEventListener('message', (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'location' && msg.point) handleLivePoint(msg.point);
+  });
+}
+
+function scheduleLiveReconnect() {
+  if (tracksState.wsReconnectTimer) return;
+  if (document.visibilityState !== 'visible') return;
+  tracksState.wsReconnectTimer = setTimeout(() => {
+    tracksState.wsReconnectTimer = null;
+    if (state.tab === 'tracks') ensureLiveSocket();
+  }, 3000);
+}
+
+function setLiveStatus(s) {
+  const el = $('tracksLive');
+  if (!el) return;
+  el.dataset.live = s;
+  el.title = `WS: ${s}`;
+}
+
+function handleLivePoint(point) {
+  const dateStr = $('tracksDate')?.value;
+  if (!dateStr) return;
+  const localDay = isoToLocalYmd(point.recorded_at);
+  if (localDay !== dateStr) {
+    api('/api/locations/days?limit=180').then(({ days }) => renderTracksDaysList(days)).catch(() => {});
+    return;
+  }
+  if (!tracksState.map) return;
+  tracksState.todayPoints.push(point);
+  appendLivePointToPolyline(point);
+  const km = computeDistanceMeters(tracksState.todayPoints) / 1000;
+  $('tracksStats').textContent = `${tracksState.todayPoints.length} 点 / 概算 ${km.toFixed(2)} km (live)`;
+}
+
+function isoToLocalYmd(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function appendLivePointToPolyline(point) {
+  if (!tracksState.polyline) {
+    drawTracks([point]);
+    return;
+  }
+  const path = tracksState.polyline.getPath();
+  path.push(new google.maps.LatLng(point.lat, point.lon));
+  if (tracksState.dotMarkers[1]) {
+    tracksState.dotMarkers[1].setPosition({ lat: point.lat, lng: point.lon });
   }
 }
 
@@ -3681,10 +3814,13 @@ async function renderTracksForCurrentDate() {
   if (!date) return;
   try {
     const { points } = await api(`/api/locations?date=${encodeURIComponent(date)}`);
-    drawTracks(points || []);
-    const km = computeDistanceMeters(points || []) / 1000;
-    $('tracksStats').textContent = points && points.length
-      ? `${points.length} 点 / 概算 ${km.toFixed(2)} km`
+    const pts = points || [];
+    drawTracks(pts);
+    // live append のキャッシュ。 表示中の日付が「今日 (local)」なら使われる。
+    tracksState.todayPoints = (date === todayLocalIso()) ? pts.slice() : [];
+    const km = computeDistanceMeters(pts) / 1000;
+    $('tracksStats').textContent = pts.length
+      ? `${pts.length} 点 / 概算 ${km.toFixed(2)} km`
       : '点なし';
   } catch (e) {
     console.error('[tracks] render failed', e);
