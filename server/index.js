@@ -2232,18 +2232,46 @@ app.patch('/api/maps/config', async (c) => {
 // `npm run owntracks` を別シェルで走らせること。
 //
 // 個人ツール想定なので auth は緩め: 環境変数 LOCATIONS_INGEST_KEY が設定
-// されていれば X-Memoria-Ingest-Key header と一致を要求、未設定なら
-// 認証なし (LAN-only バインドが前提)。
+// されていれば 3 経路のいずれか一致で OK、未設定なら認証なし (LAN-only 前提)。
+//
+//   1. `X-Memoria-Ingest-Key: <key>`         (curl 等カスタムヘッダ向け)
+//   2. `Authorization: Bearer <key>`         (一般的な API client)
+//   3. `Authorization: Basic base64(u:<key>)` (OwnTracks iOS HTTP モードはこれ)
+//
+// Cloudflare Tunnel で WAN 公開する時は必ず key を設定すること。
 
 const LOCATIONS_INGEST_KEY = process.env.LOCATIONS_INGEST_KEY ?? '';
 
+function decodeBasicAuth(headerVal) {
+  if (!headerVal || !headerVal.startsWith('Basic ')) return null;
+  try {
+    const decoded = Buffer.from(headerVal.slice(6).trim(), 'base64').toString('utf8');
+    const idx = decoded.indexOf(':');
+    if (idx < 0) return null;
+    return { user: decoded.slice(0, idx), pass: decoded.slice(idx + 1) };
+  } catch {
+    return null;
+  }
+}
+
 function checkIngestKey(c) {
   if (!LOCATIONS_INGEST_KEY) return null;
-  const got = c.req.header('x-memoria-ingest-key') ?? '';
-  if (got !== LOCATIONS_INGEST_KEY) {
-    return c.json({ error: 'invalid ingest key' }, 401);
+  // 1) custom header
+  const xKey = c.req.header('x-memoria-ingest-key') ?? '';
+  if (xKey && xKey === LOCATIONS_INGEST_KEY) return null;
+  // 2/3) Authorization
+  const auth = c.req.header('authorization') ?? '';
+  if (auth.startsWith('Bearer ')) {
+    const tok = auth.slice(7).trim();
+    if (tok === LOCATIONS_INGEST_KEY) return null;
   }
-  return null;
+  const basic = decodeBasicAuth(auth);
+  if (basic && basic.pass === LOCATIONS_INGEST_KEY) return null;
+  // OwnTracks iOS は 401 を見ると basic auth ダイアログを出さず再試行するので
+  // realm 付きで返しておく (ログから "認証要求" が判別しやすくなる)。
+  return c.json({ error: 'invalid ingest key' }, 401, {
+    'WWW-Authenticate': 'Basic realm="memoria-locations"',
+  });
 }
 
 /**
@@ -2290,7 +2318,12 @@ app.post('/api/locations/ingest', async (c) => {
   };
 
   const result = insertGpsLocation(db, rec);
-  return c.json({ ok: true, id: result.id, skipped: result.skipped });
+  // OwnTracks の HTTP モードはレスポンスとして JSON 配列 (友達の cards 等) を
+  // 期待するので空配列で返す。 手動テスト時は X-Memoria-Insert-* header で
+  // 結果を確認できる。
+  c.header('X-Memoria-Insert-Id', String(result.id ?? ''));
+  c.header('X-Memoria-Insert-Skipped', String(!!result.skipped));
+  return c.json([]);
 });
 
 /**
