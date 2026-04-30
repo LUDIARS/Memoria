@@ -1520,6 +1520,41 @@ async function deleteDomainEntry() {
   await loadDomainCatalog();
 }
 
+async function recatalogAllDomains({ force = false } = {}) {
+  const note = force
+    ? 'force 再分類: 既存ドメインも含めて全部再分類します (user_edited 列は保護)。LLM コストが高くつく可能性があります。実行しますか？'
+    : 'アクセス記録に出てきたドメインのうち、まだ辞書に無いものを分類キューに積みます。実行しますか？';
+  if (!confirm(note)) return;
+  const status = $('recatalogAllStatus');
+  if (status) {
+    status.textContent = '走査中...';
+    status.classList.remove('error');
+  }
+  try {
+    const r = await api('/api/domains/recatalog-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force }),
+    });
+    const msg = `走査 URL ${r.scanned_urls}、ユニークドメイン ${r.unique_domains}、`
+              + `キュー追加 ${r.queued}、既存スキップ ${r.skipped_existing}、`
+              + `host スキップ ${r.skipped_host}、キュー深さ ${r.queue_depth}`;
+    flashToast(msg);
+    if (status) {
+      status.textContent = msg;
+      status.classList.remove('error');
+    }
+    await loadDomainCatalog();
+  } catch (e) {
+    const msg = `失敗: ${e.message}`;
+    alert(msg);
+    if (status) {
+      status.textContent = msg;
+      status.classList.add('error');
+    }
+  }
+}
+
 // ── Diary ──────────────────────────────────────────────────────────────
 
 function todayLocalDate() {
@@ -2482,6 +2517,9 @@ $('domainSearch')?.addEventListener('input', (e) => {
 $('domainSaveBtn')?.addEventListener('click', saveDomainEntry);
 $('domainRegenBtn')?.addEventListener('click', regenerateDomainEntry);
 $('domainDeleteBtn')?.addEventListener('click', deleteDomainEntry);
+$('domainRecatalogBtn')?.addEventListener('click', () => recatalogAllDomains({ force: false }));
+$('recatalogAllBtn')?.addEventListener('click', () => recatalogAllDomains({ force: false }));
+$('recatalogAllForceBtn')?.addEventListener('click', () => recatalogAllDomains({ force: true }));
 $('visitsBookmark').addEventListener('click', bookmarkSelectedVisits);
 $('visitsDelete').addEventListener('click', deleteSelectedVisits);
 $('visitsAll').addEventListener('click', (e) => {
