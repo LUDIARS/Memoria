@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
 import { parse as parseHtml } from 'node-html-parser';
+import { runLlm } from './llm.js';
 
 const MAX_TEXT = 30000; // chars passed to claude
 
@@ -20,7 +20,7 @@ export function htmlToText(html) {
  * Ask Claude Code (CLI, non-interactive) to produce a summary + 3-5 categories.
  * Returns { summary: string, categories: string[] }.
  */
-export async function summarizeWithClaude({ url, title, html, claudeBin = 'claude', timeoutMs = 180_000 }) {
+export async function summarizeWithClaude({ url, title, html, timeoutMs = 180_000 }) {
   const text = htmlToText(html).slice(0, MAX_TEXT);
 
   const prompt = [
@@ -40,40 +40,8 @@ export async function summarizeWithClaude({ url, title, html, claudeBin = 'claud
     text,
   ].join('\n');
 
-  const stdout = await runClaude(claudeBin, prompt, timeoutMs);
+  const stdout = await runLlm({ task: 'summarize', prompt, timeoutMs });
   return parseClaudeJson(stdout);
-}
-
-function runClaude(bin, prompt, timeoutMs) {
-  // Pass the prompt via stdin instead of as an argv entry — Windows command
-  // lines top out around 8 KB and long prompts hit ENAMETOOLONG otherwise.
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false,
-    });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`claude CLI exited with ${code}: ${stderr.slice(0, 400)}`));
-        return;
-      }
-      resolve(stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
 }
 
 function parseClaudeJson(raw) {

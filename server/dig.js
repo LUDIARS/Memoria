@@ -5,7 +5,7 @@
 // Brave). The engine is delivered as an instruction in the prompt and as a
 // preferred WebFetch URL pattern so claude actually queries the right SERP.
 
-import { spawn } from 'node:child_process';
+import { runLlm } from './llm.js';
 
 const SEARCH_ENGINES = {
   default: { name: 'default', label: 'デフォルト (claude が自動選択)', serpUrl: null },
@@ -88,39 +88,22 @@ const PREVIEW_PROMPT_TEMPLATE = ({ query, engine }) => [
   `QUERY: ${query}`,
 ].join('\n');
 
-export async function runDigPreview({ query, searchEngine = 'default', claudeBin = 'claude', timeoutMs = 90_000 }) {
+export async function runDigPreview({ query, searchEngine = 'default', timeoutMs = 90_000 }) {
   const engine = engineFor(searchEngine);
   const prompt = PREVIEW_PROMPT_TEMPLATE({ query, engine });
-  const stdout = await spawnClaudeWithTools(claudeBin, prompt, ['WebSearch', 'WebFetch'], timeoutMs);
+  const stdout = await runLlm({
+    task: 'dig_preview', prompt, tools: ['WebSearch', 'WebFetch'], timeoutMs,
+  });
   return parsePreview(stdout);
 }
 
-export async function runDig({ query, searchEngine = 'default', claudeBin = 'claude', timeoutMs = 600_000 }) {
+export async function runDig({ query, searchEngine = 'default', timeoutMs = 600_000 }) {
   const engine = engineFor(searchEngine);
   const prompt = PROMPT_TEMPLATE({ query, engine });
-  const stdout = await spawnClaude(claudeBin, prompt, timeoutMs);
-  return parseJsonStrict(stdout);
-}
-
-function spawnClaudeWithTools(bin, prompt, tools, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p', '--allowedTools', tools.join(',')];
-    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-    let stdout = '', stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
+  const stdout = await runLlm({
+    task: 'dig', prompt, tools: ['WebSearch', 'WebFetch'], timeoutMs,
   });
+  return parseJsonStrict(stdout);
 }
 
 function parsePreview(raw) {
@@ -146,31 +129,6 @@ function parsePreview(raw) {
 
 function extractDomain(url) {
   try { return new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
-}
-
-function spawnClaude(bin, prompt, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      bin,
-      ['-p', '--allowedTools', 'WebSearch,WebFetch'],
-      { stdio: ['pipe', 'pipe', 'pipe'], shell: false },
-    );
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
 }
 
 function parseJsonStrict(raw) {

@@ -55,6 +55,11 @@ import {
   generateDiary, generateWeekly, summarizeGithubByRepo,
   formatLocalDate, yesterdayLocal, weekRangeFor, weekOfMonth, pingGithub,
 } from './diary.js';
+import {
+  TASKS as LLM_TASKS, PROVIDERS as LLM_PROVIDERS,
+  getLlmConfig, loadLlmConfigFromSettings, settingsPatchFromConfig,
+} from './llm.js';
+import { getAppSettings, setAppSettings } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -65,6 +70,7 @@ const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
 
 mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
+loadLlmConfigFromSettings(getAppSettings(db));
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
 const domainCatalogQueue = new FifoQueue();
@@ -78,7 +84,7 @@ function maybeQueuePageMetadata(url) {
   if (getPageMetadata(db, url)) return;
   insertPageMetadataPending(db, url);
   pageMetadataQueue.enqueue(async () => {
-    const result = await fetchPageMetadata({ url, claudeBin: CLAUDE_BIN });
+    const result = await fetchPageMetadata({ url });
     if (result.skip) {
       deletePageMetadata(db, url);
       return;
@@ -132,7 +138,7 @@ function maybeQueueDomain(url) {
   if (getDomainCatalog(db, domain)) return;
   insertDomainPending(db, domain);
   domainCatalogQueue.enqueue(async () => {
-    const result = await classifyDomain({ domain, claudeBin: CLAUDE_BIN });
+    const result = await classifyDomain({ domain });
     if (result.skip) {
       deleteDomainCatalog(db, domain);
       return;
@@ -177,7 +183,7 @@ function enqueueSummary(id) {
     try {
       const html = readFileSync(htmlAbs, 'utf8');
       const { summary, categories } = await summarizeWithClaude({
-        url: cur.url, title: cur.title, html, claudeBin: CLAUDE_BIN,
+        url: cur.url, title: cur.title, html,
       });
       setSummary(db, id, { summary, categories, status: 'done' });
     } catch (e) {
@@ -377,12 +383,12 @@ function enqueueDig(id, query, searchEngine = 'default') {
   digQueue.enqueue(async () => {
     // Phase 1: SERP preview (fast — no page fetches). Persisted as soon as
     // it lands so the FE can render before the deep claude pass finishes.
-    runDigPreview({ query, searchEngine, claudeBin: CLAUDE_BIN })
+    runDigPreview({ query, searchEngine })
       .then(preview => setDigPreview(db, id, preview))
       .catch(err => console.warn(`[dig#${id}] preview failed: ${err.message}`));
     // Phase 2: full deep analysis with WebFetch (existing behavior).
     try {
-      const result = await runDig({ query, searchEngine, claudeBin: CLAUDE_BIN });
+      const result = await runDig({ query, searchEngine });
       setDigResult(db, id, { status: 'done', result });
     } catch (e) {
       setDigResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
@@ -461,7 +467,7 @@ function buildBookmarkDoc(b) {
 function enqueueCloud(id, { docs, label }) {
   cloudQueue.enqueue(async () => {
     try {
-      const result = await extractWordCloud({ label, docs, claudeBin: CLAUDE_BIN });
+      const result = await extractWordCloud({ label, docs });
       setWordCloudResult(db, id, { status: 'done', result });
     } catch (e) {
       setWordCloudResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
@@ -703,7 +709,7 @@ app.post('/api/wordcloud/validate-word', async (c) => {
   const context = body?.context;
   if (!word || !context) return c.json({ error: 'word and context required' }, 400);
   try {
-    const r = await validateWordRelevance({ word, context, claudeBin: CLAUDE_BIN });
+    const r = await validateWordRelevance({ word, context });
     return c.json(r);
   } catch (e) {
     return c.json({ error: e.message }, 500);
@@ -842,6 +848,37 @@ app.post('/api/dictionary/upsert-from-source', async (c) => {
   return c.json({ id: entryId, existed });
 });
 
+// ---- llm config -----------------------------------------------------------
+
+app.get('/api/llm/config', (c) => {
+  const cfg = getLlmConfig();
+  return c.json({
+    config: {
+      ...cfg,
+      // Mask the API key when returning to FE.
+      openai_api_key: cfg.openai_api_key ? '***' : '',
+      openai_api_key_set: !!cfg.openai_api_key,
+    },
+    tasks: LLM_TASKS,
+    providers: Object.entries(LLM_PROVIDERS).map(([key, v]) => ({
+      key,
+      label: v.label,
+      kind: v.kind,
+      supportsTools: v.supportsTools,
+    })),
+  });
+});
+
+app.patch('/api/llm/config', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch = settingsPatchFromConfig(body);
+  // Don't blow away the API key with the masked '***' value.
+  if (patch['llm.openai.api_key'] === '***') delete patch['llm.openai.api_key'];
+  setAppSettings(db, patch);
+  loadLlmConfigFromSettings(getAppSettings(db));
+  return c.json({ ok: true });
+});
+
 // ---- queue status ---------------------------------------------------------
 
 app.get('/api/queue', (c) => {
@@ -967,7 +1004,7 @@ app.post('/api/domains/:domain/regenerate', (c) => {
   // protects manual fields.
   insertDomainPending(db, d);
   domainCatalogQueue.enqueue(async () => {
-    const result = await classifyDomain({ domain: d, claudeBin: CLAUDE_BIN });
+    const result = await classifyDomain({ domain: d });
     if (result.skip || result.dropRow) {
       deleteDomainCatalog(db, d);
       return;
@@ -1181,7 +1218,7 @@ async function runDiaryGeneration(dateStr) {
   let result;
   try {
     result = await generateDiary({
-      db, dateStr, metrics, github, notes, claudeBin: CLAUDE_BIN,
+      db, dateStr, metrics, github, notes,
     });
   } catch (e) {
     upsertDiary(db, {
@@ -1336,7 +1373,7 @@ async function runWeeklyGeneration(weekStart) {
   try {
     summary = await generateWeekly({
       weekStart: range.start, weekEnd: range.end,
-      dailyDiaries, githubByRepo, claudeBin: CLAUDE_BIN,
+      dailyDiaries, githubByRepo,
     });
   } catch (e) {
     upsertWeekly(db, {

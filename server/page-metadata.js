@@ -3,9 +3,9 @@
 // specific page is". Cached forever in page_metadata; 404 / DNS errors
 // drop the row so it can be retried later.
 
-import { spawn } from 'node:child_process';
 import { parse as parseHtml } from 'node-html-parser';
 import { shouldSkipDomain } from './domain-catalog.js';
+import { runLlm } from './llm.js';
 
 const SUMMARY_PROMPT = ({ url, title, metaDescription, ogTitle, ogDescription, ogType, headers, bodySample }) => [
   'あなたは Web ページのメタ情報をもとに、「このページは何か」を 1〜2 文の日本語で説明する係です。',
@@ -29,7 +29,7 @@ const SUMMARY_PROMPT = ({ url, title, metaDescription, ogTitle, ogDescription, o
   bodySample,
 ].join('\n');
 
-export async function fetchPageMetadata({ url, claudeBin = 'claude', timeoutMs = 60_000 }) {
+export async function fetchPageMetadata({ url, timeoutMs = 60_000 }) {
   let host;
   try { host = new URL(url).hostname.toLowerCase(); }
   catch { return { dropRow: true, error: 'invalid url' }; }
@@ -101,7 +101,7 @@ export async function fetchPageMetadata({ url, claudeBin = 'claude', timeoutMs =
   });
   let parsed;
   try {
-    const stdout = await spawnClaude(claudeBin, promptText, 'sonnet', timeoutMs);
+    const stdout = await runLlm({ task: 'page_summary', prompt: promptText, timeoutMs });
     parsed = parseSummaryJson(stdout);
   } catch (e) {
     return {
@@ -151,21 +151,3 @@ function parseSummaryJson(raw) {
   };
 }
 
-function spawnClaude(bin, prompt, model, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p'];
-    if (model) args.push('--model', model);
-    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-    let stdout = '', stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`timeout after ${timeoutMs}ms`)); }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`exit ${code}: ${stderr.slice(0, 300)}`));
-      else resolve(stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
-}

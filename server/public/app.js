@@ -2382,3 +2382,72 @@ setInterval(async () => {
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
+
+// ── AI / LLM settings panel ───────────────────────────────────────────
+async function openAiSettings() {
+  $('aiSettingsPanel').classList.remove('hidden');
+  try {
+    const r = await api('/api/llm/config');
+    const cfg = r.config;
+    const tasks = r.tasks;
+    const providers = r.providers;
+    const optionsHtml = providers.map(p => `<option value="${p.key}">${escapeHtml(p.label)}</option>`).join('');
+    $('aiTaskRows').innerHTML = tasks.map(t => `
+      <div class="ai-task-row">
+        <label>${escapeHtml(t)}</label>
+        <select data-task="${t}" class="ai-task-provider">${optionsHtml}</select>
+        <input data-task="${t}" class="ai-task-model" type="text" placeholder="モデル名 (任意)" />
+      </div>
+    `).join('');
+    for (const t of tasks) {
+      const tCfg = cfg.tasks?.[t] || {};
+      $('aiTaskRows').querySelector(`select[data-task="${t}"]`).value = tCfg.provider || 'claude';
+      $('aiTaskRows').querySelector(`input[data-task="${t}"]`).value = tCfg.model || '';
+    }
+    $('aiBinClaude').value = cfg.bins?.claude || '';
+    $('aiBinGemini').value = cfg.bins?.gemini || '';
+    $('aiBinCodex').value  = cfg.bins?.codex  || '';
+    $('aiOpenaiKey').value = '';
+    $('aiOpenaiModel').value = cfg.openai_model || '';
+    $('aiOpenaiKeyStatus').textContent = cfg.openai_api_key_set ? '✓ API key 設定済み (再入力で上書き)' : '(未設定)';
+  } catch (e) {
+    console.error(e);
+    alert(`設定取得失敗: ${e.message}`);
+  }
+}
+
+async function saveAiSettings() {
+  const tasks = {};
+  document.querySelectorAll('.ai-task-row').forEach(row => {
+    const sel = row.querySelector('.ai-task-provider');
+    const inp = row.querySelector('.ai-task-model');
+    const t = sel.dataset.task;
+    tasks[t] = { provider: sel.value, model: inp.value.trim() };
+  });
+  const body = {
+    tasks,
+    bins: {
+      claude: $('aiBinClaude').value.trim() || 'claude',
+      gemini: $('aiBinGemini').value.trim() || 'gemini',
+      codex:  $('aiBinCodex').value.trim()  || 'codex',
+    },
+    openai_model: $('aiOpenaiModel').value.trim() || 'gpt-4o-mini',
+  };
+  const k = $('aiOpenaiKey').value;
+  if (k && k !== '***') body.openai_api_key = k;
+  try {
+    await api('/api/llm/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    alert('保存しました。次回のジョブから反映されます。');
+    $('aiSettingsPanel').classList.add('hidden');
+  } catch (e) {
+    alert(`保存失敗: ${e.message}`);
+  }
+}
+
+document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
+document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
+document.getElementById('aiSettingsSave')?.addEventListener('click', saveAiSettings);
