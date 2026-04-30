@@ -602,10 +602,10 @@ function tabsInUsageOrder() {
     return sb - sa;
   });
 }
-// Mobile tab nav is "top 4 most-used (active stays visible) + the rest in
-// a ⋯ More dropdown". 合計 strip にいるタブは常に <= 4 件。 active が
-// top-4 圏外なら top-4 の最下位を 1 件 evict して active を入れる。
-const TABS_VISIBLE_ON_MOBILE = 4;
+// Mobile tab nav is "top 3 most-used (active stays visible) + ⋯ More".
+// strip 全体は 3 タブ + More の 4 アイテム。 active が top-3 圏外なら
+// top-3 の最下位を 1 件 evict して active と入れ替える。
+const TABS_VISIBLE_ON_MOBILE = 3;
 
 function isNarrowViewport() {
   return window.innerWidth <= 760;
@@ -655,9 +655,9 @@ function reflowTabsForViewport() {
     return;
   }
 
-  // 上位 3 件 (使用回数 + default priority) を strip に残す。 active は必ず
-  // 含めるが、 圏外なら top-3 の最下位を 1 件抜いて active と入れ替える。
-  // → strip 内のタブは常に最大 3 件で、 「More」 を押せば残りが見える。
+  // 上位 N 件 (使用回数 + default priority) を strip に残す。 active は必ず
+  // 含めるが、 圏外なら N 件目を 1 件抜いて active と入れ替える。
+  // → strip 内のタブは常に最大 N 件で、 「More」 を押せば残りが見える。
   const active = state.tab;
   const ordered = tabsInUsageOrder()
     .filter(t => !t.hidden);          // skip hidden tabs (e.g. multi)
