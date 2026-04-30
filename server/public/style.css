@@ -1886,6 +1886,29 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     box-sizing: border-box;
     max-width: 100vw;
   }
+  /* マルチスイッチをロゴの真横に固定。 brand と multi-switch を 1 行目の
+   * flex item として張り付け、 残った ext-badge / queue-badge は 2 行目に
+   * 回す。 マルチスイッチ自体はピル数が増えても親 flex track を超えないよう
+   * `flex: 1 1 auto + min-width: 0 + overflow-x: auto` で横スクロール化。 */
+  .brand { flex: 0 0 auto; }
+  .multi-switch {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .multi-switch::-webkit-scrollbar { display: none; }
+  .multi-switch .ms-pill {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    font-size: 11px;
+  }
+  /* ext-badge / queue-badge は 2 行目に押し出して読みやすさを優先。 */
+  .ext-badge, .queue-badge { flex: 0 0 100%; margin-left: 0; }
+
   .topbar-controls {
     position: absolute;
     top: 6px;
