@@ -3,7 +3,7 @@
 // article). Words that appear across multiple documents get higher weights;
 // words unrelated to the bundle's summary are flagged kept=false.
 
-import { spawn } from 'node:child_process';
+import { runLlm } from './llm.js';
 
 const CLOUD_PROMPT = (label, docs) => [
   'You are extracting a word cloud from the provided documents.',
@@ -43,36 +43,15 @@ const VALIDATE_PROMPT = (word, context) => [
   `CONTEXT: ${context}`,
 ].join('\n');
 
-export async function extractWordCloud({ label, docs, claudeBin = 'claude', timeoutMs = 300_000 }) {
+export async function extractWordCloud({ label, docs, timeoutMs = 300_000 }) {
   if (!docs || !docs.trim()) throw new Error('no documents to extract from');
-  const stdout = await spawnClaude(claudeBin, CLOUD_PROMPT(label, docs), timeoutMs);
+  const stdout = await runLlm({ task: 'cloud_extract', prompt: CLOUD_PROMPT(label, docs), timeoutMs });
   return parseCloud(stdout);
 }
 
-export async function validateWordRelevance({ word, context, claudeBin = 'claude', timeoutMs = 60_000 }) {
-  const stdout = await spawnClaude(claudeBin, VALIDATE_PROMPT(word, context), timeoutMs);
+export async function validateWordRelevance({ word, context, timeoutMs = 60_000 }) {
+  const stdout = await runLlm({ task: 'cloud_validate', prompt: VALIDATE_PROMPT(word, context), timeoutMs });
   return parseValidate(stdout);
-}
-
-function spawnClaude(bin, prompt, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p'], { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`claude CLI timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
 }
 
 function extractJsonObject(raw) {

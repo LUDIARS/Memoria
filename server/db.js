@@ -153,6 +153,11 @@ export function openDb(dbPath) {
       value  TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS dictionary_entries (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       term         TEXT NOT NULL UNIQUE,
@@ -435,6 +440,31 @@ export function listDigSessions(db, limit = 30) {
 }
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+// ── app settings (key/value) ----------------------------------------------
+
+export function getAppSettings(db) {
+  const rows = db.prepare(`SELECT key, value FROM app_settings`).all();
+  const out = {};
+  for (const r of rows) out[r.key] = r.value;
+  return out;
+}
+
+export function setAppSettings(db, patch) {
+  const tx = db.transaction(() => {
+    for (const [k, v] of Object.entries(patch)) {
+      if (v == null || v === '') {
+        db.prepare(`DELETE FROM app_settings WHERE key = ?`).run(k);
+      } else {
+        db.prepare(`
+          INSERT INTO app_settings (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(k, String(v));
+      }
+    }
+  });
+  tx();
+}
 
 // ── word clouds ------------------------------------------------------------
 

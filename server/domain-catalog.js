@@ -3,8 +3,8 @@
 // result in the domain_catalog table. Re-checks are skipped while the row
 // exists, so this runs lazily on /api/access pings.
 
-import { spawn } from 'node:child_process';
 import { parse as parseHtml } from 'node-html-parser';
+import { runLlm } from './llm.js';
 
 const SKIP_HOST = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|\[::1\])$/i;
 
@@ -43,7 +43,7 @@ const CLASSIFY_PROMPT = ({ domain, title, metaDescription, bodySample }) => [
  *   { ok: true, ...fields }   — classification succeeded
  *   { ok: false, error }      — claude or HTML parse failed (keep row, mark error)
  */
-export async function classifyDomain({ domain, claudeBin = 'claude', timeoutMs = 60_000 }) {
+export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
   if (shouldSkipDomain(domain)) return { skip: true };
 
   let res;
@@ -91,7 +91,7 @@ export async function classifyDomain({ domain, claudeBin = 'claude', timeoutMs =
   const prompt = CLASSIFY_PROMPT({ domain, title, metaDescription, bodySample });
   let parsed;
   try {
-    const stdout = await spawnClaude(claudeBin, prompt, 'sonnet', timeoutMs);
+    const stdout = await runLlm({ task: 'domain_classify', prompt, timeoutMs });
     parsed = parseClassifyJson(stdout);
   } catch (e) {
     return { ok: false, error: `claude: ${e.message}`, title, metaDescription };
@@ -125,24 +125,3 @@ function parseClassifyJson(raw) {
   };
 }
 
-function spawnClaude(bin, prompt, model, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p'];
-    if (model) args.push('--model', model);
-    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-    let stdout = '', stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`timeout after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`exit ${code}: ${stderr.slice(0, 300)}`));
-      else resolve(stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
-}

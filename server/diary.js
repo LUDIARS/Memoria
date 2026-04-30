@@ -4,14 +4,12 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { spawn } from 'node:child_process';
 import { visitEventsForDate, getDiary, getDomainCatalogMap } from './db.js';
+import { runLlm } from './llm.js';
 
-// Model selection. The `claude` CLI accepts `--model sonnet` and `--model opus`.
-// We use Sonnet for the per-URL narrative (cheap, repetitive) and Opus 1M for
-// the integrative highlight/weekly narrative.
-const MODEL_SONNET = 'sonnet';
-const MODEL_OPUS_1M = 'claude-opus-4-7[1m]';
+// Default models per task are configured in llm.js (sonnet for diary_work,
+// opus 1M for diary_highlights / diary_weekly). The user can override per task
+// from the AI settings panel.
 
 const MIN_VISITS_FOR_REPORT = 1;
 
@@ -497,8 +495,8 @@ function formatUrlLine(ts, url) {
   return `${m ? m[1] : '??:??'} ${url}`;
 }
 
-/** Stage 1: Sonnet writes 作業内容 from the URL timeline. */
-export async function generateWorkContent({ db, dateStr, metrics, claudeBin = 'claude', timeoutMs = 180_000 }) {
+/** Stage 1: Sonnet (default) writes 作業内容 from the URL timeline. */
+export async function generateWorkContent({ db, dateStr, metrics, timeoutMs = 180_000 }) {
   const urlList = buildUrlList(db, dateStr);
   if (!urlList.trim()) return '';
   const prompt = WORK_CONTENT_PROMPT({
@@ -507,22 +505,22 @@ export async function generateWorkContent({ db, dateStr, metrics, claudeBin = 'c
     totalEvents: metrics.total_events,
     totalDomains: metrics.unique_domains,
   });
-  return await spawnClaude(claudeBin, prompt, MODEL_SONNET, timeoutMs);
+  return await runLlm({ task: 'diary_work', prompt, timeoutMs });
 }
 
-/** Stage 3: Opus 1M integrates work content + bookmark count + commits into highlights. */
-export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics, claudeBin = 'claude', timeoutMs = 240_000 }) {
+/** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits into highlights. */
+export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics, timeoutMs = 240_000 }) {
   const prompt = HIGHLIGHTS_PROMPT({
     dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics,
   });
-  return await spawnClaude(claudeBin, prompt, MODEL_OPUS_1M, timeoutMs);
+  return await runLlm({ task: 'diary_highlights', prompt, timeoutMs });
 }
 
 /**
  * Top-level diary generator orchestrating the three stages. Returns the
  * structured pieces; the caller persists them.
  */
-export async function generateDiary({ db, dateStr, metrics, github, notes, claudeBin = 'claude' }) {
+export async function generateDiary({ db, dateStr, metrics, github, notes }) {
   const githubByRepo = summarizeGithubByRepo(github);
   const bookmarkSummary = buildBookmarkSummary(metrics);
 
@@ -538,9 +536,9 @@ export async function generateDiary({ db, dateStr, metrics, github, notes, claud
     };
   }
 
-  const workContent = await generateWorkContent({ db, dateStr, metrics, claudeBin });
+  const workContent = await generateWorkContent({ db, dateStr, metrics });
   const highlights = await generateHighlights({
-    dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics, claudeBin,
+    dateStr, workContent, githubByRepo, bookmarkSummary, notes, metrics,
   });
 
   // Combined summary for legacy display.
@@ -575,26 +573,6 @@ function composeSummary({ workContent, githubByRepo, highlights }) {
   return parts.join('\n\n');
 }
 
-function spawnClaude(bin, prompt, model, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p'];
-    if (model) args.push('--model', model);
-    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`claude CLI (${model || 'default'}) timed out after ${timeoutMs}ms`)); }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude (${model || 'default'}) exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout.trim());
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
-}
-
 // ── weekly --------------------------------------------------------------
 
 const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }) => [
@@ -627,7 +605,7 @@ const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }) => [
  * Generate a weekly narrative from 7 daily diaries + commits.
  * The caller pre-fetches both via the GitHub API (per-repo commits API).
  */
-export async function generateWeekly({ weekStart, weekEnd, dailyDiaries, githubByRepo, claudeBin = 'claude', timeoutMs = 360_000 }) {
+export async function generateWeekly({ weekStart, weekEnd, dailyDiaries, githubByRepo, timeoutMs = 360_000 }) {
   const dailyBlock = dailyDiaries.map(d => {
     const head = d.summary || d.work_content || '(日報なし)';
     return `### ${d.date}\n${(head || '').slice(0, 1500)}`;
@@ -639,7 +617,7 @@ export async function generateWeekly({ weekStart, weekEnd, dailyDiaries, githubB
     }).join('\n\n')
     : '(commit なし)';
   const prompt = WEEKLY_PROMPT({ weekStart, weekEnd, dailyBlock, githubBlock });
-  return await spawnClaude(claudeBin, prompt, MODEL_OPUS_1M, timeoutMs);
+  return await runLlm({ task: 'diary_weekly', prompt, timeoutMs });
 }
 
 /** Fetch a user's commits across `repos` in a date range, grouped by repo. */
