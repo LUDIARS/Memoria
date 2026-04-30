@@ -2231,16 +2231,23 @@ app.patch('/api/maps/config', async (c) => {
 // MQTT 経路で動かすには docker-compose で mosquitto を起動して
 // `npm run owntracks` を別シェルで走らせること。
 //
-// 個人ツール想定なので auth は緩め: 環境変数 LOCATIONS_INGEST_KEY が設定
-// されていれば 3 経路のいずれか一致で OK、未設定なら認証なし (LAN-only 前提)。
-//
+// 認証経路は 3 通りで、 いずれか一致すれば OK:
 //   1. `X-Memoria-Ingest-Key: <key>`         (curl 等カスタムヘッダ向け)
 //   2. `Authorization: Bearer <key>`         (一般的な API client)
 //   3. `Authorization: Basic base64(u:<key>)` (OwnTracks iOS HTTP モードはこれ)
 //
-// Cloudflare Tunnel で WAN 公開する時は必ず key を設定すること。
+// Key の解決順:
+//   a. app_settings.`locations.ingest_key` (UI から生成 / 設定)
+//   b. 環境変数 LOCATIONS_INGEST_KEY (CI / CLI 用)
+//   c. どちらも空 → 認証無効 (LAN-only バインドが前提)
+//
+// WAN 公開する時は UI から key を生成する (推奨) か env を必ず設定すること。
 
-const LOCATIONS_INGEST_KEY = process.env.LOCATIONS_INGEST_KEY ?? '';
+function getIngestKey() {
+  const stored = (getAppSettings(db)['locations.ingest_key'] || '').trim();
+  if (stored) return stored;
+  return (process.env.LOCATIONS_INGEST_KEY ?? '').trim();
+}
 
 function decodeBasicAuth(headerVal) {
   if (!headerVal || !headerVal.startsWith('Basic ')) return null;
@@ -2255,24 +2262,66 @@ function decodeBasicAuth(headerVal) {
 }
 
 function checkIngestKey(c) {
-  if (!LOCATIONS_INGEST_KEY) return null;
+  const key = getIngestKey();
+  if (!key) return null;
   // 1) custom header
   const xKey = c.req.header('x-memoria-ingest-key') ?? '';
-  if (xKey && xKey === LOCATIONS_INGEST_KEY) return null;
+  if (xKey && xKey === key) return null;
   // 2/3) Authorization
   const auth = c.req.header('authorization') ?? '';
   if (auth.startsWith('Bearer ')) {
     const tok = auth.slice(7).trim();
-    if (tok === LOCATIONS_INGEST_KEY) return null;
+    if (tok === key) return null;
   }
   const basic = decodeBasicAuth(auth);
-  if (basic && basic.pass === LOCATIONS_INGEST_KEY) return null;
+  if (basic && basic.pass === key) return null;
   // OwnTracks iOS は 401 を見ると basic auth ダイアログを出さず再試行するので
   // realm 付きで返しておく (ログから "認証要求" が判別しやすくなる)。
   return c.json({ error: 'invalid ingest key' }, 401, {
     'WWW-Authenticate': 'Basic realm="memoria-locations"',
   });
 }
+
+// ---- ingest key 管理 (UI 経由) -------------------------------------------
+//
+// 個人ツールなので key 自体は端末/ブラウザ側で確認できる必要がある。
+// GET 系は読みやすいよう preview (先頭 4 + 末尾 4) を返し、 full 値は
+// 1 度きりの「生成直後」response でしか出さない (再表示はクリア + 再生成)。
+
+function maskKey(key) {
+  if (!key) return '';
+  if (key.length <= 8) return '*'.repeat(key.length);
+  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+app.get('/api/locations/settings', (c) => {
+  const key = getIngestKey();
+  return c.json({
+    has_key: !!key,
+    key_preview: maskKey(key),
+    source: (getAppSettings(db)['locations.ingest_key'] || '').trim()
+      ? 'settings'
+      : (process.env.LOCATIONS_INGEST_KEY ? 'env' : 'none'),
+  });
+});
+
+app.post('/api/locations/settings/regenerate', (c) => {
+  // crypto.randomUUID() の方が読みやすいが Basic auth password にする都合で
+  // 32-byte hex の方が typing しやすい (40 文字)。
+  const buf = new Uint8Array(20);
+  // Node 18+ の global crypto。 globalThis 経由で webcrypto も使える
+  // ((globalThis.crypto ?? require('node:crypto').webcrypto)).getRandomValues(buf);
+  const c2 = globalThis.crypto;
+  c2.getRandomValues(buf);
+  const newKey = [...buf].map((b) => b.toString(16).padStart(2, '0')).join('');
+  setAppSettings(db, { 'locations.ingest_key': newKey });
+  return c.json({ key: newKey, key_preview: maskKey(newKey) });
+});
+
+app.delete('/api/locations/settings/key', (c) => {
+  setAppSettings(db, { 'locations.ingest_key': '' });
+  return c.json({ ok: true });
+});
 
 /**
  * 直接 1 点の位置を投入する (OwnTracks HTTP モード or 手動テスト)。
