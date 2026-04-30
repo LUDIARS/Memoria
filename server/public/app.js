@@ -602,11 +602,10 @@ function tabsInUsageOrder() {
     return sb - sa;
   });
 }
-// Mobile tab nav is "top 4 most-used + active visible inline, the rest
-// tucked into a ⋯ More dropdown". Desktop shows every tab inline. The
-// dropdown is `position: fixed` and JS positions it under the More
-// button to dodge sticky/overflow clipping.
-const TABS_VISIBLE_ON_MOBILE = 4;
+// Mobile tab nav is "top 3 most-used (active stays visible) + the rest in
+// a ⋯ More dropdown". 合計 strip にいるタブは常に <= 3 件。 active が
+// top-3 圏外なら top-3 の最下位を 1 件 evict して active を入れる。
+const TABS_VISIBLE_ON_MOBILE = 3;
 
 function isNarrowViewport() {
   return window.innerWidth <= 760;
@@ -656,13 +655,20 @@ function reflowTabsForViewport() {
     return;
   }
 
-  // Decide which 4 stay visible: most-used first, but always pin the
-  // active tab (so the user never loses sight of where they are).
+  // 上位 3 件 (使用回数 + default priority) を strip に残す。 active は必ず
+  // 含めるが、 圏外なら top-3 の最下位を 1 件抜いて active と入れ替える。
+  // → strip 内のタブは常に最大 3 件で、 「More」 を押せば残りが見える。
   const active = state.tab;
   const ordered = tabsInUsageOrder()
     .filter(t => !t.hidden);          // skip hidden tabs (e.g. multi)
-  const visible = new Set(ordered.slice(0, TABS_VISIBLE_ON_MOBILE).map(t => t.dataset.tab));
-  if (active) visible.add(active);
+  const top = ordered.slice(0, TABS_VISIBLE_ON_MOBILE);
+  const visible = new Set(top.map(t => t.dataset.tab));
+  if (active && !visible.has(active)) {
+    if (top.length >= TABS_VISIBLE_ON_MOBILE) {
+      visible.delete(top[top.length - 1].dataset.tab);
+    }
+    visible.add(active);
+  }
 
   let overflowCount = 0;
   for (const t of allTabs) {

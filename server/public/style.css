@@ -1023,9 +1023,20 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   max-height: 88vh;
   overflow-y: auto;
   z-index: 100;
+  background: var(--panel);                /* 説明テキストが白背景で読める */
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 22px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.2);
 }
 .modal-close {
-  margin-left: auto;
+  /* 右上ピン留めの×。 スマホでも押しやすいよう 44x44 を確保。 */
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  margin-left: 0;
   background: transparent;
   border: 0;
   color: var(--muted);
@@ -1435,8 +1446,32 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   overflow-y: auto;
   z-index: 100;
 }
-.ai-settings-head { display: flex; justify-content: space-between; align-items: center; }
+.ai-settings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  /* h3 と並んでくる × を絶対配置にして見出しの右上に置く */
+  position: relative;
+  padding-right: 48px;
+}
 .ai-settings-head h3 { margin: 0; }
+.ai-settings-head #aiSettingsClose {
+  /* スマホでも押せる 44x44。 ghost 系の border / padding は上書き。 */
+  position: absolute;
+  top: -4px;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.ai-settings-head #aiSettingsClose:hover { background: #f0f2f7; color: var(--text); }
 .ai-settings-help { font-size: 11px; color: var(--muted); margin: 8px 0 16px; line-height: 1.5; }
 .ai-settings h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ai-task-row {
@@ -1831,9 +1866,10 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   }
   .topbar-howto[hidden] { display: none !important; }
 
-  /* Mobile uses the same horizontally-scrollable tab strip as desktop. */
+  /* Mobile uses the same horizontally-scrollable tab strip as desktop.
+   * (詳細指定は下の "Sticky tabs on mobile" ブロックで上書き。) */
   .tabs {
-    margin: 0 -12px 12px;
+    margin: 0 -4px 12px;
     padding: 6px 8px;
   }
 
@@ -1921,13 +1957,12 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     box-sizing: border-box;
   }
 
-  /* Sticky tabs on mobile + "top 4 + More" model: only the four most-
-   * used tabs (plus the active one) sit in the visible strip; the
-   * rest are tucked into the ⋯ More dropdown. The strip itself stops
-   * scrolling horizontally since it always fits.
-   * 機能ヘッダは viewport-fit (-8px) は適用しない (元の余白を維持)。 */
+  /* Sticky tabs on mobile + "top 3 + More" model: 上位 3 件 (active を必ず
+   * 含む) + ⋯ More を strip に配置。 inner padding は 8px キープ (機能
+   * ヘッダ自体は -8px 化しない方針)、 ただし negative margin は親 .content
+   * の padding (4px) に合わせて -4px とし、 viewport を絶対にはみ出さない。 */
   .tabs {
-    margin: 0 -12px 12px;
+    margin: 0 -4px 12px;
     padding: 6px 8px 0;
     top: 0;
     background: var(--panel);
@@ -1953,8 +1988,28 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   .diary-detail { padding: 12px; }
   .diary-pie-row { flex-direction: column; }
 
-  /* Bookmark cards stack rather than tile. */
-  .cards { grid-template-columns: 1fr; }
+  /* Bookmark cards stack rather than tile. ブックマーク (とそれ以外の
+   * すべての主要ビュー) は viewport - 8px 内に収める。 */
+  .cards { grid-template-columns: 1fr; max-width: 100%; }
+  #bookmarksView, #bookmarksView .bookmarks-main, .bookmark-card,
+  #digView, #dictView, #domainView, #diaryView, #visitsView,
+  #trendsView, #recommendView, #queueView, #eventsView, #tracksView,
+  #multiView {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  /* bookmark カードや tile が長 URL や image でこじ開けるのを防ぐ */
+  .bookmark-card img, .dict-card img, .domain-card img {
+    max-width: 100%;
+    height: auto;
+  }
+  /* toolbar のアイテムは折り返し (search が 240/320px 固定だと幅を超える) */
+  .bookmarks-toolbar { gap: 6px; }
+  .bookmarks-toolbar input[type=search] {
+    min-width: 0 !important;
+    flex: 1 1 100%;
+    width: 100%;
+  }
 
   /* Trends grid → single column. */
   .trends-grid { grid-template-columns: 1fr; }
