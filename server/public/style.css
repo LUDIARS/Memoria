@@ -1762,21 +1762,21 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
    * (see .detail rule below) so it doesn't need a flex slot. */
   .layout > .detail { flex: 0 0 auto; }
 
-  /* Categories rail collapses to a horizontal chip strip on mobile. */
-  .bookmarks-layout { flex-direction: column; gap: 12px; }
+  /* Keep the 2-pane left-right layout on mobile too (per user direction
+   * "左右ペインで"). The rail just shrinks to ~120px so the cards still
+   * have room. Sticky positioning is dropped because viewport-height
+   * sticky is awkward on small screens with the URL bar showing. */
+  .bookmarks-layout { gap: 10px; }
   .bookmarks-categories {
-    flex: 0 0 auto;
+    flex: 0 0 120px;
+    padding: 8px;
     position: static;
     max-height: none;
-  }
-  .bookmarks-categories ul { flex-direction: row; flex-wrap: wrap; gap: 6px; }
-  .bookmarks-categories li {
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 3px 10px;
     font-size: 12px;
   }
-  .bookmarks-categories li .count { min-width: auto; padding-left: 4px; }
+  .bookmarks-categories h3 { font-size: 10px; margin-bottom: 4px; }
+  .bookmarks-categories li { padding: 4px 6px; font-size: 12px; }
+  .bookmarks-categories li .count { font-size: 10px; min-width: 14px; }
 
   .detail {
     position: fixed;
@@ -1791,12 +1791,17 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 
   .content { padding: 12px; }
 
-  /* Sticky tabs: keep a single horizontal scroller and reveal the More menu
-     when the row would otherwise wrap. */
+  /* Sticky tabs on mobile. Drop the negative-margin trick because it
+   * makes sticky pin against an offset that's hard to reason about when
+   * the URL bar shows/hides. Just set top:0 inside the .content scroll
+   * container. */
   .tabs {
-    margin: -12px -12px 12px;
-    padding: 4px 8px 0;
-    top: -12px;
+    margin: 0 -12px 12px;
+    padding: 6px 8px 0;
+    top: 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04);
   }
   .tabs-scroll {
     overflow-x: auto;
