@@ -1477,3 +1477,34 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .diary-dig-query { font-weight: 600; }
 .diary-dig-meta { font-size: 11px; color: var(--muted); }
 .diary-dig-summary { font-size: 11px; color: #2c3344; line-height: 1.5; margin-top: 4px; }
+
+.events-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.uptime-status { flex: 1; font-size: 13px; }
+.events-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ev-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.ev-row.ev-downtime { background: #fae6e6; }
+.ev-row.ev-start { background: #e8f5e8; }
+.ev-row.ev-stop { background: #fff5e1; }
+.ev-row.ev-restart { background: var(--accent-bg); }
+.ev-tag { font-weight: 600; min-width: 160px; }
+.ev-time { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+.ev-det { font-size: 10px; color: var(--muted); flex-basis: 100%; word-break: break-all; }

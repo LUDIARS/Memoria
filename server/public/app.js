@@ -519,6 +519,7 @@ function switchTab(tab) {
   $('dictView').classList.toggle('hidden', tab !== 'dict');
   $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
+  $('eventsView').classList.toggle('hidden', tab !== 'events');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
@@ -527,6 +528,7 @@ function switchTab(tab) {
   if (tab === 'dict') loadDictionary();
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
+  if (tab === 'events') loadEvents();
 }
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
@@ -2473,3 +2475,54 @@ async function saveAiSettings() {
 document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
 document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
 document.getElementById('aiSettingsSave')?.addEventListener('click', saveAiSettings);
+
+// ── Events / uptime ────────────────────────────────────────────────────
+async function loadEvents() {
+  try {
+    const [evs, ut] = await Promise.all([
+      api('/api/events?limit=200'),
+      api('/api/uptime'),
+    ]);
+    renderUptimeStatus(ut);
+    renderEvents(evs.items || []);
+  } catch (e) { console.error(e); }
+}
+
+function renderUptimeStatus(u) {
+  const el = $('uptimeStatus');
+  if (!u?.heartbeat) { el.innerHTML = '<span style="color:var(--muted)">heartbeat 情報なし</span>'; return; }
+  const h = u.heartbeat;
+  const startedAt = h.server_started_at ? new Date(h.server_started_at) : null;
+  const lastHb = h.last_heartbeat_at ? new Date(h.last_heartbeat_at) : null;
+  const upMs = startedAt ? Date.now() - startedAt.getTime() : 0;
+  el.innerHTML = `
+    <span><b>稼働中</b> · 起動 ${startedAt ? startedAt.toLocaleString() : '?'} (${fmtElapsed(upMs)})</span>
+    <span style="margin-left:12px;color:var(--muted)">last heartbeat ${lastHb ? lastHb.toLocaleTimeString() : '?'}</span>
+  `;
+}
+
+const EVENT_LABELS = {
+  start: '🟢 起動',
+  stop: '🛑 停止 (graceful)',
+  downtime: '⚠ サーバ停止 (5 分超)',
+  restart: '🔁 再起動 (5 分以内)',
+};
+
+function renderEvents(items) {
+  const el = $('eventsList');
+  if (!items.length) { el.innerHTML = '<li class="queue-empty">イベント記録なし</li>'; return; }
+  el.innerHTML = items.map(e => {
+    const label = EVENT_LABELS[e.type] || e.type;
+    const occ = (e.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const dur = e.duration_ms ? ` · ${Math.round(e.duration_ms / 1000)}秒` : '';
+    const ended = e.ended_at ? ` → ${e.ended_at.replace('T',' ').slice(0,19)}` : '';
+    const det = e.details ? `<div class="ev-det">${escapeHtml(JSON.stringify(e.details))}</div>` : '';
+    return `<li class="ev-row ev-${e.type}">
+      <span class="ev-tag">${label}</span>
+      <span class="ev-time">${escapeHtml(occ)}${ended}${dur}</span>
+      ${det}
+    </li>`;
+  }).join('');
+}
+
+document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);

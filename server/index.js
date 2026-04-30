@@ -50,6 +50,8 @@ import {
 import { classifyDomain, shouldSkipDomain } from './domain-catalog.js';
 import { fetchPageMetadata } from './page-metadata.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
+import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './uptime.js';
+import { listServerEvents, listServerEventsForDate } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
   generateDiary, generateWeekly, summarizeGithubByRepo,
@@ -71,6 +73,8 @@ const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
 mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 loadLlmConfigFromSettings(getAppSettings(db));
+const HEARTBEAT_FILE = join(DATA_DIR, 'heartbeat.json');
+startUptimeTracking({ db, dataDir: DATA_DIR, heartbeatFile: HEARTBEAT_FILE });
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
 const domainCatalogQueue = new FifoQueue();
@@ -877,6 +881,21 @@ app.patch('/api/llm/config', async (c) => {
   setAppSettings(db, patch);
   loadLlmConfigFromSettings(getAppSettings(db));
   return c.json({ ok: true });
+});
+
+// ---- server events / uptime -----------------------------------------------
+
+app.get('/api/events', (c) => {
+  const limit = Number(c.req.query('limit')) || 200;
+  return c.json({ items: listServerEvents(db, { limit }) });
+});
+
+app.get('/api/uptime', (c) => {
+  const hb = readHeartbeat(HEARTBEAT_FILE);
+  return c.json({
+    heartbeat: hb,
+    downtime_threshold_ms: DOWNTIME_THRESHOLD_MS,
+  });
 });
 
 // ---- queue status ---------------------------------------------------------
