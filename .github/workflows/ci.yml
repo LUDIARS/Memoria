@@ -37,9 +37,12 @@ jobs:
       - name: Typecheck (server)
         working-directory: server
         run: |
-          # devDeps may not be in the lockfile yet — install on demand.
-          npx --yes -p typescript@5.6 -p @types/node@20 -p @types/better-sqlite3@7 \
-            tsc --noEmit -p tsconfig.json
+          # devDeps aren't in the lockfile (lean prod install). Install into
+          # node_modules without touching package-lock.json so tsc can
+          # resolve @types/* via the standard typeRoots path.
+          npm install --no-save --no-package-lock --no-audit --no-fund \
+            typescript@5.6 @types/node@20 @types/better-sqlite3@7
+          npx tsc --noEmit -p tsconfig.json
 
       - name: Syntax check (mcp-server)
         run: |

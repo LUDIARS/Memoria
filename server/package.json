@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
-    "typecheck": "npx --yes -p typescript@5.6 -p @types/node@20 -p @types/better-sqlite3@7 tsc --noEmit -p tsconfig.json"
+    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 && npx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
