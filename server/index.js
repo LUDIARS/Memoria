@@ -31,18 +31,30 @@ import { summarizeWithClaude, htmlToText } from './claude.js';
 import { FifoQueue, ConcurrentPool } from './queue.js';
 import { recommendationsFor, dismissRecommendation, clearDismissals } from './recommendations.js';
 import { runDig, runDigPreview } from './dig.js';
-import { embed, chunkText, cosine, vecToBuffer, bufferToVec, getModelName } from './embeddings.js';
 import {
-  deleteChunks, insertChunk, listChunkRows, bookmarksMissingEmbeddings, chunkStats,
   insertDigSession, setDigResult, setDigPreview, getDigSession, listDigSessions,
   insertWordCloud, setWordCloudResult, getWordCloud, listWordClouds,
   getBookmarkWordCloud, recentBookmarkWordClouds, trendsVisitDomains,
   listDictionaryEntries, getDictionaryEntry, findDictionaryEntryByTerm,
   insertDictionaryEntry, updateDictionaryEntry, deleteDictionaryEntry,
   addDictionaryLink, removeDictionaryLink,
+  insertVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
+  deleteDiary, getDiarySettings, setDiarySettings,
+  getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
+  getDomainCatalog, listDomainCatalog, listDomainCatalogWithCounts, getDomainCatalogMap,
+  insertDomainPending, setDomainCatalog, deleteDomainCatalog,
+  updateDomainCatalogUser,
+  getPageMetadata, getPageMetadataMap, insertPageMetadataPending,
+  setPageMetadata, deletePageMetadata,
 } from './db.js';
+import { classifyDomain, shouldSkipDomain } from './domain-catalog.js';
+import { fetchPageMetadata } from './page-metadata.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
-import { spawn } from 'node:child_process';
+import {
+  aggregateDay, fetchGithubActivity, fetchGithubRange,
+  generateDiary, generateWeekly, summarizeGithubByRepo,
+  formatLocalDate, yesterdayLocal, weekRangeFor, weekOfMonth, pingGithub,
+} from './diary.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -50,58 +62,106 @@ const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(__dirname, '..', 'data
 const HTML_DIR = join(DATA_DIR, 'html');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
-const RAG_ENABLED = process.env.MEMORIA_RAG !== '0';
 
 mkdirSync(HTML_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 const summaryQueue = new FifoQueue();
-const embeddingQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
-let chunkCache = null;
-function invalidateChunkCache() { chunkCache = null; }
-function loadChunkCache() {
-  if (chunkCache) return chunkCache;
-  const rows = listChunkRows(db);
-  chunkCache = rows.map(r => ({
-    id: r.id,
-    bookmark_id: r.bookmark_id,
-    idx: r.idx,
-    text: r.text,
-    vec: bufferToVec(r.vec),
-  }));
-  return chunkCache;
+const domainCatalogQueue = new FifoQueue();
+const pageMetadataQueue = new FifoQueue();
+
+function maybeQueuePageMetadata(url) {
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); }
+  catch { return; }
+  if (shouldSkipDomain(host)) return;
+  if (getPageMetadata(db, url)) return;
+  insertPageMetadataPending(db, url);
+  pageMetadataQueue.enqueue(async () => {
+    const result = await fetchPageMetadata({ url, claudeBin: CLAUDE_BIN });
+    if (result.skip) {
+      deletePageMetadata(db, url);
+      return;
+    }
+    if (result.dropRow) {
+      deletePageMetadata(db, url);
+      console.log(`[page-meta] dropped ${url}: ${result.error}`);
+      return;
+    }
+    if (!result.ok) {
+      setPageMetadata(db, url, {
+        title: result.title ?? null,
+        meta_description: result.meta_description ?? null,
+        og_title: result.og_title ?? null,
+        og_description: result.og_description ?? null,
+        og_image: result.og_image ?? null,
+        og_type: result.og_type ?? null,
+        content_type: result.content_type ?? null,
+        http_status: result.http_status ?? null,
+        status: 'error',
+        error: result.error ?? 'unknown',
+      });
+      return;
+    }
+    setPageMetadata(db, url, {
+      title: result.title,
+      meta_description: result.meta_description,
+      og_title: result.og_title,
+      og_description: result.og_description,
+      og_image: result.og_image,
+      og_type: result.og_type,
+      content_type: result.content_type,
+      http_status: result.http_status,
+      summary: result.summary,
+      kind: result.kind,
+      status: 'done',
+      error: null,
+    });
+  }, { kind: 'page', url, title: url });
 }
 
-function enqueueEmbedding(id) {
-  const meta = getBookmark(db, id);
-  embeddingQueue.enqueue(async () => {
-    const cur = getBookmark(db, id);
-    if (!cur) throw new Error('bookmark not found');
-    const htmlAbs = join(HTML_DIR, cur.html_path);
-    if (!existsSync(htmlAbs)) throw new Error('html file missing');
+function extractDomainFromUrl(u) {
+  try { return new URL(u).hostname.toLowerCase(); } catch { return null; }
+}
 
-    const html = readFileSync(htmlAbs, 'utf8');
-    const text = htmlToText(html);
-    const head = [cur.title, cur.summary].filter(Boolean).join('\n\n');
-    const all = [];
-    if (head) all.push(head);
-    for (const c of chunkText(text)) all.push(c);
-    if (all.length === 0) return;
-
-    deleteChunks(db, id);
-    const model = getModelName();
-    let i = 0;
-    for (const t of all) {
-      const v = await embed(t, 'passage');
-      insertChunk(db, { bookmarkId: id, idx: i++, text: t, vec: vecToBuffer(v), model });
+function maybeQueueDomain(url) {
+  const domain = extractDomainFromUrl(url);
+  if (!domain) return;
+  if (shouldSkipDomain(domain)) return;
+  // Cheap dedup: if we already have a row, skip. Pending rows count too.
+  if (getDomainCatalog(db, domain)) return;
+  insertDomainPending(db, domain);
+  domainCatalogQueue.enqueue(async () => {
+    const result = await classifyDomain({ domain, claudeBin: CLAUDE_BIN });
+    if (result.skip) {
+      deleteDomainCatalog(db, domain);
+      return;
     }
-    invalidateChunkCache();
-  }, {
-    kind: 'embedding',
-    bookmarkId: id,
-    title: meta?.title ?? `id=${id}`,
-    url: meta?.url ?? '',
-  });
+    if (result.dropRow) {
+      // 404 / DNS error / non-2xx → drop the row entirely so it can be retried later.
+      deleteDomainCatalog(db, domain);
+      console.log(`[domain-catalog] dropped ${domain}: ${result.error}`);
+      return;
+    }
+    if (!result.ok) {
+      setDomainCatalog(db, domain, {
+        title: result.title ?? null,
+        description: result.metaDescription ?? null,
+        status: 'error',
+        error: result.error ?? 'unknown',
+      });
+      return;
+    }
+    setDomainCatalog(db, domain, {
+      title: result.title,
+      site_name: result.site_name,
+      description: result.description,
+      can_do: result.can_do,
+      kind: result.kind,
+      status: 'done',
+      error: null,
+    });
+  }, { kind: 'domain', domain, title: domain });
 }
 
 function enqueueSummary(id) {
@@ -120,9 +180,6 @@ function enqueueSummary(id) {
         url: cur.url, title: cur.title, html, claudeBin: CLAUDE_BIN,
       });
       setSummary(db, id, { summary, categories, status: 'done' });
-      // Schedule embedding generation in the background; if disabled or
-      // not yet configured, embeddingQueue will simply error out per-job.
-      if (RAG_ENABLED) enqueueEmbedding(id);
     } catch (e) {
       setSummary(db, id, { summary: null, categories: [], status: 'error', error: e.message.slice(0, 500) });
       throw e;
@@ -311,149 +368,10 @@ app.delete('/api/recommendations/dismissals', (c) => {
   return c.json({ ok: true });
 });
 
-// ---- RAG (semantic search + Q&A) -----------------------------------------
-
-app.get('/api/rag/status', (c) => {
-  return c.json({
-    enabled: RAG_ENABLED,
-    model: getModelName(),
-    queue_depth: embeddingQueue.depth,
-    queue_running: embeddingQueue.running,
-    pending_bookmarks: bookmarksMissingEmbeddings(db).length,
-    ...chunkStats(db),
-  });
-});
-
-app.post('/api/rag/backfill', (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled (MEMORIA_RAG=0)' }, 503);
-  const ids = bookmarksMissingEmbeddings(db);
-  for (const id of ids) enqueueEmbedding(id);
-  return c.json({ queued: ids.length });
-});
-
-app.post('/api/rag/reindex/:id', (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
-  const id = Number(c.req.param('id'));
-  if (!getBookmark(db, id)) return c.json({ error: 'not found' }, 404);
-  enqueueEmbedding(id);
-  return c.json({ queued: true });
-});
-
-app.get('/api/search', async (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
-  const q = c.req.query('q');
-  const limit = Number(c.req.query('limit')) || 10;
-  if (!q) return c.json({ error: 'q required' }, 400);
-  const cache = loadChunkCache();
-  if (cache.length === 0) return c.json({ items: [], note: 'No embeddings indexed yet. POST /api/rag/backfill to start.' });
-  const qv = await embed(q, 'query');
-  const scored = cache.map(c => ({ ...c, score: cosine(qv, c.vec) }));
-  scored.sort((a, b) => b.score - a.score);
-  // Group by bookmark, keep best-scoring chunk per bookmark.
-  const byBm = new Map();
-  for (const s of scored) {
-    if (!byBm.has(s.bookmark_id)) byBm.set(s.bookmark_id, s);
-    if (byBm.size >= limit * 2) break;
-  }
-  const out = [];
-  for (const s of [...byBm.values()].sort((a, b) => b.score - a.score).slice(0, limit)) {
-    const b = getBookmark(db, s.bookmark_id);
-    if (!b) continue;
-    out.push({
-      bookmark_id: s.bookmark_id,
-      score: Number(s.score.toFixed(4)),
-      title: b.title,
-      url: b.url,
-      summary: b.summary,
-      categories: b.categories,
-      chunk: s.text.slice(0, 500),
-    });
-  }
-  return c.json({ items: out });
-});
-
-app.post('/api/ask', async (c) => {
-  if (!RAG_ENABLED) return c.json({ error: 'RAG disabled' }, 503);
-  const body = await c.req.json().catch(() => null);
-  const q = body?.q;
-  if (!q || typeof q !== 'string') return c.json({ error: 'q required' }, 400);
-  const k = Number(body?.k) || 6;
-
-  const cache = loadChunkCache();
-  if (cache.length === 0) return c.json({ error: 'no embeddings yet; backfill first' }, 400);
-
-  const qv = await embed(q, 'query');
-  const scored = cache.map(c => ({ ...c, score: cosine(qv, c.vec) }));
-  scored.sort((a, b) => b.score - a.score);
-  const seen = new Set();
-  const top = [];
-  for (const s of scored) {
-    if (seen.has(s.bookmark_id)) continue;
-    seen.add(s.bookmark_id);
-    top.push(s);
-    if (top.length >= k) break;
-  }
-
-  const sourcesMd = top.map((s, i) => {
-    const b = getBookmark(db, s.bookmark_id);
-    return `[Source ${i + 1}: ${b?.title ?? `id=${s.bookmark_id}`} (id=${s.bookmark_id}, ${b?.url ?? ''})]\n${s.text}`;
-  }).join('\n\n---\n\n');
-
-  const prompt = [
-    'You are answering a user question using only the provided sources.',
-    '- Cite sources inline as [Source 1], [Source 2] etc.',
-    '- If the sources do not contain the answer, say "Not enough context in the saved bookmarks." and stop.',
-    '- Reply in the same language as the question.',
-    '',
-    `QUESTION: ${q}`,
-    '',
-    'SOURCES:',
-    sourcesMd,
-  ].join('\n');
-
-  let answer;
-  try {
-    answer = await claudeAnswer(prompt);
-  } catch (e) {
-    return c.json({ error: 'claude failed', detail: e.message }, 500);
-  }
-  return c.json({
-    answer,
-    sources: top.map((s, i) => {
-      const b = getBookmark(db, s.bookmark_id);
-      return {
-        id: i + 1,
-        bookmark_id: s.bookmark_id,
-        title: b?.title,
-        url: b?.url,
-        score: Number(s.score.toFixed(4)),
-      };
-    }),
-  });
-});
-
-function claudeAnswer(prompt, timeoutMs = 180_000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(CLAUDE_BIN, ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('claude CLI timed out')); }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout.trim());
-    });
-  });
-}
-
 // ---- dig (deep research) -------------------------------------------------
-// Digs run in parallel — they're independent claude CLI invocations that
-// each spawn a separate child process. Concurrency keeps a sane upper bound.
-const DIG_CONCURRENCY = Number(process.env.MEMORIA_DIG_CONCURRENCY) || 4;
-const digQueue = new ConcurrentPool({ concurrency: DIG_CONCURRENCY });
+// All claude-using work (dig / cloud / diary / weekly / domain / page) runs
+// strictly one job at a time so the user can watch progress in 作業リスト.
+const digQueue = new FifoQueue();
 
 function enqueueDig(id, query) {
   digQueue.enqueue(async () => {
@@ -925,16 +843,18 @@ app.get('/api/queue', (c) => {
   return c.json({
     depth: summaryQueue.depth,
     running: summaryQueue.running,
-    embedding_depth: embeddingQueue.depth,
-    embedding_running: embeddingQueue.running,
   });
 });
 
 app.get('/api/queue/items', (c) => {
   return c.json({
     summary: summaryQueue.snapshot(),
-    embedding: embeddingQueue.snapshot(),
     wordcloud: cloudQueue.snapshot(),
+    dig: digQueue.snapshot(),
+    diary: diaryQueue.snapshot(),
+    weekly: weeklyQueue.snapshot(),
+    domain: domainCatalogQueue.snapshot(),
+    page: pageMetadataQueue.snapshot(),
     // Backward-compat top-level fields:
     ...summaryQueue.snapshot(),
   });
@@ -953,8 +873,15 @@ app.post('/api/access', async (c) => {
   if (!body || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
   if (!/^https?:\/\//.test(body.url)) return c.json({ matched: false, ignored: true });
 
-  // Always upsert into page_visits so unsaved URLs are tracked too.
-  upsertVisit(db, { url: body.url, title: typeof body.title === 'string' ? body.title : null });
+  const title = typeof body.title === 'string' ? body.title : null;
+
+  // Always upsert into page_visits (rolling counter) and append a per-event
+  // row to visit_events (used by the diary aggregator for hourly buckets).
+  upsertVisit(db, { url: body.url, title });
+  insertVisitEvent(db, { url: body.url, title });
+  // Lazily classify the domain in the background (skip for localhost, dedup
+  // via domain_catalog rows).
+  maybeQueueDomain(body.url);
 
   // If this URL is already bookmarked, also bump its bookmark access counter.
   const b = findBookmarkByUrl(db, body.url);
@@ -967,7 +894,96 @@ app.post('/api/access', async (c) => {
 
 app.get('/api/visits/unsaved', (c) => {
   const since = c.req.query('since');
-  return c.json({ items: listUnsavedVisits(db, { since }) });
+  const items = listUnsavedVisits(db, { since });
+  const domains = [...new Set(items.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
+  const urls = items.map(v => v.url);
+  const catalog = getDomainCatalogMap(db, domains);
+  const pageMap = getPageMetadataMap(db, urls);
+
+  // Lazy-fetch any URL that doesn't have metadata yet.
+  for (const url of urls) {
+    if (!pageMap.has(url)) maybeQueuePageMetadata(url);
+  }
+
+  return c.json({
+    items: items.map(v => {
+      const dom = extractDomainFromUrl(v.url);
+      const cat = dom ? catalog.get(dom) : null;
+      const pm = pageMap.get(v.url);
+      return {
+        ...v,
+        domain: dom,
+        catalog: cat ? {
+          site_name: cat.site_name,
+          description: cat.description,
+          can_do: cat.can_do,
+          kind: cat.kind,
+          title: cat.title,
+          status: cat.status,
+        } : null,
+        page: pm ? {
+          status: pm.status,
+          summary: pm.summary,
+          kind: pm.kind,
+          meta_description: pm.meta_description,
+          og_description: pm.og_description,
+          page_title: pm.title,
+        } : (dom && shouldSkipDomain(dom)) ? { status: 'skipped' } : { status: 'pending' },
+      };
+    }),
+  });
+});
+
+app.get('/api/domains', (c) => {
+  const search = c.req.query('q')?.trim() || undefined;
+  return c.json({ items: listDomainCatalogWithCounts(db, { search }) });
+});
+
+app.get('/api/domains/:domain', (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  const row = getDomainCatalog(db, d);
+  if (!row) return c.json({ error: 'not found' }, 404);
+  return c.json(row);
+});
+
+app.patch('/api/domains/:domain', async (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  const row = getDomainCatalog(db, d);
+  if (!row) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  updateDomainCatalogUser(db, d, body);
+  return c.json(getDomainCatalog(db, d));
+});
+
+app.post('/api/domains/:domain/regenerate', (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  if (shouldSkipDomain(d)) return c.json({ error: 'skipped domain' }, 400);
+  // Force re-classify even if a row exists; the user_edited flag still
+  // protects manual fields.
+  insertDomainPending(db, d);
+  domainCatalogQueue.enqueue(async () => {
+    const result = await classifyDomain({ domain: d, claudeBin: CLAUDE_BIN });
+    if (result.skip || result.dropRow) {
+      deleteDomainCatalog(db, d);
+      return;
+    }
+    if (!result.ok) {
+      setDomainCatalog(db, d, { status: 'error', error: result.error });
+      return;
+    }
+    setDomainCatalog(db, d, {
+      title: result.title, site_name: result.site_name,
+      description: result.description, can_do: result.can_do,
+      kind: result.kind, status: 'done', error: null,
+    });
+  }, { kind: 'domain', domain: d, title: d });
+  return c.json({ queued: true });
+});
+
+app.delete('/api/domains/:domain', (c) => {
+  const d = c.req.param('domain').toLowerCase();
+  deleteDomainCatalog(db, d);
+  return c.json({ ok: true });
 });
 
 app.get('/api/visits/suggested', (c) => {
@@ -1123,6 +1139,280 @@ app.post('/api/import', async (c) => {
   }
   return c.json(results);
 });
+
+// ---- diary ----------------------------------------------------------------
+
+const diaryQueue = new FifoQueue();
+
+function settingsAsObject() {
+  const s = getDiarySettings(db);
+  return {
+    github_token: s.github_token || process.env.MEMORIA_GH_TOKEN || '',
+    github_user: s.github_user || process.env.MEMORIA_GH_USER || '',
+    github_repos: s.github_repos
+      ? s.github_repos.split(',').map(x => x.trim()).filter(Boolean)
+      : [],
+  };
+}
+
+async function runDiaryGeneration(dateStr) {
+  const metrics = aggregateDay(db, dateStr);
+  const settings = settingsAsObject();
+  upsertDiary(db, { date: dateStr, status: 'pending', metrics, error: null });
+
+  let github = null;
+  if (settings.github_user) {
+    github = await fetchGithubActivity({
+      token: settings.github_token,
+      user: settings.github_user,
+      repos: settings.github_repos,
+      dateStr,
+    });
+  }
+
+  const prior = getDiary(db, dateStr);
+  const notes = prior?.notes || '';
+
+  let result;
+  try {
+    result = await generateDiary({
+      db, dateStr, metrics, github, notes, claudeBin: CLAUDE_BIN,
+    });
+  } catch (e) {
+    upsertDiary(db, {
+      date: dateStr, status: 'error', metrics,
+      githubCommits: github, error: e.message.slice(0, 500),
+    });
+    throw e;
+  }
+
+  upsertDiary(db, {
+    date: dateStr,
+    summary: result.summary,
+    workContent: result.workContent,
+    highlights: result.highlights,
+    metrics,
+    githubCommits: github,
+    status: 'done',
+    error: null,
+  });
+}
+
+function enqueueDiary(dateStr) {
+  diaryQueue.enqueue(async () => {
+    await runDiaryGeneration(dateStr);
+  }, { kind: 'diary', date: dateStr, title: dateStr });
+}
+
+app.get('/api/diary', (c) => {
+  // ?month=YYYY-MM (defaults to current local month)
+  const monthQ = c.req.query('month');
+  const today = new Date();
+  const monthStr = (monthQ && /^\d{4}-\d{2}$/.test(monthQ))
+    ? monthQ
+    : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const start = `${monthStr}-01`;
+  const [y, m] = monthStr.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  const end = `${monthStr}-${String(last).padStart(2, '0')}`;
+  const items = listDiariesInRange(db, { start, end });
+  return c.json({ month: monthStr, start, end, items });
+});
+
+app.get('/api/diary/:date', (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  const entry = getDiary(db, date) || { date, status: 'absent' };
+  // Always include live metrics so the UI can chart even before the claude
+  // narrative finishes. (cheap; pure SQL aggregation)
+  const liveMetrics = aggregateDay(db, date);
+  return c.json({ ...entry, live_metrics: liveMetrics });
+});
+
+app.post('/api/diary/:date/generate', (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  enqueueDiary(date);
+  return c.json({ queued: true, queue_depth: diaryQueue.depth });
+});
+
+app.patch('/api/diary/:date', async (c) => {
+  const date = c.req.param('date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.notes === 'string') {
+    upsertDiary(db, { date, notes: body.notes });
+  }
+  return c.json(getDiary(db, date));
+});
+
+app.delete('/api/diary/:date', (c) => {
+  const date = c.req.param('date');
+  deleteDiary(db, date);
+  return c.json({ ok: true });
+});
+
+app.get('/api/diary/settings', (c) => {
+  // Mask the token when returning to the FE.
+  const s = settingsAsObject();
+  return c.json({
+    github_user: s.github_user,
+    github_repos: s.github_repos.join(','),
+    github_token_set: !!s.github_token,
+  });
+});
+
+app.post('/api/diary/settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.github_token === 'string') patch.github_token = body.github_token;
+  if (typeof body.github_user === 'string') patch.github_user = body.github_user;
+  if (typeof body.github_repos === 'string') patch.github_repos = body.github_repos;
+  setDiarySettings(db, patch);
+  return c.json({ ok: true });
+});
+
+/** Validate the saved GitHub PAT by hitting /user. */
+app.post('/api/diary/test-github', async (c) => {
+  const s = settingsAsObject();
+  if (!s.github_token) return c.json({ ok: false, error: 'no token saved' });
+  const r = await pingGithub({ token: s.github_token, user: s.github_user });
+  return c.json(r);
+});
+
+// Midnight scheduler — fires at next 00:00:05 local, generates the previous
+// day's diary, then re-schedules itself.
+function scheduleMidnight() {
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+  const ms = next.getTime() - now.getTime();
+  setTimeout(async () => {
+    try {
+      const dateStr = yesterdayLocal();
+      console.log(`[diary cron] generating ${dateStr}`);
+      enqueueDiary(dateStr);
+    } catch (e) {
+      console.error('[diary cron] failed:', e.message);
+    }
+    scheduleMidnight();
+  }, Math.max(60_000, ms)).unref?.();
+}
+scheduleMidnight();
+
+// ---- weekly report --------------------------------------------------------
+
+const weeklyQueue = new FifoQueue();
+
+async function runWeeklyGeneration(weekStart) {
+  const range = weekRangeFor(weekStart);
+  const { weekInMonth, month } = weekOfMonth(range.start);
+  upsertWeekly(db, {
+    weekStart: range.start, weekEnd: range.end, month, weekInMonth,
+    status: 'pending', error: null,
+  });
+
+  // Pull the 7 daily diaries (use whichever pieces are available).
+  const dailyDiaries = listDiariesInRange(db, { start: range.start, end: range.end });
+
+  // Pull commits across the week from configured repos.
+  const settings = settingsAsObject();
+  let githubByRepo = { repos: [], total: 0 };
+  if (settings.github_user && settings.github_repos.length > 0) {
+    const since = `${range.start}T00:00:00Z`;
+    const until = `${range.end}T23:59:59Z`;
+    const fetched = await fetchGithubRange({
+      token: settings.github_token, user: settings.github_user,
+      repos: settings.github_repos, since, until,
+    });
+    githubByRepo = summarizeGithubByRepo(fetched);
+  }
+
+  let summary;
+  try {
+    summary = await generateWeekly({
+      weekStart: range.start, weekEnd: range.end,
+      dailyDiaries, githubByRepo, claudeBin: CLAUDE_BIN,
+    });
+  } catch (e) {
+    upsertWeekly(db, {
+      weekStart: range.start, status: 'error', githubSummary: githubByRepo,
+      error: e.message.slice(0, 500),
+    });
+    throw e;
+  }
+
+  upsertWeekly(db, {
+    weekStart: range.start, summary,
+    githubSummary: githubByRepo,
+    status: 'done', error: null,
+  });
+}
+
+function enqueueWeekly(weekStart) {
+  weeklyQueue.enqueue(async () => {
+    await runWeeklyGeneration(weekStart);
+  }, { kind: 'weekly', weekStart, title: weekStart });
+}
+
+app.get('/api/weekly', (c) => {
+  const monthQ = c.req.query('month');
+  const today = new Date();
+  const monthStr = (monthQ && /^\d{4}-\d{2}$/.test(monthQ))
+    ? monthQ
+    : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  return c.json({ month: monthStr, items: listWeeklyForMonth(db, monthStr) });
+});
+
+app.get('/api/weekly/:weekStart', (c) => {
+  const ws = c.req.param('weekStart');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ws)) return c.json({ error: 'invalid week_start' }, 400);
+  const w = getWeekly(db, ws);
+  if (!w) {
+    const range = weekRangeFor(ws);
+    const { weekInMonth, month } = weekOfMonth(range.start);
+    return c.json({ week_start: range.start, week_end: range.end, month, week_in_month: weekInMonth, status: 'absent' });
+  }
+  return c.json(w);
+});
+
+app.post('/api/weekly/:weekStart/generate', (c) => {
+  const ws = c.req.param('weekStart');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ws)) return c.json({ error: 'invalid week_start' }, 400);
+  const range = weekRangeFor(ws);
+  enqueueWeekly(range.start);
+  return c.json({ queued: true, week_start: range.start, week_end: range.end });
+});
+
+app.delete('/api/weekly/:weekStart', (c) => {
+  const ws = c.req.param('weekStart');
+  deleteWeekly(db, ws);
+  return c.json({ ok: true });
+});
+
+// Sunday 23:00 cron — summarises Mon-Sun of the current week.
+function scheduleSundayEvening() {
+  const now = new Date();
+  const next = new Date(now);
+  const dow = now.getDay();
+  const daysUntilSunday = dow === 0 ? 0 : (7 - dow); // 0=Sun,1=Mon,...6=Sat
+  next.setDate(now.getDate() + daysUntilSunday);
+  next.setHours(23, 0, 5, 0);
+  if (next <= now) next.setDate(next.getDate() + 7);
+  const ms = next.getTime() - now.getTime();
+  setTimeout(async () => {
+    try {
+      // Today (Sunday) is the end of the week we're summarising.
+      const today = new Date();
+      const range = weekRangeFor(formatLocalDate(today));
+      console.log(`[weekly cron] generating week ${range.start}`);
+      enqueueWeekly(range.start);
+    } catch (e) {
+      console.error('[weekly cron] failed:', e.message);
+    }
+    scheduleSundayEvening();
+  }, Math.max(60_000, ms)).unref?.();
+}
+scheduleSundayEvening();
 
 // ---- static UI ------------------------------------------------------------
 

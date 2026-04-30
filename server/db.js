@@ -74,16 +74,84 @@ export function openDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_accesses_bookmark
       ON accesses(bookmark_id, accessed_at DESC);
 
-    CREATE TABLE IF NOT EXISTS chunks (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      bookmark_id  INTEGER NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE,
-      idx          INTEGER NOT NULL,
-      text         TEXT NOT NULL,
-      vec          BLOB NOT NULL,
-      vec_dim      INTEGER NOT NULL,
-      vec_model    TEXT NOT NULL DEFAULT 'multilingual-e5-small'
+    CREATE TABLE IF NOT EXISTS page_metadata (
+      url               TEXT PRIMARY KEY,
+      title             TEXT,
+      meta_description  TEXT,
+      og_title          TEXT,
+      og_description    TEXT,
+      og_image          TEXT,
+      og_type           TEXT,
+      content_type      TEXT,
+      http_status       INTEGER,
+      summary           TEXT,
+      kind              TEXT,
+      status            TEXT NOT NULL DEFAULT 'pending',
+      error             TEXT,
+      fetched_at        TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_chunks_bookmark ON chunks(bookmark_id);
+    CREATE INDEX IF NOT EXISTS idx_page_metadata_status
+      ON page_metadata(status);
+
+    CREATE TABLE IF NOT EXISTS domain_catalog (
+      domain        TEXT PRIMARY KEY,
+      title         TEXT,
+      site_name     TEXT,
+      description   TEXT,
+      can_do        TEXT,
+      kind          TEXT,
+      notes         TEXT,
+      user_edited   INTEGER NOT NULL DEFAULT 0,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      error         TEXT,
+      fetched_at    TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS visit_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      url         TEXT NOT NULL,
+      domain      TEXT,
+      title       TEXT,
+      visited_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_visit_events_visited_at
+      ON visit_events(visited_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_visit_events_domain
+      ON visit_events(domain);
+
+    CREATE TABLE IF NOT EXISTS diary_entries (
+      date                  TEXT PRIMARY KEY,
+      summary               TEXT,
+      work_content          TEXT,
+      highlights            TEXT,
+      notes                 TEXT,
+      metrics_json          TEXT,
+      github_commits_json   TEXT,
+      status                TEXT NOT NULL DEFAULT 'pending',
+      error                 TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS weekly_reports (
+      week_start            TEXT PRIMARY KEY,
+      week_end              TEXT NOT NULL,
+      month                 TEXT NOT NULL,
+      week_in_month         INTEGER NOT NULL,
+      summary               TEXT,
+      github_summary_json   TEXT,
+      status                TEXT NOT NULL DEFAULT 'pending',
+      error                 TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_weekly_month
+      ON weekly_reports(month);
+
+    CREATE TABLE IF NOT EXISTS diary_settings (
+      key    TEXT PRIMARY KEY,
+      value  TEXT
+    );
 
     CREATE TABLE IF NOT EXISTS dictionary_entries (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,6 +203,16 @@ export function openDb(dbPath) {
   if (!dsCols.includes('preview_json')) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN preview_json TEXT`);
   }
+
+  const deCols = db.prepare(`PRAGMA table_info(diary_entries)`).all().map(c => c.name);
+  if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
+  if (!deCols.includes('highlights'))   db.exec(`ALTER TABLE diary_entries ADD COLUMN highlights TEXT`);
+
+  const dcCols = db.prepare(`PRAGMA table_info(domain_catalog)`).all().map(c => c.name);
+  if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);
+  if (!dcCols.includes('can_do'))      db.exec(`ALTER TABLE domain_catalog ADD COLUMN can_do TEXT`);
+  if (!dcCols.includes('notes'))       db.exec(`ALTER TABLE domain_catalog ADD COLUMN notes TEXT`);
+  if (!dcCols.includes('user_edited')) db.exec(`ALTER TABLE domain_catalog ADD COLUMN user_edited INTEGER NOT NULL DEFAULT 0`);
 
   // Forward-compat: ensure newer columns exist on older DBs.
   const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
@@ -503,6 +581,374 @@ export function removeDictionaryLink(db, { entryId, sourceKind, sourceId }) {
   `).run(entryId, sourceKind, sourceId);
 }
 
+// ── page metadata (per-URL) -----------------------------------------------
+
+export function getPageMetadata(db, url) {
+  return db.prepare(`SELECT * FROM page_metadata WHERE url = ?`).get(url) ?? null;
+}
+
+export function getPageMetadataMap(db, urls) {
+  if (!urls.length) return new Map();
+  const placeholders = urls.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM page_metadata WHERE url IN (${placeholders})`).all(...urls);
+  return new Map(rows.map(r => [r.url, r]));
+}
+
+export function insertPageMetadataPending(db, url) {
+  db.prepare(`
+    INSERT OR IGNORE INTO page_metadata (url, status) VALUES (?, 'pending')
+  `).run(url);
+}
+
+export function setPageMetadata(db, url, patch) {
+  db.prepare(`
+    UPDATE page_metadata
+       SET title = COALESCE(?, title),
+           meta_description = COALESCE(?, meta_description),
+           og_title = COALESCE(?, og_title),
+           og_description = COALESCE(?, og_description),
+           og_image = COALESCE(?, og_image),
+           og_type = COALESCE(?, og_type),
+           content_type = COALESCE(?, content_type),
+           http_status = COALESCE(?, http_status),
+           summary = COALESCE(?, summary),
+           kind = COALESCE(?, kind),
+           status = COALESCE(?, status),
+           error = ?,
+           fetched_at = datetime('now')
+     WHERE url = ?
+  `).run(
+    patch.title ?? null,
+    patch.meta_description ?? null,
+    patch.og_title ?? null,
+    patch.og_description ?? null,
+    patch.og_image ?? null,
+    patch.og_type ?? null,
+    patch.content_type ?? null,
+    patch.http_status ?? null,
+    patch.summary ?? null,
+    patch.kind ?? null,
+    patch.status ?? null,
+    patch.error ?? null,
+    url,
+  );
+}
+
+export function deletePageMetadata(db, url) {
+  db.prepare(`DELETE FROM page_metadata WHERE url = ?`).run(url);
+}
+
+// ── domain catalog ---------------------------------------------------------
+
+export function getDomainCatalog(db, domain) {
+  return db.prepare(`SELECT * FROM domain_catalog WHERE domain = ?`).get(domain) ?? null;
+}
+
+export function listDomainCatalog(db, { limit = 200 } = {}) {
+  return db.prepare(`
+    SELECT * FROM domain_catalog
+    ORDER BY (status = 'done') DESC, fetched_at DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+/** Bulk fetch by domain set; returns { domain → row }. */
+export function getDomainCatalogMap(db, domains) {
+  if (!domains.length) return new Map();
+  const placeholders = domains.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM domain_catalog WHERE domain IN (${placeholders})`).all(...domains);
+  return new Map(rows.map(r => [r.domain, r]));
+}
+
+export function insertDomainPending(db, domain) {
+  db.prepare(`
+    INSERT OR IGNORE INTO domain_catalog (domain, status) VALUES (?, 'pending')
+  `).run(domain);
+}
+
+export function setDomainCatalog(db, domain, patch) {
+  // Don't clobber user-edited columns. Caller should pass only the fields
+  // it produced; we COALESCE so untouched columns keep their value.
+  db.prepare(`
+    UPDATE domain_catalog
+       SET title = COALESCE(?, title),
+           site_name = CASE WHEN user_edited = 1 THEN site_name ELSE COALESCE(?, site_name) END,
+           description = CASE WHEN user_edited = 1 THEN description ELSE COALESCE(?, description) END,
+           can_do = CASE WHEN user_edited = 1 THEN can_do ELSE COALESCE(?, can_do) END,
+           kind = CASE WHEN user_edited = 1 THEN kind ELSE COALESCE(?, kind) END,
+           status = COALESCE(?, status),
+           error = ?,
+           fetched_at = datetime('now')
+     WHERE domain = ?
+  `).run(
+    patch.title ?? null,
+    patch.site_name ?? null,
+    patch.description ?? null,
+    patch.can_do ?? null,
+    patch.kind ?? null,
+    patch.status ?? null,
+    patch.error ?? null,
+    domain,
+  );
+}
+
+export function updateDomainCatalogUser(db, domain, patch) {
+  // User edit. Mark user_edited=1 so the auto-classifier won't overwrite.
+  const fields = [];
+  const args = [];
+  for (const k of ['site_name', 'description', 'can_do', 'kind', 'notes']) {
+    if (typeof patch[k] === 'string' || patch[k] === null) {
+      fields.push(`${k} = ?`);
+      args.push(patch[k] ?? null);
+    }
+  }
+  if (fields.length === 0) return;
+  fields.push(`user_edited = 1`);
+  args.push(domain);
+  db.prepare(`UPDATE domain_catalog SET ${fields.join(', ')} WHERE domain = ?`).run(...args);
+}
+
+export function listDomainCatalogWithCounts(db, { limit = 500, search } = {}) {
+  const args = [];
+  let where = '';
+  if (search) {
+    where = `WHERE c.domain LIKE ? OR c.site_name LIKE ? OR c.description LIKE ? OR c.can_do LIKE ?`;
+    const pat = `%${search}%`;
+    args.push(pat, pat, pat, pat);
+  }
+  const rows = db.prepare(`
+    SELECT c.*,
+           COALESCE(d.daily_visits, 0)    AS visits_today,
+           COALESCE(w.weekly_visits, 0)   AS visits_week,
+           COALESCE(t.total_visits, 0)    AS visits_total
+      FROM domain_catalog c
+      LEFT JOIN (
+        SELECT instr(SUBSTR(url, INSTR(url, '://') + 3), '/') AS slash,
+               LOWER(SUBSTR(SUBSTR(url, INSTR(url, '://') + 3), 1,
+                            CASE WHEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') > 0
+                                 THEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') - 1
+                                 ELSE LENGTH(SUBSTR(url, INSTR(url, '://') + 3)) END
+                           )) AS dom,
+               SUM(visit_count) AS daily_visits
+          FROM page_visits
+         WHERE date(last_seen_at, 'localtime') = date('now', 'localtime')
+         GROUP BY dom
+      ) d ON d.dom = c.domain
+      LEFT JOIN (
+        SELECT LOWER(SUBSTR(SUBSTR(url, INSTR(url, '://') + 3), 1,
+                            CASE WHEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') > 0
+                                 THEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') - 1
+                                 ELSE LENGTH(SUBSTR(url, INSTR(url, '://') + 3)) END
+                           )) AS dom,
+               SUM(visit_count) AS weekly_visits
+          FROM page_visits
+         WHERE last_seen_at >= datetime('now', '-7 days')
+         GROUP BY dom
+      ) w ON w.dom = c.domain
+      LEFT JOIN (
+        SELECT LOWER(SUBSTR(SUBSTR(url, INSTR(url, '://') + 3), 1,
+                            CASE WHEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') > 0
+                                 THEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') - 1
+                                 ELSE LENGTH(SUBSTR(url, INSTR(url, '://') + 3)) END
+                           )) AS dom,
+               SUM(visit_count) AS total_visits
+          FROM page_visits
+         GROUP BY dom
+      ) t ON t.dom = c.domain
+     ${where}
+     ORDER BY visits_today DESC, visits_week DESC, c.domain ASC
+     LIMIT ?
+  `).all(...args, Number(limit) || 500);
+  return rows;
+}
+
+export function deleteDomainCatalog(db, domain) {
+  db.prepare(`DELETE FROM domain_catalog WHERE domain = ?`).run(domain);
+}
+
+// ── visit events / diary ---------------------------------------------------
+
+export function insertVisitEvent(db, { url, title }) {
+  const domain = extractDomain(url);
+  db.prepare(`
+    INSERT INTO visit_events (url, domain, title) VALUES (?, ?, ?)
+  `).run(url, domain, title ?? null);
+}
+
+/** Visit events for a single local date (YYYY-MM-DD). */
+export function visitEventsForDate(db, dateStr) {
+  return db.prepare(`
+    SELECT id, url, domain, title, visited_at
+    FROM visit_events
+    WHERE date(visited_at, 'localtime') = ?
+    ORDER BY visited_at ASC
+  `).all(dateStr);
+}
+
+export function getDiary(db, dateStr) {
+  const row = db.prepare(`SELECT * FROM diary_entries WHERE date = ?`).get(dateStr);
+  if (!row) return null;
+  return {
+    ...row,
+    metrics: row.metrics_json ? safeParse(row.metrics_json) : null,
+    github_commits: row.github_commits_json ? safeParse(row.github_commits_json) : null,
+  };
+}
+
+export function listDiariesInRange(db, { start, end }) {
+  return db.prepare(`
+    SELECT date, status, summary, notes, updated_at
+    FROM diary_entries
+    WHERE date >= ? AND date <= ?
+    ORDER BY date ASC
+  `).all(start, end);
+}
+
+export function upsertDiary(db, { date, summary, workContent, highlights, notes, metrics, githubCommits, status, error }) {
+  const tx = db.transaction(() => {
+    const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date);
+    if (exists) {
+      db.prepare(`
+        UPDATE diary_entries
+           SET summary = COALESCE(?, summary),
+               work_content = COALESCE(?, work_content),
+               highlights = COALESCE(?, highlights),
+               notes = COALESCE(?, notes),
+               metrics_json = COALESCE(?, metrics_json),
+               github_commits_json = COALESCE(?, github_commits_json),
+               status = COALESCE(?, status),
+               error = ?,
+               updated_at = datetime('now')
+         WHERE date = ?
+      `).run(
+        summary ?? null,
+        workContent ?? null,
+        highlights ?? null,
+        notes ?? null,
+        metrics ? JSON.stringify(metrics) : null,
+        githubCommits ? JSON.stringify(githubCommits) : null,
+        status ?? null,
+        error ?? null,
+        date,
+      );
+    } else {
+      db.prepare(`
+        INSERT INTO diary_entries
+          (date, summary, work_content, highlights, notes, metrics_json, github_commits_json, status, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        date,
+        summary ?? null,
+        workContent ?? null,
+        highlights ?? null,
+        notes ?? null,
+        metrics ? JSON.stringify(metrics) : null,
+        githubCommits ? JSON.stringify(githubCommits) : null,
+        status ?? 'pending',
+        error ?? null,
+      );
+    }
+  });
+  tx();
+}
+
+// ── weekly reports ---------------------------------------------------------
+
+export function getWeekly(db, weekStart) {
+  const row = db.prepare(`SELECT * FROM weekly_reports WHERE week_start = ?`).get(weekStart);
+  if (!row) return null;
+  return { ...row, github_summary: row.github_summary_json ? safeParse(row.github_summary_json) : null };
+}
+
+export function listWeeklyForMonth(db, monthStr) {
+  return db.prepare(`
+    SELECT week_start, week_end, week_in_month, status, summary, updated_at
+    FROM weekly_reports
+    WHERE month = ?
+    ORDER BY week_start ASC
+  `).all(monthStr);
+}
+
+export function upsertWeekly(db, { weekStart, weekEnd, month, weekInMonth, summary, githubSummary, status, error }) {
+  const exists = db.prepare(`SELECT week_start FROM weekly_reports WHERE week_start = ?`).get(weekStart);
+  if (exists) {
+    db.prepare(`
+      UPDATE weekly_reports
+         SET week_end = COALESCE(?, week_end),
+             month = COALESCE(?, month),
+             week_in_month = COALESCE(?, week_in_month),
+             summary = COALESCE(?, summary),
+             github_summary_json = COALESCE(?, github_summary_json),
+             status = COALESCE(?, status),
+             error = ?,
+             updated_at = datetime('now')
+       WHERE week_start = ?
+    `).run(
+      weekEnd ?? null,
+      month ?? null,
+      weekInMonth ?? null,
+      summary ?? null,
+      githubSummary ? JSON.stringify(githubSummary) : null,
+      status ?? null,
+      error ?? null,
+      weekStart,
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO weekly_reports
+        (week_start, week_end, month, week_in_month, summary, github_summary_json, status, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      weekStart,
+      weekEnd,
+      month,
+      weekInMonth,
+      summary ?? null,
+      githubSummary ? JSON.stringify(githubSummary) : null,
+      status ?? 'pending',
+      error ?? null,
+    );
+  }
+}
+
+export function deleteWeekly(db, weekStart) {
+  db.prepare(`DELETE FROM weekly_reports WHERE week_start = ?`).run(weekStart);
+}
+
+export function updateDiaryNotes(db, dateStr, notes) {
+  db.prepare(`
+    UPDATE diary_entries SET notes = ?, updated_at = datetime('now')
+    WHERE date = ?
+  `).run(notes ?? '', dateStr);
+}
+
+export function deleteDiary(db, dateStr) {
+  db.prepare(`DELETE FROM diary_entries WHERE date = ?`).run(dateStr);
+}
+
+export function getDiarySettings(db) {
+  const rows = db.prepare(`SELECT key, value FROM diary_settings`).all();
+  const out = {};
+  for (const r of rows) out[r.key] = r.value;
+  return out;
+}
+
+export function setDiarySettings(db, patch) {
+  const tx = db.transaction(() => {
+    for (const [k, v] of Object.entries(patch)) {
+      if (v == null || v === '') {
+        db.prepare(`DELETE FROM diary_settings WHERE key = ?`).run(k);
+      } else {
+        db.prepare(`
+          INSERT INTO diary_settings (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run(k, String(v));
+      }
+    }
+  });
+  tx();
+}
+
 /**
  * Top domains across the page_visits log (URL-only history),
  * regardless of whether the URL is bookmarked.
@@ -526,38 +972,6 @@ export function trendsVisitDomains(db, { sinceDays = 30, limit = 12 } = {}) {
   return [...tally.values()]
     .sort((a, b) => b.visits - a.visits || b.urls - a.urls)
     .slice(0, Number(limit) || 12);
-}
-
-// ── chunks / embeddings ----------------------------------------------------
-
-export function deleteChunks(db, bookmarkId) {
-  db.prepare(`DELETE FROM chunks WHERE bookmark_id = ?`).run(bookmarkId);
-}
-
-export function insertChunk(db, { bookmarkId, idx, text, vec, model }) {
-  db.prepare(`
-    INSERT INTO chunks (bookmark_id, idx, text, vec, vec_dim, vec_model)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(bookmarkId, idx, text, vec, vec.length / 4, model || 'multilingual-e5-small');
-}
-
-export function listChunkRows(db) {
-  return db.prepare(`SELECT id, bookmark_id, idx, text, vec FROM chunks`).all();
-}
-
-export function bookmarksMissingEmbeddings(db) {
-  return db.prepare(`
-    SELECT b.id FROM bookmarks b
-    LEFT JOIN chunks c ON c.bookmark_id = b.id
-    WHERE c.id IS NULL AND b.status = 'done'
-    ORDER BY b.created_at DESC
-  `).all().map(r => r.id);
-}
-
-export function chunkStats(db) {
-  const total = db.prepare(`SELECT COUNT(*) AS n FROM chunks`).get().n;
-  const docs = db.prepare(`SELECT COUNT(DISTINCT bookmark_id) AS n FROM chunks`).get().n;
-  return { total_chunks: total, indexed_bookmarks: docs };
 }
 
 // ── trends -----------------------------------------------------------------

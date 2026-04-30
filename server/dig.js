@@ -71,8 +71,8 @@ export async function runDig({ query, claudeBin = 'claude', timeoutMs = 600_000 
 
 function spawnClaudeWithTools(bin, prompt, tools, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const args = ['-p', prompt, '--allowedTools', tools.join(',')];
-    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const args = ['-p', '--allowedTools', tools.join(',')];
+    const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     let stdout = '', stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
@@ -86,6 +86,7 @@ function spawnClaudeWithTools(bin, prompt, tools, timeoutMs) {
       if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
       else resolve(stdout);
     });
+    child.stdin.end(prompt, 'utf8');
   });
 }
 
@@ -118,8 +119,8 @@ function spawnClaude(bin, prompt, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       bin,
-      ['-p', prompt, '--allowedTools', 'WebSearch,WebFetch'],
-      { stdio: ['ignore', 'pipe', 'pipe'], shell: false },
+      ['-p', '--allowedTools', 'WebSearch,WebFetch'],
+      { stdio: ['pipe', 'pipe', 'pipe'], shell: false },
     );
     let stdout = '';
     let stderr = '';
@@ -135,6 +136,7 @@ function spawnClaude(bin, prompt, timeoutMs) {
       if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
       else resolve(stdout);
     });
+    child.stdin.end(prompt, 'utf8');
   });
 }
 

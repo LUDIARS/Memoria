@@ -56,7 +56,7 @@ export async function validateWordRelevance({ word, context, claudeBin = 'claude
 
 function spawnClaude(bin, prompt, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p', prompt], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    const child = spawn(bin, ['-p'], { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -71,6 +71,7 @@ function spawnClaude(bin, prompt, timeoutMs) {
       if (code !== 0) reject(new Error(`claude exited ${code}: ${stderr.slice(0, 400)}`));
       else resolve(stdout);
     });
+    child.stdin.end(prompt, 'utf8');
   });
 }
 
