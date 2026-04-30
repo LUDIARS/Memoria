@@ -111,8 +111,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
  * so the sticky tab nav cannot collide with them. Other tabs never render
  * this section because it lives inside #bookmarksView. */
 .bookmarks-categories {
-  margin-top: 24px;
-  padding: 12px 14px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -375,6 +375,14 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .visits-list li.hot { border-left: 4px solid #d68a00; }
 .visits-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.visits-domain-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent);
+  padding-bottom: 1px;
+  cursor: pointer;
+}
+.visits-domain-link:hover { background: var(--accent-bg); border-radius: 3px; }
 
 .trends-bar {
   display: flex;
