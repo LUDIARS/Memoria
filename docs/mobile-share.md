@@ -1,64 +1,63 @@
-# Mobile share → Memoria
+# モバイル共有 → Memoria
 
-Memoria registers itself as a Web Share Target so the OS share sheet can hand a
-URL straight to the server, which queues the page just like a Chrome-extension
-save.
+Memoria は Web Share Target として登録されるので、OS の共有シートから URL を
+直接サーバへ渡して、Chrome 拡張で保存したときと同じようにキューに積めます。
 
-The plumbing:
+仕組み:
 
-1. `server/public/manifest.webmanifest` declares `share_target.action = /share`.
-2. The browser sends `GET /share?url=…&title=…&text=…` once the user installs
-   Memoria as a PWA.
-3. `app.get('/share')` in `server/index.js` extracts the first http(s) URL it
-   can find (preferring `url`, falling back to a regex over `text` / `title`),
-   calls `bulkSaveUrls([url])`, and 303-redirects to `/?share=ok&u=…`.
-4. The SPA shows a one-shot toast confirming the save.
+1. `server/public/manifest.webmanifest` で `share_target.action = /share` を宣言。
+2. ユーザーが Memoria を PWA としてインストールすると、ブラウザが
+   `GET /share?url=…&title=…&text=…` を送る。
+3. `server/index.js` の `app.get('/share')` が最初に見つかった http(s) URL を
+   抽出し (`url` を優先、なければ `text` / `title` から正規表現で拾う)、
+   `bulkSaveUrls([url])` を呼んで `/?share=ok&u=…` に 303 リダイレクトする。
+4. SPA が保存完了のワンショットトーストを表示する。
 
 ## Android (Chrome / Edge / Brave)
 
-1. Open `https://<your-memoria-host>/` in Chrome.
-2. Menu → **Add to Home screen** (or **Install app**).
-3. Once installed, **Memoria** appears in the share sheet of any app.
-4. Sharing a page hands the URL to `/share`. Memoria fetches the HTML on the
-   server, summarises, and adds it to the bookmark queue.
+1. Chrome で `https://<your-memoria-host>/` を開く。
+2. メニュー → **ホーム画面に追加**（または **アプリをインストール**）。
+3. インストール後、任意のアプリの共有シートに **Memoria** が出るようになる。
+4. ページを共有すると URL が `/share` に渡される。サーバ側で HTML を取得して
+   要約し、ブックマークキューに追加される。
 
 ## iOS (Safari)
 
-iOS Safari does **not** implement Web Share Target — there is no way for a PWA
-to register in the iOS share sheet. The workaround is an iOS Shortcut:
+iOS Safari は Web Share Target を**実装していない**ため、PWA を iOS 共有
+シートに登録する手段がありません。回避策として iOS ショートカットを使います:
 
-1. Open the **Shortcuts** app.
-2. Tap **+** → **New Shortcut**.
-3. Add the **Get URLs from Input** action.
-4. Add **URL** (`https://<your-memoria-host>/share?url=`).
-5. Add **Combine Text** to concatenate the URL above with the URL from step 3
-   (URL-encoded). The simplest way: use the **URL Encode** action between
-   them, then **Get Contents of URL** with method `GET`.
-6. Toggle **Show in Share Sheet** in shortcut settings.
-7. Set **Share Sheet Types** to **URLs**.
+1. **ショートカット** アプリを開く。
+2. **+** → **新規ショートカット** をタップ。
+3. **入力から URL を取得** アクションを追加。
+4. **URL** (`https://<your-memoria-host>/share?url=`) を追加。
+5. **テキストを結合** で 4 のURLと 3 で取り出した URL（URL エンコード済み）を
+   連結する。一番素直な手順は、間に **URL エンコード** アクションを挟んでから
+   **URL の内容を取得** をメソッド `GET` で実行する。
+6. ショートカット設定で **共有シートに表示** をオンにする。
+7. **共有シートのタイプ** を **URL** に設定する。
 
-A starter `.shortcut` JSON-equivalent (paste into the Shortcut text editor):
+`.shortcut` に相当する最小構成（ショートカットエディタに貼り付け可能なイメージ）:
 
 ```text
-Action 1: Get Contents of URL
-  URL: https://YOUR-HOST/share?url=[URL Encoded Shortcut Input]
-  Method: GET
-  Headers: (none)
+アクション 1: URL の内容を取得
+  URL: https://YOUR-HOST/share?url=[URL エンコード済みショートカット入力]
+  メソッド: GET
+  ヘッダ: （なし）
 ```
 
-Once saved, sharing any URL from Safari → Memoria runs the shortcut, the
-server saves the page, and the response (the redirect to `/?share=ok…`) is
-discarded.
+保存しておくと、Safari で URL を共有 → Memoria を選ぶとショートカットが走り、
+サーバがページを保存し、レスポンス (`/?share=ok…` へのリダイレクト) は
+破棄される、という流れになります。
 
-## Local-only / private deployments
+## ローカル限定 / 非公開デプロイ
 
-If Memoria is reachable only on localhost, the PWA install path still works on
-desktop (Chrome → Install app). Mobile share targets require a publicly
-addressable HTTPS host — typical patterns:
+Memoria が localhost からしか到達できない場合でも、PWA インストール自体は
+デスクトップで動作します（Chrome → アプリをインストール）。ただしモバイルの
+共有ターゲットは公開された HTTPS ホストが必須です。よくある構成:
 
-- Tailscale + custom DNS for personal use.
-- Reverse-proxy (Caddy / Cloudflare Tunnel) in front of `npm start`.
+- 個人用途なら Tailscale + 独自 DNS。
+- `npm start` の前段にリバースプロキシ (Caddy / Cloudflare Tunnel) を置く。
 
-The `/share` handler trusts whoever can reach it, so do not expose the server
-to the open internet without authentication. Multi-server mode (issue #34)
-will add Cernere SSO in front of `/share` and the rest of the API.
+`/share` ハンドラは到達できる相手を区別しないので、認証なしでインターネットに
+公開しないでください。マルチサーバモード (issue #34) では `/share` と他の
+API の前段に Cernere SSO を入れる予定です。
