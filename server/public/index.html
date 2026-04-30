@@ -15,15 +15,78 @@
   <header class="topbar">
     <div class="brand">Memoria</div>
     <div id="multiSwitch" class="multi-switch" hidden></div>
+    <button id="extensionBadge" type="button" class="ext-badge" hidden></button>
     <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
+      <button id="howToBookmarkBtn" class="ghost topbar-howto" title="ブックマークの追加方法" hidden>💡 やり方</button>
       <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定">⚙ 設定</button>
     </div>
   </header>
 
+  <!-- Mobile-only: how to bookmark when the Chrome extension isn't an
+       option (Android Chrome, iOS Safari, etc.). Re-uses the PWA share-
+       target instructions. -->
+  <div id="howToBookmarkOverlay" class="modal-backdrop" hidden>
+    <div class="modal-panel ext-setup">
+      <div class="ext-setup-head">
+        <h3>📌 スマホでブックマークする方法</h3>
+        <button id="howToBookmarkClose" class="modal-close" title="閉じる">×</button>
+      </div>
+      <p class="ext-setup-help">スマホには Chrome 拡張が無いので、Memoria を <b>PWA</b> としてインストールしてから OS の共有メニューで送ります。</p>
+      <ol class="ext-setup-steps">
+        <li>Memoria の URL を開いた状態で、ブラウザのメニュー →
+          <b>「ホーム画面に追加」</b> または <b>「アプリをインストール」</b></li>
+        <li>シェアしたいページで <b>共有</b> ボタンを押す</li>
+        <li>共有先のリストから <b>Memoria</b> を選ぶと自動で保存キューに入ります</li>
+      </ol>
+      <p class="ext-setup-help">iOS Safari は Web Share Target に対応しないので、<a href="https://github.com/LUDIARS/Memoria/blob/main/docs/mobile-share.md" target="_blank" rel="noreferrer">iOS Shortcut テンプレート</a> を使ってください。</p>
+    </div>
+  </div>
+
+  <!-- Setup overlay: how to install + configure the Chrome extension.
+       Shown when the user clicks the "拡張未設定" badge. -->
+  <div id="extensionSetupOverlay" class="modal-backdrop" hidden>
+    <div class="modal-panel ext-setup">
+      <div class="ext-setup-head">
+        <h3>🧩 Chrome 拡張をセットアップ</h3>
+        <button id="extensionSetupClose" class="modal-close" title="閉じる">×</button>
+      </div>
+      <p class="ext-setup-help">Memoria はブラウザで開いているページを Chrome 拡張から受け取ります。
+        この PC で拡張がまだ動いていないようです。下の手順で 1 度だけ設定してください。</p>
+      <ol class="ext-setup-steps">
+        <li>Chrome で <code>chrome://extensions</code> を開く</li>
+        <li>右上の <b>「デベロッパーモード」</b> を <b>ON</b></li>
+        <li><b>「パッケージ化されていない拡張機能を読み込む」</b> をクリックし、
+          このリポジトリの <code>extension/</code> フォルダを選ぶ</li>
+        <li>拡張のオプションを開き、<b>サーバ URL</b> に
+          <code id="extensionSetupUrl">http://localhost:5180</code> が入っていることを確認</li>
+        <li>適当なページを開いてみてください。数秒後ここの表示が <b>✓ 拡張 OK</b> に変わります</li>
+      </ol>
+      <p class="ext-setup-help">うまく動かないときは <code>chrome://extensions</code> の Memoria Bookmarker を
+        🔄 リロード → 確認したいページで F5 で再読込。</p>
+    </div>
+  </div>
+
   <main class="layout" data-active-tab="bookmarks">
     <section class="content">
       <nav class="tabs">
+        <!-- Mobile uses a native <select> so the dropdown is browser-native
+             (the previous custom More menu kept rendering empty in some
+             setups; a <select> always works). Desktop hides this and uses
+             the horizontal button strip below. -->
+        <select id="mobileTabSelect" class="mobile-tab-select" aria-label="タブ">
+          <option value="bookmarks">📚 ブックマーク</option>
+          <option value="queue">🔧 作業キュー</option>
+          <option value="events">📋 イベント</option>
+          <option value="visits">📰 アクセス履歴</option>
+          <option value="trends">📈 傾向</option>
+          <option value="recommend">✨ おすすめ</option>
+          <option value="dig">🔎 ディグる</option>
+          <option value="dict">📖 辞書</option>
+          <option value="domain">🏷 ドメイン</option>
+          <option value="diary">📅 日記</option>
+          <option value="multi" class="mobile-tab-multi-only">🌐 マルチ</option>
+        </select>
         <div class="tabs-scroll">
           <button class="tab active" data-tab="bookmarks">ブックマーク</button>
           <button class="tab" data-tab="queue">
