@@ -528,10 +528,23 @@ export function getAppSettings(db) {
   return out;
 }
 
+// Keys whose stored row should be DELETED when the user clears them
+// (credentials / one-shot session info — empty string == cleared and we
+// don't want stale rows lying around). Everything else preserves an
+// empty string as an empty string so plain text fields like
+// `diary.global_memo` don't get auto-wiped when the user happens to
+// save the panel with the textarea empty for a moment.
+const DELETE_ON_EMPTY_KEYS = new Set([
+  'multi_jwt', 'multi_user_id', 'multi_user_name', 'multi_role',
+  'multi_connected_at', 'multi_url',
+  'llm.openai.api_key',
+  'github_token',
+]);
+
 export function setAppSettings(db, patch) {
   const tx = db.transaction(() => {
     for (const [k, v] of Object.entries(patch)) {
-      if (v == null || v === '') {
+      if (v == null || (v === '' && DELETE_ON_EMPTY_KEYS.has(k))) {
         db.prepare(`DELETE FROM app_settings WHERE key = ?`).run(k);
       } else {
         db.prepare(`
@@ -1224,6 +1237,133 @@ export function trendsDomains(db, { sinceDays = 30, limit = 12 } = {}) {
     .map(([domain, hits]) => ({ domain, hits }))
     .sort((a, b) => b.hits - a.hits)
     .slice(0, Number(limit) || 12);
+}
+
+/**
+ * Per-day estimated work minutes derived from visit_events. Cuts each visitor
+ * timeline at gaps > GAP_MS (idle); the remaining intra-session deltas are
+ * summed and capped per session at SESSION_CAP_MS (long single visits would
+ * otherwise inflate the metric).
+ */
+export function trendsWorkHours(db, { sinceDays = 30 } = {}) {
+  const days = Number(sinceDays) || 30;
+  const GAP_MS = 30 * 60_000;          // 30 min idle = session boundary
+  const SESSION_CAP_MS = 4 * 60 * 60_000; // single session capped at 4h
+  const rows = db.prepare(`
+    SELECT visited_at FROM visit_events
+    WHERE visited_at >= datetime('now', ?)
+    ORDER BY visited_at ASC
+  `).all(`-${days} days`);
+  // Bucket per local-date.
+  const perDay = new Map();
+  function dateKeyLocal(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  function parseUtc(s) {
+    return new Date(String(s).replace(' ', 'T') + 'Z');
+  }
+  let prevTs = null;
+  let sessionStart = null;
+  let prevDateKey = null;
+  function flush(endTs) {
+    if (sessionStart != null) {
+      const dur = Math.min(endTs - sessionStart, SESSION_CAP_MS);
+      perDay.set(prevDateKey, (perDay.get(prevDateKey) || 0) + dur);
+    }
+    sessionStart = null;
+    prevTs = null;
+    prevDateKey = null;
+  }
+  for (const r of rows) {
+    const d = parseUtc(r.visited_at);
+    const ts = d.getTime();
+    if (!Number.isFinite(ts)) continue;
+    const key = dateKeyLocal(d);
+    if (prevTs == null) {
+      sessionStart = ts;
+      prevTs = ts;
+      prevDateKey = key;
+      continue;
+    }
+    const gap = ts - prevTs;
+    if (gap > GAP_MS || key !== prevDateKey) {
+      flush(prevTs);
+      sessionStart = ts;
+      prevTs = ts;
+      prevDateKey = key;
+    } else {
+      prevTs = ts;
+    }
+  }
+  if (prevTs != null) flush(prevTs);
+
+  // Zero-fill so the chart shows all days in the window.
+  const out = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const dt = new Date(today);
+    dt.setDate(today.getDate() - i);
+    const k = dateKeyLocal(dt);
+    out.push({
+      date: k,
+      minutes: Math.round((perDay.get(k) || 0) / 60_000),
+    });
+  }
+  return out;
+}
+
+const KEYWORD_STOPWORDS = new Set([
+  'the','and','for','with','from','that','this','your','you','our','have','has','was','were','will','what','when','where','which','who','about','into','than','then','also','but','not','are','can','use','using','how','why','etc',
+  'について','として','による','によって','などの','する','して','です','ます','ない','ある','こと','もの','よう','これ','それ','ため','など','とは','では','での','さん','さま','様','記事','ページ','こちら','そして','しかし','ただし','ここ','以下','以上',
+]);
+
+function tokenize(text) {
+  const t = String(text || '').toLowerCase();
+  const out = [];
+  // ASCII / Latin words ≥ 3 chars.
+  for (const m of t.matchAll(/[a-z][a-z0-9_+#.-]{2,}/g)) out.push(m[0]);
+  // Japanese-ish runs ≥ 2 chars (CJK + katakana/hiragana lump).
+  for (const m of t.matchAll(/[぀-ヿ一-鿿]{2,}/g)) out.push(m[0]);
+  return out.filter(w => !KEYWORD_STOPWORDS.has(w));
+}
+
+/**
+ * Keyword frequency across recent page titles + bookmark titles + dig
+ * queries. Crude tokeniser: ASCII words ≥3 chars + JP runs ≥2 chars,
+ * minus stopwords.
+ */
+export function trendsKeywords(db, { sinceDays = 30, limit = 25 } = {}) {
+  const days = Number(sinceDays) || 30;
+  const ago = `-${days} days`;
+  const sources = [];
+  for (const r of db.prepare(`
+    SELECT title FROM page_visits WHERE last_seen_at >= datetime('now', ?)
+  `).all(ago)) sources.push(r.title);
+  for (const r of db.prepare(`
+    SELECT title FROM bookmarks WHERE created_at >= datetime('now', ?)
+  `).all(ago)) sources.push(r.title);
+  for (const r of db.prepare(`
+    SELECT query FROM dig_sessions WHERE created_at >= datetime('now', ?)
+  `).all(ago)) sources.push(r.query);
+  // Dictionary terms also reflect what the user is studying.
+  for (const r of db.prepare(`
+    SELECT term FROM dictionary_entries WHERE updated_at >= datetime('now', ?)
+  `).all(ago)) sources.push(r.term);
+
+  const tally = new Map();
+  for (const text of sources) {
+    if (!text) continue;
+    const seen = new Set();  // count each source once per word
+    for (const w of tokenize(text)) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      tally.set(w, (tally.get(w) || 0) + 1);
+    }
+  }
+  return [...tally.entries()]
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, Number(limit) || 25);
 }
 
 function extractDomain(url) {
