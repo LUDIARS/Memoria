@@ -231,39 +231,19 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   align-items: stretch;
   box-shadow: 0 1px 0 rgba(0,0,0,0.04);
 }
+/* Single horizontally-scrollable tab strip on every viewport.
+ * Custom More dropdown got dropped — it kept rendering empty in some
+ * setups and `overflow-x: auto` on the strip is the simplest reliable
+ * fallback for narrow widths. Hide the scrollbar for cosmetics. */
 .tabs-scroll {
   display: flex;
   gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.tabs-more { position: relative; flex-shrink: 0; }
-.tab-more-btn { font-weight: 600; }
-.tab-more-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.12);
-  min-width: 180px;
-  padding: 4px;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.tab-more-menu .tab {
-  border-bottom: 0;
-  justify-content: flex-start;
-  border-radius: 6px;
-  padding: 8px 12px;
-}
-.tab-more-menu .tab.active { background: var(--accent-bg); }
-.tabs-more.hidden { display: none; }
+.tabs-scroll::-webkit-scrollbar { display: none; }
 .tab {
   background: transparent;
   border: 0;
@@ -1799,12 +1779,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   }
   .topbar-howto[hidden] { display: none !important; }
 
-  /* Mobile shows the <select> dropdown for tabs. The horizontal button
-   * strip and the legacy More menu are hidden so we never have to fight
-   * with empty-overflow rendering on small screens. */
-  .mobile-tab-select { display: block; }
-  .tabs-scroll { display: none !important; }
-  .tabs-more { display: none !important; }
+  /* Mobile uses the same horizontally-scrollable tab strip as desktop. */
   .tabs {
     margin: 0 -12px 12px;
     padding: 6px 8px;
@@ -2210,14 +2185,3 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .ext-setup-steps { padding-left: 18px; margin: 8px 0; line-height: 1.7; font-size: 13px; }
 .ext-setup-steps li { margin-bottom: 4px; }
 
-/* Mobile tab select (hidden on desktop). */
-.mobile-tab-select {
-  display: none;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  font-size: 14px;
-}
