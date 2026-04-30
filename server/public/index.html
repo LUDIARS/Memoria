@@ -257,6 +257,14 @@
             <div class="diary-detail-actions">
               <button id="diaryNotesSave">メモを保存</button>
             </div>
+
+            <h4>🔧 この日記を改善</h4>
+            <p class="diary-improve-help">出力に対するフィードバック (例: <code>もっと簡潔に</code> / <code>○○の話題を強調</code> / <code>時間帯を詳しく</code>) を書いて改善ボタンを押すと、その指示を上乗せして当日分だけ再生成します。指示は永続化されません。</p>
+            <textarea id="diaryImproveInput" rows="3" placeholder="例: 12〜15時のブロックを2行に分けて、Memoria の作業を主役に書き直して"></textarea>
+            <div class="diary-detail-actions">
+              <button id="diaryImproveBtn">改善して再生成</button>
+              <span id="diaryImproveStatus" class="share-status"></span>
+            </div>
           </div>
         </div>
         <div id="diarySettingsPanel" class="diary-settings hidden">
@@ -401,6 +409,10 @@
     <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." /></label>
     <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
     <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+    <h4>📝 日記の常設メモ</h4>
+    <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
+    <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
+
     <h4>🧹 メンテナンス</h4>
     <p class="ai-settings-help">過去のアクセス記録に出てきたドメインのうち、まだドメイン辞書に登録されていないものを fetch + 分類キューに積みます。 force にすると既存行も再分類します (user_edited 列は保護)。</p>
     <div class="ai-settings-actions">
