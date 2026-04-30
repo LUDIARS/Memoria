@@ -89,17 +89,22 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .danger:hover { background: var(--danger); color: #fff; }
 .file-btn { display: inline-block; }
 
+/* Flexbox instead of grid here. CSS Grid resolved `1fr` against an
+ * implicit auto min-width, which let descendants (the sticky tab nav
+ * with its negative margin, long URLs in cards, etc.) collapse the
+ * content track down to ~170px. Flex gives us:
+ *   - `.content` grows freely (flex: 1) with `min-width: 0` so children
+ *      cannot push it back below its track,
+ *   - `.detail` keeps its 360px when present and disappears completely
+ *      when `.hidden` (display: none) — no empty grid track left behind.
+ */
 .layout {
-  display: grid;
-  /* `minmax(0, 1fr)` instead of plain `1fr`: the latter has implicit
-   * min-width: auto, which shrinks the column when a child overflows
-   * its track (the sticky tab nav with negative margin used to squeeze
-   * the bookmarks view down to ~170px). minmax(0,…) lets the column
-   * fill the remaining space regardless of content min-size. */
-  grid-template-columns: minmax(0, 1fr) 360px;
+  display: flex;
+  align-items: stretch;
   height: calc(100vh - 53px);
 }
-.layout:has(.detail.hidden) { grid-template-columns: minmax(0, 1fr); }
+.layout > .content { flex: 1 1 auto; min-width: 0; }
+.layout > .detail  { flex: 0 0 360px; }
 
 /* Categories live INSIDE the bookmarks page, below the cards. They sit in
  * normal document flow — no sticky positioning, no layout-level sidebar —
@@ -1673,12 +1678,15 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   .topbar-controls input[type=search] { flex: 1 1 100%; min-width: 0; }
 
   /* Right-hand detail rail collapses on mobile. */
-  .layout,
-  .layout:has(.detail.hidden) {
-    grid-template-columns: 1fr;
+  .layout {
+    flex-direction: column;
     height: auto;
     min-height: calc(100vh - 53px);
   }
+  .layout > .content { flex: 1 1 auto; }
+  /* On mobile the detail aside is positioned as a fullscreen overlay
+   * (see .detail rule below) so it doesn't need a flex slot. */
+  .layout > .detail { flex: 0 0 auto; }
 
   .detail {
     position: fixed;
