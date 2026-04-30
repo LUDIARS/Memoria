@@ -2210,36 +2210,141 @@ function renderRecommendations() {
 async function loadTrends() {
   const days = state.trendsRange;
   try {
-    const [cats, diff, timeline, domains, visitDomains] = await Promise.all([
+    const [cats, diff, timeline, domains, visitDomains, workHours, keywords, github] = await Promise.all([
       api(`/api/trends/categories?days=${encodeURIComponent(days)}`),
       api(`/api/trends/category-diff?days=7`),
       api(`/api/trends/timeline?days=${encodeURIComponent(days)}`),
       api(`/api/trends/domains?days=${encodeURIComponent(days)}`),
       api(`/api/trends/visit-domains?days=${encodeURIComponent(days)}`),
+      api(`/api/trends/work-hours?days=${encodeURIComponent(days)}`),
+      api(`/api/trends/keywords?days=${encodeURIComponent(days)}`),
+      api(`/api/trends/github?days=${encodeURIComponent(days)}`).catch(() => ({ enabled: false })),
     ]);
     renderTrendCategories(cats.items);
     renderTrendDiff(diff.items);
     renderTrendTimeline(timeline.items);
     renderTrendDomains(domains.items);
     renderTrendVisitDomains(visitDomains.items);
+    renderTrendWorkHours(workHours.items);
+    renderTrendKeywords(keywords.items);
+    renderTrendGithub(github);
   } catch (e) {
     console.error('trends load failed', e);
   }
 }
 
 function renderTrendCategories(items) {
-  $('trendCategories').innerHTML = svgHorizontalBar(items, c => c.category, c => c.count);
+  // Clickable horizontal bars: each row gets a `data-category` so the
+  // event listener below can route to the bookmarks tab filtered by it.
+  $('trendCategories').innerHTML = svgHorizontalBar(items, c => c.category, c => c.count, '', {
+    rowAttr: c => `data-category="${escapeHtml(c.category)}"`,
+    rowClass: 'clickable',
+  });
+  $('trendCategories').querySelectorAll('[data-category]').forEach(el => {
+    el.addEventListener('click', () => {
+      const cat = el.dataset.category;
+      if (!cat) return;
+      state.category = cat;
+      switchTab('bookmarks');
+      load();
+    });
+    el.style.cursor = 'pointer';
+  });
 }
 
 function renderTrendDomains(items) {
-  $('trendDomains').innerHTML = svgHorizontalBar(items, c => c.domain, c => c.hits, 'alt');
+  $('trendDomains').innerHTML = svgHorizontalBar(items, c => c.domain, c => c.hits, 'alt', {
+    rowAttr: c => `data-domain="${escapeHtml(c.domain)}"`,
+    rowClass: 'clickable',
+  });
+  attachDomainClick($('trendDomains'));
 }
 
 function renderTrendVisitDomains(items) {
-  $('trendVisitDomains').innerHTML = svgHorizontalBar(items, c => c.domain, c => c.visits, 'alt');
+  $('trendVisitDomains').innerHTML = svgHorizontalBar(items, c => c.domain, c => c.visits, 'alt', {
+    rowAttr: c => `data-domain="${escapeHtml(c.domain)}"`,
+    rowClass: 'clickable',
+  });
+  attachDomainClick($('trendVisitDomains'));
 }
 
-function svgHorizontalBar(items, labelFn, valueFn, klass = '') {
+function attachDomainClick(root) {
+  if (!root) return;
+  root.querySelectorAll('[data-domain]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', async () => {
+      const domain = el.dataset.domain;
+      if (!domain) return;
+      switchTab('domain');
+      await new Promise(r => setTimeout(r, 0));
+      try { await loadDomainEntry(domain); }
+      catch (err) {
+        try {
+          await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
+          flashToast(`「${domain}」を分類キューに追加しました`);
+          await loadDomainCatalog();
+        } catch (e2) { console.error(e2); }
+      }
+    });
+  });
+}
+
+function renderTrendKeywords(items) {
+  const el = $('trendKeywords');
+  if (!el) return;
+  if (!items.length) { el.innerHTML = '<div class="queue-empty">データなし</div>'; return; }
+  const max = Math.max(...items.map(i => i.count), 1);
+  el.innerHTML = items.map(i => {
+    const weight = 0.7 + (i.count / max) * 0.5;          // 0.7–1.2
+    const fontSz = 11 + (i.count / max) * 7;             // 11–18 px
+    return `<span class="trend-kw" style="font-size:${fontSz.toFixed(1)}px;font-weight:${Math.round(weight * 600)}" title="${i.count} 回">${escapeHtml(i.word)} <span class="trend-kw-n">${i.count}</span></span>`;
+  }).join('');
+}
+
+function renderTrendWorkHours(items) {
+  const el = $('trendWorkHours');
+  if (!el) return;
+  if (!items?.length) { el.innerHTML = '<div class="queue-empty">データなし</div>'; return; }
+  // items: [{date: 'YYYY-MM-DD', minutes}]
+  const data = items.map(d => ({ date: d.date, value: d.minutes / 60, raw: d.minutes }));
+  el.innerHTML = renderLineChartSvg(data, {
+    yLabel: (v) => `${v.toFixed(1)}h`,
+    pointLabel: (d) => `${d.date} : ${(d.value).toFixed(1)} 時間 (${d.raw} 分)`,
+  });
+  attachLineChartTooltip(el);
+}
+
+function renderTrendGithub(payload) {
+  const card = $('trendGithubCard');
+  if (!card) return;
+  if (!payload?.enabled) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  if (payload.error) {
+    $('trendGithubSummary').textContent = `取得失敗: ${payload.error}`;
+    $('trendGithubChart').innerHTML = '';
+    $('trendGithubRepos').innerHTML = '';
+    return;
+  }
+  $('trendGithubSummary').textContent = `期間内 ${payload.total} commits / ${payload.repos.length} リポジトリ`;
+  const series = (payload.series || []).map(d => ({ date: d.date, value: d.count, raw: d.count }));
+  $('trendGithubChart').innerHTML = renderLineChartSvg(series, {
+    yLabel: (v) => `${Math.round(v)}`,
+    pointLabel: (d) => `${d.date} : ${d.value} commits`,
+    klass: 'gh',
+  });
+  attachLineChartTooltip($('trendGithubChart'));
+  $('trendGithubRepos').innerHTML = (payload.repos || []).map(r => `
+    <li>
+      <span class="repo">${escapeHtml(r.repo)}</span>
+      <span class="count">${r.count} commits</span>
+    </li>
+  `).join('');
+}
+
+function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts = {}) {
   if (!items.length) return '<div class="queue-empty">データなし</div>';
   const max = Math.max(...items.map(valueFn), 1);
   const rowH = 22, padTop = 4, padLeft = 130, padRight = 40, w = 460;
@@ -2249,36 +2354,120 @@ function svgHorizontalBar(items, labelFn, valueFn, klass = '') {
     const len = Math.round((v / max) * (w - padLeft - padRight));
     const y = padTop + i * rowH;
     const label = String(labelFn(it)).slice(0, 18);
+    const attr = opts.rowAttr ? opts.rowAttr(it) : '';
+    const rowClass = opts.rowClass || '';
     return `
-      <text class="label" x="${padLeft - 8}" y="${y + 14}" text-anchor="end">${escapeHtml(label)}</text>
-      <rect class="bar ${klass}" x="${padLeft}" y="${y + 4}" width="${len}" height="14" rx="2" />
-      <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${v}</text>
+      <g class="bar-row ${rowClass}" ${attr}>
+        <rect class="bar-hit" x="0" y="${y}" width="${w}" height="${rowH}" fill="transparent" />
+        <text class="label" x="${padLeft - 8}" y="${y + 14}" text-anchor="end">${escapeHtml(label)}</text>
+        <rect class="bar ${klass}" x="${padLeft}" y="${y + 4}" width="${len}" height="14" rx="2" />
+        <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${v}</text>
+      </g>
     `;
   }).join('');
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">${rows}</svg>`;
 }
 
+// Generic line chart returning an SVG string. `data` = [{date, value, raw}].
+// Hover tooltips are wired up by attachLineChartTooltip(container).
+function renderLineChartSvg(data, { yLabel, pointLabel, klass = '' } = {}) {
+  if (!data?.length) return '<div class="queue-empty">データなし</div>';
+  const w = 600, h = 200, padL = 40, padR = 12, padT = 12, padB = 24;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  const max = Math.max(1, ...data.map(d => d.value || 0));
+  const xStep = innerW / Math.max(1, data.length - 1);
+  const points = data.map((d, i) => {
+    const x = padL + i * xStep;
+    const y = padT + innerH - ((d.value || 0) / max) * innerH;
+    return { x, y, d, i };
+  });
+  const polyline = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const yLabelFn = yLabel || (v => String(Math.round(v * 10) / 10));
+  const yLabels = [0, max / 2, max].map(v => {
+    const y = padT + innerH - (v / max) * innerH;
+    return `<text class="label" x="${padL - 6}" y="${y + 3}" text-anchor="end">${yLabelFn(v)}</text>
+            <line class="grid" x1="${padL}" y1="${y}" x2="${padL + innerW}" y2="${y}" />`;
+  }).join('');
+  const xLabelStep = Math.max(1, Math.floor(data.length / 6));
+  const xLabels = data.map((d, i) => {
+    if (i % xLabelStep !== 0 && i !== data.length - 1) return '';
+    const x = padL + i * xStep;
+    const md = (d.date || '').slice(5);
+    return `<text class="label" x="${x.toFixed(1)}" y="${h - 6}" text-anchor="middle">${md}</text>`;
+  }).join('');
+  const dots = points.map(p => `<circle class="dot ${klass}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" />`).join('');
+  const hits = points.map(p => `
+    <circle class="hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="14"
+      data-x="${p.x.toFixed(1)}" data-y="${p.y.toFixed(1)}"
+      data-label="${escapeHtml(pointLabel ? pointLabel(p.d) : `${p.d.date}: ${p.d.value}`)}"
+      fill="transparent" />
+  `).join('');
+  return `
+    <div class="line-chart">
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">
+        ${yLabels}
+        <polyline class="line ${klass}" points="${polyline}" />
+        ${dots}
+        ${hits}
+        ${xLabels}
+      </svg>
+      <div class="line-chart-tip" hidden></div>
+    </div>
+  `;
+}
+
+function attachLineChartTooltip(container) {
+  if (!container) return;
+  const wrap = container.querySelector('.line-chart');
+  const svg = wrap?.querySelector('svg');
+  const tip = wrap?.querySelector('.line-chart-tip');
+  if (!wrap || !svg || !tip) return;
+  function show(target) {
+    tip.textContent = target.dataset.label || '';
+    tip.hidden = false;
+    const cx = parseFloat(target.dataset.x);
+    const cy = parseFloat(target.dataset.y);
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const px = (cx / vb.width) * rect.width;
+    const py = (cy / vb.height) * rect.height;
+    tip.style.left = `${px + 8}px`;
+    tip.style.top = `${py - 24}px`;
+  }
+  function hide() { tip.hidden = true; }
+  for (const hit of svg.querySelectorAll('.hit')) {
+    hit.addEventListener('mouseenter', () => show(hit));
+    hit.addEventListener('mouseleave', hide);
+    hit.addEventListener('focus', () => show(hit));
+    hit.addEventListener('blur', hide);
+    hit.setAttribute('tabindex', '0');
+  }
+}
+
 function renderTrendTimeline(items) {
-  if (!items.length) { $('trendTimeline').innerHTML = '<div class="queue-empty">データなし</div>'; return; }
-  const w = 600, h = 200, padL = 32, padR = 12, padT = 12, padB = 24;
+  const el = $('trendTimeline');
+  if (!items.length) { el.innerHTML = '<div class="queue-empty">データなし</div>'; return; }
+  const w = 600, h = 200, padL = 40, padR = 12, padT = 12, padB = 24;
   const innerW = w - padL - padR, innerH = h - padT - padB;
   const max = Math.max(1, ...items.flatMap(d => [d.saves, d.accesses]));
   const xStep = innerW / Math.max(1, items.length - 1);
-  function pts(key) {
-    return items.map((d, i) => {
-      const x = padL + i * xStep;
-      const y = padT + innerH - (d[key] / max) * innerH;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
+  function ptsFor(key) {
+    return items.map((d, i) => ({
+      x: padL + i * xStep,
+      y: padT + innerH - (d[key] / max) * innerH,
+      d, key,
+    }));
   }
-  function dots(key, klass) {
-    return items.map((d, i) => {
-      const x = padL + i * xStep;
-      const y = padT + innerH - (d[key] / max) * innerH;
-      return `<circle class="${klass}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" />`;
-    }).join('');
-  }
-  // Y axis labels (0, max/2, max)
+  const savesPts = ptsFor('saves');
+  const accPts = ptsFor('accesses');
+  const polyline = (pts) => pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const dotsFor = (pts, klass) => pts.map(p => `<circle class="${klass}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" />`).join('');
+  const hitsFor = (pts, key) => pts.map(p => `
+    <circle class="hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="12"
+      data-x="${p.x.toFixed(1)}" data-y="${p.y.toFixed(1)}"
+      data-label="${escapeHtml(`${p.d.date} : ${key === 'saves' ? '保存' : 'アクセス'} ${p.d[key]}`)}"
+      fill="transparent" />
+  `).join('');
   const yLabels = [0, Math.round(max / 2), max].map(v => {
     const y = padT + innerH - (v / max) * innerH;
     return `<text class="label" x="${padL - 6}" y="${y + 3}" text-anchor="end">${v}</text>
@@ -2288,23 +2477,28 @@ function renderTrendTimeline(items) {
   const xLabels = items.map((d, i) => {
     if (i % xLabelStep !== 0 && i !== items.length - 1) return '';
     const x = padL + i * xStep;
-    const md = d.date.slice(5);
-    return `<text class="label" x="${x.toFixed(1)}" y="${h - 6}" text-anchor="middle">${md}</text>`;
+    return `<text class="label" x="${x.toFixed(1)}" y="${h - 6}" text-anchor="middle">${d.date.slice(5)}</text>`;
   }).join('');
-  $('trendTimeline').innerHTML = `
-    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">
-      ${yLabels}
-      <polyline class="line-saves" points="${pts('saves')}" />
-      <polyline class="line-accesses" points="${pts('accesses')}" />
-      ${dots('saves', 'dot')}
-      ${dots('accesses', 'dot-alt')}
-      ${xLabels}
-    </svg>
+  el.innerHTML = `
+    <div class="line-chart">
+      <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">
+        ${yLabels}
+        <polyline class="line-saves" points="${polyline(savesPts)}" />
+        <polyline class="line-accesses" points="${polyline(accPts)}" />
+        ${dotsFor(savesPts, 'dot')}
+        ${dotsFor(accPts, 'dot-alt')}
+        ${hitsFor(savesPts, 'saves')}
+        ${hitsFor(accPts, 'accesses')}
+        ${xLabels}
+      </svg>
+      <div class="line-chart-tip" hidden></div>
+    </div>
     <div class="chart-legend">
       <span><span class="dot saves"></span>新規保存</span>
       <span><span class="dot accesses"></span>アクセス</span>
     </div>
   `;
+  attachLineChartTooltip(el);
 }
 
 function renderTrendDiff(items) {
@@ -2397,10 +2591,17 @@ function renderVisits() {
     const catLine = cat?.description
       ? `<div class="visits-catalog"><span class="visits-domain-prefix">[ドメイン] </span>${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}${escapeHtml(cat.description)}</div>`
       : (cat?.status === 'pending' ? `<div class="visits-catalog pending">ドメイン分類中…</div>` : '');
-    // Title fallback chain: Sonnet-fetched page_title → recorded title →
-    // bare domain URL (so rows that never resolved a title still read as
-    // something meaningful instead of "(タイトル未取得)").
-    const titleText = pg?.page_title || v.title || (dom ? `https://${dom}/` : v.url);
+    // Title fallback chain: Sonnet page_title → recorded title (only if
+    // it isn't itself a URL) → domain catalog site_name → bare domain.
+    // The URL fallback was leaking through whenever the page never
+    // resolved a title — we now prefer the human-readable domain info.
+    const titleLooksLikeUrl = (s) => typeof s === 'string' && /^\s*https?:\/\//i.test(s);
+    const realTitle = pg?.page_title
+      || (titleLooksLikeUrl(v.title) ? null : v.title)
+      || cat?.site_name
+      || dom
+      || v.url;
+    const titleText = realTitle;
     return `
       <li class="${sel ? 'selected' : ''} ${hot ? 'hot' : ''}" data-url="${escapeHtml(v.url)}">
         <input type="checkbox" class="vchk" ${sel ? 'checked' : ''} />

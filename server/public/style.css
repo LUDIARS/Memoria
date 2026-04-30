@@ -1973,3 +1973,68 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   font-size: 13px;
   resize: vertical;
 }
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Trends — extra cards + line chart tooltips
+ * ────────────────────────────────────────────────────────────────────── */
+.trend-help { font-size: 11px; color: var(--muted); margin: 0 0 8px; line-height: 1.5; }
+
+.trend-categories-chart .bar-row.clickable:hover .bar { fill: var(--accent); }
+.trend-categories-chart .bar-row.clickable:hover .label { fill: var(--accent); font-weight: 600; }
+.bar-row.clickable { cursor: pointer; }
+
+.trend-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  line-height: 1.6;
+}
+.trend-kw {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--text);
+}
+.trend-kw .trend-kw-n {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.trend-github-repos {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.trend-github-repos li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.trend-github-repos .repo { color: var(--text); }
+.trend-github-repos .count { color: var(--muted); }
+
+.line-chart { position: relative; }
+.line-chart .hit { cursor: pointer; }
+.line-chart .hit:hover, .line-chart .hit:focus { outline: none; }
+.line-chart-tip {
+  position: absolute;
+  background: var(--text);
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+}
+.line-chart-tip[hidden] { display: none; }
