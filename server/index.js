@@ -50,7 +50,7 @@ import {
 import { classifyDomain, shouldSkipDomain } from './domain-catalog.js';
 import { fetchPageMetadata } from './page-metadata.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
-import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './uptime.js';
+import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './local/uptime.js';
 import { listServerEvents, listServerEventsForDate } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
