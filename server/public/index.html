@@ -212,19 +212,51 @@
       </div>
 
       <div id="digView" class="hidden">
-        <div class="dig-input">
-          <input id="digQuery" type="text" placeholder="掘りたい単語または質問を入力 (例: WebGPU compute shader readback)" />
-          <select id="digEngine" title="検索エンジン" class="dig-engine"></select>
-          <button id="digRun">ディグる</button>
-          <button id="digFromBookmarks" class="ghost" title="既存のブックマークからワードクラウドを作る">📚 ブクマから雲</button>
+        <div class="dig-layout">
+          <aside class="dig-themes">
+            <h3>テーマ</h3>
+            <ul id="digThemeList" class="dig-theme-list">
+              <li class="dig-theme-item active" data-theme="">
+                <span class="theme-name">全部</span>
+                <span class="count" id="digThemeAllCount"></span>
+              </li>
+            </ul>
+          </aside>
+
+          <div class="dig-main">
+            <header class="dig-head">
+              <h2>テーマを決めて深堀</h2>
+              <p class="dig-howto">
+                掘りたい話題やキーワードを下に書いて <b>ディグる</b> を押すと、
+                Web 検索 + AI が関連ソースを集めて整理します。
+                同じテーマで何度も掘ると、 <b>左のテーマ一覧</b> から再開できる
+                ようになり、 過去に集めたキーワード / ソースを引き継いで差分を
+                探します。
+              </p>
+              <div id="digThemeBadge" class="dig-theme-badge" hidden></div>
+            </header>
+
+            <div class="dig-input">
+              <textarea id="digQuery" rows="5"
+                placeholder="例: WebGPU の compute shader で readback を効率化する方法は? ベンチマークやベストプラクティスを集めたい"></textarea>
+              <button id="digRun" class="dig-run-btn">🔎 ディグる</button>
+            </div>
+            <div class="dig-input-row2">
+              <label class="dig-engine-label">
+                AI / 検索エンジン
+                <select id="digEngine" title="AI が使う検索エンジン" class="dig-engine"></select>
+              </label>
+            </div>
+
+            <div id="digHistory" class="dig-history"></div>
+            <div id="cloudView" class="dig-cloud"></div>
+            <div id="digShareBar" class="dig-share-bar" hidden>
+              <button id="digShareBtn" class="ghost" title="マルチサーバに共有">📤 シェア</button>
+              <span id="digShareStatus" class="share-status"></span>
+            </div>
+            <div id="digResult" class="dig-result"></div>
+          </div>
         </div>
-        <div id="digHistory" class="dig-history"></div>
-        <div id="cloudView" class="dig-cloud"></div>
-        <div id="digShareBar" class="dig-share-bar" hidden>
-          <button id="digShareBtn" class="ghost" title="マルチサーバに共有">📤 シェア</button>
-          <span id="digShareStatus" class="share-status"></span>
-        </div>
-        <div id="digResult" class="dig-result"></div>
       </div>
 
       <div id="recommendView" class="hidden">
