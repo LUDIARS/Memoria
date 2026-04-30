@@ -867,12 +867,15 @@ app.post('/api/dictionary/upsert-from-source', async (c) => {
 
 app.get('/api/llm/config', (c) => {
   const cfg = getLlmConfig();
+  const settings = getAppSettings(db);
   return c.json({
     config: {
       ...cfg,
       // Mask the API key when returning to FE.
       openai_api_key: cfg.openai_api_key ? '***' : '',
       openai_api_key_set: !!cfg.openai_api_key,
+      // Standing memo passed to every diary generation.
+      diary_global_memo: settings['diary.global_memo'] || '',
     },
     tasks: LLM_TASKS,
     providers: Object.entries(LLM_PROVIDERS).map(([key, v]) => ({
@@ -897,6 +900,10 @@ app.patch('/api/llm/config', async (c) => {
   const patch = settingsPatchFromConfig(body);
   // Don't blow away the API key with the masked '***' value.
   if (patch['llm.openai.api_key'] === '***') delete patch['llm.openai.api_key'];
+  // Diary-specific standing memo lives outside the LLM config object.
+  if (typeof body.diary_global_memo === 'string') {
+    patch['diary.global_memo'] = body.diary_global_memo;
+  }
   setAppSettings(db, patch);
   loadLlmConfigFromSettings(getAppSettings(db));
   return c.json({ ok: true });
@@ -1551,7 +1558,7 @@ function settingsAsObject() {
 // Stages share a context object that is closed over by every queued task,
 // so later stages can read what earlier stages produced. Failure in any
 // stage marks the diary row as `error` and stops the chain.
-function enqueueDiaryStages(dateStr) {
+function enqueueDiaryStages(dateStr, opts = {}) {
   const ctx = {
     metrics: null,
     github: null,
@@ -1560,6 +1567,10 @@ function enqueueDiaryStages(dateStr) {
     githubByRepo: null,
     highlights: '',
     bookmarkSummary: null,
+    // One-shot improvement instruction from the UI (not persisted).
+    improve: typeof opts.improve === 'string' ? opts.improve.trim() : '',
+    // Standing memo from app_settings — passed to every prompt.
+    globalMemo: '',
     failed: false,
   };
 
@@ -1579,6 +1590,7 @@ function enqueueDiaryStages(dateStr) {
     ctx.metrics = aggregateDay(db, dateStr);
     const prior = getDiary(db, dateStr);
     ctx.notes = prior?.notes || '';
+    ctx.globalMemo = (getAppSettings(db)['diary.global_memo'] || '').trim();
     upsertDiary(db, { date: dateStr, status: 'pending', metrics: ctx.metrics, error: null });
   }, { kind: 'diary_prepare', date: dateStr, title: `📅 ${dateStr} 集計` });
 
@@ -1604,7 +1616,11 @@ function enqueueDiaryStages(dateStr) {
   diaryQueue.enqueue(async () => {
     if (ctx.failed) return;
     try {
-      ctx.workContent = await generateWorkContent({ db, dateStr, metrics: ctx.metrics });
+      ctx.workContent = await generateWorkContent({
+        db, dateStr, metrics: ctx.metrics,
+        globalMemo: ctx.globalMemo,
+        improve: ctx.improve,
+      });
       upsertDiary(db, {
         date: dateStr,
         workContent: ctx.workContent,
@@ -1642,6 +1658,8 @@ function enqueueDiaryStages(dateStr) {
         githubByRepo: ctx.githubByRepo,
         bookmarkSummary: ctx.bookmarkSummary,
         digs, notes: ctx.notes, metrics: ctx.metrics,
+        globalMemo: ctx.globalMemo,
+        improve: ctx.improve,
       });
       const summary = composeDiarySummary({
         workContent: ctx.workContent,
@@ -1731,11 +1749,12 @@ async function runDiaryGeneration(dateStr) {
   });
 }
 
-function enqueueDiary(dateStr) {
+function enqueueDiary(dateStr, opts = {}) {
   // User-facing diary regenerate. Splits into prepare → github → work →
   // highlights so each LLM/IO step is its own queue entry. The legacy
   // single-task path (runDiaryGeneration) is kept for the weekly cron.
-  enqueueDiaryStages(dateStr);
+  // `opts.improve` carries one-shot UI feedback for this run only.
+  enqueueDiaryStages(dateStr, opts);
 }
 
 app.get('/api/diary', (c) => {
@@ -1763,10 +1782,13 @@ app.get('/api/diary/:date', (c) => {
   return c.json({ ...entry, live_metrics: liveMetrics });
 });
 
-app.post('/api/diary/:date/generate', (c) => {
+app.post('/api/diary/:date/generate', async (c) => {
   const date = c.req.param('date');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
-  enqueueDiary(date);
+  // Body is optional. When present, `improve` is a one-shot instruction
+  // appended to the prompt for this run only (not persisted).
+  const body = await c.req.json().catch(() => null);
+  enqueueDiary(date, { improve: body?.improve });
   return c.json({ queued: true, queue_depth: diaryQueue.depth });
 });
 
