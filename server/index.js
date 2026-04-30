@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
+import { WebSocketServer } from 'ws';
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +71,10 @@ import { getAppSettings, setAppSettings } from './db.js';
 import {
   markBookmarkShared, markDigShared, markDictionaryShared,
   setBookmarkOwner, setDigOwner, setDictionaryOwner,
+} from './db.js';
+import {
+  insertGpsLocation, listGpsLocationsInRange, listGpsLocationDays,
+  listGpsLocationsForDate, deleteGpsLocationsOlderThan,
 } from './db.js';
 import {
   readMultiState, isConnected,
@@ -2196,13 +2201,355 @@ app.get('/share', async (c) => {
   return c.redirect('/?share=ok&u=' + encodeURIComponent(target), 303);
 });
 
+// ---- Google Maps client config -------------------------------------------
+//
+// API key は app_settings.`maps.api_key` か環境変数 GOOGLE_MAPS_API_KEY。
+// ブラウザに渡す必要があるため masked 値ではなく実値を返す。
+// Google Maps の鍵は HTTP referrer 制限 + API 制限を Google Cloud Console で
+// かけて運用するのが筋。
+
+app.get('/api/maps/config', (c) => {
+  const settings = getAppSettings(db);
+  const key = settings['maps.api_key'] || process.env.GOOGLE_MAPS_API_KEY || '';
+  return c.json({ apiKey: key, hasKey: !!key });
+});
+
+app.patch('/api/maps/config', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.apiKey !== 'string') {
+    return c.json({ error: 'apiKey (string) required' }, 400);
+  }
+  setAppSettings(db, { 'maps.api_key': body.apiKey.trim() });
+  return c.json({ ok: true });
+});
+
+// ---- GPS locations (OwnTracks) -------------------------------------------
+//
+// 個人用の歩いた軌跡を記録する。MQTT subscriber (server/owntracks-server.js)
+// が別 process で挿入するのが本流だが、ここでも HTTP 直投入を許可する
+// (テスト + OwnTracks の HTTP モードからの直接 POST 用)。
+//
+// MQTT 経路で動かすには docker-compose で mosquitto を起動して
+// `npm run owntracks` を別シェルで走らせること。
+//
+// 認証経路は 3 通りで、 いずれか一致すれば OK:
+//   1. `X-Memoria-Ingest-Key: <key>`         (curl 等カスタムヘッダ向け)
+//   2. `Authorization: Bearer <key>`         (一般的な API client)
+//   3. `Authorization: Basic base64(u:<key>)` (OwnTracks iOS HTTP モードはこれ)
+//
+// Key の解決順:
+//   a. app_settings.`locations.ingest_key` (UI から生成 / 設定)
+//   b. 環境変数 LOCATIONS_INGEST_KEY (CI / CLI 用)
+//   c. どちらも空 → 認証無効 (LAN-only バインドが前提)
+//
+// WAN 公開する時は UI から key を生成する (推奨) か env を必ず設定すること。
+
+function getIngestKey() {
+  const stored = (getAppSettings(db)['locations.ingest_key'] || '').trim();
+  if (stored) return stored;
+  return (process.env.LOCATIONS_INGEST_KEY ?? '').trim();
+}
+
+function decodeBasicAuth(headerVal) {
+  if (!headerVal || !headerVal.startsWith('Basic ')) return null;
+  try {
+    const decoded = Buffer.from(headerVal.slice(6).trim(), 'base64').toString('utf8');
+    const idx = decoded.indexOf(':');
+    if (idx < 0) return null;
+    return { user: decoded.slice(0, idx), pass: decoded.slice(idx + 1) };
+  } catch {
+    return null;
+  }
+}
+
+function checkIngestKey(c) {
+  const key = getIngestKey();
+  if (!key) return null;
+  // 1) custom header
+  const xKey = c.req.header('x-memoria-ingest-key') ?? '';
+  if (xKey && xKey === key) return null;
+  // 2/3) Authorization
+  const auth = c.req.header('authorization') ?? '';
+  if (auth.startsWith('Bearer ')) {
+    const tok = auth.slice(7).trim();
+    if (tok === key) return null;
+  }
+  const basic = decodeBasicAuth(auth);
+  if (basic && basic.pass === key) return null;
+  // OwnTracks iOS は 401 を見ると basic auth ダイアログを出さず再試行するので
+  // realm 付きで返しておく (ログから "認証要求" が判別しやすくなる)。
+  return c.json({ error: 'invalid ingest key' }, 401, {
+    'WWW-Authenticate': 'Basic realm="memoria-locations"',
+  });
+}
+
+// ---- ingest key 管理 (UI 経由) -------------------------------------------
+//
+// 個人ツールなので key 自体は端末/ブラウザ側で確認できる必要がある。
+// GET 系は読みやすいよう preview (先頭 4 + 末尾 4) を返し、 full 値は
+// 1 度きりの「生成直後」response でしか出さない (再表示はクリア + 再生成)。
+
+function maskKey(key) {
+  if (!key) return '';
+  if (key.length <= 8) return '*'.repeat(key.length);
+  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+app.get('/api/locations/settings', (c) => {
+  const key = getIngestKey();
+  return c.json({
+    has_key: !!key,
+    key_preview: maskKey(key),
+    source: (getAppSettings(db)['locations.ingest_key'] || '').trim()
+      ? 'settings'
+      : (process.env.LOCATIONS_INGEST_KEY ? 'env' : 'none'),
+  });
+});
+
+app.post('/api/locations/settings/regenerate', (c) => {
+  // crypto.randomUUID() の方が読みやすいが Basic auth password にする都合で
+  // 32-byte hex の方が typing しやすい (40 文字)。
+  const buf = new Uint8Array(20);
+  // Node 18+ の global crypto。 globalThis 経由で webcrypto も使える
+  // ((globalThis.crypto ?? require('node:crypto').webcrypto)).getRandomValues(buf);
+  const c2 = globalThis.crypto;
+  c2.getRandomValues(buf);
+  const newKey = [...buf].map((b) => b.toString(16).padStart(2, '0')).join('');
+  setAppSettings(db, { 'locations.ingest_key': newKey });
+  return c.json({ key: newKey, key_preview: maskKey(newKey) });
+});
+
+app.delete('/api/locations/settings/key', (c) => {
+  setAppSettings(db, { 'locations.ingest_key': '' });
+  return c.json({ ok: true });
+});
+
+/**
+ * 直接 1 点の位置を投入する (OwnTracks HTTP モード or 手動テスト)。
+ * 受け取れる形式:
+ *   - OwnTracks 形式: { _type:'location', lat, lon, tst, acc?, alt?, vel?, cog?, batt?, conn? }
+ *   - 簡易形式:       { lat, lon, recorded_at?, device_id?, accuracy_m?, ... }
+ */
+app.post('/api/locations/ingest', async (c) => {
+  const denied = checkIngestKey(c);
+  if (denied) return denied;
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return c.json({ error: 'json body required' }, 400);
+  }
+  const lat = Number(body.lat);
+  const lon = Number(body.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return c.json({ error: 'lat / lon required (number)' }, 400);
+  }
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return c.json({ error: 'lat / lon out of range' }, 400);
+  }
+
+  const deviceId = body.device_id ?? body.tid ?? c.req.header('x-limit-d') ?? null;
+  const tst = typeof body.tst === 'number' ? body.tst : undefined;
+  const recordedAt = body.recorded_at ?? null;
+
+  const rec = {
+    userId: body.user_id ?? 'me',
+    deviceId,
+    tst,
+    recordedAt,
+    lat,
+    lon,
+    accuracy:  body.accuracy_m ?? body.acc ?? null,
+    altitude:  body.altitude_m ?? body.alt ?? null,
+    velocity:  body.velocity_kmh ?? body.vel ?? null,
+    course:    body.course_deg ?? body.cog ?? null,
+    battery:   body.battery_pct ?? body.batt ?? null,
+    conn:      body.conn ?? null,
+    rawJson:   JSON.stringify(body),
+  };
+
+  const result = insertGpsLocation(db, rec);
+  if (!result.skipped) {
+    // WebSocket subscriber に新規点をブロードキャスト
+    broadcastLocation({
+      id: result.id,
+      user_id: rec.userId,
+      device_id: rec.deviceId,
+      recorded_at: rec.recordedAt
+        ?? (typeof rec.tst === 'number' ? new Date(rec.tst * 1000).toISOString() : new Date().toISOString()),
+      lat: rec.lat,
+      lon: rec.lon,
+      accuracy_m: rec.accuracy ?? null,
+      altitude_m: rec.altitude ?? null,
+      velocity_kmh: rec.velocity ?? null,
+      course_deg: rec.course ?? null,
+    });
+  }
+  // OwnTracks の HTTP モードはレスポンスとして JSON 配列 (友達の cards 等) を
+  // 期待するので空配列で返す。 手動テスト時は X-Memoria-Insert-* header で
+  // 結果を確認できる。
+  c.header('X-Memoria-Insert-Id', String(result.id ?? ''));
+  c.header('X-Memoria-Insert-Skipped', String(!!result.skipped));
+  return c.json([]);
+});
+
+/**
+ * 期間内の点を時系列順で返す。
+ *   GET /api/locations?from=ISO&to=ISO&device=iphone
+ *   GET /api/locations?date=YYYY-MM-DD              (local TZ)
+ */
+app.get('/api/locations', (c) => {
+  const url = new URL(c.req.url);
+  const date = url.searchParams.get('date');
+  if (date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return c.json({ error: 'date must be YYYY-MM-DD' }, 400);
+    }
+    const points = listGpsLocationsForDate(db, date);
+    return c.json({ date, points });
+  }
+  const from = url.searchParams.get('from');
+  const to   = url.searchParams.get('to');
+  const deviceId = url.searchParams.get('device') ?? undefined;
+  const points = listGpsLocationsInRange(db, { from, to, deviceId });
+  return c.json({ from, to, deviceId: deviceId ?? null, points });
+});
+
+/**
+ * 位置情報を持っている日と件数。 UI の date picker 用。
+ */
+app.get('/api/locations/days', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') ?? 365) || 365, 3650);
+  const days = listGpsLocationDays(db, { limit });
+  return c.json({ days });
+});
+
+/**
+ * 古い位置情報を一括削除。 retention 用。
+ *   DELETE /api/locations?older_than=ISO
+ */
+app.delete('/api/locations', (c) => {
+  const denied = checkIngestKey(c);
+  if (denied) return denied;
+  const olderThan = c.req.query('older_than');
+  if (!olderThan) return c.json({ error: 'older_than (ISO) required' }, 400);
+  const removed = deleteGpsLocationsOlderThan(db, olderThan);
+  return c.json({ removed });
+});
+
 // ---- static UI ------------------------------------------------------------
 
 app.use('/*', serveStatic({ root: './public' }));
 app.get('/', serveStatic({ path: './public/index.html' }));
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
+// ---- HTTP server + WebSocket -------------------------------------------
+//
+// `@hono/node-server::serve` は内部で http.Server を作って listen するので、
+// その server hook (戻り値) に対して `ws` ライブラリで WebSocketServer を
+// attach すれば HTTP / WS を同 port で兼ねられる。
+//
+// Cloudflare Tunnel は WS upgrade を素通しできるので、 wss://.../ws/locations
+// で外からも繋がる (read-only broadcast。 認証は今後 ingest key で gate 予定)。
+
+/** @type {Set<import('ws').WebSocket>} */
+const wsClients = new Set();
+
+function broadcastLocation(point) {
+  if (wsClients.size === 0) return;
+  const msg = JSON.stringify({ type: 'location', point });
+  for (const c of wsClients) {
+    if (c.readyState === 1 /* OPEN */) {
+      try { c.send(msg); } catch {}
+    }
+  }
+}
+
+const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
+
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on('upgrade', (req, socket, head) => {
+  if (!req.url || !req.url.startsWith('/ws/locations')) {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
+});
+
+wss.on('connection', (ws) => {
+  wsClients.add(ws);
+  ws.on('close', () => wsClients.delete(ws));
+  ws.on('error', () => wsClients.delete(ws));
+  // 接続直後の hello (UI 側で接続成立を確認しやすくする)
+  try { ws.send(JSON.stringify({ type: 'hello', ts: Date.now() })); } catch {}
+});
+
+// keep-alive: 30s ごとに ping。 Cloudflare の idle timeout (100s 程度) を超えない。
+setInterval(() => {
+  for (const c of wsClients) {
+    if (c.readyState === 1) {
+      try { c.ping(); } catch {}
+    }
+  }
+}, 30_000).unref?.();
+
+// ---- in-process MQTT subscriber (任意) ----------------------------------
+//
+// MEMORIA_MQTT_URL が設定されていれば、 main server process 内で OwnTracks
+// subscriber を立てる。 別 process の owntracks-server.js は legacy として
+// 残るが、 in-process にすると WebSocket broadcaster (broadcastLocation) を
+// 直接呼べるので UI も即時更新される。
+//
+// 構成例 (Cloudflare Tunnel + MQTT over WSS):
+//   [iOS/Android OwnTracks (WSS mode)]
+//      │ wss://memoria.example.com/mqtt
+//      ▼
+//   [Cloudflare Tunnel ingress: /mqtt → ws://localhost:9002]
+//      │
+//      ▼
+//   [mosquitto (docker compose、 host port 9002 → container 9001)]
+//      │
+//      ▼
+//   [この process の subscriber → insertGpsLocation + broadcastLocation]
+
+if (process.env.MEMORIA_MQTT_URL) {
+  try {
+    const { loadOwntracksConfig } = await import('./owntracks/config.js');
+    const { startOwntracksClient } = await import('./owntracks/client.js');
+    const { locationToDbRecord } = await import('./owntracks/payload.js');
+    const cfg = loadOwntracksConfig();
+    console.log(`[mqtt] in-process subscriber starting (url=${cfg.mqtt.url}, topic=${cfg.mqtt.topic})`);
+    startOwntracksClient(cfg, async (topic, loc, ctx) => {
+      const rec = locationToDbRecord(topic, loc, {
+        userId: cfg.userId,
+        rawJson: ctx.rawJson,
+      });
+      const result = insertGpsLocation(db, rec);
+      if (!result.skipped) {
+        broadcastLocation({
+          id: result.id,
+          user_id: rec.userId,
+          device_id: rec.deviceId,
+          recorded_at: new Date(rec.tst * 1000).toISOString(),
+          lat: rec.lat,
+          lon: rec.lon,
+          accuracy_m: rec.accuracy ?? null,
+          altitude_m: rec.altitude ?? null,
+          velocity_kmh: rec.velocity ?? null,
+          course_deg: rec.course ?? null,
+        });
+        console.log(
+          `[mqtt] insert id=${result.id} ${rec.deviceId ?? '?'} ` +
+          `(${rec.lat.toFixed(5)}, ${rec.lon.toFixed(5)})`
+        );
+      }
+    });
+  } catch (e) {
+    console.error(`[mqtt] in-process subscriber failed to start: ${e?.message ?? e}`);
+  }
+}

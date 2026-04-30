@@ -1,0 +1,10 @@
+# Memoria mosquitto ACL (allow_anonymous 有効時は参照されない)
+#
+# 例: alice が OwnTracks 端末から自分の prefix だけ publish できる構成
+#
+# user alice
+# topic readwrite owntracks/alice/#
+#
+# user memoria-sub
+# topic read owntracks/+/+
+# topic read owntracks/+/+/+
