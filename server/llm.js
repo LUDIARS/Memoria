@@ -61,6 +61,10 @@ let cfg = {
   bins: { claude: 'claude', gemini: 'gemini', codex: 'codex' },
   openai_api_key: '',
   openai_model: 'gpt-4o-mini',
+  // Windows users running the Claude CLI from a packaged Node child need
+  // CLAUDE_CODE_GIT_BASH_PATH set or the CLI dies looking for bash. The
+  // desktop app stashes its discovery here.
+  git_bash_path: '',
 };
 
 export function getLlmConfig() {
@@ -85,6 +89,7 @@ export function loadLlmConfigFromSettings(settings) {
     },
     openai_api_key: settings['llm.openai.api_key'] || '',
     openai_model:   settings['llm.openai.model']   || 'gpt-4o-mini',
+    git_bash_path:  settings['runtime.git_bash_path'] || process.env.CLAUDE_CODE_GIT_BASH_PATH || '',
   };
 }
 
@@ -103,6 +108,7 @@ export function settingsPatchFromConfig(patch) {
   }
   if (patch.openai_api_key !== undefined) out['llm.openai.api_key'] = patch.openai_api_key;
   if (patch.openai_model !== undefined)   out['llm.openai.model']   = patch.openai_model;
+  if (patch.git_bash_path !== undefined)  out['runtime.git_bash_path'] = patch.git_bash_path;
   return out;
 }
 
@@ -137,14 +143,20 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }) {
   const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || '';
   if (modelToUse && p.supportsModel) args.push('--model', modelToUse);
   if (tools && p.supportsTools) args.push('--allowedTools', tools.join(','));
-  return runCli({ bin, args, prompt, timeoutMs, label: provider });
+  // Pass CLAUDE_CODE_GIT_BASH_PATH to the Claude CLI on Windows. Configured
+  // via settings → runtime.git_bash_path; falls back to the parent env.
+  const env = { ...process.env };
+  if (provider === 'claude' && cfg.git_bash_path) {
+    env.CLAUDE_CODE_GIT_BASH_PATH = cfg.git_bash_path;
+  }
+  return runCli({ bin, args, prompt, timeoutMs, env, label: provider });
 }
 
-function runCli({ bin, args, prompt, timeoutMs, label }) {
+function runCli({ bin, args, prompt, timeoutMs, env, label }) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
+      child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, env });
     } catch (e) {
       reject(new Error(`spawn ${bin}: ${e.message}`));
       return;

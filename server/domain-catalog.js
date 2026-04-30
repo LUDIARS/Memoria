@@ -19,11 +19,13 @@ export function shouldSkipDomain(domain) {
 const CLASSIFY_PROMPT = ({ domain, title, metaDescription, bodySample }) => [
   'あなたは Web サイトを辞書化する係です。次の情報からこのドメインを JSON 1 オブジェクトのみで出力してください (前置き不要、コードフェンス禁止)。',
   '',
+  '**4 つのフィールドはすべて必須**。情報が乏しくても推測で埋めること (空文字列・null・"unknown" 禁止)。',
+  '',
   'スキーマ:',
   '{',
-  '  "site_name": "サービス名 / プロダクト名 (例: GitHub, Notion, Cloudflare Dashboard)",',
+  '  "site_name": "サービス名 / プロダクト名 (例: GitHub, Notion, Cloudflare Dashboard)。タイトルから判断できるならそれを使う。",',
   '  "description": "1〜2 文の概要 (50〜120 文字)",',
-  '  "can_do": "このドメインで何ができるかを箇条書き 2〜4 個 (- で始める)。改行は \\n。",',
+  '  "can_do": "このドメインで何ができるかを箇条書き 2〜4 個 (- で始める)。改行は \\n。実際の操作 (作成/閲覧/管理 等) を動詞で書く。",',
   '  "kind": "短いカテゴリ (例: ドキュメント, ブログ, SaaS, ニュース, ツール, 企業サイト, 個人サイト)"',
   '}',
   '',
@@ -97,13 +99,17 @@ export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
     return { ok: false, error: `claude: ${e.message}`, title, metaDescription };
   }
 
+  // Defensive fallbacks: if the LLM somehow returns blank fields, fall
+  // back to derivable info from the page itself so the row is never
+  // half-populated.
+  const fallbackSiteName = (title.split(/[|·–—:-]/)[0] || domain).trim().slice(0, 120);
   return {
     ok: true,
     title,
-    site_name: parsed.site_name,
-    description: parsed.description,
-    can_do: parsed.can_do,
-    kind: parsed.kind,
+    site_name: parsed.site_name || fallbackSiteName,
+    description: parsed.description || metaDescription || `${domain} のサイト`,
+    can_do: parsed.can_do || `- ${domain} のコンテンツを閲覧する`,
+    kind: parsed.kind || 'Webサイト',
   };
 }
 
