@@ -1172,17 +1172,24 @@ const DIG_CLOUD_MAX_CJK_LEN   = 12;
  *  - ASCII / Latin: ≥ 3 chars, ≤ DIG_CLOUD_MAX_ASCII_LEN.
  *  - CJK (kana, hiragana, katakana, kanji): runs ≥ 2 chars,
  *    ≤ DIG_CLOUD_MAX_CJK_LEN.
- * Stopwords (English filler + Japanese filler) are dropped, and overly long
- * runs are dropped as "this is a sentence, not a word".
+ *
+ * Returns a Map<lowercaseKey, count>. Stopwords (English filler + Japanese
+ * filler) are dropped, and overly long runs are dropped as "this is a
+ * sentence, not a word".
+ *
+ * For shape classification we also need the ORIGINAL casing of each ASCII
+ * token (lowercased "webgpu" loses the ProperCase signal). Use
+ * `digCloudOriginalCase(text)` to recover that — kept as a sister fn so
+ * the simple frequency case stays cheap.
  */
 function digCloudTokenize(text) {
-  const t = String(text || '').toLowerCase();
   const freq = new Map();
-  for (const m of t.matchAll(/[a-z][a-z0-9_+#.-]{2,}/g)) {
-    const w = m[0];
-    if (w.length > DIG_CLOUD_MAX_ASCII_LEN) continue;
-    if (DIG_CLOUD_STOPWORDS.has(w)) continue;
-    freq.set(w, (freq.get(w) || 0) + 1);
+  for (const m of String(text || '').matchAll(/[A-Za-z][A-Za-z0-9_+#.\-]{2,}/g)) {
+    const orig = m[0];
+    if (orig.length > DIG_CLOUD_MAX_ASCII_LEN) continue;
+    const key = orig.toLowerCase();
+    if (DIG_CLOUD_STOPWORDS.has(key)) continue;
+    freq.set(key, (freq.get(key) || 0) + 1);
   }
   for (const m of String(text || '').matchAll(/[぀-ヿ一-鿿]{2,}/g)) {
     const w = m[0];
@@ -1191,6 +1198,28 @@ function digCloudTokenize(text) {
     freq.set(w, (freq.get(w) || 0) + 1);
   }
   return freq;
+}
+
+/**
+ * Build a `Map<lowercaseKey, originalForm>` for ASCII tokens — the
+ * "best-looking" casing we observed (first occurrence wins). CJK tokens
+ * map to themselves. Used by digCloudShape so `WebGPU` keeps its capitals
+ * for the Mixed-Case heuristic.
+ */
+function digCloudOriginalCase(text) {
+  const map = new Map();
+  for (const m of String(text || '').matchAll(/[A-Za-z][A-Za-z0-9_+#.\-]{2,}/g)) {
+    const orig = m[0];
+    if (orig.length > DIG_CLOUD_MAX_ASCII_LEN) continue;
+    const key = orig.toLowerCase();
+    if (!map.has(key)) map.set(key, orig);
+  }
+  for (const m of String(text || '').matchAll(/[぀-ヿ一-鿿]{2,}/g)) {
+    const w = m[0];
+    if (w.length > DIG_CLOUD_MAX_CJK_LEN) continue;
+    if (!map.has(w)) map.set(w, w);
+  }
+  return map;
 }
 
 /**
@@ -1257,6 +1286,12 @@ function digWordCloud(session, sources) {
   ));
   const queryTokens = digCloudTokenize(session.query || '');
 
+  // Original-case map — needed so digCloudShape can see "WebGPU" (mixed)
+  // vs "design" (pure lowercase). Built from the same combined text.
+  const caseMap = digCloudOriginalCase(
+    sources.map(s => `${s.title || ''} ${s.snippet || ''} ${(s.topics || []).join(' ')}`).join(' ')
+  );
+
   // Global frequency = total occurrences across all sources.
   const freq = new Map();
   for (const ft of sourceTokens) {
@@ -1265,13 +1300,20 @@ function digWordCloud(session, sources) {
   for (const k of queryTokens.keys()) freq.delete(k);
 
   const words = [...freq.entries()]
-    .map(([word, count]) => ({ word, count }))
-    .filter(w => w.count >= 2 || w.word.length >= 4)
+    .map(([key, count]) => ({
+      key,
+      word: caseMap.get(key) || key,
+      count,
+    }))
+    .filter(w => w.count >= 2 || w.key.length >= 4)
     .sort((a, b) => b.count - a.count)
     .slice(0, TOP_N);
   if (!words.length) return '';
 
-  const wordIndex = new Map(words.map((w, i) => [w.word, i]));
+  // wordIndex is keyed by the lowercase token (matches what's in
+  // `sourceTokens`/`queryTokens`/`pastByQuery`). Display strings live in
+  // `node.word` later via `caseMap`.
+  const wordIndex = new Map(words.map((w, i) => [w.key, i]));
 
   // Co-occurrence: for each source, every pair of present words → +1.
   const pairWeight = new Map();
@@ -1286,7 +1328,7 @@ function digWordCloud(session, sources) {
     }
   }
   // Reduce to top-3 partners per node — stops the layout becoming a blob.
-  const adjPicks = new Map(words.map(w => [w.word, []]));
+  const adjPicks = new Map(words.map(w => [w.key, []]));
   for (const [k, w] of pairWeight) {
     if (w < 2) continue;
     const [a, b] = k.split('|||');
@@ -1295,13 +1337,13 @@ function digWordCloud(session, sources) {
   }
   const edges = [];
   const seenEdge = new Set();
-  for (const [word, picks] of adjPicks) {
+  for (const [key, picks] of adjPicks) {
     picks.sort((x, y) => y.w - x.w);
     for (const p of picks.slice(0, 3)) {
-      const k = pairKey(word, p.other);
+      const k = pairKey(key, p.other);
       if (seenEdge.has(k)) continue;
       seenEdge.add(k);
-      edges.push({ a: wordIndex.get(word), b: wordIndex.get(p.other), w: p.w });
+      edges.push({ a: wordIndex.get(key), b: wordIndex.get(p.other), w: p.w });
     }
   }
 
@@ -1329,7 +1371,7 @@ function digWordCloud(session, sources) {
   const nodes = words.map((w, i) => {
     const angle = (i / words.length) * Math.PI * 2;
     const fontSize = 11 + 14 * (w.count / max);   // ~11–25 px
-    const past = pastByQuery.get(w.word);
+    const past = pastByQuery.get(w.key);
     const prefix = past ? '↪ ' : '';
     const display = `${prefix}${w.word}`;
     const lines = digCloudWrap(display, fontSize, MAX_TEXT_WIDTH_PX);
@@ -1354,6 +1396,7 @@ function digWordCloud(session, sources) {
     const r = Math.sqrt(halfW * halfW + halfH * halfH);
     return {
       i,
+      key: w.key,
       word: w.word,
       count: w.count,
       shape,
@@ -1438,7 +1481,7 @@ function digWordCloud(session, sources) {
   }).join('');
 
   const nodeSvg = nodes.map(n => {
-    const past = pastByQuery.get(n.word);
+    const past = pastByQuery.get(n.key);
     const cls = `dig-graph-node ${n.shape === 'square' ? 'shape-square' : 'shape-circle'}${past ? ' explored' : ''}`;
     const titleAttr = past
       ? `過去のディグ「${past.query}」に連結 — クリックでそのセッションへ`
@@ -1469,7 +1512,7 @@ function digWordCloud(session, sources) {
     </g>`;
   }).join('');
 
-  const exploredCount = nodes.filter(n => pastByQuery.has(n.word)).length;
+  const exploredCount = nodes.filter(n => pastByQuery.has(n.key)).length;
   const exploredHint = exploredCount
     ? `<span class="dig-cloud-explored-hint" title="↪ 印付きノードは過去のディグに連結 — クリックでそのセッションへ">↪ ${exploredCount} 語が過去ディグに連結</span>`
     : '';
