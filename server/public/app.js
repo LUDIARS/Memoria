@@ -522,6 +522,7 @@ function switchTab(tab) {
   $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('eventsView').classList.toggle('hidden', tab !== 'events');
+  $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
   if (tab === 'trends') loadTrends();
@@ -531,6 +532,7 @@ function switchTab(tab) {
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
+  if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   reflowTabsForViewport();
   closeTabMoreMenu();
@@ -2545,6 +2547,7 @@ async function refreshMultiStatus() {
       b.hidden = !s.connected;
     });
     if (!s.connected && $('digShareBar')) $('digShareBar').hidden = true;
+    if (typeof refreshMultiTabVisibility === 'function') refreshMultiTabVisibility();
   } catch (e) { console.error(e); }
 }
 
@@ -2745,3 +2748,116 @@ function renderEvents(items) {
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
+
+// ── 🌐 Multi (Memoria Hub) browse ─────────────────────────────────────────
+state.multiSubtab = 'bookmarks';
+
+function refreshMultiTabVisibility() {
+  const visible = !!state.multi?.connected;
+  document.querySelectorAll('.tab-multi-only').forEach(t => { t.hidden = !visible; });
+  if (!visible && state.tab === 'multi') switchTab('bookmarks');
+  if (visible) {
+    const badge = $('multiUserBadge');
+    if (badge) badge.textContent = `🌐 ${state.multi.user.name} (${state.multi.user.role})`;
+  }
+}
+
+async function loadMulti() {
+  refreshMultiTabVisibility();
+  if (!state.multi?.connected) {
+    $('multiList').innerHTML = '<div class="queue-empty">マルチサーバに接続されていません。⚙ AI から接続してください。</div>';
+    return;
+  }
+  const sub = state.multiSubtab;
+  document.querySelectorAll('.multi-subtab').forEach(b => {
+    b.classList.toggle('active', b.dataset.mtab === sub);
+  });
+  let url;
+  if (sub === 'bookmarks') url = '/api/multi/proxy/api/shared/bookmarks?limit=50';
+  else if (sub === 'digs') url = '/api/multi/proxy/api/shared/digs?limit=50';
+  else url = '/api/multi/proxy/api/shared/dictionary?limit=200';
+  let data;
+  try { data = await api(url); }
+  catch (e) {
+    $('multiList').innerHTML = `<div class="queue-empty">取得失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const items = data.items || [];
+  if (!items.length) {
+    $('multiList').innerHTML = '<div class="queue-empty">該当エントリなし</div>';
+    return;
+  }
+  if (sub === 'bookmarks') $('multiList').innerHTML = items.map(renderMultiBookmark).join('');
+  else if (sub === 'digs') $('multiList').innerHTML = items.map(renderMultiDig).join('');
+  else $('multiList').innerHTML = items.map(renderMultiDict).join('');
+  $('multiList').querySelectorAll('[data-download]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const kind = btn.dataset.download;
+      const id = Number(btn.dataset.id);
+      btn.disabled = true;
+      btn.textContent = '取込中…';
+      try {
+        await api('/api/multi/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind, remote_id: id }),
+        });
+        btn.textContent = '✓ 取込済';
+      } catch (e) {
+        btn.textContent = `✗ ${e.message}`;
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+function renderMultiBookmark(b) {
+  return `<div class="multi-card">
+    <div class="title">${escapeHtml(b.title || b.url)}</div>
+    <div class="url"><a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer">${escapeHtml(b.url)}</a></div>
+    ${b.summary ? `<div class="summary">${escapeHtml(b.summary)}</div>` : ''}
+    <div class="cats">${(b.categories || []).map(c => `<span class="cat">${escapeHtml(c)}</span>`).join('')}</div>
+    <div class="multi-meta">
+      <span>by ${escapeHtml(b.owner_user_name || b.owner_user_id || '?')}</span>
+      <span>${fmtDate(b.shared_at)}</span>
+      <button class="ghost ghost-sm" data-download="bookmark" data-id="${b.id}">📥 ローカルへ取込</button>
+    </div>
+  </div>`;
+}
+
+function renderMultiDig(d) {
+  const r = d.result_json || d.result || {};
+  const summary = (r.summary || '').slice(0, 600);
+  return `<div class="multi-card">
+    <div class="title">⛏ ${escapeHtml(d.query)}</div>
+    ${summary ? `<div class="summary">${escapeHtml(summary)}</div>` : ''}
+    <div class="multi-meta">
+      <span>by ${escapeHtml(d.owner_user_name || d.owner_user_id || '?')}</span>
+      <span>${fmtDate(d.shared_at)}</span>
+      <button class="ghost ghost-sm" data-download="dig" data-id="${d.id}">📥 ローカルへ取込</button>
+    </div>
+  </div>`;
+}
+
+function renderMultiDict(e) {
+  return `<div class="multi-card">
+    <div class="title">📖 ${escapeHtml(e.term)}</div>
+    ${e.definition ? `<div class="summary">${escapeHtml(e.definition)}</div>` : ''}
+    <div class="multi-meta">
+      <span>by ${escapeHtml(e.owner_user_name || e.owner_user_id || '?')}</span>
+      <span>${fmtDate(e.shared_at)}</span>
+      <button class="ghost ghost-sm" data-download="dict" data-id="${e.id}">📥 ローカルへ取込</button>
+    </div>
+  </div>`;
+}
+
+document.querySelectorAll('.multi-subtab').forEach(b => {
+  b.addEventListener('click', () => {
+    state.multiSubtab = b.dataset.mtab;
+    loadMulti();
+  });
+});
+document.getElementById('multiRefresh')?.addEventListener('click', loadMulti);
+
+// First paint: surface the multi tab if we're already connected.
+refreshMultiTabVisibility();
