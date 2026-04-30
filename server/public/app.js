@@ -2368,13 +2368,20 @@ function renderVisits() {
     const catLine = cat?.description
       ? `<div class="visits-catalog"><span class="visits-domain-prefix">[ドメイン] </span>${cat.kind ? `<span class="visits-kind">${escapeHtml(cat.kind)}</span> ` : ''}${escapeHtml(cat.description)}</div>`
       : (cat?.status === 'pending' ? `<div class="visits-catalog pending">ドメイン分類中…</div>` : '');
+    // Title fallback chain: Sonnet-fetched page_title → recorded title →
+    // bare domain URL (so rows that never resolved a title still read as
+    // something meaningful instead of "(タイトル未取得)").
+    const titleText = pg?.page_title || v.title || (dom ? `https://${dom}/` : v.url);
     return `
       <li class="${sel ? 'selected' : ''} ${hot ? 'hot' : ''}" data-url="${escapeHtml(v.url)}">
         <input type="checkbox" class="vchk" ${sel ? 'checked' : ''} />
         <div style="min-width:0">
-          <div class="title">${escapeHtml(pg?.page_title || v.title || '(タイトル未取得)')} ${badge}</div>
+          <div class="title">${escapeHtml(titleText)} ${badge}</div>
           <div class="url">${escapeHtml(v.url)}</div>
-          <div class="visits-meta">${escapeHtml(dom)}${v.score ? ` · score ${v.score}` : ''}</div>
+          <div class="visits-meta">
+            <a class="visits-domain-link" href="#" data-domain="${escapeHtml(dom)}" title="${escapeHtml(dom)} のドメイン辞書を開く">${escapeHtml(dom)}</a>
+            ${v.score ? ` · score ${v.score}` : ''}
+          </div>
           ${pageLine}
           ${catLine}
         </div>
@@ -2389,6 +2396,9 @@ function renderVisits() {
     const url = li.dataset.url;
     const cb = li.querySelector('.vchk');
     li.addEventListener('click', (e) => {
+      // Clicks on the domain link / select / inputs shouldn't toggle the
+      // bookmark checkbox.
+      if (e.target.closest('.visits-domain-link, a, button, input')) return;
       if (e.target !== cb) {
         cb.checked = !cb.checked;
       }
@@ -2397,6 +2407,20 @@ function renderVisits() {
       li.classList.toggle('selected', cb.checked);
       $('visitsSelCount').textContent = state.visitsSelected.size;
       $('visitsAll').checked = state.visitsSelected.size === state.visits.length;
+    });
+  });
+  list.querySelectorAll('.visits-domain-link').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const domain = a.dataset.domain;
+      if (!domain) return;
+      switchTab('domain');
+      // loadDomainCatalog runs from switchTab's tab handler; await its
+      // completion before pinning the entry so the list highlights it.
+      Promise.resolve().then(async () => {
+        try { await loadDomainEntry(domain); } catch (err) { console.error(err); }
+      });
     });
   });
 }
