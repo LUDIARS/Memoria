@@ -2958,3 +2958,22 @@ document.getElementById('multiRefresh')?.addEventListener('click', loadMulti);
 
 // First paint: surface the multi tab if we're already connected.
 refreshMultiTabVisibility();
+
+// ── PWA share_target landing ───────────────────────────────────────────────
+// /share redirects back here with ?share=ok&u=<url> after queueing the save.
+(function pwaShareToast() {
+  const params = new URLSearchParams(location.search);
+  const flag = params.get('share');
+  if (!flag) return;
+  const u = params.get('u') || '';
+  const div = document.createElement('div');
+  div.className = 'share-toast';
+  div.textContent = flag === 'ok'
+    ? `📌 「${u}」を保存しました`
+    : '⚠ 共有された URL を解釈できませんでした';
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 4000);
+  // Strip the query so reload doesn't re-show the toast.
+  history.replaceState({}, '', location.pathname);
+})();
+
