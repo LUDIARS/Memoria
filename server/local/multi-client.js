@@ -1,9 +1,17 @@
+// @ts-check
 // Local-side client for the multi server (Memoria Hub).
 //
 // Wraps the JWT plumbing — the rest of the local server just passes the
 // resource shape. Connection state lives in app_settings (`multi_url`,
 // `multi_jwt`, `multi_user_id`, `multi_user_name`, `multi_role`,
 // `multi_connected_at`), so it survives restarts.
+//
+// @ts-check is on so the typedefs in `../types/db.d.ts` get exercised.
+// Phase 1 of the TS migration (#31): this module is the canary.
+
+/** @typedef {import('../types/db.js').Db} Db */
+/** @typedef {import('../types/db.js').MultiState} MultiState */
+
 import { getAppSettings, setAppSettings } from '../db/index.js';
 
 const SETTING_KEYS = {
@@ -15,6 +23,10 @@ const SETTING_KEYS = {
   connectedAt: 'multi_connected_at',
 };
 
+/**
+ * @param {Db} db
+ * @returns {MultiState}
+ */
 export function readMultiState(db) {
   const s = getAppSettings(db);
   return {
@@ -22,11 +34,12 @@ export function readMultiState(db) {
     jwt:         s[SETTING_KEYS.jwt] || null,
     userId:      s[SETTING_KEYS.userId] || null,
     userName:    s[SETTING_KEYS.userName] || null,
-    role:        s[SETTING_KEYS.role] || null,
+    role:        /** @type {MultiState['role']} */ (s[SETTING_KEYS.role] || null),
     connectedAt: s[SETTING_KEYS.connectedAt] || null,
   };
 }
 
+/** @param {MultiState} state */
 export function isConnected(state) {
   return Boolean(state.url && state.jwt && state.userId);
 }

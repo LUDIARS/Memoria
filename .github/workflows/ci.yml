@@ -32,7 +32,14 @@ jobs:
           set -e
           while IFS= read -r f; do
             node --check "$f"
-          done < <(find server -type f -name '*.js' -not -path 'server/node_modules/*')
+          done < <(find server -type f -name '*.js' -not -path 'server/node_modules/*' -not -path 'server/multi/node_modules/*')
+
+      - name: Typecheck (server)
+        working-directory: server
+        run: |
+          # devDeps may not be in the lockfile yet — install on demand.
+          npx --yes -p typescript@5.6 -p @types/node@20 -p @types/better-sqlite3@7 \
+            tsc --noEmit -p tsconfig.json
 
       - name: Syntax check (mcp-server)
         run: |
