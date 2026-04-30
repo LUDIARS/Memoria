@@ -553,6 +553,13 @@ function enqueueDig(id, query, { searchEngine = 'default', theme = null } = {}) 
     try {
       const result = await runDig({ query, searchEngine, theme, themeContext: themeCtx });
       setDigResult(db, id, { status: 'done', result });
+      // Dig 完了で push 通知 (登録済端末のみ)。 失敗は本体に影響させない。
+      sendPushToAll(db, {
+        title: `🔍 ディグ完了: ${query.slice(0, 40)}`,
+        body: theme ? `テーマ: ${theme}` : 'AI 分析が出揃いました',
+        url: `/?tab=dig&dig=${id}`,
+        tag: `memoria-dig-${id}`,
+      }).catch((err) => console.warn(`[push] dig#${id} notification failed: ${err.message}`));
     } catch (e) {
       setDigResult(db, id, { status: 'error', error: e.message.slice(0, 500) });
       throw e;
