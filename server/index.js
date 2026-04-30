@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
+import { WebSocketServer } from 'ws';
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2367,6 +2368,22 @@ app.post('/api/locations/ingest', async (c) => {
   };
 
   const result = insertGpsLocation(db, rec);
+  if (!result.skipped) {
+    // WebSocket subscriber に新規点をブロードキャスト
+    broadcastLocation({
+      id: result.id,
+      user_id: rec.userId,
+      device_id: rec.deviceId,
+      recorded_at: rec.recordedAt
+        ?? (typeof rec.tst === 'number' ? new Date(rec.tst * 1000).toISOString() : new Date().toISOString()),
+      lat: rec.lat,
+      lon: rec.lon,
+      accuracy_m: rec.accuracy ?? null,
+      altitude_m: rec.altitude ?? null,
+      velocity_kmh: rec.velocity ?? null,
+      course_deg: rec.course ?? null,
+    });
+  }
   // OwnTracks の HTTP モードはレスポンスとして JSON 配列 (友達の cards 等) を
   // 期待するので空配列で返す。 手動テスト時は X-Memoria-Insert-* header で
   // 結果を確認できる。
@@ -2424,8 +2441,59 @@ app.delete('/api/locations', (c) => {
 app.use('/*', serveStatic({ root: './public' }));
 app.get('/', serveStatic({ path: './public/index.html' }));
 
-serve({ fetch: app.fetch, port: PORT }, (info) => {
+// ---- HTTP server + WebSocket -------------------------------------------
+//
+// `@hono/node-server::serve` は内部で http.Server を作って listen するので、
+// その server hook (戻り値) に対して `ws` ライブラリで WebSocketServer を
+// attach すれば HTTP / WS を同 port で兼ねられる。
+//
+// Cloudflare Tunnel は WS upgrade を素通しできるので、 wss://.../ws/locations
+// で外からも繋がる (read-only broadcast。 認証は今後 ingest key で gate 予定)。
+
+/** @type {Set<import('ws').WebSocket>} */
+const wsClients = new Set();
+
+function broadcastLocation(point) {
+  if (wsClients.size === 0) return;
+  const msg = JSON.stringify({ type: 'location', point });
+  for (const c of wsClients) {
+    if (c.readyState === 1 /* OPEN */) {
+      try { c.send(msg); } catch {}
+    }
+  }
+}
+
+const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
+
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on('upgrade', (req, socket, head) => {
+  if (!req.url || !req.url.startsWith('/ws/locations')) {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
+});
+
+wss.on('connection', (ws) => {
+  wsClients.add(ws);
+  ws.on('close', () => wsClients.delete(ws));
+  ws.on('error', () => wsClients.delete(ws));
+  // 接続直後の hello (UI 側で接続成立を確認しやすくする)
+  try { ws.send(JSON.stringify({ type: 'hello', ts: Date.now() })); } catch {}
+});
+
+// keep-alive: 30s ごとに ping。 Cloudflare の idle timeout (100s 程度) を超えない。
+setInterval(() => {
+  for (const c of wsClients) {
+    if (c.readyState === 1) {
+      try { c.ping(); } catch {}
+    }
+  }
+}, 30_000).unref?.();
