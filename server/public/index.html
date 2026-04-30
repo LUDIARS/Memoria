@@ -70,23 +70,6 @@
   <main class="layout" data-active-tab="bookmarks">
     <section class="content">
       <nav class="tabs">
-        <!-- Mobile uses a native <select> so the dropdown is browser-native
-             (the previous custom More menu kept rendering empty in some
-             setups; a <select> always works). Desktop hides this and uses
-             the horizontal button strip below. -->
-        <select id="mobileTabSelect" class="mobile-tab-select" aria-label="タブ">
-          <option value="bookmarks">📚 ブックマーク</option>
-          <option value="queue">🔧 作業キュー</option>
-          <option value="events">📋 イベント</option>
-          <option value="visits">📰 アクセス履歴</option>
-          <option value="trends">📈 傾向</option>
-          <option value="recommend">✨ おすすめ</option>
-          <option value="dig">🔎 ディグる</option>
-          <option value="dict">📖 辞書</option>
-          <option value="domain">🏷 ドメイン</option>
-          <option value="diary">📅 日記</option>
-          <option value="multi" class="mobile-tab-multi-only">🌐 マルチ</option>
-        </select>
         <div class="tabs-scroll">
           <button class="tab active" data-tab="bookmarks">ブックマーク</button>
           <button class="tab" data-tab="queue">
@@ -108,10 +91,6 @@
           <button class="tab" data-tab="domain">🏷 ドメイン</button>
           <button class="tab" data-tab="diary">📅 日記</button>
           <button class="tab tab-multi-only" data-tab="multi" hidden>🌐 マルチ</button>
-        </div>
-        <div class="tabs-more">
-          <button type="button" class="tab tab-more-btn" id="tabMoreBtn" aria-haspopup="true" aria-expanded="false" title="他のタブ">⋯</button>
-          <div id="tabMoreMenu" class="tab-more-menu hidden" role="menu"></div>
         </div>
       </nav>
 

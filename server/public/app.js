@@ -564,12 +564,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
   if (tab === 'multi') loadMulti();
-  // Keep mobile tab select in sync with the active tab.
-  const sel = $('mobileTabSelect');
-  if (sel && sel.value !== tab) sel.value = tab;
   bumpTabUsage(tab);
-  reflowTabsForViewport();
-  closeTabMoreMenu();
 }
 
 // ── Tab use-count + mobile More menu ──────────────────────────────────────
@@ -587,61 +582,12 @@ function tabsInUsageOrder() {
   const u = readTabUsage();
   return tabs.slice().sort((a, b) => (u[b.dataset.tab] || 0) - (u[a.dataset.tab] || 0));
 }
-function closeTabMoreMenu() {
-  const m = $('tabMoreMenu');
-  const b = $('tabMoreBtn');
-  if (m) m.classList.add('hidden');
-  if (b) b.setAttribute('aria-expanded', 'false');
-}
-function reflowTabsForViewport() {
-  const scroll = document.querySelector('.tabs-scroll');
-  const moreWrap = document.querySelector('.tabs-more');
-  const moreMenu = $('tabMoreMenu');
-  if (!scroll || !moreWrap || !moreMenu) return;
-
-  const allTabs = [...scroll.querySelectorAll('.tab[data-tab]')];
-
-  // Reset every state from any previous run.
-  for (const t of allTabs) t.style.display = '';
-  moreMenu.replaceChildren();
-
-  const isNarrow = window.innerWidth <= 760;
-  if (!isNarrow) {
-    moreWrap.classList.add('hidden');
-    return;
-  }
-
-  const active = state.tab;
-  const ordered = tabsInUsageOrder();
-  const visibleN = 4;
-  const visible = new Set(ordered.slice(0, visibleN).map(t => t.dataset.tab));
-  if (active) visible.add(active);
-
-  let overflowCount = 0;
-  for (const t of allTabs) {
-    if (visible.has(t.dataset.tab)) {
-      t.style.display = '';
-    } else {
-      // Build a fresh button instead of cloning — cloneNode used to
-      // copy the `display: none` we set on the original, which made
-      // the More menu silently empty.
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'tab' + (t.dataset.tab === active ? ' active' : '');
-      item.dataset.tab = t.dataset.tab;
-      item.textContent = (t.textContent || t.dataset.tab).trim();
-      item.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        switchTab(t.dataset.tab);
-      });
-      moreMenu.appendChild(item);
-      t.style.display = 'none';
-      overflowCount += 1;
-    }
-  }
-  moreWrap.classList.toggle('hidden', overflowCount === 0);
-}
+// Custom More menu and mobile <select> have been removed — the tab
+// strip now scrolls horizontally on every viewport, which is more
+// reliable than juggling overflow logic. These no-ops stay around so
+// existing call sites (switchTab → reflowTabsForViewport) don't error.
+function closeTabMoreMenu() { /* no-op */ }
+function reflowTabsForViewport() { /* no-op */ }
 
 // ── Dig (deep research) ──────────────────────────────────────────────────
 
@@ -2751,34 +2697,9 @@ async function deleteSelectedVisits() {
 document.querySelectorAll('.tabs-scroll .tab').forEach(t => {
   t.addEventListener('click', () => switchTab(t.dataset.tab));
 });
-$('tabMoreBtn')?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  const menu = $('tabMoreMenu');
-  const btn = $('tabMoreBtn');
-  const open = menu.classList.contains('hidden');
-  menu.classList.toggle('hidden', !open);
-  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-});
-document.addEventListener('click', (e) => {
-  const menu = $('tabMoreMenu');
-  if (!menu || menu.classList.contains('hidden')) return;
-  if (e.target.closest('.tabs-more')) return;
-  closeTabMoreMenu();
-});
-window.addEventListener('resize', reflowTabsForViewport);
-reflowTabsForViewport();
 setupCategoriesDrawer();
 setupExtensionBadge();
-setupMobileTabSelect();
 setupHowToBookmark();
-
-// Mobile <select> for tabs — fires switchTab() on change.
-function setupMobileTabSelect() {
-  const sel = $('mobileTabSelect');
-  if (!sel) return;
-  sel.value = state.tab || 'bookmarks';
-  sel.addEventListener('change', () => switchTab(sel.value));
-}
 
 // 💡 やり方 button — only shows on mobile (no Chrome extension available).
 function setupHowToBookmark() {

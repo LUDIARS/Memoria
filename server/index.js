@@ -1919,10 +1919,14 @@ app.get('/api/diary/:date', (c) => {
   const date = c.req.param('date');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
   const entry = getDiary(db, date) || { date, status: 'absent' };
-  // Always include live metrics so the UI can chart even before the claude
-  // narrative finishes. (cheap; pure SQL aggregation)
+  // The stored row contains both `metrics_json` (raw text) AND its parsed
+  // `metrics` object. We also compute fresh `live_metrics`. Sending all
+  // three triples the payload — for a busy day that pushed the response
+  // past 1.8 MB and made the Tauri WebView freeze. Keep only live_metrics
+  // (which is what the SPA actually reads) and drop the redundancies.
+  const { metrics_json: _mj, metrics: _m, ...slim } = entry;
   const liveMetrics = aggregateDay(db, date);
-  return c.json({ ...entry, live_metrics: liveMetrics });
+  return c.json({ ...slim, live_metrics: liveMetrics });
 });
 
 app.post('/api/diary/:date/generate', async (c) => {
