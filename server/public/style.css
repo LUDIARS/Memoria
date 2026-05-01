@@ -3222,6 +3222,47 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .meal-addition button:hover {
   filter: brightness(0.96);
 }
+/* 追加 / 編集 inline form (prompt の代替) */
+.meal-addition-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.meal-addition-name-input {
+  flex: 1 1 140px;
+  min-width: 100px;
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.meal-addition-cal-input {
+  width: 80px;
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.meal-addition-save {
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--accent, #2a6df4);
+  background: var(--accent, #2a6df4);
+  color: #fff;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.meal-addition-save:hover { filter: brightness(0.95); }
+.meal-addition.editing {
+  flex-wrap: wrap;
+}
 
 /* ── Meals: 時刻 inline 編集 ─────────────────────────────────── */
 .meal-time-edit {
