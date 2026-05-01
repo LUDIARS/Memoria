@@ -3670,3 +3670,73 @@ dialog.meal-modal[open] {
     height: 200px;
   }
 }
+
+/* ── Diary: charts side-by-side + domains pane ───────────────── */
+.diary-charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+.diary-chart-cell {
+  min-width: 0;
+}
+.diary-chart-cell h4 {
+  margin: 0 0 6px;
+}
+.diary-chart-cell .diary-hourly,
+.diary-chart-cell .diary-pie {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .diary-charts-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* よく見たドメイン: ブクマと同じカード型ペイン */
+.diary-domains-pane {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.diary-domain-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.diary-domain-card:hover { border-color: var(--accent, #2a6df4); }
+.diary-domain-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.diary-domain-head .grow { flex: 1; }
+.diary-domain-title {
+  font-weight: 600;
+  word-break: break-all;
+}
+.diary-domain-card .diary-domain-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+.diary-domain-card .diary-domain-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+.diary-domain-card .diary-domain-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #2c3344;
+  margin-top: 3px;
+}

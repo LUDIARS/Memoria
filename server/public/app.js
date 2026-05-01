@@ -2652,8 +2652,14 @@ function renderDiaryDetail() {
       const desc = dm.description
         ? `<div class="diary-domain-desc">${dm.kind ? `<span class="visits-kind">${escapeHtml(dm.kind)}</span> ` : ''}${escapeHtml(dm.description)}</div>`
         : '';
-      return `<li>
-        <div class="diary-domain-row"><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(display)}</span>${sub}<span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></div>
+      return `<li class="diary-domain-card">
+        <div class="diary-domain-head">
+          <span class="diary-domain-swatch" style="background:${color}"></span>
+          <span class="diary-domain-title">${escapeHtml(display)}</span>
+          ${sub}
+          <span class="grow"></span>
+          <span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span>
+        </div>
         ${desc}
       </li>`;
     }).join('');
