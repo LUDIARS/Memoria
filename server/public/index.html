@@ -497,7 +497,9 @@
           <button id="mealsRefresh" class="ghost">更新</button>
         </div>
         <div id="mealsHint" class="meals-hint muted hidden">
-          OpenAI API key 未設定です (設定 → AI / 連携 → llm.openai.api_key)。 写真は登録できますが、 食事内容 / カロリーは自動推定されません。
+          画像解析が失敗しています。 設定 → AI / 連携 で
+          <code>meal_vision</code> タスクの provider / モデルを確認してください
+          (デフォルトは Claude CLI sonnet)。
         </div>
         <div id="mealsList" class="meals-list"></div>
       </div>

@@ -86,7 +86,7 @@ import {
 } from './db.js';
 import { initWebPush, getVapidPublicKey, saveSubscription, sendPushToAll } from './push.js';
 import {
-  extractPhotoMeta, resolveMealLocation, analyzeMealPhoto, getMealsApiKey,
+  extractPhotoMeta, resolveMealLocation, analyzeMealPhoto,
 } from './meals.js';
 import {
   readMultiState, isConnected,
@@ -619,26 +619,14 @@ function enqueueMealVision(id) {
   mealVisionQueue.enqueue(async () => {
     const meal = getMeal(db, id);
     if (!meal) return;
-    const apiKey = getMealsApiKey(db);
-    if (!apiKey) {
-      updateMeal(db, id, {
-        ai_status: 'pending',
-        ai_error: 'OpenAI API key not configured (set llm.openai.api_key in settings)',
-      });
-      return;
-    }
     const fullPath = join(MEAL_DIR, meal.photo_path);
-    let buf;
-    try {
-      buf = readFileSync(fullPath);
-    } catch (e) {
-      updateMeal(db, id, { ai_status: 'error', ai_error: `read file: ${e.message}` });
+    if (!existsSync(fullPath)) {
+      updateMeal(db, id, { ai_status: 'error', ai_error: 'photo file missing' });
       return;
     }
-    const mime = mimeFromExt(meal.photo_path);
     try {
       const result = await Promise.race([
-        analyzeMealPhoto(apiKey, buf.toString('base64'), mime),
+        analyzeMealPhoto(fullPath),
         new Promise((_, reject) => setTimeout(() => reject(new Error('vision timeout')), MEAL_VISION_TIMEOUT)),
       ]);
       if (!result) {

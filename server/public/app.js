@@ -4999,11 +4999,11 @@ function renderMeals() {
       </div>
     `;
   }).join('');
-  // OpenAI API key 不足の検出 (pending かつ ai_error にメッセージ)
+  // 直近の写真で解析エラーが続いたら設定確認の hint を表示
   const hint = document.getElementById('mealsHint');
   if (hint) {
-    const keyMissing = mealsState.items.some((m) => m.ai_status === 'pending' && (m.ai_error || '').includes('OpenAI API key'));
-    hint.classList.toggle('hidden', !keyMissing);
+    const recentErrors = mealsState.items.slice(0, 5).filter((m) => m.ai_status === 'error').length;
+    hint.classList.toggle('hidden', recentErrors < 2);
   }
   list.querySelectorAll('.meal-edit-btn').forEach((b) => {
     b.addEventListener('click', () => editMeal(Number(b.dataset.id)));

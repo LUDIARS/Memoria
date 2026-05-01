@@ -6,7 +6,8 @@
 // app_settings. Tasks recognised at the moment:
 //   summarize, dig, dig_preview, cloud_extract, cloud_validate,
 //   domain_classify, page_summary,
-//   diary_work, diary_highlights, diary_weekly
+//   diary_work, diary_highlights, diary_weekly,
+//   meal_vision (画像入力あり — Claude CLI 推奨)
 
 import { spawn } from 'node:child_process';
 
@@ -14,6 +15,7 @@ export const TASKS = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
   'domain_classify', 'page_summary',
   'diary_work', 'diary_highlights', 'diary_weekly',
+  'meal_vision',
 ];
 
 // When the user hasn't explicitly chosen a model for a task, fall back to these.
@@ -24,6 +26,7 @@ const TASK_DEFAULT_MODELS = {
   diary_work: 'sonnet',
   diary_highlights: 'claude-opus-4-7[1m]',
   diary_weekly: 'claude-opus-4-7[1m]',
+  meal_vision: 'sonnet',
 };
 
 export const PROVIDERS = {
