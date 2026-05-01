@@ -281,7 +281,9 @@ function renderDetailCloud() {
   const kept = (r.words || []).filter(w => w.kept);
   el.innerHTML = renderCloudWords(kept);
   el.querySelectorAll('.cloud-word').forEach(w => {
-    w.addEventListener('click', () => onCloudWordClick(w.dataset.word));
+    w.addEventListener('click', (ev) => {
+      openWordRingMenu(w.dataset.word, ev.clientX, ev.clientY, { onDig: () => onCloudWordClick(w.dataset.word) });
+    });
   });
 }
 
@@ -499,6 +501,7 @@ const QUEUE_GROUP_LABELS = {
   weekly:    '📆 週報',
   domain:    '🏷 ドメイン分類',
   page:      '📄 ページメタ',
+  meal:      '🍽 食事解析',
 };
 
 function collectQueueJobs(snap) {
@@ -586,6 +589,7 @@ function jobLabel(item) {
   if (item.bookmarkId != null) return `${kindHint}bookmark #${item.bookmarkId}`;
   if (item.sessionId != null) return `${kindHint}dig #${item.sessionId}`;
   if (item.cloudId != null) return `${kindHint}cloud #${item.cloudId}`;
+  if (item.meal_id != null) return `${kindHint}meal #${item.meal_id}`;
   if (item.date) return `${kindHint}${item.date}`;
   if (item.weekStart) return `${kindHint}${item.weekStart}`;
   if (item.domain) return `${kindHint}${item.domain}`;
@@ -611,6 +615,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('eventsView').classList.toggle('hidden', tab !== 'events');
   $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
+  $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
@@ -622,6 +627,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
   if (tab === 'tracks') loadTracks();
+  if (tab === 'meals') loadMeals();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   closeTabMoreMenu();
@@ -1139,21 +1145,21 @@ function renderDigSession() {
     </div>
     <div class="dig-sources">${sourceCards}</div>
   `;
-  // Cloud node clicks — explored word jumps to its past session, new word
-  // hands off to digOnWordPick (one-cushion flow: focus the textarea with a
-  // prefilled "○○ について 何を知りたいか?" prompt, plus a "別テーマとして
-  // 検索" button alongside the regular ディグる).
-  const handleNodeClick = (target) => {
+  // Cloud node clicks — explored word はその過去 session へジャンプ。
+  // それ以外は単語リングメニューを開いて 「ディグる / 辞書登録 / 削除」
+  // を選ばせる (one-cushion 廃止、 明示的な分岐に)。
+  const handleNodeClick = (target, ev) => {
     const exploredId = target.dataset.exploredId;
     if (exploredId) {
       loadDigSession(Number(exploredId));
       return;
     }
     const word = target.dataset.word;
-    if (word) digOnWordPick(s, word);
+    if (!word) return;
+    openWordRingMenu(word, ev?.clientX, ev?.clientY, { session: s });
   };
   el.querySelectorAll('.dig-graph-node, .dig-cloud-word').forEach(node => {
-    node.addEventListener('click', () => handleNodeClick(node));
+    node.addEventListener('click', (ev) => handleNodeClick(node, ev));
   });
   el.querySelectorAll('.dig-source').forEach(card => {
     const url = card.dataset.url;
@@ -1840,7 +1846,9 @@ function renderCloud() {
     });
   });
   el.querySelectorAll('.cloud-word').forEach(w => {
-    w.addEventListener('click', () => onCloudWordClick(w.dataset.word));
+    w.addEventListener('click', (ev) => {
+      openWordRingMenu(w.dataset.word, ev.clientX, ev.clientY, { onDig: () => onCloudWordClick(w.dataset.word) });
+    });
   });
   el.querySelector('#cloudManualBtn')?.addEventListener('click', submitManualWord);
   el.querySelector('#cloudManualInput')?.addEventListener('keydown', (e) => {
@@ -2650,8 +2658,14 @@ function renderDiaryDetail() {
       const desc = dm.description
         ? `<div class="diary-domain-desc">${dm.kind ? `<span class="visits-kind">${escapeHtml(dm.kind)}</span> ` : ''}${escapeHtml(dm.description)}</div>`
         : '';
-      return `<li>
-        <div class="diary-domain-row"><span class="diary-domain-swatch" style="background:${color}"></span><span class="diary-domain-name">${escapeHtml(display)}</span>${sub}<span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span></div>
+      return `<li class="diary-domain-card">
+        <div class="diary-domain-head">
+          <span class="diary-domain-swatch" style="background:${color}"></span>
+          <span class="diary-domain-title">${escapeHtml(display)}</span>
+          ${sub}
+          <span class="grow"></span>
+          <span class="diary-domain-count">${dm.count} 件 · ${dm.active_hours.length} 時間帯</span>
+        </div>
         ${desc}
       </li>`;
     }).join('');
@@ -2667,6 +2681,11 @@ function renderDiaryDetail() {
   const digs = metrics.digs || [];
   const digsTotal = metrics.digs_total ?? digs.length;
   renderDiaryDigList(digs, digsTotal);
+
+  // 食事
+  renderDiaryMeals(metrics.meals || [], metrics.meals_total_calories, metrics.meals_nutrients, metrics.meals_pfc_label);
+  // カロリーバランス
+  renderDiaryCaloricBalance(metrics.caloric_balance);
 
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
@@ -2777,6 +2796,111 @@ function renderDiaryBookmarkList(elId, items, total, kind, emptyMsg) {
       return { items: (r.items || []).map(b => bookmarkLi(b, withAccess)), total: r.total };
     });
   }
+}
+
+function fmtNutrient(v, unit) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—';
+  return `${Math.round(v * 10) / 10}${unit}`;
+}
+
+function renderDiaryCaloricBalance(cb) {
+  const wrap = document.getElementById('diaryCaloricBalance');
+  if (!wrap) return;
+  if (!cb) {
+    wrap.innerHTML = `<div class="hint">プロファイルが未設定です。 設定 (右上 ⚙) → 「🧍 プロファイル」 で年齢 / 性別 / 体重 / 身長 / 活動レベルを入れると、 BMR + TDEE + 軌跡からの歩行消費を計算します。</div>`;
+    return;
+  }
+  const p = cb.profile;
+  const sexLabel = p.sex === 'male' ? '男性' : '女性';
+  const intakeStr = (cb.intake != null) ? `${cb.intake} kcal` : '— (食事なし)';
+  const diffT = cb.diff_vs_target;
+  const diffE = cb.diff_vs_expenditure;
+  const sign = (n) => n == null ? '—' : (n > 0 ? `+${n}` : String(n));
+  const diffTClass = diffT == null ? '' : (diffT > 200 ? 'over' : diffT < -200 ? 'under' : 'ok');
+  const diffEClass = diffE == null ? '' : (diffE > 200 ? 'over' : diffE < -200 ? 'under' : 'ok');
+  wrap.innerHTML = `
+    <div class="cb-profile muted">${escapeHtml(sexLabel)} / ${p.age}歳 / ${p.weight_kg}kg / ${p.height_cm}cm / 活動 ${escapeHtml(p.activity_level)}</div>
+    <div class="cb-grid">
+      <div class="cb-stat">
+        <div class="cb-label">摂取</div>
+        <div class="cb-value">${escapeHtml(intakeStr)}</div>
+      </div>
+      <div class="cb-stat">
+        <div class="cb-label">消費 (BMR + 歩行)</div>
+        <div class="cb-value">${cb.expenditure_total} kcal</div>
+        <div class="cb-sub muted">BMR ${cb.bmr} + 歩行 ${cb.walking_kcal}</div>
+      </div>
+      <div class="cb-stat">
+        <div class="cb-label">適正 (TDEE)</div>
+        <div class="cb-value">${cb.tdee} kcal</div>
+      </div>
+      <div class="cb-stat cb-diff ${diffTClass}">
+        <div class="cb-label">摂取 - 適正</div>
+        <div class="cb-value">${escapeHtml(sign(diffT))} kcal</div>
+      </div>
+      <div class="cb-stat cb-diff ${diffEClass}">
+        <div class="cb-label">摂取 - 消費 (収支)</div>
+        <div class="cb-value">${escapeHtml(sign(diffE))} kcal</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDiaryMeals(meals, totalCal, nutrients, pfcLabel) {
+  const wrap = document.getElementById('diaryMeals');
+  if (!wrap) return;
+  if (!meals || meals.length === 0) {
+    wrap.innerHTML = '<div class="queue-empty">この日の食事記録はなし</div>';
+    return;
+  }
+  const totalLine = (typeof totalCal === 'number')
+    ? `<div class="diary-meals-total">総カロリー: <strong>${totalCal} kcal</strong> (${meals.length} 食)</div>`
+    : `<div class="diary-meals-total muted">${meals.length} 食 (カロリー未推定)</div>`;
+  const nutLine = nutrients
+    ? `<div class="diary-meals-nutrients">
+        <span class="nutrient-chip"><b>P</b> ${fmtNutrient(nutrients.protein_g, 'g')}</span>
+        <span class="nutrient-chip"><b>F</b> ${fmtNutrient(nutrients.fat_g, 'g')}</span>
+        <span class="nutrient-chip"><b>C</b> ${fmtNutrient(nutrients.carbs_g, 'g')}</span>
+        <span class="nutrient-chip nutrient-fiber">食物繊維 ${fmtNutrient(nutrients.fiber_g, 'g')}</span>
+        <span class="nutrient-chip nutrient-sugar">糖質 ${fmtNutrient(nutrients.sugar_g, 'g')}</span>
+        <span class="nutrient-chip nutrient-sodium">塩分 ${fmtNutrient(nutrients.sodium_mg, 'mg')}</span>
+        ${pfcLabel ? `<span class="nutrient-chip nutrient-pfc"><b>PFC</b> ${escapeHtml(pfcLabel)}</span>` : ''}
+       </div>`
+    : '';
+  const items = meals.map((m) => {
+    // ISO は UTC なので localtime に変換して HH:MM を表示
+    const td = new Date(m.eaten_at || '');
+    const t = isNaN(td.getTime())
+      ? (m.eaten_at || '').slice(11, 16)
+      : `${String(td.getHours()).padStart(2, '0')}:${String(td.getMinutes()).padStart(2, '0')}`;
+    const desc = m.description || '(未記入)';
+    const cal = (typeof m.total_calories === 'number') ? `${m.total_calories} kcal` : '— kcal';
+    const adds = (m.additions || []).map((a) => {
+      const ac = typeof a.calories === 'number' ? ` ${a.calories}kcal` : '';
+      return `＋${a.name}${ac}`;
+    }).join(', ');
+    const addsHtml = adds ? `<span class="diary-meal-adds muted"> · ${escapeHtml(adds)}</span>` : '';
+    return `<li class="diary-meal-row">
+      <a class="diary-meal-thumb" href="#" data-meal-id="${m.id}">
+        <img src="/api/meals/${m.id}/photo" loading="lazy" alt="" />
+      </a>
+      <div class="diary-meal-body">
+        <div class="diary-meal-head">
+          <span class="diary-meal-time">${escapeHtml(t)}</span>
+          <span class="diary-meal-cal">${escapeHtml(cal)}</span>
+        </div>
+        <div class="diary-meal-desc">${escapeHtml(desc)}${addsHtml}</div>
+      </div>
+    </li>`;
+  }).join('');
+  wrap.innerHTML = `${totalLine}${nutLine}<ul class="diary-meals-list">${items}</ul>`;
+  // クリック → 食事タブに飛ばす
+  wrap.querySelectorAll('.diary-meal-thumb').forEach((a) => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      switchTab('meals');
+    });
+  });
 }
 
 function renderDiaryDigList(items, total) {
@@ -3873,6 +3997,15 @@ async function openAiSettings() {
     $('aiOpenaiModel').value = cfg.openai_model || '';
     $('aiOpenaiKeyStatus').textContent = cfg.openai_api_key_set ? '✓ API key 設定済み (再入力で上書き)' : '(未設定)';
     if ($('aiDiaryGlobalMemo')) $('aiDiaryGlobalMemo').value = cfg.diary_global_memo || '';
+    // ユーザプロファイル (適正カロリー計算用)
+    if (cfg.user_profile) {
+      const up = cfg.user_profile;
+      if ($('userAge')) $('userAge').value = up.age != null ? String(up.age) : '';
+      if ($('userSex')) $('userSex').value = up.sex || '';
+      if ($('userWeightKg')) $('userWeightKg').value = up.weight_kg != null ? String(up.weight_kg) : '';
+      if ($('userHeightCm')) $('userHeightCm').value = up.height_cm != null ? String(up.height_cm) : '';
+      if ($('userActivityLevel')) $('userActivityLevel').value = up.activity_level || 'moderate';
+    }
     if (r.runtime) {
       const rt = r.runtime;
       $('aiRuntimeInfo').innerHTML = `
@@ -4173,7 +4306,18 @@ async function saveAiSettings() {
     openai_model: $('aiOpenaiModel').value.trim() || 'gpt-4o-mini',
     git_bash_path: $('aiGitBashPath').value.trim(),
     diary_global_memo: $('aiDiaryGlobalMemo')?.value || '',
+    user_profile: {
+      age: parseFloat($('userAge')?.value),
+      sex: $('userSex')?.value || '',
+      weight_kg: parseFloat($('userWeightKg')?.value),
+      height_cm: parseFloat($('userHeightCm')?.value),
+      activity_level: $('userActivityLevel')?.value || 'moderate',
+    },
   };
+  // NaN/empty を null に正規化
+  for (const k of ['age', 'weight_kg', 'height_cm']) {
+    if (!isFinite(body.user_profile[k])) body.user_profile[k] = null;
+  }
   const k = $('aiOpenaiKey').value;
   if (k && k !== '***') body.openai_api_key = k;
   try {
@@ -4926,3 +5070,1175 @@ document.getElementById('aiSettingsBtn')?.addEventListener('click', () => {
   history.replaceState({}, '', location.pathname);
 })();
 
+
+// ── Meals (食事記録) ─────────────────────────────────────────────────────
+//
+// /api/meals (multipart) で写真投稿 → サーバが EXIF / GPS / Vision で
+// 補完 → 一覧 + 編集。 OPENAI_API_KEY が無いと内容 / カロリーは pending のまま、
+// 手動入力で運用可能。
+
+const mealsState = {
+  items: [],
+  pollTimer: null,
+};
+
+async function loadMeals() {
+  const list = document.getElementById('mealsList');
+  if (!list) return;
+  // 単一日付フィルタ — 値があれば「その日 0:00 〜 23:59」 で絞り込み
+  const dateEl = document.getElementById('mealsFilterDate');
+  const params = new URLSearchParams();
+  const v = dateEl?.value;
+  if (v) {
+    params.set('from', v + 'T00:00:00');
+    params.set('to', v + 'T23:59:59');
+  }
+  try {
+    const r = await api(`/api/meals?${params.toString()}`);
+    mealsState.items = r.meals || [];
+    renderMeals();
+    schedulePendingPoll();
+  } catch (e) {
+    list.innerHTML = `<div class="hint">読み込みエラー: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderMeals() {
+  const list = document.getElementById('mealsList');
+  if (!list) return;
+  if (mealsState.items.length === 0) {
+    list.innerHTML = '<div class="hint">まだ食事の記録はありません。 「📷 写真を追加」 から登録してください。</div>';
+    return;
+  }
+  list.innerHTML = mealsState.items.map((m) => {
+    const desc = m.user_corrected_description || m.description || (m.ai_status === 'pending' ? '解析中…' : m.ai_status === 'error' ? '解析失敗' : '(未記入)');
+    const baseCal = m.user_corrected_calories ?? m.calories;
+    const additions = parseMealAdditions(m.additions_json);
+    const addCalSum = additions.reduce((s, a) => s + (typeof a.calories === 'number' ? a.calories : 0), 0);
+    const totalCal = (baseCal == null && additions.length === 0) ? null : (baseCal ?? 0) + addCalSum;
+    const calStr = totalCal == null ? '— kcal' : `${totalCal} kcal`;
+    const eatenAt = formatLocalMealDateTime(m.eaten_at);
+    const locStr = m.location_label || (m.lat != null && m.lon != null ? `${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}` : '場所不明');
+    const aiBadge = m.ai_status === 'pending'
+      ? '<span class="meal-badge meal-badge-pending">解析中</span>'
+      : m.ai_status === 'error'
+      ? `<span class="meal-badge meal-badge-error" title="${escapeHtml(m.ai_error || '')}">解析失敗</span>`
+      : '';
+    const additionsHtml = additions.length === 0 ? '' : `
+      <ul class="meal-additions">
+        ${additions.map((a, i) => {
+          const calLabel = typeof a.calories === 'number' ? `${a.calories} kcal` : '— kcal';
+          const timeLabel = a.added_at ? formatLocalMealDateTime(a.added_at) : '';
+          return `
+            <li class="meal-addition" data-meal-id="${m.id}" data-idx="${i}">
+              <span class="meal-addition-name">＋ ${escapeHtml(a.name)}</span>
+              <span class="meal-addition-cal">${escapeHtml(calLabel)}</span>
+              ${timeLabel ? `<span class="meal-addition-time">${escapeHtml(timeLabel)}</span>` : ''}
+              <button class="ghost meal-addition-edit" data-id="${m.id}" data-idx="${i}" title="編集">✏️</button>
+              <button class="ghost meal-addition-delete" data-id="${m.id}" data-idx="${i}" title="削除">×</button>
+            </li>
+          `;
+        }).join('')}
+      </ul>
+    `;
+    const photoHtml = m.photo_path
+      ? `<img class="meal-photo" src="/api/meals/${m.id}/photo" loading="lazy" alt="食事写真" />`
+      : `<div class="meal-photo meal-photo-empty" aria-label="写真なし"><span class="meal-photo-empty-icon">📝</span><span class="meal-photo-empty-label">写真なし</span></div>`;
+    return `
+      <div class="meal-card" data-meal-id="${m.id}">
+        ${photoHtml}
+        <div class="meal-body">
+          <div class="meal-head">
+            <button class="meal-time-edit" data-id="${m.id}" data-current="${escapeHtml(toDatetimeLocalValue(m.eaten_at))}" title="クリックで時刻を編集">
+              <span class="meal-time">${escapeHtml(eatenAt)}</span>
+              <span class="meal-time-pencil">✏️</span>
+            </button>
+            ${aiBadge}
+          </div>
+          <button class="meal-desc meal-inline-editable" data-id="${m.id}" data-field="description" data-current="${escapeHtml(m.user_corrected_description || m.description || '')}" title="クリックで内容を編集">
+            ${escapeHtml(desc)}
+            <span class="meal-inline-pencil">✏️</span>
+          </button>
+          <div class="meal-meta">
+            <span class="meal-cal">${escapeHtml(calStr)}</span>
+            <button class="meal-loc meal-inline-editable" data-id="${m.id}" data-field="location" data-lat="${m.lat ?? ''}" data-lon="${m.lon ?? ''}" title="クリックで場所を編集">
+              ${escapeHtml(locStr)}
+              <span class="meal-inline-pencil">✏️</span>
+            </button>
+            ${(m.lat != null && m.lon != null) ? `<a class="meal-loc-map-link" href="https://www.google.com/maps?q=${encodeURIComponent(m.lat)},${encodeURIComponent(m.lon)}" target="_blank" rel="noopener" title="Google Maps で開く" onclick="event.stopPropagation()">↗ Maps</a>` : ''}
+          </div>
+          ${m.user_note ? `<div class="meal-note">📝 ${escapeHtml(m.user_note)}</div>` : ''}
+          ${additionsHtml}
+          <div class="meal-actions">
+            <button class="ghost meal-edit-full-btn" data-id="${m.id}" title="ダイアログで全項目を編集">✏️ 編集</button>
+            <button class="ghost meal-add-btn" data-id="${m.id}">➕ 追加で食べた</button>
+            <button class="ghost meal-reanalyze-btn" data-id="${m.id}" ${m.photo_path ? '' : 'hidden'}>🔄 再解析</button>
+            <button class="ghost meal-delete-btn" data-id="${m.id}">🗑️ 削除</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  // 直近の写真で解析エラーが続いたら設定確認の hint を表示
+  const hint = document.getElementById('mealsHint');
+  if (hint) {
+    const recentErrors = mealsState.items.slice(0, 5).filter((m) => m.ai_status === 'error').length;
+    hint.classList.toggle('hidden', recentErrors < 2);
+  }
+  list.querySelectorAll('.meal-edit-full-btn').forEach((b) => {
+    b.addEventListener('click', () => openMealEditModal(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-reanalyze-btn').forEach((b) => {
+    b.addEventListener('click', () => reanalyzeMeal(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-delete-btn').forEach((b) => {
+    b.addEventListener('click', () => deleteMealRow(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-add-btn').forEach((b) => {
+    b.addEventListener('click', () => addMealAddition(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-time-edit').forEach((b) => {
+    b.addEventListener('click', (ev) => {
+      // editing 状態の中の input/button が再帰しないように
+      if (ev.target.closest('.meal-time-actions') || ev.target.tagName === 'INPUT') return;
+      startMealTimeEdit(b);
+    });
+  });
+  list.querySelectorAll('.meal-inline-editable[data-field="description"]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('.meal-inline-actions') || ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
+      startMealDescriptionEdit(el);
+    });
+  });
+  list.querySelectorAll('.meal-inline-editable[data-field="location"]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('.meal-inline-actions') || ev.target.tagName === 'INPUT' || ev.target.tagName === 'BUTTON') return;
+      startMealLocationEdit(el);
+    });
+  });
+  list.querySelectorAll('.meal-addition-edit').forEach((b) => {
+    b.addEventListener('click', () => editMealAddition(Number(b.dataset.id), Number(b.dataset.idx)));
+  });
+  list.querySelectorAll('.meal-addition-delete').forEach((b) => {
+    b.addEventListener('click', () => deleteMealAddition(Number(b.dataset.id), Number(b.dataset.idx)));
+  });
+}
+
+function parseMealAdditions(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+/** ISO8601 → `YYYY-MM-DDTHH:MM` (datetime-local 用 / ローカル時刻基準)。 */
+function toDatetimeLocalValue(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+/** 時刻表示の隣の ✏️ をクリックしたら inline picker に切り替えて即時 PATCH。 */
+function startMealTimeEdit(btn) {
+  const mealId = Number(btn.dataset.id);
+  const current = btn.dataset.current || '';
+  if (btn.classList.contains('editing')) return;
+  btn.classList.add('editing');
+
+  // 元の中身 (span 2 つ) を退避してから input に置き換える
+  const original = btn.innerHTML;
+  btn.innerHTML = `
+    <input type="datetime-local" class="meal-time-input" value="${current}" />
+    <span class="meal-time-actions">
+      <button class="meal-time-save" type="button" title="保存">✓</button>
+      <button class="meal-time-cancel" type="button" title="キャンセル">×</button>
+    </span>
+  `;
+  const input = btn.querySelector('input');
+  const saveBtn = btn.querySelector('.meal-time-save');
+  const cancelBtn = btn.querySelector('.meal-time-cancel');
+  input?.focus();
+
+  function restore() {
+    btn.innerHTML = original;
+    btn.classList.remove('editing');
+  }
+
+  async function save() {
+    const v = input?.value || '';
+    if (!v) { restore(); return; }
+    try {
+      // datetime-local の文字列をそのまま PATCH に渡す (サーバ側で new Date() → ISO8601)
+      await api(`/api/meals/${mealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eaten_at: v }),
+      });
+      await loadMeals();
+    } catch (e) {
+      alert(`時刻修正エラー: ${e.message}`);
+      restore();
+    }
+  }
+
+  saveBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); save(); });
+  cancelBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); restore(); });
+  input?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
+  });
+  input?.addEventListener('click', (ev) => ev.stopPropagation());
+}
+
+function formatLocalMealDateTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso || '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function schedulePendingPoll() {
+  if (mealsState.pollTimer) clearTimeout(mealsState.pollTimer);
+  // 解析中 (ai_status=pending) または addition の calories 未確定なら polling
+  const hasPending = mealsState.items.some((m) => {
+    if (m.ai_status === 'pending') return true;
+    const adds = parseMealAdditions(m.additions_json);
+    return adds.some((a) => a.calories == null);
+  });
+  if (!hasPending) return;
+  mealsState.pollTimer = setTimeout(() => {
+    if (state.tab !== 'meals') return;
+    loadMeals();
+  }, 4000);
+}
+
+// ── 食事登録モーダル — 写真 / 写真なし いずれも 1 件ずつ確認画面を出す ──
+//
+// queue にためて 1 件ずつ open / submit / next。 キャンセルで queue 全破棄。
+
+const mealModalState = {
+  queue: [],
+  currentIndex: 0,
+  totalCount: 0,
+  current: null,
+};
+
+function ensureBlobUrlRevoked(item) {
+  if (item?.blobUrl) {
+    URL.revokeObjectURL(item.blobUrl);
+    item.blobUrl = '';
+  }
+}
+
+function clearMealQueue() {
+  for (const it of mealModalState.queue) ensureBlobUrlRevoked(it);
+  if (mealModalState.current) ensureBlobUrlRevoked(mealModalState.current);
+  mealModalState.queue = [];
+  mealModalState.currentIndex = 0;
+  mealModalState.totalCount = 0;
+  mealModalState.current = null;
+}
+
+function enqueueMealModal(items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const wasIdle = mealModalState.queue.length === 0 && !mealModalState.current;
+  for (const it of items) {
+    if (it.kind === 'photo' && it.file) {
+      it.blobUrl = URL.createObjectURL(it.file);
+    }
+    mealModalState.queue.push(it);
+  }
+  // 進捗総数 = 現在処理中分 + 残りキュー
+  mealModalState.totalCount = mealModalState.currentIndex + (mealModalState.current ? 0 : 0) + mealModalState.queue.length + (mealModalState.current ? 1 : 0);
+  if (wasIdle) advanceMealQueue();
+}
+
+function advanceMealQueue() {
+  if (mealModalState.current) ensureBlobUrlRevoked(mealModalState.current);
+  const next = mealModalState.queue.shift();
+  if (!next) {
+    closeMealModal();
+    return;
+  }
+  mealModalState.current = next;
+  mealModalState.currentIndex += 1;
+  openMealModal(next);
+}
+
+function openMealModal(item) {
+  const modal = document.getElementById('mealModal');
+  if (!modal) return;
+  // グローバル `.hidden { display: none !important }` が残っていると
+  // showModal で [open] が付いても表示されないので、 念のため毎回 remove。
+  modal.classList.remove('hidden');
+  // <dialog>.showModal() でネイティブ popup として開く (focus trap / Esc 自動)。
+  // 古い iOS Safari (< 15.4) や一部の WebView では showModal が未実装。
+  // どんな環境でも確実に開けるよう、 stub 失敗時は手動で open 属性 + flex を強制。
+  let openedNatively = false;
+  if (typeof modal.showModal === 'function' && !modal.open) {
+    try {
+      modal.showModal();
+      openedNatively = true;
+    } catch (e) {
+      console.warn('[meal-modal] showModal failed, falling back:', e);
+    }
+  }
+  if (!openedNatively) {
+    // dialog 非対応 / showModal 失敗時の fallback — open 属性 + 直接 style 指定
+    modal.setAttribute('open', '');
+    modal.style.display = 'flex';
+    modal.style.position = 'fixed';
+    modal.style.inset = '0';
+    modal.style.zIndex = '1000';
+    // ネイティブ ::backdrop が出ない fallback の場合、 dialog 自体の背景で
+    // 半透明黒を塗って他クリックを封じる
+    modal.style.background = 'rgba(0, 0, 0, 0.45)';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+  }
+
+  const photoImg = document.getElementById('mealModalPhoto');
+  const photoEmpty = document.getElementById('mealModalPhotoEmpty');
+  if (item.kind === 'photo' && item.blobUrl) {
+    photoImg.src = item.blobUrl;
+    photoImg.hidden = false;
+    photoEmpty.classList.add('hidden');
+  } else if (item.kind === 'edit' && item.meal?.photo_path) {
+    // 編集 mode: 既存写真をサーバ URL から表示
+    photoImg.src = `/api/meals/${item.meal.id}/photo?t=${Date.now()}`;
+    photoImg.hidden = false;
+    photoEmpty.classList.add('hidden');
+  } else {
+    photoImg.hidden = true;
+    photoImg.removeAttribute('src');
+    photoEmpty.classList.remove('hidden');
+  }
+
+  const descEl = document.getElementById('mealModalDesc');
+  const eatenEl = document.getElementById('mealModalEatenAt');
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const calEl = document.getElementById('mealModalCal');
+  const noteEl = document.getElementById('mealModalNote');
+  const descHint = document.getElementById('mealModalDescHint');
+  const titleEl = document.getElementById('mealModalTitle');
+  const submitEl = document.getElementById('mealModalSubmit');
+
+  if (item.kind === 'edit' && item.meal) {
+    // 既存値を埋める
+    const m = item.meal;
+    if (descEl) descEl.value = m.user_corrected_description || m.description || '';
+    if (eatenEl) eatenEl.value = toDatetimeLocalValue(m.eaten_at);
+    if (latEl) latEl.value = m.lat != null ? String(m.lat) : '';
+    if (lonEl) lonEl.value = m.lon != null ? String(m.lon) : '';
+    const cal = m.user_corrected_calories ?? m.calories;
+    if (calEl) calEl.value = cal != null ? String(cal) : '';
+    if (noteEl) noteEl.value = m.user_note || '';
+    if (titleEl) titleEl.textContent = `食事を編集 #${m.id}`;
+    if (submitEl) submitEl.textContent = '保存';
+  } else {
+    if (descEl) descEl.value = '';
+    if (eatenEl) eatenEl.value = toDatetimeLocalValue(new Date().toISOString());
+    if (latEl) latEl.value = '';
+    if (lonEl) lonEl.value = '';
+    if (calEl) calEl.value = '';
+    if (noteEl) noteEl.value = '';
+    if (titleEl) titleEl.textContent = '食事を登録';
+    if (submitEl) submitEl.textContent = '登録';
+  }
+  updateMealModalMapLink();
+
+  // 写真あり (新規 / 編集) なら description 任意、 写真なし (manual) は必須
+  const hasPhoto = item.kind === 'photo' || (item.kind === 'edit' && item.meal?.photo_path);
+  if (hasPhoto) {
+    descEl?.removeAttribute('required');
+    if (descHint) descHint.textContent = item.kind === 'edit'
+      ? '空欄なら AI 結果に戻ります'
+      : '空欄なら AI が画像から推定 (Claude Vision)';
+  } else {
+    descEl?.setAttribute('required', 'required');
+    if (descHint) descHint.textContent = '写真なしの場合は内容必須。 カロリー空欄なら AI 推定';
+  }
+
+  const total = mealModalState.totalCount;
+  const idx = mealModalState.currentIndex;
+  const prog = document.getElementById('mealModalProgress');
+  if (prog) prog.textContent = total > 1 ? `${idx} / ${total}` : '';
+  const skipBtn = document.getElementById('mealModalSkip');
+  if (skipBtn) skipBtn.hidden = mealModalState.queue.length === 0;
+
+  setTimeout(() => descEl?.focus(), 30);
+}
+
+function closeMealModal() {
+  const modal = document.getElementById('mealModal');
+  if (modal) {
+    if (typeof modal.close === 'function' && modal.open) {
+      try { modal.close(); }
+      catch (e) { console.warn('[meal-modal] close failed:', e); }
+    }
+    // fallback で付けた open 属性 / inline style をクリア。
+    // `.hidden` は付けない — 次回 showModal 時に `display: none !important`
+    // が `dialog[open]` を上書きしてしまうため。 dialog は UA 既定で
+    // `:not([open])` のとき非表示になる。
+    modal.removeAttribute('open');
+    modal.style.display = '';
+    modal.style.position = '';
+    modal.style.inset = '';
+    modal.style.zIndex = '';
+    modal.style.background = '';
+    modal.style.alignItems = '';
+    modal.style.justifyContent = '';
+  }
+  // 地図リソースもクリア
+  mealMapState.marker = null;
+  mealModalState.current = null;
+  mealModalState.currentIndex = 0;
+  mealModalState.totalCount = 0;
+}
+
+// ── 食事モーダル: Google Map 連携 ───────────────────────────────
+//
+// 既存の tracksMap で使う API key とローダ (ensureGoogleMapsLoaded) を
+// 流用。 モーダル内に小さな地図を埋め込み、 クリック/タップで lat/lon を
+// フォームへ反映。 API key 未設定時は外部リンク (Maps で開く) のみ提供。
+
+const mealMapState = {
+  apiKey: null,         // null=未取得、 ''=未設定確定、 string=取得済
+  fetched: false,
+  map: null,            // google.maps.Map インスタンス
+  marker: null,
+};
+
+async function fetchMapsApiKey() {
+  if (mealMapState.fetched) return mealMapState.apiKey;
+  try {
+    const cfg = await api('/api/maps/config');
+    mealMapState.apiKey = cfg.hasKey ? (cfg.apiKey || '') : '';
+  } catch {
+    mealMapState.apiKey = '';
+  }
+  mealMapState.fetched = true;
+  return mealMapState.apiKey;
+}
+
+async function ensureMealModalMap(initialLat, initialLon) {
+  const wrap = document.getElementById('mealModalMap');
+  if (!wrap) return;
+  const apiKey = await fetchMapsApiKey();
+  if (!apiKey) {
+    wrap.innerHTML = '<div class="hint">Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps.api_key</code> を入れるか、 「↗ Maps で開く」 リンクで外部表示してください。</div>';
+    return;
+  }
+  try {
+    await ensureGoogleMapsLoaded(apiKey);
+  } catch (e) {
+    wrap.innerHTML = `<div class="hint">Google Maps の読み込みに失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!window.google?.maps) return;
+
+  // 中心点: 既存値 → 直近の GPS 軌跡 → 東京駅
+  const center = (initialLat != null && initialLon != null)
+    ? { lat: Number(initialLat), lng: Number(initialLon) }
+    : { lat: 35.681, lng: 139.767 };
+
+  // 既存の Map インスタンスがあれば再利用、 そうでなければ新規作成
+  if (!mealMapState.map) {
+    mealMapState.map = new google.maps.Map(wrap, {
+      center,
+      zoom: 15,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+    });
+    mealMapState.map.addListener('click', (ev) => {
+      const lat = ev.latLng.lat();
+      const lon = ev.latLng.lng();
+      setMealModalLatLon(lat, lon, /*recenter*/ false);
+    });
+  } else {
+    mealMapState.map.setCenter(center);
+    mealMapState.map.setZoom(15);
+    google.maps.event.trigger(mealMapState.map, 'resize');
+  }
+  if (initialLat != null && initialLon != null) {
+    placeMealModalMarker(Number(initialLat), Number(initialLon));
+  } else if (mealMapState.marker) {
+    mealMapState.marker.setMap(null);
+    mealMapState.marker = null;
+  }
+}
+
+function placeMealModalMarker(lat, lon) {
+  if (!mealMapState.map) return;
+  const pos = new google.maps.LatLng(lat, lon);
+  if (!mealMapState.marker) {
+    mealMapState.marker = new google.maps.Marker({
+      position: pos,
+      map: mealMapState.map,
+      draggable: true,
+    });
+    mealMapState.marker.addListener('dragend', (ev) => {
+      const dlat = ev.latLng.lat();
+      const dlon = ev.latLng.lng();
+      setMealModalLatLon(dlat, dlon, /*recenter*/ false);
+    });
+  } else {
+    mealMapState.marker.setPosition(pos);
+    mealMapState.marker.setMap(mealMapState.map);
+  }
+}
+
+function setMealModalLatLon(lat, lon, recenter) {
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  if (latEl) latEl.value = String(lat.toFixed ? lat.toFixed(6) : lat);
+  if (lonEl) lonEl.value = String(lon.toFixed ? lon.toFixed(6) : lon);
+  placeMealModalMarker(Number(lat), Number(lon));
+  if (recenter && mealMapState.map) {
+    mealMapState.map.setCenter(new google.maps.LatLng(Number(lat), Number(lon)));
+  }
+  updateMealModalMapLink();
+}
+
+function clearMealModalMarker() {
+  if (mealMapState.marker) {
+    mealMapState.marker.setMap(null);
+    mealMapState.marker = null;
+  }
+}
+
+function updateMealModalMapLink() {
+  const link = document.getElementById('mealModalMapOpen');
+  if (!link) return;
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const lat = latEl?.value?.trim();
+  const lon = lonEl?.value?.trim();
+  if (lat && lon && isFinite(Number(lat)) && isFinite(Number(lon))) {
+    link.href = `https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+    link.removeAttribute('href');
+  }
+}
+
+function readMealModalForm() {
+  const desc = (document.getElementById('mealModalDesc')?.value || '').trim();
+  const eatenAt = (document.getElementById('mealModalEatenAt')?.value || '').trim();
+  const latRaw = (document.getElementById('mealModalLat')?.value || '').trim();
+  const lonRaw = (document.getElementById('mealModalLon')?.value || '').trim();
+  const calRaw = (document.getElementById('mealModalCal')?.value || '').trim();
+  const note = (document.getElementById('mealModalNote')?.value || '').trim();
+  const lat = latRaw === '' ? null : Number(latRaw);
+  const lon = lonRaw === '' ? null : Number(lonRaw);
+  const calories = calRaw === '' ? null : Number(calRaw);
+  return { desc, eatenAt, lat, lon, calories, note };
+}
+
+async function submitMealModal() {
+  const item = mealModalState.current;
+  if (!item) return;
+  const { desc, eatenAt, lat, lon, calories, note } = readMealModalForm();
+  const status = document.getElementById('mealsUploadStatus');
+
+  if (item.kind === 'manual' && !desc) {
+    alert('食事内容を入力してください');
+    return;
+  }
+
+  if (status) status.textContent = item.kind === 'edit' ? `📝 保存中…` : `📤 登録中…`;
+
+  try {
+    if (item.kind === 'edit') {
+      // 既存 meal の編集 → PATCH /api/meals/:id
+      const m = item.meal;
+      const patch = {};
+      // description: 空文字なら null (= AI 結果へ戻す) に明示
+      const prevDesc = m.user_corrected_description || m.description || '';
+      if (desc !== prevDesc) {
+        patch.user_corrected_description = desc || null;
+        // 内容変更でカロリー再推定をかけたい場合は user_corrected_calories=null
+        // (背景再推定が走る)。 ただしユーザが明示的にカロリー入れた場合は保持
+      }
+      if (eatenAt) patch.eaten_at = eatenAt;
+      if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+        patch.lat = lat; patch.lon = lon;
+      } else if (lat == null && lon == null) {
+        patch.lat = null; patch.lon = null;
+      }
+      // calories: 入力値があればそのまま、 空欄なら null (再推定許可)
+      if (calories != null && isFinite(calories)) {
+        patch.user_corrected_calories = calories;
+      } else {
+        patch.user_corrected_calories = null;
+      }
+      patch.user_note = note || null;
+      await api(`/api/meals/${m.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (status) status.textContent = `✅ 保存しました`;
+    } else if (item.kind === 'photo') {
+      const fd = new FormData();
+      fd.append('photo', item.file);
+      if (eatenAt) fd.append('eaten_at', eatenAt);
+      if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+        fd.append('lat', String(lat));
+        fd.append('lon', String(lon));
+      }
+      if (note) fd.append('user_note', note);
+      const res = await fetch('/api/meals', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const patch = {};
+      if (desc) patch.user_corrected_description = desc;
+      if (calories != null && isFinite(calories)) patch.user_corrected_calories = calories;
+      if (Object.keys(patch).length > 0 && data.meal?.id) {
+        await api(`/api/meals/${data.meal.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+      }
+      if (status) status.textContent = `✅ 登録しました`;
+    } else {
+      const body = { description: desc };
+      if (eatenAt) body.eaten_at = eatenAt;
+      if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+        body.lat = lat; body.lon = lon;
+      }
+      if (calories != null && isFinite(calories)) body.calories = calories;
+      if (note) body.user_note = note;
+      await api('/api/meals/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (status) status.textContent = `✅ 登録しました`;
+    }
+  } catch (e) {
+    if (status) status.textContent = item.kind === 'edit'
+      ? `⚠ 保存エラー: ${e.message}`
+      : `⚠ 登録エラー: ${e.message}`;
+    console.warn('[meals] submit error:', e);
+  }
+  await loadMeals();
+  advanceMealQueue();
+}
+
+function skipMealModalItem() {
+  if (mealModalState.current) ensureBlobUrlRevoked(mealModalState.current);
+  mealModalState.current = null;
+  advanceMealQueue();
+}
+
+function cancelMealModal() {
+  clearMealQueue();
+  closeMealModal();
+}
+
+function startMealModalForFiles(files) {
+  const items = Array.from(files || [])
+    .filter((f) => f && f.type?.startsWith?.('image/'))
+    .map((file) => ({ kind: 'photo', file, blobUrl: '' }));
+  if (items.length === 0) return;
+  enqueueMealModal(items);
+}
+
+function startMealModalForManual() {
+  enqueueMealModal([{ kind: 'manual' }]);
+}
+
+function openMealEditModal(mealId) {
+  const m = mealsState.items.find((x) => x.id === mealId);
+  if (!m) return;
+  // 編集 mode は 1 件のみ — 既存キューがあれば優先 (連続編集は順次)
+  enqueueMealModal([{ kind: 'edit', meal: m }]);
+}
+
+async function reanalyzeMeal(id) {
+  try {
+    await api(`/api/meals/${id}/reanalyze`, { method: 'POST' });
+    await loadMeals();
+  } catch (e) {
+    alert(`再解析エラー: ${e.message}`);
+  }
+}
+
+async function deleteMealRow(id) {
+  if (!confirm('この食事記録を削除しますか?')) return;
+  try {
+    await api(`/api/meals/${id}`, { method: 'DELETE' });
+    await loadMeals();
+  } catch (e) {
+    alert(`削除エラー: ${e.message}`);
+  }
+}
+
+// ── 補足メモのみ編集 (旧 editMeal の縮小版) ─────────────────
+async function editMealNote(id) {
+  const m = mealsState.items.find((x) => x.id === id);
+  if (!m) return;
+  const note = prompt('補足メモ', m.user_note || '');
+  if (note === null) return;
+  try {
+    await api(`/api/meals/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_note: note }),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`メモ保存エラー: ${e.message}`);
+  }
+}
+
+// ── 食事内容 inline 編集 (textarea) ─────────────────────────
+function startMealDescriptionEdit(btn) {
+  if (btn.classList.contains('editing')) return;
+  const mealId = Number(btn.dataset.id);
+  const current = btn.dataset.current || '';
+  btn.classList.add('editing');
+  const original = btn.innerHTML;
+  btn.innerHTML = `
+    <textarea class="meal-desc-input" rows="2">${escapeHtml(current)}</textarea>
+    <span class="meal-inline-actions">
+      <button class="meal-inline-save" type="button" title="保存 (カロリー再推定)">✓</button>
+      <button class="meal-inline-cancel" type="button" title="キャンセル">×</button>
+    </span>
+  `;
+  const ta = btn.querySelector('textarea');
+  ta?.focus();
+  ta?.setSelectionRange(ta.value.length, ta.value.length);
+
+  function restore() { btn.innerHTML = original; btn.classList.remove('editing'); }
+
+  async function save() {
+    const v = (ta?.value ?? '').trim();
+    if (!v) { restore(); return; }
+    if (v === current) { restore(); return; }
+    try {
+      // PATCH 後に backend が「description 変更を検出 → カロリー LLM 再推定」 を kick する。
+      // user_corrected_description を空にして基本 description (AI 推定 or manual 登録時) を活かす場合と
+      // user_corrected_description で上書きする場合があるが、 シンプルに常に user_corrected を使う。
+      await api(`/api/meals/${mealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_corrected_description: v,
+          // 内容が変わったらユーザ補正カロリーをクリアして自動再推定させる
+          user_corrected_calories: null,
+        }),
+      });
+      await loadMeals();
+    } catch (e) {
+      alert(`内容保存エラー: ${e.message}`);
+      restore();
+    }
+  }
+
+  btn.querySelector('.meal-inline-save')?.addEventListener('click', (ev) => { ev.stopPropagation(); save(); });
+  btn.querySelector('.meal-inline-cancel')?.addEventListener('click', (ev) => { ev.stopPropagation(); restore(); });
+  ta?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); save(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
+  });
+  ta?.addEventListener('click', (ev) => ev.stopPropagation());
+}
+
+// ── 場所 inline 編集 (lat,lon + 「現在地から」 + 「クリア」) ─────
+function startMealLocationEdit(btn) {
+  if (btn.classList.contains('editing')) return;
+  const mealId = Number(btn.dataset.id);
+  const curLat = btn.dataset.lat || '';
+  const curLon = btn.dataset.lon || '';
+  btn.classList.add('editing');
+  const original = btn.innerHTML;
+  btn.innerHTML = `
+    <input type="number" step="any" class="meal-loc-lat" placeholder="緯度" value="${escapeHtml(curLat)}" />
+    <input type="number" step="any" class="meal-loc-lon" placeholder="経度" value="${escapeHtml(curLon)}" />
+    <span class="meal-inline-actions">
+      <button class="meal-loc-here" type="button" title="現在地から取得">📍</button>
+      <button class="meal-loc-clear" type="button" title="場所を削除">∅</button>
+      <button class="meal-inline-save" type="button" title="保存">✓</button>
+      <button class="meal-inline-cancel" type="button" title="キャンセル">×</button>
+    </span>
+  `;
+  const latIn = btn.querySelector('.meal-loc-lat');
+  const lonIn = btn.querySelector('.meal-loc-lon');
+
+  function restore() { btn.innerHTML = original; btn.classList.remove('editing'); }
+
+  async function save() {
+    const lat = (latIn?.value ?? '').trim() === '' ? null : Number(latIn.value);
+    const lon = (lonIn?.value ?? '').trim() === '' ? null : Number(lonIn.value);
+    const body = { lat: null, lon: null };
+    if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+      body.lat = lat; body.lon = lon;
+    }
+    try {
+      await api(`/api/meals/${mealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      await loadMeals();
+    } catch (e) {
+      alert(`場所保存エラー: ${e.message}`);
+      restore();
+    }
+  }
+
+  btn.querySelector('.meal-loc-here')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (!navigator.geolocation) { alert('この端末は位置情報に対応していません'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (latIn) latIn.value = String(pos.coords.latitude);
+        if (lonIn) lonIn.value = String(pos.coords.longitude);
+      },
+      (err) => alert(`位置取得失敗: ${err.message}`),
+      { enableHighAccuracy: true, timeout: 10_000 },
+    );
+  });
+  btn.querySelector('.meal-loc-clear')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (latIn) latIn.value = '';
+    if (lonIn) lonIn.value = '';
+  });
+  btn.querySelector('.meal-inline-save')?.addEventListener('click', (ev) => { ev.stopPropagation(); save(); });
+  btn.querySelector('.meal-inline-cancel')?.addEventListener('click', (ev) => { ev.stopPropagation(); restore(); });
+  [latIn, lonIn].forEach((el) => {
+    el?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
+    });
+    el?.addEventListener('click', (ev) => ev.stopPropagation());
+  });
+}
+
+async function addMealAddition(mealId) {
+  const name = prompt('追加で食べたものは? (例: アイスクリーム)');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const calRaw = prompt('カロリー (kcal、 不明なら空欄)', '');
+  if (calRaw === null) return;
+  const body = { name: trimmed };
+  if (calRaw.trim() !== '') {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
+  }
+  try {
+    await api(`/api/meals/${mealId}/additions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`追加エラー: ${e.message}`);
+  }
+}
+
+async function editMealAddition(mealId, idx) {
+  const m = mealsState.items.find((x) => x.id === mealId);
+  if (!m) return;
+  const additions = parseMealAdditions(m.additions_json);
+  const cur = additions[idx];
+  if (!cur) return;
+  const name = prompt('項目名', cur.name || '');
+  if (name === null) return;
+  const calRaw = prompt('カロリー (kcal、 空欄でクリア)', cur.calories == null ? '' : String(cur.calories));
+  if (calRaw === null) return;
+  const body = {};
+  if (name.trim()) body.name = name.trim();
+  if (calRaw.trim() === '') body.calories = null;
+  else {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
+  }
+  try {
+    await api(`/api/meals/${mealId}/additions/${idx}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`編集エラー: ${e.message}`);
+  }
+}
+
+async function deleteMealAddition(mealId, idx) {
+  if (!confirm('この追加項目を削除しますか?')) return;
+  try {
+    await api(`/api/meals/${mealId}/additions/${idx}`, { method: 'DELETE' });
+    await loadMeals();
+  } catch (e) {
+    alert(`削除エラー: ${e.message}`);
+  }
+}
+
+// ── イベント結線 ─────────────────────────────────────────────
+document.getElementById('mealsRefresh')?.addEventListener('click', () => loadMeals());
+
+document.getElementById('mealsPhotoInput')?.addEventListener('change', (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (files.length === 0) return;
+  startMealModalForFiles(files);
+});
+
+document.getElementById('mealsCameraInput')?.addEventListener('change', (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (files.length === 0) return;
+  startMealModalForFiles(files);
+});
+
+document.getElementById('mealsManualBtn')?.addEventListener('click', () => startMealModalForManual());
+
+// ── 食事モーダルのボタン結線 ──────────────────────────────────
+document.getElementById('mealModalSubmit')?.addEventListener('click', () => submitMealModal());
+document.getElementById('mealModalCancel')?.addEventListener('click', () => cancelMealModal());
+document.getElementById('mealModalClose')?.addEventListener('click', () => cancelMealModal());
+document.getElementById('mealModalSkip')?.addEventListener('click', () => skipMealModalItem());
+document.querySelector('#mealModal .meal-modal-backdrop')?.addEventListener('click', () => cancelMealModal());
+document.getElementById('mealModalLocHere')?.addEventListener('click', () => {
+  if (!navigator.geolocation) { alert('この端末は位置情報に対応していません'); return; }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      setMealModalLatLon(pos.coords.latitude, pos.coords.longitude, /*recenter*/ true);
+    },
+    (err) => alert(`位置取得失敗: ${err.message}`),
+    { enableHighAccuracy: true, timeout: 10_000 },
+  );
+});
+document.getElementById('mealModalLocClear')?.addEventListener('click', () => {
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  if (latEl) latEl.value = '';
+  if (lonEl) lonEl.value = '';
+  clearMealModalMarker();
+  updateMealModalMapLink();
+});
+
+// 🗺 地図ボタンで開閉 + 必要なら Google Maps を初期化
+document.getElementById('mealModalMapToggle')?.addEventListener('click', async () => {
+  const wrap = document.getElementById('mealModalMap');
+  if (!wrap) return;
+  const open = wrap.classList.toggle('hidden');
+  if (open) return; // 閉じた
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const lat = latEl?.value ? Number(latEl.value) : null;
+  const lon = lonEl?.value ? Number(lonEl.value) : null;
+  await ensureMealModalMap(lat, lon);
+  // resize trigger (hidden → show のとき必須)
+  if (mealMapState.map && window.google?.maps) {
+    setTimeout(() => google.maps.event.trigger(mealMapState.map, 'resize'), 50);
+  }
+});
+
+// lat/lon 手入力時に map と link を追従
+['mealModalLat', 'mealModalLon'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('input', () => {
+    const lat = Number(document.getElementById('mealModalLat')?.value);
+    const lon = Number(document.getElementById('mealModalLon')?.value);
+    if (isFinite(lat) && isFinite(lon)) {
+      placeMealModalMarker(lat, lon);
+    } else {
+      clearMealModalMarker();
+    }
+    updateMealModalMapLink();
+  });
+});
+
+// <dialog> のネイティブ close (Esc 含む) を cancel として扱う
+document.getElementById('mealModal')?.addEventListener('close', () => {
+  // showModal で開いた場合、 Esc で close → ここに来る
+  if (mealModalState.queue.length > 0 || mealModalState.current) {
+    clearMealQueue();
+  }
+});
+
+// 単一日付フィルタの結線 (絞り込み変更で即時 reload + クリアボタン)
+document.getElementById('mealsFilterDate')?.addEventListener('change', () => loadMeals());
+document.getElementById('mealsFilterClear')?.addEventListener('click', () => {
+  const el = document.getElementById('mealsFilterDate');
+  if (el) el.value = '';
+  loadMeals();
+});
+
+// ── 単語リングメニュー ────────────────────────────────────────
+//
+// グラフ / ワードクラウドの単語をクリックすると、 黒背景の上に
+// 単語を中心としたリング状のボタン (ディグる / 辞書登録 / 削除) が
+// 浮く。 削除は user_stopwords (server) に保存し、 既存の表示からは
+// userStopwordSet で hide。
+
+const wordRingState = {
+  word: null,
+  context: null, // { session?, onDig? }
+};
+const userStopwordSet = new Set();
+
+async function loadUserStopwords() {
+  try {
+    const r = await api('/api/stopwords');
+    userStopwordSet.clear();
+    for (const it of (r.items || [])) userStopwordSet.add(String(it.lower || it.word || '').toLowerCase());
+  } catch {
+    // 無視 — 失敗しても致命的ではない
+  }
+}
+
+function isUserStopword(word) {
+  if (!word) return false;
+  return userStopwordSet.has(String(word).toLowerCase());
+}
+
+function openWordRingMenu(word, clientX, clientY, ctx = {}) {
+  const menu = document.getElementById('wordRingMenu');
+  const wEl = document.getElementById('wordRingWord');
+  const pop = menu?.querySelector('.word-ring-pop');
+  if (!menu || !wEl || !pop) return;
+  wordRingState.word = String(word || '').trim();
+  wordRingState.context = ctx;
+  wEl.textContent = wordRingState.word;
+
+  // ポップ位置: クリック座標を中心に。 端だと画面外へ出るので clamp
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const PAD = 130; // pop の半径 (110) + 余白
+  const cx = Math.max(PAD, Math.min(W - PAD, Number.isFinite(clientX) ? clientX : W / 2));
+  const cy = Math.max(PAD, Math.min(H - PAD, Number.isFinite(clientY) ? clientY : H / 2));
+  pop.style.left = `${cx}px`;
+  pop.style.top = `${cy}px`;
+
+  menu.classList.remove('hidden');
+}
+
+function closeWordRingMenu() {
+  const menu = document.getElementById('wordRingMenu');
+  if (menu) menu.classList.add('hidden');
+  wordRingState.word = null;
+  wordRingState.context = null;
+}
+
+async function wordRingAction(action) {
+  const word = wordRingState.word;
+  const ctx = wordRingState.context || {};
+  closeWordRingMenu();
+  if (!word) return;
+
+  if (action === 'dig') {
+    if (typeof ctx.onDig === 'function') {
+      ctx.onDig(word);
+    } else {
+      // dig session 文脈の場合は textarea にプリフィル
+      digOnWordPick(ctx.session || null, word);
+    }
+    return;
+  }
+
+  if (action === 'dict') {
+    try {
+      const r = await api('/api/dictionary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ term: word }),
+      });
+      const msg = r.existed
+        ? `「${word}」 は既に辞書に登録済 (id ${r.id})`
+        : `📖 「${word}」 を辞書に登録しました`;
+      // 辞書タブに反映 + 通知
+      flashMessage(msg);
+    } catch (e) {
+      alert(`辞書登録エラー: ${e.message}`);
+    }
+    return;
+  }
+
+  if (action === 'delete') {
+    if (!confirm(`「${word}」 を今後表示しない (stopword) ように設定しますか?`)) return;
+    try {
+      await api('/api/stopwords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word }),
+      });
+      userStopwordSet.add(word.toLowerCase());
+      // 即時 hide: 該当 dataset.word を持つノード / cloud-word を CSS で隠す
+      hideWordsInDom(word);
+      flashMessage(`🗑 「${word}」 を以後の表示から除外しました`);
+    } catch (e) {
+      alert(`stopword 追加エラー: ${e.message}`);
+    }
+    return;
+  }
+}
+
+function hideWordsInDom(word) {
+  const lower = String(word || '').toLowerCase();
+  document.querySelectorAll('[data-word]').forEach((el) => {
+    if (String(el.dataset.word || '').toLowerCase() === lower) {
+      el.style.display = 'none';
+    }
+  });
+}
+
+function flashMessage(text) {
+  // 軽量な toast (既存 .share-toast 流用)
+  const div = document.createElement('div');
+  div.className = 'share-toast';
+  div.textContent = text;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 3500);
+}
+
+// イベント結線
+document.addEventListener('DOMContentLoaded', () => {
+  // 起動時に user stopwords をロード
+  loadUserStopwords();
+});
+
+document.getElementById('wordRingMenu')?.querySelectorAll('.word-ring-btn').forEach((btn) => {
+  btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const action = btn.dataset.action;
+    if (action) wordRingAction(action);
+  });
+});
+document.getElementById('wordRingClose')?.addEventListener('click', () => closeWordRingMenu());
+document.querySelector('#wordRingMenu .word-ring-backdrop')?.addEventListener('click', () => closeWordRingMenu());
+window.addEventListener('keydown', (ev) => {
+  const menu = document.getElementById('wordRingMenu');
+  if (menu && !menu.classList.contains('hidden') && ev.key === 'Escape') {
+    ev.preventDefault();
+    closeWordRingMenu();
+  }
+});
+
+// 起動時にも一度ロード (DOMContentLoaded を待たないコード経路用)
+loadUserStopwords();
