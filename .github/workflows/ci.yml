@@ -44,6 +44,10 @@ jobs:
             typescript@5.6 @types/node@20 @types/better-sqlite3@7
           npx tsc --noEmit -p tsconfig.json
 
+      - name: Unit tests (server, vitest)
+        working-directory: server
+        run: npx vitest run
+
       - name: Syntax check (mcp-server)
         run: |
           set -e
