@@ -398,6 +398,8 @@
             <ul id="diaryDigs" class="diary-digs"></ul>
             <h4>🍽 食事</h4>
             <div id="diaryMeals" class="diary-meals"></div>
+            <h4>⚖️ カロリーバランス (適正 vs 摂取 vs 消費)</h4>
+            <div id="diaryCaloricBalance" class="diary-caloric-balance"></div>
             <h4>GitHub commits (リポ別件数)</h4>
             <ul id="diaryGithub" class="diary-github"></ul>
             <h4>メモ・補足</h4>
@@ -746,6 +748,30 @@
     </div>
     <div id="pushStatus" class="multi-status"></div>
     <ul id="pushDevicesList" class="multi-servers"></ul>
+
+    <h4>🧍 プロファイル (適正カロリー計算用)</h4>
+    <p class="ai-settings-help">日記のカロリーバランス分析で使用。 未設定だと分析されません。</p>
+    <div class="user-profile-grid">
+      <label>年齢 <input id="userAge" type="number" min="1" max="120" /></label>
+      <label>性別
+        <select id="userSex">
+          <option value="">(未選択)</option>
+          <option value="male">男性</option>
+          <option value="female">女性</option>
+        </select>
+      </label>
+      <label>体重 (kg) <input id="userWeightKg" type="number" min="20" max="300" step="0.1" /></label>
+      <label>身長 (cm) <input id="userHeightCm" type="number" min="100" max="250" step="0.1" /></label>
+      <label>活動レベル
+        <select id="userActivityLevel">
+          <option value="sedentary">座りがち (×1.2)</option>
+          <option value="light">軽運動 (×1.375)</option>
+          <option value="moderate" selected>中運動 (×1.55)</option>
+          <option value="active">活発 (×1.725)</option>
+          <option value="very_active">非常に活発 (×1.9)</option>
+        </select>
+      </label>
+    </div>
 
     <h4>🛠 ランタイム情報 (読み取り専用)</h4>
     <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>

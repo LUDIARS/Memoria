@@ -4,7 +4,7 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate, listMealsForDate } from './db.js';
+import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate, listMealsForDate, getAppSettings } from './db.js';
 import { runLlm } from './llm.js';
 
 // Downtimes >5 min make it into the diary; shorter gaps are treated as
@@ -183,6 +183,7 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
       base_calories: baseCal,
       addition_calories: addCalSum,
       total_calories: totalCal,
+      nutrients: parseMealNutrients(m.nutrients_json),
       additions: additions.map((a) => ({
         name: a.name,
         calories: typeof a.calories === 'number' ? a.calories : null,
@@ -196,6 +197,32 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
   const mealsCalories = meals.reduce(
     (s, m) => s + (typeof m.total_calories === 'number' ? m.total_calories : 0), 0,
   );
+  // 栄養素合計 — null は 0 として加算しない (= 計上しない)、 ある食事のみ合計
+  const nutrientKeys = ['protein_g', 'fat_g', 'carbs_g', 'fiber_g', 'sugar_g', 'sodium_mg'];
+  const nutrientsSum = Object.fromEntries(nutrientKeys.map((k) => [k, 0]));
+  let nutrientsAnyMeal = false;
+  for (const m of meals) {
+    if (!m.nutrients) continue;
+    nutrientsAnyMeal = true;
+    for (const k of nutrientKeys) {
+      const v = m.nutrients[k];
+      if (typeof v === 'number' && isFinite(v)) nutrientsSum[k] += v;
+    }
+  }
+  // PFC バランスの簡易ラベル (3 大栄養素 g → kcal 比換算)
+  let pfcLabel = null;
+  if (nutrientsAnyMeal) {
+    const pCal = (nutrientsSum.protein_g || 0) * 4;
+    const fCal = (nutrientsSum.fat_g || 0) * 9;
+    const cCal = (nutrientsSum.carbs_g || 0) * 4;
+    const sum = pCal + fCal + cCal;
+    if (sum > 0) {
+      const pPct = Math.round((pCal / sum) * 100);
+      const fPct = Math.round((fCal / sum) * 100);
+      const cPct = 100 - pPct - fPct;
+      pfcLabel = `P:${pPct}% / F:${fPct}% / C:${cPct}%`;
+    }
+  }
 
   return {
     date: dateStr,
@@ -214,6 +241,12 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
     gps,
     meals,
     meals_total_calories: meals.length > 0 ? mealsCalories : null,
+    meals_nutrients: nutrientsAnyMeal ? nutrientsSum : null,
+    meals_pfc_label: pfcLabel,
+    caloric_balance: computeCaloricBalance(db, {
+      intake: meals.length > 0 ? mealsCalories : null,
+      gpsDistanceM: gps?.distance_m ?? 0,
+    }),
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
@@ -229,6 +262,73 @@ function parseMealAdditions(json) {
   } catch {
     return [];
   }
+}
+
+function parseMealNutrients(json) {
+  if (!json) return null;
+  try {
+    const o = JSON.parse(json);
+    return (o && typeof o === 'object') ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── カロリーバランス計算 ───────────────────────────────────────
+//
+// app_settings の `user.*` から profile を読み出し、 BMR / TDEE を計算。
+// 摂取 (食事合計) / 消費 (BMR + 軌跡歩行) / 適正 (TDEE) / 過不足 を出す。
+//
+// プロファイル未設定の場合は null を返し、 UI 側で「設定してください」 と促す。
+
+const ACTIVITY_FACTORS = {
+  sedentary: 1.2,
+  light: 1.375,
+  moderate: 1.55,
+  active: 1.725,
+  very_active: 1.9,
+};
+
+function loadUserProfile(db) {
+  const s = getAppSettings(db);
+  const age = parseFloat(s['user.age']);
+  const sex = (s['user.sex'] || '').trim().toLowerCase();
+  const weight = parseFloat(s['user.weight_kg']);
+  const height = parseFloat(s['user.height_cm']);
+  const activity = (s['user.activity_level'] || 'moderate').trim().toLowerCase();
+  if (!isFinite(age) || !isFinite(weight) || !isFinite(height) || (sex !== 'male' && sex !== 'female')) {
+    return null;
+  }
+  return { age, sex, weight_kg: weight, height_cm: height, activity_level: activity };
+}
+
+function computeBmrMifflin(profile) {
+  // Mifflin-St Jeor
+  const base = 10 * profile.weight_kg + 6.25 * profile.height_cm - 5 * profile.age;
+  return profile.sex === 'male' ? base + 5 : base - 161;
+}
+
+function computeCaloricBalance(db, { intake, gpsDistanceM }) {
+  const profile = loadUserProfile(db);
+  if (!profile) return null;
+  const bmr = Math.round(computeBmrMifflin(profile));
+  const factor = ACTIVITY_FACTORS[profile.activity_level] ?? ACTIVITY_FACTORS.moderate;
+  const tdee = Math.round(bmr * factor);
+  // 歩行による追加消費 (m → kcal): 1 km あたり 体重 × 0.6 kcal の概算
+  const walkingKcal = Math.round((gpsDistanceM || 0) / 1000 * profile.weight_kg * 0.6);
+  // 1 日消費 = BMR + 軌跡からの歩行追加 (TDEE の活動係数とは別の上乗せで見せる)
+  const expenditure = bmr + walkingKcal;
+  const intakeNum = (typeof intake === 'number' && isFinite(intake)) ? intake : null;
+  return {
+    profile,
+    bmr,
+    tdee,
+    walking_kcal: walkingKcal,
+    intake: intakeNum,
+    expenditure_total: expenditure, // BMR + walking
+    diff_vs_target: intakeNum != null ? intakeNum - tdee : null,
+    diff_vs_expenditure: intakeNum != null ? intakeNum - expenditure : null,
+  };
 }
 
 // Haversine 距離 (m)。地球半径 6371008 m (mean)。短距離では誤差は数 cm 以下。
@@ -650,6 +750,28 @@ function formatDowntimeBlock(metrics) {
   }).join('\n');
 }
 
+function formatCaloricBalanceBlock(metrics) {
+  const cb = metrics?.caloric_balance;
+  if (!cb) return '(ユーザプロファイル未設定 — 設定 → AI / 連携 で年齢 / 性別 / 体重 / 身長 / 活動レベルを入れてください)';
+  const p = cb.profile;
+  const lines = [];
+  lines.push(`プロファイル: ${p.sex === 'male' ? '男性' : '女性'} / ${p.age}歳 / ${p.weight_kg}kg / ${p.height_cm}cm / 活動 ${p.activity_level}`);
+  lines.push(`基礎代謝 (BMR): 約 ${cb.bmr} kcal`);
+  lines.push(`適正カロリー (TDEE = BMR × 活動係数): 約 ${cb.tdee} kcal`);
+  lines.push(`軌跡からの歩行消費: 約 ${cb.walking_kcal} kcal`);
+  lines.push(`1 日消費 (BMR + 歩行): 約 ${cb.expenditure_total} kcal`);
+  if (cb.intake != null) {
+    lines.push(`摂取カロリー (食事合計): 約 ${cb.intake} kcal`);
+    const diffT = cb.diff_vs_target;
+    const diffE = cb.diff_vs_expenditure;
+    lines.push(`摂取 - 適正: ${diffT > 0 ? '+' : ''}${diffT} kcal`);
+    lines.push(`摂取 - 消費 (収支): ${diffE > 0 ? '+' : ''}${diffE} kcal (プラス = 余剰、 マイナス = 不足)`);
+  } else {
+    lines.push('摂取カロリー: (食事の記録なし)');
+  }
+  return lines.join('\n');
+}
+
 function formatMealsBlock(metrics) {
   const meals = metrics?.meals || [];
   if (!meals.length) return '(食事の記録なし)';
@@ -669,6 +791,14 @@ function formatMealsBlock(metrics) {
   });
   const total = (typeof metrics.meals_total_calories === 'number') ? metrics.meals_total_calories : null;
   if (total != null) lines.push(`総カロリー (推定): 約 ${total} kcal`);
+  const nut = metrics.meals_nutrients;
+  if (nut) {
+    const fmt = (k, unit) => (typeof nut[k] === 'number' && isFinite(nut[k]))
+      ? `${Math.round(nut[k] * 10) / 10}${unit}` : '—';
+    lines.push(`栄養素合計 (推定): P ${fmt('protein_g', 'g')} / F ${fmt('fat_g', 'g')} / C ${fmt('carbs_g', 'g')} / 食物繊維 ${fmt('fiber_g', 'g')} / 糖質 ${fmt('sugar_g', 'g')} / 塩分 ${fmt('sodium_mg', 'mg')}`);
+    if (metrics.meals_pfc_label) lines.push(`PFC バランス: ${metrics.meals_pfc_label}`);
+    lines.push('※ 栄養素は写真 + 食品名から AI が推定した概数。 厳密な値ではない。');
+  }
   return lines.join('\n');
 }
 
@@ -720,6 +850,9 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   '## 食事 (写真投稿 + AI 推定 / 手動補正、 参考情報)',
   formatMealsBlock(metrics),
   '※ カロリーは推定値で誤差を含む。 ハイライトに含める時は「総カロリー約 X kcal」 のような概数表記で。',
+  '',
+  '## カロリーバランス (適正 vs 摂取 vs 消費)',
+  formatCaloricBalanceBlock(metrics),
   '',
   notes ? `## ユーザのメモ・補足 (反映してください)\n${notes}\n` : '',
   '',

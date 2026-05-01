@@ -647,6 +647,7 @@ function enqueueMealVision(id) {
         description: result.description ?? null,
         calories: typeof result.calories === 'number' ? result.calories : null,
         items_json: result.items ? JSON.stringify(result.items) : null,
+        nutrients_json: result.nutrients ? JSON.stringify(result.nutrients) : null,
         ai_status: 'done',
         ai_error: null,
       });
@@ -668,9 +669,15 @@ function enqueueCalorieEstimate(mealId, additionIdx, foodName) {
       if (!meal) return;
       if (additionIdx === -1) {
         // meal 本体のカロリーを user_corrected_calories に書く (上書きしない)
+        const patch = {};
         if (meal.user_corrected_calories == null && meal.calories == null) {
-          updateMeal(db, mealId, { user_corrected_calories: r.calories });
+          patch.user_corrected_calories = r.calories;
         }
+        // nutrients も未設定なら埋める
+        if (!meal.nutrients_json && r.nutrients) {
+          patch.nutrients_json = JSON.stringify(r.nutrients);
+        }
+        if (Object.keys(patch).length > 0) updateMeal(db, mealId, patch);
         return;
       }
       const additions = parseMealAdditionsJson(meal.additions_json);
@@ -1631,6 +1638,13 @@ app.get('/api/llm/config', (c) => {
       openai_api_key_set: !!cfg.openai_api_key,
       // Standing memo passed to every diary generation.
       diary_global_memo: settings['diary.global_memo'] || '',
+      user_profile: {
+        age: settings['user.age'] ? Number(settings['user.age']) : null,
+        sex: settings['user.sex'] || '',
+        weight_kg: settings['user.weight_kg'] ? Number(settings['user.weight_kg']) : null,
+        height_cm: settings['user.height_cm'] ? Number(settings['user.height_cm']) : null,
+        activity_level: settings['user.activity_level'] || 'moderate',
+      },
     },
     tasks: LLM_TASKS,
     providers: Object.entries(LLM_PROVIDERS).map(([key, v]) => ({
@@ -1658,6 +1672,25 @@ app.patch('/api/llm/config', async (c) => {
   // Diary-specific standing memo lives outside the LLM config object.
   if (typeof body.diary_global_memo === 'string') {
     patch['diary.global_memo'] = body.diary_global_memo;
+  }
+  // ユーザプロファイル (適正カロリー計算用)
+  if (body.user_profile && typeof body.user_profile === 'object') {
+    const up = body.user_profile;
+    if (up.age == null || (typeof up.age === 'number' && isFinite(up.age))) {
+      patch['user.age'] = up.age == null ? '' : String(up.age);
+    }
+    if (typeof up.sex === 'string') {
+      patch['user.sex'] = (up.sex === 'male' || up.sex === 'female') ? up.sex : '';
+    }
+    if (up.weight_kg == null || (typeof up.weight_kg === 'number' && isFinite(up.weight_kg))) {
+      patch['user.weight_kg'] = up.weight_kg == null ? '' : String(up.weight_kg);
+    }
+    if (up.height_cm == null || (typeof up.height_cm === 'number' && isFinite(up.height_cm))) {
+      patch['user.height_cm'] = up.height_cm == null ? '' : String(up.height_cm);
+    }
+    if (typeof up.activity_level === 'string' && Object.keys({sedentary:1, light:1, moderate:1, active:1, very_active:1}).includes(up.activity_level)) {
+      patch['user.activity_level'] = up.activity_level;
+    }
   }
   setAppSettings(db, patch);
   loadLlmConfigFromSettings(getAppSettings(db));

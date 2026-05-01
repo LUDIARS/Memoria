@@ -97,11 +97,19 @@ const VISION_PROMPT_TEMPLATE = (absPath) => [
   '  "calories": <推定総カロリー (数値, kcal)>,',
   '  "items": [',
   '    {"name": "個別の料理名", "calories": <推定 kcal>}',
-  '  ]',
+  '  ],',
+  '  "nutrients": {',
+  '    "protein_g":  <タンパク質 (g)>,',
+  '    "fat_g":      <脂質 (g)>,',
+  '    "carbs_g":    <炭水化物 (g)>,',
+  '    "fiber_g":    <食物繊維 (g)>,',
+  '    "sugar_g":    <糖質 (g)>,',
+  '    "sodium_mg":  <塩分 (mg、 食塩相当量で構わない)>',
+  '  }',
   '}',
   '',
   '不明な値: description は推測 (例 "料理 (推定不可)")、 数値は null。',
-  '食事以外の写真: description="食事ではない", calories=null, items=[]。',
+  '食事以外の写真: description="食事ではない", calories=null, items=[], nutrients は全 null。',
 ].join('\n');
 
 /**
@@ -124,17 +132,25 @@ export async function analyzeMealPhoto(photoAbsPath) {
 const CALORIE_PROMPT = (foodName) => [
   `食品名: ${foodName}`,
   '',
-  '上記の食品の標準的な 1 食分 / 1 個分のカロリー (kcal) を推定してください。',
+  '上記の食品の標準的な 1 食分 / 1 個分のカロリーと主要栄養素を推定してください。',
   '一般的なレシピサイト・栄養データベースの値を参考にした概数で構いません。',
   '',
   '返答は **次の JSON 1 オブジェクトだけ** にしてください (前後の説明 / コードフェンス禁止):',
   '{',
   '  "calories": <推定 kcal (数値) または null>,',
   '  "serving": "想定する分量 (例: \\"1 杯 (200g)\\", \\"1 個\\", \\"1 食分\\")",',
-  '  "confidence": "high | medium | low"',
+  '  "confidence": "high | medium | low",',
+  '  "nutrients": {',
+  '    "protein_g":  <タンパク質 (g) または null>,',
+  '    "fat_g":      <脂質 (g) または null>,',
+  '    "carbs_g":    <炭水化物 (g) または null>,',
+  '    "fiber_g":    <食物繊維 (g) または null>,',
+  '    "sugar_g":    <糖質 (g) または null>,',
+  '    "sodium_mg":  <塩分 (mg) または null>',
+  '  }',
   '}',
   '',
-  '一般的な食品でない / 推定不能なら calories を null、 confidence を low にしてください。',
+  '一般的な食品でない / 推定不能なら calories を null、 confidence を low、 nutrients は全 null。',
 ].join('\n');
 
 /**
@@ -169,7 +185,26 @@ function parseCalorieJson(raw) {
   const serving = typeof obj.serving === 'string' ? obj.serving.slice(0, 120) : '';
   const confidence = (obj.confidence === 'high' || obj.confidence === 'medium' || obj.confidence === 'low')
     ? obj.confidence : 'low';
-  return { calories, serving, confidence };
+  const nutrients = sanitizeNutrients(obj.nutrients);
+  return { calories, serving, confidence, nutrients };
+}
+
+/** vision / calorie 共通の nutrients サニタイザ。 数値 (有限) のみ採用、 残りは null。 */
+function sanitizeNutrients(input) {
+  if (!input || typeof input !== 'object') return null;
+  const keys = ['protein_g', 'fat_g', 'carbs_g', 'fiber_g', 'sugar_g', 'sodium_mg'];
+  const out = {};
+  let any = false;
+  for (const k of keys) {
+    const v = input[k];
+    if (typeof v === 'number' && isFinite(v) && v >= 0) {
+      out[k] = Math.round(v * 10) / 10; // 小数 1 桁
+      any = true;
+    } else {
+      out[k] = null;
+    }
+  }
+  return any ? out : null;
 }
 
 function parseVisionJson(raw) {
@@ -199,5 +234,6 @@ function parseVisionJson(raw) {
         calories: typeof it.calories === 'number' && isFinite(it.calories) ? Math.round(it.calories) : null,
       }));
   }
-  return { description, calories, items };
+  const nutrients = sanitizeNutrients(obj.nutrients);
+  return { description, calories, items, nutrients };
 }

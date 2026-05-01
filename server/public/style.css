@@ -3864,3 +3864,93 @@ dialog.meal-modal[open] {
     height: 56px;
   }
 }
+
+/* ── Diary: 栄養素チップ ─────────────────────────────────────── */
+.diary-meals-nutrients {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.nutrient-chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.nutrient-chip b {
+  color: #2a6df4;
+  font-weight: 600;
+  margin-right: 2px;
+}
+.nutrient-fiber b, .nutrient-sugar b, .nutrient-sodium b { color: #6c757d; }
+.nutrient-pfc {
+  background: #fff7d6;
+  border-color: #e6c97a;
+}
+.nutrient-pfc b { color: #8a6d00; }
+
+/* ── Settings: ユーザプロファイル grid ────────────────────────── */
+.user-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+.user-profile-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.user-profile-grid input,
+.user-profile-grid select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Diary: カロリーバランス ──────────────────────────────────── */
+.diary-caloric-balance {
+  margin: 4px 0 12px;
+}
+.diary-caloric-balance .cb-profile {
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.cb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.cb-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.cb-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.cb-value {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.cb-sub {
+  font-size: 10px;
+  margin-top: 2px;
+}
+.cb-diff.over { background: #ffe2e2; border-color: #d49797; }
+.cb-diff.over .cb-value { color: #b00; }
+.cb-diff.under { background: #e2f0ff; border-color: #97b8d4; }
+.cb-diff.under .cb-value { color: #1455a8; }
+.cb-diff.ok { background: #e6f7e6; border-color: #95cf95; }
+.cb-diff.ok .cb-value { color: #2a8b2a; }

@@ -2683,7 +2683,9 @@ function renderDiaryDetail() {
   renderDiaryDigList(digs, digsTotal);
 
   // 食事
-  renderDiaryMeals(metrics.meals || [], metrics.meals_total_calories);
+  renderDiaryMeals(metrics.meals || [], metrics.meals_total_calories, metrics.meals_nutrients, metrics.meals_pfc_label);
+  // カロリーバランス
+  renderDiaryCaloricBalance(metrics.caloric_balance);
 
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
@@ -2796,7 +2798,55 @@ function renderDiaryBookmarkList(elId, items, total, kind, emptyMsg) {
   }
 }
 
-function renderDiaryMeals(meals, totalCal) {
+function fmtNutrient(v, unit) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—';
+  return `${Math.round(v * 10) / 10}${unit}`;
+}
+
+function renderDiaryCaloricBalance(cb) {
+  const wrap = document.getElementById('diaryCaloricBalance');
+  if (!wrap) return;
+  if (!cb) {
+    wrap.innerHTML = `<div class="hint">プロファイルが未設定です。 設定 (右上 ⚙) → 「🧍 プロファイル」 で年齢 / 性別 / 体重 / 身長 / 活動レベルを入れると、 BMR + TDEE + 軌跡からの歩行消費を計算します。</div>`;
+    return;
+  }
+  const p = cb.profile;
+  const sexLabel = p.sex === 'male' ? '男性' : '女性';
+  const intakeStr = (cb.intake != null) ? `${cb.intake} kcal` : '— (食事なし)';
+  const diffT = cb.diff_vs_target;
+  const diffE = cb.diff_vs_expenditure;
+  const sign = (n) => n == null ? '—' : (n > 0 ? `+${n}` : String(n));
+  const diffTClass = diffT == null ? '' : (diffT > 200 ? 'over' : diffT < -200 ? 'under' : 'ok');
+  const diffEClass = diffE == null ? '' : (diffE > 200 ? 'over' : diffE < -200 ? 'under' : 'ok');
+  wrap.innerHTML = `
+    <div class="cb-profile muted">${escapeHtml(sexLabel)} / ${p.age}歳 / ${p.weight_kg}kg / ${p.height_cm}cm / 活動 ${escapeHtml(p.activity_level)}</div>
+    <div class="cb-grid">
+      <div class="cb-stat">
+        <div class="cb-label">摂取</div>
+        <div class="cb-value">${escapeHtml(intakeStr)}</div>
+      </div>
+      <div class="cb-stat">
+        <div class="cb-label">消費 (BMR + 歩行)</div>
+        <div class="cb-value">${cb.expenditure_total} kcal</div>
+        <div class="cb-sub muted">BMR ${cb.bmr} + 歩行 ${cb.walking_kcal}</div>
+      </div>
+      <div class="cb-stat">
+        <div class="cb-label">適正 (TDEE)</div>
+        <div class="cb-value">${cb.tdee} kcal</div>
+      </div>
+      <div class="cb-stat cb-diff ${diffTClass}">
+        <div class="cb-label">摂取 - 適正</div>
+        <div class="cb-value">${escapeHtml(sign(diffT))} kcal</div>
+      </div>
+      <div class="cb-stat cb-diff ${diffEClass}">
+        <div class="cb-label">摂取 - 消費 (収支)</div>
+        <div class="cb-value">${escapeHtml(sign(diffE))} kcal</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDiaryMeals(meals, totalCal, nutrients, pfcLabel) {
   const wrap = document.getElementById('diaryMeals');
   if (!wrap) return;
   if (!meals || meals.length === 0) {
@@ -2806,6 +2856,17 @@ function renderDiaryMeals(meals, totalCal) {
   const totalLine = (typeof totalCal === 'number')
     ? `<div class="diary-meals-total">総カロリー: <strong>${totalCal} kcal</strong> (${meals.length} 食)</div>`
     : `<div class="diary-meals-total muted">${meals.length} 食 (カロリー未推定)</div>`;
+  const nutLine = nutrients
+    ? `<div class="diary-meals-nutrients">
+        <span class="nutrient-chip"><b>P</b> ${fmtNutrient(nutrients.protein_g, 'g')}</span>
+        <span class="nutrient-chip"><b>F</b> ${fmtNutrient(nutrients.fat_g, 'g')}</span>
+        <span class="nutrient-chip"><b>C</b> ${fmtNutrient(nutrients.carbs_g, 'g')}</span>
+        <span class="nutrient-chip nutrient-fiber">食物繊維 ${fmtNutrient(nutrients.fiber_g, 'g')}</span>
+        <span class="nutrient-chip nutrient-sugar">糖質 ${fmtNutrient(nutrients.sugar_g, 'g')}</span>
+        <span class="nutrient-chip nutrient-sodium">塩分 ${fmtNutrient(nutrients.sodium_mg, 'mg')}</span>
+        ${pfcLabel ? `<span class="nutrient-chip nutrient-pfc"><b>PFC</b> ${escapeHtml(pfcLabel)}</span>` : ''}
+       </div>`
+    : '';
   const items = meals.map((m) => {
     // ISO は UTC なので localtime に変換して HH:MM を表示
     const td = new Date(m.eaten_at || '');
@@ -2832,7 +2893,7 @@ function renderDiaryMeals(meals, totalCal) {
       </div>
     </li>`;
   }).join('');
-  wrap.innerHTML = `${totalLine}<ul class="diary-meals-list">${items}</ul>`;
+  wrap.innerHTML = `${totalLine}${nutLine}<ul class="diary-meals-list">${items}</ul>`;
   // クリック → 食事タブに飛ばす
   wrap.querySelectorAll('.diary-meal-thumb').forEach((a) => {
     a.addEventListener('click', (ev) => {
@@ -3936,6 +3997,15 @@ async function openAiSettings() {
     $('aiOpenaiModel').value = cfg.openai_model || '';
     $('aiOpenaiKeyStatus').textContent = cfg.openai_api_key_set ? '✓ API key 設定済み (再入力で上書き)' : '(未設定)';
     if ($('aiDiaryGlobalMemo')) $('aiDiaryGlobalMemo').value = cfg.diary_global_memo || '';
+    // ユーザプロファイル (適正カロリー計算用)
+    if (cfg.user_profile) {
+      const up = cfg.user_profile;
+      if ($('userAge')) $('userAge').value = up.age != null ? String(up.age) : '';
+      if ($('userSex')) $('userSex').value = up.sex || '';
+      if ($('userWeightKg')) $('userWeightKg').value = up.weight_kg != null ? String(up.weight_kg) : '';
+      if ($('userHeightCm')) $('userHeightCm').value = up.height_cm != null ? String(up.height_cm) : '';
+      if ($('userActivityLevel')) $('userActivityLevel').value = up.activity_level || 'moderate';
+    }
     if (r.runtime) {
       const rt = r.runtime;
       $('aiRuntimeInfo').innerHTML = `
@@ -4236,7 +4306,18 @@ async function saveAiSettings() {
     openai_model: $('aiOpenaiModel').value.trim() || 'gpt-4o-mini',
     git_bash_path: $('aiGitBashPath').value.trim(),
     diary_global_memo: $('aiDiaryGlobalMemo')?.value || '',
+    user_profile: {
+      age: parseFloat($('userAge')?.value),
+      sex: $('userSex')?.value || '',
+      weight_kg: parseFloat($('userWeightKg')?.value),
+      height_cm: parseFloat($('userHeightCm')?.value),
+      activity_level: $('userActivityLevel')?.value || 'moderate',
+    },
   };
+  // NaN/empty を null に正規化
+  for (const k of ['age', 'weight_kg', 'height_cm']) {
+    if (!isFinite(body.user_profile[k])) body.user_profile[k] = null;
+  }
   const k = $('aiOpenaiKey').value;
   if (k && k !== '***') body.openai_api_key = k;
   try {

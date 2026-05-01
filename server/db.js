@@ -257,6 +257,7 @@ export function openDb(dbPath) {
       description                 TEXT,
       calories                    INTEGER,
       items_json                  TEXT,
+      nutrients_json              TEXT,
       ai_status                   TEXT NOT NULL DEFAULT 'pending',
       ai_error                    TEXT,
       user_note                   TEXT,
@@ -270,10 +271,13 @@ export function openDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_meals_ai_status ON meals(ai_status);
   `);
 
-  // Forward-compat: 既存 DB に additions_json 列が無ければ ALTER で追加
+  // Forward-compat: 既存 DB に列を ALTER で追加
   const mealsCols = db.prepare(`PRAGMA table_info(meals)`).all().map(c => c.name);
   if (mealsCols.length > 0 && !mealsCols.includes('additions_json')) {
     db.exec(`ALTER TABLE meals ADD COLUMN additions_json TEXT`);
+  }
+  if (mealsCols.length > 0 && !mealsCols.includes('nutrients_json')) {
+    db.exec(`ALTER TABLE meals ADD COLUMN nutrients_json TEXT`);
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
