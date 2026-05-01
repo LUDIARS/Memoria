@@ -107,6 +107,9 @@
           <button class="tab" data-tab="tracks">
             <span class="tab-label" data-full="🗺 軌跡" data-short="🗺 軌跡">🗺 軌跡</span>
           </button>
+          <button class="tab" data-tab="meals">
+            <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -479,6 +482,24 @@
           <h4>記録のある日</h4>
           <ul id="tracksDays" class="tracks-days-list"></ul>
         </div>
+      </div>
+
+      <div id="mealsView" class="hidden">
+        <div class="meals-bar">
+          <label class="meals-upload-btn ghost">
+            📷 写真を追加
+            <input id="mealsPhotoInput" type="file" accept="image/*" capture="environment" hidden />
+          </label>
+          <span id="mealsUploadStatus" class="muted"></span>
+          <span class="grow"></span>
+          <input id="mealsFromDate" type="date" title="開始日" />
+          <input id="mealsToDate" type="date" title="終了日" />
+          <button id="mealsRefresh" class="ghost">更新</button>
+        </div>
+        <div id="mealsHint" class="meals-hint muted hidden">
+          OpenAI API key 未設定です (設定 → AI / 連携 → llm.openai.api_key)。 写真は登録できますが、 食事内容 / カロリーは自動推定されません。
+        </div>
+        <div id="mealsList" class="meals-list"></div>
       </div>
 
       <div id="multiView" class="hidden">

@@ -2997,3 +2997,116 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   border-radius: 3px;
   font-size: 11px;
 }
+
+/* ── Meals (食事記録) ──────────────────────────────────────────── */
+.meals-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 0;
+}
+.meals-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.meals-hint {
+  padding: 8px 10px;
+  background: var(--bg);
+  border-left: 3px solid var(--accent, #2a6df4);
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.meals-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.meal-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.meal-photo {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #eee;
+  display: block;
+}
+.meal-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meal-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+}
+.meal-time {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.meal-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.meal-badge-pending {
+  background: #fff7d6;
+  color: #8a6d00;
+  border-color: #e6c97a;
+}
+.meal-badge-error {
+  background: #ffe2e2;
+  color: #a40000;
+  border-color: #d49797;
+  cursor: help;
+}
+.meal-desc {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.meal-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+.meal-cal {
+  font-weight: 500;
+  color: #c25500;
+}
+.meal-note {
+  font-size: 12px;
+  background: var(--bg);
+  padding: 6px 8px;
+  border-radius: 4px;
+  border-left: 2px solid var(--accent, #2a6df4);
+}
+.meal-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.meal-actions button {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+@media (max-width: 600px) {
+  .meals-list {
+    grid-template-columns: 1fr;
+  }
+}

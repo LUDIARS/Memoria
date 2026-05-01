@@ -244,6 +244,29 @@ export function openDb(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_push_subscriptions_active
       ON push_subscriptions(revoked_at) WHERE revoked_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS meals (
+      id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+      photo_path                  TEXT NOT NULL,
+      eaten_at                    TEXT NOT NULL,
+      eaten_at_source             TEXT NOT NULL DEFAULT 'manual',
+      lat                         REAL,
+      lon                         REAL,
+      location_label              TEXT,
+      location_source             TEXT,
+      description                 TEXT,
+      calories                    INTEGER,
+      items_json                  TEXT,
+      ai_status                   TEXT NOT NULL DEFAULT 'pending',
+      ai_error                    TEXT,
+      user_note                   TEXT,
+      user_corrected_description  TEXT,
+      user_corrected_calories     INTEGER,
+      created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_meals_eaten_at ON meals(eaten_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_meals_ai_status ON meals(ai_status);
   `);
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
@@ -1843,4 +1866,102 @@ export function deleteGpsLocationsOlderThan(db, olderThan, { userId = 'me' } = {
 }
 
 void GPS_INSERT_STMT_KEY; // reserved for prepared-stmt cache
+
+// ─── meals ────────────────────────────────────────────────
+
+/** Find the GPS point closest to `at` (ISO8601), within `windowMs`. */
+export function findNearestGpsLocation(db, at, { windowMs = 5 * 60 * 1000, userId = 'me' } = {}) {
+  const center = new Date(at);
+  if (isNaN(center.getTime())) return null;
+  const from = new Date(center.getTime() - windowMs).toISOString();
+  const to = new Date(center.getTime() + windowMs).toISOString();
+  const rows = db.prepare(`
+    SELECT id, recorded_at, lat, lon, accuracy_m
+    FROM gps_locations
+    WHERE user_id = ? AND recorded_at BETWEEN ? AND ?
+    ORDER BY recorded_at
+  `).all(userId, from, to);
+  if (rows.length === 0) return null;
+  let best = rows[0];
+  let bestDiff = Math.abs(new Date(best.recorded_at).getTime() - center.getTime());
+  for (const r of rows.slice(1)) {
+    const d = Math.abs(new Date(r.recorded_at).getTime() - center.getTime());
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = r;
+    }
+  }
+  return best;
+}
+
+export function insertMeal(db, m) {
+  const info = db.prepare(`
+    INSERT INTO meals (
+      photo_path, eaten_at, eaten_at_source,
+      lat, lon, location_label, location_source,
+      description, calories, items_json,
+      ai_status, ai_error, user_note,
+      user_corrected_description, user_corrected_calories
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    m.photo_path, m.eaten_at, m.eaten_at_source ?? 'manual',
+    m.lat ?? null, m.lon ?? null, m.location_label ?? null, m.location_source ?? null,
+    m.description ?? null, m.calories ?? null, m.items_json ?? null,
+    m.ai_status ?? 'pending', m.ai_error ?? null, m.user_note ?? null,
+    m.user_corrected_description ?? null, m.user_corrected_calories ?? null,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function getMeal(db, id) {
+  return db.prepare(`SELECT * FROM meals WHERE id = ?`).get(id);
+}
+
+export function listMeals(db, { from, to, limit = 100, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (from) { where.push(`eaten_at >= ?`); args.push(from); }
+  if (to)   { where.push(`eaten_at <= ?`); args.push(to);   }
+  const sql = `
+    SELECT * FROM meals
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY eaten_at DESC
+    LIMIT ? OFFSET ?
+  `;
+  args.push(limit, offset);
+  return db.prepare(sql).all(...args);
+}
+
+export function countMeals(db, { from, to } = {}) {
+  const where = [];
+  const args = [];
+  if (from) { where.push(`eaten_at >= ?`); args.push(from); }
+  if (to)   { where.push(`eaten_at <= ?`); args.push(to);   }
+  const sql = `SELECT COUNT(*) AS c FROM meals ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
+  return db.prepare(sql).get(...args).c;
+}
+
+export function updateMeal(db, id, patch) {
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    cols.push(`${k} = ?`);
+    args.push(v);
+  }
+  if (cols.length === 0) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE meals SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteMeal(db, id) {
+  db.prepare(`DELETE FROM meals WHERE id = ?`).run(id);
+}
+
+export function listPendingMeals(db, { limit = 20 } = {}) {
+  return db.prepare(`
+    SELECT * FROM meals WHERE ai_status = 'pending'
+    ORDER BY id ASC LIMIT ?
+  `).all(limit);
+}
 

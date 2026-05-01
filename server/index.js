@@ -81,7 +81,13 @@ import {
   listGpsLocationsForDate, deleteGpsLocationsOlderThan,
 } from './db.js';
 import { listPushSubscriptions, deletePushSubscription } from './db.js';
+import {
+  insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
+} from './db.js';
 import { initWebPush, getVapidPublicKey, saveSubscription, sendPushToAll } from './push.js';
+import {
+  extractPhotoMeta, resolveMealLocation, analyzeMealPhoto, getMealsApiKey,
+} from './meals.js';
 import {
   readMultiState, isConnected,
   readMultiServers, persistServers, upsertServer, removeServer,
@@ -94,10 +100,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
 const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(__dirname, '..', 'data'));
 const HTML_DIR = join(DATA_DIR, 'html');
+const MEAL_DIR = join(DATA_DIR, 'meals');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
 
 mkdirSync(HTML_DIR, { recursive: true });
+mkdirSync(MEAL_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 loadLlmConfigFromSettings(getAppSettings(db));
 initWebPush(DATA_DIR);
@@ -107,6 +115,7 @@ const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
 const domainCatalogQueue = new FifoQueue();
 const pageMetadataQueue = new FifoQueue();
+const mealVisionQueue = new FifoQueue();
 
 function maybeQueuePageMetadata(url) {
   let host;
@@ -572,6 +581,271 @@ app.delete('/api/recommendations/dismissals', (c) => {
   clearDismissals(db);
   return c.json({ ok: true });
 });
+
+// ---- meals (食事記録) -----------------------------------------------------
+//
+// 写真 + EXIF + GPS 軌跡から食事内容 / カロリー / 場所 / 時刻 を半自動で記録する。
+//
+// 解決順序:
+//   - 食事時刻: EXIF DateTimeOriginal → 投稿時刻 (POST 受信時)
+//   - 場所:     EXIF GPS → 既存 gps_locations ±5 分の最近点 → 手動 (PATCH)
+//   - 内容/cal: OpenAI Vision (gpt-4o-mini) — API key 未設定なら pending のまま
+//
+// 解析失敗時 / API key 未設定時は ai_status='pending' のまま手動入力で運用可能。
+
+const MEAL_PHOTO_MAX_BYTES = 12 * 1024 * 1024; // 12 MiB
+const MEAL_VISION_TIMEOUT = 90_000;
+
+function pickPhotoExt(filename, mime) {
+  const lower = (filename || '').toLowerCase();
+  if (lower.endsWith('.png')) return '.png';
+  if (lower.endsWith('.heic') || lower.endsWith('.heif')) return '.heic';
+  if (lower.endsWith('.webp')) return '.webp';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return '.jpg';
+  if (mime === 'image/png') return '.png';
+  if (mime === 'image/heic' || mime === 'image/heif') return '.heic';
+  if (mime === 'image/webp') return '.webp';
+  return '.jpg';
+}
+
+function mimeFromExt(p) {
+  if (p.endsWith('.png')) return 'image/png';
+  if (p.endsWith('.heic') || p.endsWith('.heif')) return 'image/heic';
+  if (p.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+function enqueueMealVision(id) {
+  mealVisionQueue.enqueue(async () => {
+    const meal = getMeal(db, id);
+    if (!meal) return;
+    const apiKey = getMealsApiKey(db);
+    if (!apiKey) {
+      updateMeal(db, id, {
+        ai_status: 'pending',
+        ai_error: 'OpenAI API key not configured (set llm.openai.api_key in settings)',
+      });
+      return;
+    }
+    const fullPath = join(MEAL_DIR, meal.photo_path);
+    let buf;
+    try {
+      buf = readFileSync(fullPath);
+    } catch (e) {
+      updateMeal(db, id, { ai_status: 'error', ai_error: `read file: ${e.message}` });
+      return;
+    }
+    const mime = mimeFromExt(meal.photo_path);
+    try {
+      const result = await Promise.race([
+        analyzeMealPhoto(apiKey, buf.toString('base64'), mime),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('vision timeout')), MEAL_VISION_TIMEOUT)),
+      ]);
+      if (!result) {
+        updateMeal(db, id, { ai_status: 'error', ai_error: 'vision returned null' });
+        return;
+      }
+      updateMeal(db, id, {
+        description: result.description ?? null,
+        calories: typeof result.calories === 'number' ? result.calories : null,
+        items_json: result.items ? JSON.stringify(result.items) : null,
+        ai_status: 'done',
+        ai_error: null,
+      });
+    } catch (e) {
+      updateMeal(db, id, { ai_status: 'error', ai_error: String(e.message ?? e).slice(0, 500) });
+    }
+  }, { kind: 'meal-vision', meal_id: id, title: `meal #${id}` });
+}
+
+// POST /api/meals — multipart/form-data
+//   photo:      File (required)
+//   user_note:  string (optional)
+//   eaten_at:   ISO8601 string (optional, 手動上書き)
+//   lat / lon:  number (optional, 手動上書き)
+app.post('/api/meals', async (c) => {
+  const form = await c.req.formData().catch(() => null);
+  if (!form) return c.json({ error: 'multipart/form-data required' }, 400);
+  const photo = form.get('photo');
+  if (!(photo instanceof File)) return c.json({ error: 'photo (File) required' }, 400);
+  if (photo.size === 0) return c.json({ error: 'empty photo' }, 400);
+  if (photo.size > MEAL_PHOTO_MAX_BYTES) {
+    return c.json({ error: `photo too large (max ${MEAL_PHOTO_MAX_BYTES} bytes)` }, 413);
+  }
+  const buf = Buffer.from(await photo.arrayBuffer());
+  const exif = await extractPhotoMeta(buf);
+
+  const userNote = (form.get('user_note') || '').toString().trim() || null;
+  const eatenAtRaw = (form.get('eaten_at') || '').toString().trim();
+  const latRaw = (form.get('lat') || '').toString().trim();
+  const lonRaw = (form.get('lon') || '').toString().trim();
+  const manualLat = latRaw ? Number(latRaw) : null;
+  const manualLon = lonRaw ? Number(lonRaw) : null;
+  const hasManualLatLon =
+    typeof manualLat === 'number' && isFinite(manualLat) &&
+    typeof manualLon === 'number' && isFinite(manualLon);
+
+  // 食事時刻: 手動 > EXIF > 投稿時刻
+  let eatenAt = '';
+  let eatenAtSource = 'manual';
+  if (eatenAtRaw) {
+    const d = new Date(eatenAtRaw);
+    if (!isNaN(d.getTime())) {
+      eatenAt = d.toISOString();
+      eatenAtSource = 'manual';
+    }
+  }
+  if (!eatenAt && exif.capturedAt) {
+    eatenAt = exif.capturedAt;
+    eatenAtSource = 'exif';
+  }
+  if (!eatenAt) {
+    eatenAt = new Date().toISOString();
+    eatenAtSource = 'post';
+  }
+
+  const loc = resolveMealLocation(
+    db,
+    exif,
+    eatenAt,
+    hasManualLatLon ? { lat: manualLat, lon: manualLon } : null,
+  );
+
+  const ext = pickPhotoExt(photo.name, photo.type);
+  const id = insertMeal(db, {
+    photo_path: 'placeholder' + ext,
+    eaten_at: eatenAt,
+    eaten_at_source: eatenAtSource,
+    lat: loc.lat,
+    lon: loc.lon,
+    location_label: loc.label,
+    location_source: loc.source,
+    description: null,
+    calories: null,
+    items_json: null,
+    ai_status: 'pending',
+    ai_error: null,
+    user_note: userNote,
+  });
+
+  const filename = `${id}${ext}`;
+  const fullPath = join(MEAL_DIR, filename);
+  try {
+    writeFileSync(fullPath, buf);
+  } catch (e) {
+    deleteMeal(db, id);
+    return c.json({ error: `write photo: ${e.message}` }, 500);
+  }
+  updateMeal(db, id, { photo_path: filename });
+
+  enqueueMealVision(id);
+
+  const created = getMeal(db, id);
+  return c.json({ meal: created }, 201);
+});
+
+app.get('/api/meals', (c) => {
+  const from = c.req.query('from') || undefined;
+  const to = c.req.query('to') || undefined;
+  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  const offset = Math.max(Number(c.req.query('offset') || 0), 0);
+  const meals = listMeals(db, { from, to, limit, offset });
+  const total = countMeals(db, { from, to });
+  return c.json({ meals, total });
+});
+
+app.get('/api/meals/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  return c.json({ meal });
+});
+
+app.get('/api/meals/:id/photo', (c) => {
+  const id = Number(c.req.param('id'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  const fullPath = join(MEAL_DIR, meal.photo_path);
+  if (!existsSync(fullPath)) return c.json({ error: 'photo missing' }, 404);
+  const buf = readFileSync(fullPath);
+  return new Response(buf, {
+    headers: {
+      'Content-Type': mimeFromExt(meal.photo_path),
+      'Cache-Control': 'private, max-age=86400',
+    },
+  });
+});
+
+app.patch('/api/meals/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'json body required' }, 400);
+
+  const patch = {};
+  if (typeof body.user_note === 'string') patch.user_note = body.user_note.trim() || null;
+  if (typeof body.user_corrected_description === 'string') {
+    patch.user_corrected_description = body.user_corrected_description.trim() || null;
+  }
+  if (body.user_corrected_calories === null) {
+    patch.user_corrected_calories = null;
+  } else if (typeof body.user_corrected_calories === 'number' && isFinite(body.user_corrected_calories)) {
+    patch.user_corrected_calories = Math.round(body.user_corrected_calories);
+  }
+  if (typeof body.eaten_at === 'string' && body.eaten_at.trim()) {
+    const d = new Date(body.eaten_at);
+    if (!isNaN(d.getTime())) {
+      patch.eaten_at = d.toISOString();
+      patch.eaten_at_source = 'manual';
+    }
+  }
+  if (body.lat === null && body.lon === null) {
+    patch.lat = null;
+    patch.lon = null;
+    patch.location_source = 'none';
+    patch.location_label = null;
+  } else if (
+    typeof body.lat === 'number' && isFinite(body.lat) &&
+    typeof body.lon === 'number' && isFinite(body.lon)
+  ) {
+    patch.lat = body.lat;
+    patch.lon = body.lon;
+    patch.location_source = 'manual';
+    patch.location_label = '手動指定';
+  }
+
+  if (Object.keys(patch).length > 0) updateMeal(db, id, patch);
+  return c.json({ meal: getMeal(db, id) });
+});
+
+app.delete('/api/meals/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  try {
+    const fullPath = join(MEAL_DIR, meal.photo_path);
+    if (existsSync(fullPath)) unlinkSync(fullPath);
+  } catch (e) {
+    console.warn(`[meal#${id}] failed to delete photo: ${e.message}`);
+  }
+  deleteMeal(db, id);
+  return c.json({ ok: true });
+});
+
+app.post('/api/meals/:id/reanalyze', (c) => {
+  const id = Number(c.req.param('id'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  updateMeal(db, id, { ai_status: 'pending', ai_error: null });
+  enqueueMealVision(id);
+  return c.json({ meal: getMeal(db, id), queued: true });
+});
+
+// 起動時に pending 食事があれば解析を再投入 (前回終了時の中断分)
+for (const m of listPendingMeals(db, { limit: 50 })) {
+  enqueueMealVision(m.id);
+}
 
 // ---- dig (deep research) -------------------------------------------------
 // All claude-using work (dig / cloud / diary / weekly / domain / page) runs

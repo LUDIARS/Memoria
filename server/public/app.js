@@ -611,6 +611,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('eventsView').classList.toggle('hidden', tab !== 'events');
   $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
+  $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
@@ -622,6 +623,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'events') loadEvents();
   if (tab === 'tracks') loadTracks();
+  if (tab === 'meals') loadMeals();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   closeTabMoreMenu();
@@ -4926,3 +4928,189 @@ document.getElementById('aiSettingsBtn')?.addEventListener('click', () => {
   history.replaceState({}, '', location.pathname);
 })();
 
+
+// ── Meals (食事記録) ─────────────────────────────────────────────────────
+//
+// /api/meals (multipart) で写真投稿 → サーバが EXIF / GPS / Vision で
+// 補完 → 一覧 + 編集。 OPENAI_API_KEY が無いと内容 / カロリーは pending のまま、
+// 手動入力で運用可能。
+
+const mealsState = {
+  items: [],
+  pollTimer: null,
+};
+
+async function loadMeals() {
+  const list = document.getElementById('mealsList');
+  if (!list) return;
+  const fromEl = document.getElementById('mealsFromDate');
+  const toEl = document.getElementById('mealsToDate');
+  const params = new URLSearchParams();
+  if (fromEl?.value) params.set('from', fromEl.value);
+  if (toEl?.value) params.set('to', toEl.value + 'T23:59:59');
+  try {
+    const r = await api(`/api/meals?${params.toString()}`);
+    mealsState.items = r.meals || [];
+    renderMeals();
+    schedulePendingPoll();
+  } catch (e) {
+    list.innerHTML = `<div class="hint">読み込みエラー: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderMeals() {
+  const list = document.getElementById('mealsList');
+  if (!list) return;
+  if (mealsState.items.length === 0) {
+    list.innerHTML = '<div class="hint">まだ食事の記録はありません。 「📷 写真を追加」 から登録してください。</div>';
+    return;
+  }
+  list.innerHTML = mealsState.items.map((m) => {
+    const desc = m.user_corrected_description || m.description || (m.ai_status === 'pending' ? '解析中…' : m.ai_status === 'error' ? '解析失敗' : '(未記入)');
+    const cal = m.user_corrected_calories ?? m.calories;
+    const calStr = (cal == null) ? '— kcal' : `${cal} kcal`;
+    const eatenAt = formatLocalMealDateTime(m.eaten_at);
+    const locStr = m.location_label || (m.lat != null && m.lon != null ? `${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}` : '場所不明');
+    const aiBadge = m.ai_status === 'pending'
+      ? '<span class="meal-badge meal-badge-pending">解析中</span>'
+      : m.ai_status === 'error'
+      ? `<span class="meal-badge meal-badge-error" title="${escapeHtml(m.ai_error || '')}">解析失敗</span>`
+      : '';
+    return `
+      <div class="meal-card" data-meal-id="${m.id}">
+        <img class="meal-photo" src="/api/meals/${m.id}/photo" loading="lazy" alt="食事写真" />
+        <div class="meal-body">
+          <div class="meal-head">
+            <span class="meal-time">${escapeHtml(eatenAt)}</span>
+            ${aiBadge}
+          </div>
+          <div class="meal-desc">${escapeHtml(desc)}</div>
+          <div class="meal-meta">
+            <span class="meal-cal">${escapeHtml(calStr)}</span>
+            <span class="meal-loc">${escapeHtml(locStr)}</span>
+          </div>
+          ${m.user_note ? `<div class="meal-note">📝 ${escapeHtml(m.user_note)}</div>` : ''}
+          <div class="meal-actions">
+            <button class="ghost meal-edit-btn" data-id="${m.id}">✏️ 修正</button>
+            <button class="ghost meal-reanalyze-btn" data-id="${m.id}">🔄 再解析</button>
+            <button class="ghost meal-delete-btn" data-id="${m.id}">🗑️ 削除</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  // OpenAI API key 不足の検出 (pending かつ ai_error にメッセージ)
+  const hint = document.getElementById('mealsHint');
+  if (hint) {
+    const keyMissing = mealsState.items.some((m) => m.ai_status === 'pending' && (m.ai_error || '').includes('OpenAI API key'));
+    hint.classList.toggle('hidden', !keyMissing);
+  }
+  list.querySelectorAll('.meal-edit-btn').forEach((b) => {
+    b.addEventListener('click', () => editMeal(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-reanalyze-btn').forEach((b) => {
+    b.addEventListener('click', () => reanalyzeMeal(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-delete-btn').forEach((b) => {
+    b.addEventListener('click', () => deleteMealRow(Number(b.dataset.id)));
+  });
+}
+
+function formatLocalMealDateTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso || '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function schedulePendingPoll() {
+  if (mealsState.pollTimer) clearTimeout(mealsState.pollTimer);
+  const hasPending = mealsState.items.some((m) => m.ai_status === 'pending');
+  if (!hasPending) return;
+  mealsState.pollTimer = setTimeout(() => {
+    if (state.tab !== 'meals') return;
+    loadMeals();
+  }, 4000);
+}
+
+async function uploadMealPhoto(file) {
+  const status = document.getElementById('mealsUploadStatus');
+  const fd = new FormData();
+  fd.append('photo', file);
+  if (status) status.textContent = `📤 ${file.name} を送信中…`;
+  try {
+    const res = await fetch('/api/meals', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || `HTTP ${res.status}`);
+    }
+    if (status) status.textContent = '✅ 登録しました (解析中)';
+    await loadMeals();
+  } catch (e) {
+    if (status) status.textContent = `⚠ エラー: ${e.message}`;
+  }
+}
+
+async function reanalyzeMeal(id) {
+  try {
+    await api(`/api/meals/${id}/reanalyze`, { method: 'POST' });
+    await loadMeals();
+  } catch (e) {
+    alert(`再解析エラー: ${e.message}`);
+  }
+}
+
+async function deleteMealRow(id) {
+  if (!confirm('この食事記録を削除しますか?')) return;
+  try {
+    await api(`/api/meals/${id}`, { method: 'DELETE' });
+    await loadMeals();
+  } catch (e) {
+    alert(`削除エラー: ${e.message}`);
+  }
+}
+
+function editMeal(id) {
+  const m = mealsState.items.find((x) => x.id === id);
+  if (!m) return;
+  const desc = prompt('食事内容 (補正)', m.user_corrected_description || m.description || '');
+  if (desc === null) return;
+  const calRaw = prompt('カロリー (補正、 数字。 空欄でクリア)', String(m.user_corrected_calories ?? m.calories ?? ''));
+  if (calRaw === null) return;
+  const eatenAtRaw = prompt('食事時刻 (YYYY-MM-DDTHH:mm、 空欄で変更しない)', formatLocalMealDateTime(m.eaten_at).replace(' ', 'T'));
+  if (eatenAtRaw === null) return;
+  const note = prompt('補足メモ', m.user_note || '');
+  if (note === null) return;
+
+  const patch = {
+    user_corrected_description: desc.trim() || null,
+    user_note: note.trim() || null,
+  };
+  if (calRaw.trim() === '') {
+    patch.user_corrected_calories = null;
+  } else {
+    const n = Number(calRaw);
+    if (isFinite(n)) patch.user_corrected_calories = n;
+  }
+  if (eatenAtRaw.trim()) patch.eaten_at = eatenAtRaw.trim();
+
+  api(`/api/meals/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+    .then(() => loadMeals())
+    .catch((e) => alert(`修正エラー: ${e.message}`));
+}
+
+// イベント結線
+document.getElementById('mealsRefresh')?.addEventListener('click', () => loadMeals());
+document.getElementById('mealsPhotoInput')?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  uploadMealPhoto(file).finally(() => { e.target.value = ''; });
+});
