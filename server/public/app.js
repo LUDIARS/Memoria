@@ -5380,6 +5380,9 @@ function advanceMealQueue() {
 function openMealModal(item) {
   const modal = document.getElementById('mealModal');
   if (!modal) return;
+  // グローバル `.hidden { display: none !important }` が残っていると
+  // showModal で [open] が付いても表示されないので、 念のため毎回 remove。
+  modal.classList.remove('hidden');
   // <dialog>.showModal() でネイティブ popup として開く (focus trap / Esc 自動)。
   // 古い iOS Safari (< 15.4) や一部の WebView では showModal が未実装。
   // どんな環境でも確実に開けるよう、 stub 失敗時は手動で open 属性 + flex を強制。
@@ -5395,7 +5398,6 @@ function openMealModal(item) {
   if (!openedNatively) {
     // dialog 非対応 / showModal 失敗時の fallback — open 属性 + 直接 style 指定
     modal.setAttribute('open', '');
-    modal.classList.remove('hidden');
     modal.style.display = 'flex';
     modal.style.position = 'fixed';
     modal.style.inset = '0';
@@ -5487,9 +5489,11 @@ function closeMealModal() {
       try { modal.close(); }
       catch (e) { console.warn('[meal-modal] close failed:', e); }
     }
-    // fallback で付けた open 属性 / inline style もクリア
+    // fallback で付けた open 属性 / inline style をクリア。
+    // `.hidden` は付けない — 次回 showModal 時に `display: none !important`
+    // が `dialog[open]` を上書きしてしまうため。 dialog は UA 既定で
+    // `:not([open])` のとき非表示になる。
     modal.removeAttribute('open');
-    modal.classList.add('hidden');
     modal.style.display = '';
     modal.style.position = '';
     modal.style.inset = '';
