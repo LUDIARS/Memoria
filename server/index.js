@@ -11,6 +11,7 @@ import {
   insertBookmark,
   setSummary,
   listBookmarks,
+  countBookmarks,
   getBookmark,
   listAllCategories,
   updateMemoAndCategories,
@@ -332,9 +333,19 @@ app.post('/api/bookmark', async (c) => {
 });
 
 app.get('/api/bookmarks', (c) => {
+  // Pagination: bookmark count grew enough that returning every row + every
+  // category lookup got noticeably slow. The UI now requests 50 at a time
+  // (with `?q=` for server-side search) and asks for the next page on
+  // demand. Internal callers (export / wordcloud / recommendations) skip
+  // the limit and keep getting the full array.
   const category = c.req.query('category') || undefined;
   const sort = c.req.query('sort') || undefined;
-  return c.json({ items: listBookmarks(db, { category, sort }) });
+  const q = c.req.query('q')?.trim() || undefined;
+  const limit = Math.min(200, Math.max(1, Number(c.req.query('limit')) || 50));
+  const offset = Math.max(0, Number(c.req.query('offset')) || 0);
+  const items = listBookmarks(db, { category, sort, q, limit, offset });
+  const total = countBookmarks(db, { category, q });
+  return c.json({ items, total, limit, offset });
 });
 
 app.get('/api/bookmarks/:id', (c) => {

@@ -1,10 +1,14 @@
+const BOOKMARKS_PAGE_SIZE = 50;
+
 const state = {
   bookmarks: [],
+  bookmarksTotal: 0,
   categories: [],
   category: null,
   selected: new Set(),
   detailId: null,
   search: '',
+  searchDebounce: null,
   sort: 'created_desc',
   tab: 'bookmarks',
   queue: { items: [], history: [] },
@@ -59,16 +63,28 @@ function fmtDate(s) {
   return d.toLocaleString();
 }
 
-async function load() {
-  const q = new URLSearchParams();
-  if (state.category) q.set('category', state.category);
-  if (state.sort) q.set('sort', state.sort);
-  const [{ items: bookmarks }, { items: categories }] = await Promise.all([
-    api(`/api/bookmarks?${q.toString()}`),
+async function load(opts = {}) {
+  // 50 件ずつのページング。 「もっと表示」 で append=true、 それ以外
+  // (カテゴリ切替 / ソート変更 / 検索 / 自動 refresh) は先頭から取り直す。
+  const append = opts.append === true;
+  const offset = append ? state.bookmarks.length : 0;
+  const qs = new URLSearchParams();
+  if (state.category) qs.set('category', state.category);
+  if (state.sort) qs.set('sort', state.sort);
+  if (state.search) qs.set('q', state.search);
+  qs.set('limit', String(BOOKMARKS_PAGE_SIZE));
+  qs.set('offset', String(offset));
+  const [bookmarksRes, categoriesRes] = await Promise.all([
+    api(`/api/bookmarks?${qs.toString()}`),
     api('/api/categories'),
   ]);
-  state.bookmarks = bookmarks;
-  state.categories = categories;
+  state.bookmarks = append
+    ? [...state.bookmarks, ...(bookmarksRes.items || [])]
+    : (bookmarksRes.items || []);
+  state.bookmarksTotal = Number.isFinite(bookmarksRes.total)
+    ? bookmarksRes.total
+    : state.bookmarks.length;
+  state.categories = categoriesRes.items;
   render();
 }
 
@@ -81,7 +97,9 @@ function render() {
 
 function renderCategories() {
   const ul = $('categoryList');
-  const total = state.bookmarks.length;
+  // Use the server-reported total (across the whole DB) rather than
+  // `state.bookmarks.length` which is just the current page (≤ 50).
+  const total = state.bookmarksTotal;
   let html = '';
   html += `<li class="${state.category === null ? 'active' : ''}" data-cat="">すべて<span class="count">${total}</span></li>`;
   for (const c of state.categories) {
@@ -127,12 +145,10 @@ function setupCategoriesDrawer() {
 function renderCards() {
   const wrap = $('cards');
   const empty = $('empty');
-  const search = state.search.toLowerCase();
-  const items = state.bookmarks.filter(b => {
-    if (!search) return true;
-    const haystack = `${b.title} ${b.url} ${b.summary ?? ''} ${(b.categories||[]).join(' ')}`.toLowerCase();
-    return haystack.includes(search);
-  });
+  // Search filtering now happens server-side (?q=...). The full page is
+  // already what we want to render — no local re-filtering.
+  const items = state.bookmarks;
+  renderBookmarksMore();
   if (items.length === 0) {
     wrap.innerHTML = '';
     empty.classList.remove('hidden');
@@ -181,6 +197,40 @@ function renderBulk() {
   const bar = $('bulkBar');
   $('bulkCount').textContent = state.selected.size;
   bar.classList.toggle('hidden', state.selected.size === 0);
+}
+
+function renderBookmarksMore() {
+  // The "もっと表示" button at the bottom of the card grid. Visible only
+  // when the server says there are more rows than we've loaded so far.
+  const btn = $('bookmarksMore');
+  const status = $('bookmarksMoreStatus');
+  if (!btn) return;
+  const loaded = state.bookmarks.length;
+  const total = state.bookmarksTotal;
+  const remaining = Math.max(0, total - loaded);
+  if (status) {
+    status.textContent = total > 0
+      ? `${loaded} / ${total} 件表示中`
+      : '';
+  }
+  if (remaining > 0) {
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.textContent = `もっと表示 (残り ${remaining} 件)`;
+  } else {
+    btn.hidden = true;
+  }
+}
+
+async function loadMoreBookmarks() {
+  const btn = $('bookmarksMore');
+  if (btn) { btn.disabled = true; btn.textContent = '読み込み中…'; }
+  try {
+    await load({ append: true });
+  } catch (e) {
+    alert(`追加読み込み失敗: ${e.message}`);
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function openDetail(id) {
@@ -355,13 +405,18 @@ function escapeHtml(s) {
 // ---- wire up ---------------------------------------------------------------
 
 $('search').addEventListener('input', (e) => {
+  // Search is now server-side (?q=) so each keystroke triggers a fetch.
+  // Debounce by 250ms — long enough to skip "in-flight typing" but short
+  // enough that the result list feels live.
   state.search = e.target.value;
-  renderCards();
+  if (state.searchDebounce) clearTimeout(state.searchDebounce);
+  state.searchDebounce = setTimeout(() => load(), 250);
 });
 $('sort').addEventListener('change', (e) => {
   state.sort = e.target.value;
   load();
 });
+$('bookmarksMore')?.addEventListener('click', () => loadMoreBookmarks());
 $('detailClose').addEventListener('click', closeDetail);
 $('dSave').addEventListener('click', saveDetail);
 $('dResummarize').addEventListener('click', resummarizeDetail);
