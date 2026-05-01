@@ -3446,3 +3446,175 @@ button.meal-desc {
   font-size: 12px;
   padding: 3px 8px;
 }
+
+/* ── Meals: 登録モーダル ─────────────────────────────────────── */
+.meal-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.meal-modal.hidden {
+  display: none;
+}
+.meal-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+.meal-modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 96vw);
+  max-height: 92vh;
+  background: var(--bg-surface, #fff);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.meal-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.meal-modal-head h3 {
+  margin: 0;
+  font-size: 16px;
+  flex: 1;
+}
+.meal-modal-progress {
+  font-size: 12px;
+}
+.meal-modal-x {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.meal-modal-x:hover { color: var(--text); }
+
+.meal-modal-photo-wrap {
+  width: 100%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 36vh;
+  overflow: hidden;
+}
+.meal-modal-photo-wrap img {
+  max-width: 100%;
+  max-height: 36vh;
+  object-fit: contain;
+  display: block;
+}
+.meal-modal-photo-empty {
+  width: 100%;
+  aspect-ratio: 16 / 6;
+  background: linear-gradient(135deg, #f4f4f4, #e9e9e9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  gap: 4px;
+}
+.meal-modal-photo-empty.hidden { display: none; }
+
+.meal-modal-form {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.meal-modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.meal-modal-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.meal-modal-label .required {
+  color: #c00;
+  margin-left: 2px;
+}
+.meal-modal-row input[type="datetime-local"],
+.meal-modal-row input[type="number"],
+.meal-modal-row textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg);
+}
+.meal-modal-row textarea {
+  resize: vertical;
+  min-height: 50px;
+}
+.meal-modal-hint {
+  font-size: 11px;
+}
+.meal-modal-loc {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.meal-modal-loc input {
+  flex: 1;
+  min-width: 100px;
+}
+.meal-modal-loc button {
+  padding: 6px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.meal-modal-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-surface, #fff);
+}
+.meal-modal-actions .grow { flex: 1; }
+.meal-modal-actions button {
+  padding: 8px 16px;
+  font-size: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+#mealModalSubmit {
+  background: var(--accent, #2a6df4);
+  color: #fff;
+  border-color: transparent;
+  font-weight: 500;
+}
+#mealModalSubmit:hover { filter: brightness(1.05); }
+
+@media (max-width: 480px) {
+  .meal-modal-card {
+    width: 100%;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+}

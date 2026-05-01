@@ -5223,46 +5223,214 @@ function schedulePendingPoll() {
   }, 4000);
 }
 
-async function uploadMealPhotos(files) {
-  if (!files || files.length === 0) return;
-  const status = document.getElementById('mealsUploadStatus');
-  const total = files.length;
-  let ok = 0;
-  let failed = 0;
-  for (let i = 0; i < total; i++) {
-    const file = files[i];
-    if (!file || !file.type?.startsWith?.('image/')) {
-      failed += 1;
-      continue;
-    }
-    if (status) {
-      status.textContent = `📤 ${i + 1}/${total} 送信中… (${file.name || 'image'})`;
-    }
-    try {
-      const fd = new FormData();
-      fd.append('photo', file);
-      const res = await fetch('/api/meals', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error || `HTTP ${res.status}`);
-      }
-      ok += 1;
-    } catch (e) {
-      failed += 1;
-      console.warn(`[meals] upload failed (${file.name}):`, e);
-    }
+// ── 食事登録モーダル — 写真 / 写真なし いずれも 1 件ずつ確認画面を出す ──
+//
+// queue にためて 1 件ずつ open / submit / next。 キャンセルで queue 全破棄。
+
+const mealModalState = {
+  queue: [],
+  currentIndex: 0,
+  totalCount: 0,
+  current: null,
+};
+
+function ensureBlobUrlRevoked(item) {
+  if (item?.blobUrl) {
+    URL.revokeObjectURL(item.blobUrl);
+    item.blobUrl = '';
   }
-  if (status) {
-    if (failed === 0) status.textContent = `✅ ${ok} 件 登録しました (解析中)`;
-    else if (ok === 0) status.textContent = `⚠ 全 ${total} 件 失敗しました`;
-    else status.textContent = `⚠ ${ok} 件 成功 / ${failed} 件 失敗`;
-  }
-  await loadMeals();
 }
 
-// 単一互換 (古い call 元用)
-function uploadMealPhoto(file) {
-  return uploadMealPhotos([file]);
+function clearMealQueue() {
+  for (const it of mealModalState.queue) ensureBlobUrlRevoked(it);
+  if (mealModalState.current) ensureBlobUrlRevoked(mealModalState.current);
+  mealModalState.queue = [];
+  mealModalState.currentIndex = 0;
+  mealModalState.totalCount = 0;
+  mealModalState.current = null;
+}
+
+function enqueueMealModal(items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const wasIdle = mealModalState.queue.length === 0 && !mealModalState.current;
+  for (const it of items) {
+    if (it.kind === 'photo' && it.file) {
+      it.blobUrl = URL.createObjectURL(it.file);
+    }
+    mealModalState.queue.push(it);
+  }
+  // 進捗総数 = 現在処理中分 + 残りキュー
+  mealModalState.totalCount = mealModalState.currentIndex + (mealModalState.current ? 0 : 0) + mealModalState.queue.length + (mealModalState.current ? 1 : 0);
+  if (wasIdle) advanceMealQueue();
+}
+
+function advanceMealQueue() {
+  if (mealModalState.current) ensureBlobUrlRevoked(mealModalState.current);
+  const next = mealModalState.queue.shift();
+  if (!next) {
+    closeMealModal();
+    return;
+  }
+  mealModalState.current = next;
+  mealModalState.currentIndex += 1;
+  openMealModal(next);
+}
+
+function openMealModal(item) {
+  const modal = document.getElementById('mealModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  const photoImg = document.getElementById('mealModalPhoto');
+  const photoEmpty = document.getElementById('mealModalPhotoEmpty');
+  if (item.kind === 'photo' && item.blobUrl) {
+    photoImg.src = item.blobUrl;
+    photoImg.hidden = false;
+    photoEmpty.classList.add('hidden');
+  } else {
+    photoImg.hidden = true;
+    photoImg.removeAttribute('src');
+    photoEmpty.classList.remove('hidden');
+  }
+
+  const descEl = document.getElementById('mealModalDesc');
+  const eatenEl = document.getElementById('mealModalEatenAt');
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const calEl = document.getElementById('mealModalCal');
+  const noteEl = document.getElementById('mealModalNote');
+  const descHint = document.getElementById('mealModalDescHint');
+
+  if (descEl) descEl.value = '';
+  if (eatenEl) eatenEl.value = toDatetimeLocalValue(new Date().toISOString());
+  if (latEl) latEl.value = '';
+  if (lonEl) lonEl.value = '';
+  if (calEl) calEl.value = '';
+  if (noteEl) noteEl.value = '';
+
+  // 写真ありなら description 任意 (AI 解析)、 写真なしなら必須
+  if (item.kind === 'photo') {
+    descEl?.removeAttribute('required');
+    if (descHint) descHint.textContent = '空欄なら AI が画像から推定 (Claude Vision)';
+  } else {
+    descEl?.setAttribute('required', 'required');
+    if (descHint) descHint.textContent = '写真なしの場合は内容必須。 カロリー空欄なら AI 推定';
+  }
+
+  const total = mealModalState.totalCount;
+  const idx = mealModalState.currentIndex;
+  const prog = document.getElementById('mealModalProgress');
+  if (prog) prog.textContent = total > 1 ? `${idx} / ${total}` : '';
+  const skipBtn = document.getElementById('mealModalSkip');
+  if (skipBtn) skipBtn.hidden = mealModalState.queue.length === 0;
+
+  setTimeout(() => descEl?.focus(), 30);
+}
+
+function closeMealModal() {
+  const modal = document.getElementById('mealModal');
+  if (modal) modal.classList.add('hidden');
+  mealModalState.current = null;
+  mealModalState.currentIndex = 0;
+  mealModalState.totalCount = 0;
+}
+
+function readMealModalForm() {
+  const desc = (document.getElementById('mealModalDesc')?.value || '').trim();
+  const eatenAt = (document.getElementById('mealModalEatenAt')?.value || '').trim();
+  const latRaw = (document.getElementById('mealModalLat')?.value || '').trim();
+  const lonRaw = (document.getElementById('mealModalLon')?.value || '').trim();
+  const calRaw = (document.getElementById('mealModalCal')?.value || '').trim();
+  const note = (document.getElementById('mealModalNote')?.value || '').trim();
+  const lat = latRaw === '' ? null : Number(latRaw);
+  const lon = lonRaw === '' ? null : Number(lonRaw);
+  const calories = calRaw === '' ? null : Number(calRaw);
+  return { desc, eatenAt, lat, lon, calories, note };
+}
+
+async function submitMealModal() {
+  const item = mealModalState.current;
+  if (!item) return;
+  const { desc, eatenAt, lat, lon, calories, note } = readMealModalForm();
+  const status = document.getElementById('mealsUploadStatus');
+
+  if (item.kind === 'manual' && !desc) {
+    alert('食事内容を入力してください');
+    return;
+  }
+
+  if (status) status.textContent = `📤 登録中…`;
+
+  try {
+    if (item.kind === 'photo') {
+      const fd = new FormData();
+      fd.append('photo', item.file);
+      if (eatenAt) fd.append('eaten_at', eatenAt);
+      if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+        fd.append('lat', String(lat));
+        fd.append('lon', String(lon));
+      }
+      if (note) fd.append('user_note', note);
+      const res = await fetch('/api/meals', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const patch = {};
+      if (desc) patch.user_corrected_description = desc;
+      if (calories != null && isFinite(calories)) patch.user_corrected_calories = calories;
+      if (Object.keys(patch).length > 0 && data.meal?.id) {
+        await api(`/api/meals/${data.meal.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+      }
+    } else {
+      const body = { description: desc };
+      if (eatenAt) body.eaten_at = eatenAt;
+      if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+        body.lat = lat; body.lon = lon;
+      }
+      if (calories != null && isFinite(calories)) body.calories = calories;
+      if (note) body.user_note = note;
+      await api('/api/meals/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+    if (status) status.textContent = `✅ 登録しました`;
+  } catch (e) {
+    if (status) status.textContent = `⚠ 登録エラー: ${e.message}`;
+    console.warn('[meals] submit error:', e);
+  }
+  await loadMeals();
+  advanceMealQueue();
+}
+
+function skipMealModalItem() {
+  if (mealModalState.current) ensureBlobUrlRevoked(mealModalState.current);
+  mealModalState.current = null;
+  advanceMealQueue();
+}
+
+function cancelMealModal() {
+  clearMealQueue();
+  closeMealModal();
+}
+
+function startMealModalForFiles(files) {
+  const items = Array.from(files || [])
+    .filter((f) => f && f.type?.startsWith?.('image/'))
+    .map((file) => ({ kind: 'photo', file, blobUrl: '' }));
+  if (items.length === 0) return;
+  enqueueMealModal(items);
+}
+
+function startMealModalForManual() {
+  enqueueMealModal([{ kind: 'manual' }]);
 }
 
 async function reanalyzeMeal(id) {
@@ -5426,38 +5594,6 @@ function startMealLocationEdit(btn) {
   });
 }
 
-// ── 写真なしで食事を追加 ─────────────────────────────────────
-async function addManualMeal() {
-  const description = prompt('食事内容を入力 (例: ラーメン、 おにぎり 1 個)');
-  if (description == null) return;
-  const trimmed = description.trim();
-  if (!trimmed) return;
-  const eatenAtRaw = prompt('食事時刻 (YYYY-MM-DDTHH:mm、 空欄で現在時刻)', toDatetimeLocalValue(new Date().toISOString()));
-  if (eatenAtRaw == null) return;
-  const calRaw = prompt('カロリー (kcal、 空欄で AI 自動推定)', '');
-  if (calRaw == null) return;
-
-  const body = { description: trimmed };
-  if (eatenAtRaw.trim()) body.eaten_at = eatenAtRaw.trim();
-  if (calRaw.trim()) {
-    const n = Number(calRaw);
-    if (isFinite(n)) body.calories = n;
-  }
-  const status = document.getElementById('mealsUploadStatus');
-  if (status) status.textContent = `📝 ${trimmed.slice(0, 30)} を登録中…`;
-  try {
-    await api('/api/meals/manual', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (status) status.textContent = `✅ 「${trimmed.slice(0, 30)}」 登録${calRaw.trim() ? '' : ' (カロリー推定中)'}`;
-    await loadMeals();
-  } catch (e) {
-    if (status) status.textContent = `⚠ 登録エラー: ${e.message}`;
-  }
-}
-
 async function addMealAddition(mealId) {
   const name = prompt('追加で食べたものは? (例: アイスクリーム)');
   if (name === null) return;
@@ -5526,17 +5662,52 @@ document.getElementById('mealsRefresh')?.addEventListener('click', () => loadMea
 
 document.getElementById('mealsPhotoInput')?.addEventListener('change', (e) => {
   const files = Array.from(e.target.files || []);
+  e.target.value = '';
   if (files.length === 0) return;
-  uploadMealPhotos(files).finally(() => { e.target.value = ''; });
+  startMealModalForFiles(files);
 });
 
 document.getElementById('mealsCameraInput')?.addEventListener('change', (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  uploadMealPhoto(file).finally(() => { e.target.value = ''; });
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (files.length === 0) return;
+  startMealModalForFiles(files);
 });
 
-document.getElementById('mealsManualBtn')?.addEventListener('click', () => addManualMeal());
+document.getElementById('mealsManualBtn')?.addEventListener('click', () => startMealModalForManual());
+
+// ── 食事モーダルのボタン結線 ──────────────────────────────────
+document.getElementById('mealModalSubmit')?.addEventListener('click', () => submitMealModal());
+document.getElementById('mealModalCancel')?.addEventListener('click', () => cancelMealModal());
+document.getElementById('mealModalClose')?.addEventListener('click', () => cancelMealModal());
+document.getElementById('mealModalSkip')?.addEventListener('click', () => skipMealModalItem());
+document.querySelector('#mealModal .meal-modal-backdrop')?.addEventListener('click', () => cancelMealModal());
+document.getElementById('mealModalLocHere')?.addEventListener('click', () => {
+  if (!navigator.geolocation) { alert('この端末は位置情報に対応していません'); return; }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const latEl = document.getElementById('mealModalLat');
+      const lonEl = document.getElementById('mealModalLon');
+      if (latEl) latEl.value = String(pos.coords.latitude);
+      if (lonEl) lonEl.value = String(pos.coords.longitude);
+    },
+    (err) => alert(`位置取得失敗: ${err.message}`),
+    { enableHighAccuracy: true, timeout: 10_000 },
+  );
+});
+document.getElementById('mealModalLocClear')?.addEventListener('click', () => {
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  if (latEl) latEl.value = '';
+  if (lonEl) lonEl.value = '';
+});
+// Esc キーで全 cancel
+window.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape') return;
+  const modal = document.getElementById('mealModal');
+  if (!modal || modal.classList.contains('hidden')) return;
+  cancelMealModal();
+});
 
 // ── ドラッグ&ドロップ ──────────────────────────────────────────
 (function setupMealsDropZone() {
@@ -5574,7 +5745,7 @@ document.getElementById('mealsManualBtn')?.addEventListener('click', () => addMa
     zone.classList.remove('drag-over');
     const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith?.('image/'));
     if (files.length === 0) return;
-    uploadMealPhotos(files);
+    startMealModalForFiles(files);
   }
 
   window.addEventListener('dragenter', onDragEnter);
@@ -5595,6 +5766,6 @@ document.getElementById('mealsManualBtn')?.addEventListener('click', () => addMa
       .filter((f) => !!f);
     if (files.length === 0) return;
     e.preventDefault();
-    uploadMealPhotos(files);
+    startMealModalForFiles(files);
   });
 })();

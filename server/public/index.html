@@ -520,6 +520,68 @@
         <div id="mealsList" class="meals-list"></div>
       </div>
 
+      <!-- 食事登録モーダル — 写真 / 写真なしどちらの経路も 1 件ずつここで確認 -->
+      <div id="mealModal" class="meal-modal hidden" role="dialog" aria-modal="true" aria-labelledby="mealModalTitle">
+        <div class="meal-modal-backdrop"></div>
+        <div class="meal-modal-card">
+          <header class="meal-modal-head">
+            <h3 id="mealModalTitle">食事を登録</h3>
+            <span id="mealModalProgress" class="meal-modal-progress muted"></span>
+            <button type="button" id="mealModalClose" class="meal-modal-x" aria-label="閉じる">×</button>
+          </header>
+
+          <div id="mealModalPhotoWrap" class="meal-modal-photo-wrap">
+            <img id="mealModalPhoto" alt="食事写真プレビュー" />
+            <div id="mealModalPhotoEmpty" class="meal-modal-photo-empty hidden">
+              <span class="meal-photo-empty-icon">📝</span>
+              <span class="meal-photo-empty-label">写真なし</span>
+            </div>
+          </div>
+
+          <form id="mealModalForm" class="meal-modal-form" onsubmit="return false;">
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">食事内容 <span class="required">*</span></span>
+              <textarea id="mealModalDesc" rows="2" placeholder="例: カレーライスとサラダ" required></textarea>
+              <span class="meal-modal-hint muted" id="mealModalDescHint">写真ありで空欄なら AI が解析します</span>
+            </label>
+
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">食事時刻</span>
+              <input id="mealModalEatenAt" type="datetime-local" />
+              <span class="meal-modal-hint muted">EXIF があれば後でサーバが上書き</span>
+            </label>
+
+            <div class="meal-modal-row">
+              <span class="meal-modal-label">場所</span>
+              <div class="meal-modal-loc">
+                <input id="mealModalLat" type="number" step="any" placeholder="緯度" />
+                <input id="mealModalLon" type="number" step="any" placeholder="経度" />
+                <button type="button" id="mealModalLocHere" class="ghost" title="現在地から取得">📍</button>
+                <button type="button" id="mealModalLocClear" class="ghost" title="場所を削除">∅</button>
+              </div>
+              <span class="meal-modal-hint muted">空欄なら EXIF / GPS 軌跡から推定</span>
+            </div>
+
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">カロリー (kcal)</span>
+              <input id="mealModalCal" type="number" inputmode="numeric" placeholder="空欄で AI 推定" />
+            </label>
+
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">補足メモ</span>
+              <textarea id="mealModalNote" rows="2" placeholder="任意"></textarea>
+            </label>
+          </form>
+
+          <footer class="meal-modal-actions">
+            <button type="button" id="mealModalSkip" class="ghost" hidden>このファイルは登録しない</button>
+            <span class="grow"></span>
+            <button type="button" id="mealModalCancel" class="ghost">キャンセル</button>
+            <button type="button" id="mealModalSubmit">登録</button>
+          </footer>
+        </div>
+      </div>
+
       <div id="multiView" class="hidden">
         <div class="multi-bar">
           <span id="multiUserBadge" class="multi-user-badge"></span>
