@@ -3448,17 +3448,8 @@ button.meal-desc {
 }
 
 /* ── Meals: 登録モーダル ─────────────────────────────────────── */
-.meal-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.meal-modal.hidden {
-  display: none;
-}
+/* 旧 .meal-modal (div) 用スタイルは <dialog> 化により撤去。
+   dialog.meal-modal セレクタの方を使う。 */
 .meal-modal-backdrop {
   position: absolute;
   inset: 0;

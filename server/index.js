@@ -1958,6 +1958,7 @@ app.get('/api/queue/items', (c) => {
     weekly: weeklyQueue.snapshot(),
     domain: domainCatalogQueue.snapshot(),
     page: pageMetadataQueue.snapshot(),
+    meal: mealVisionQueue.snapshot(),
     // Backward-compat top-level fields:
     ...summaryQueue.snapshot(),
   });

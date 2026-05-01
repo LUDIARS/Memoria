@@ -499,6 +499,7 @@ const QUEUE_GROUP_LABELS = {
   weekly:    '📆 週報',
   domain:    '🏷 ドメイン分類',
   page:      '📄 ページメタ',
+  meal:      '🍽 食事解析',
 };
 
 function collectQueueJobs(snap) {
@@ -586,6 +587,7 @@ function jobLabel(item) {
   if (item.bookmarkId != null) return `${kindHint}bookmark #${item.bookmarkId}`;
   if (item.sessionId != null) return `${kindHint}dig #${item.sessionId}`;
   if (item.cloudId != null) return `${kindHint}cloud #${item.cloudId}`;
+  if (item.meal_id != null) return `${kindHint}meal #${item.meal_id}`;
   if (item.date) return `${kindHint}${item.date}`;
   if (item.weekStart) return `${kindHint}${item.weekStart}`;
   if (item.domain) return `${kindHint}${item.domain}`;
