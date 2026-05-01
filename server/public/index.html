@@ -107,6 +107,9 @@
           <button class="tab" data-tab="tracks">
             <span class="tab-label" data-full="🗺 軌跡" data-short="🗺 軌跡">🗺 軌跡</span>
           </button>
+          <button class="tab" data-tab="meals">
+            <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -375,24 +378,28 @@
             <div id="diaryWork" class="diary-summary"></div>
             <h4>ハイライト (Opus 1M)</h4>
             <div id="diaryHighlights" class="diary-summary"></div>
-            <h4>時間帯別アクセス (0-24時)</h4>
-            <div id="diaryHourly" class="diary-hourly"></div>
-            <div class="diary-pie-row">
-              <div class="diary-pie-wrap">
+            <div class="diary-charts-row">
+              <div class="diary-chart-cell">
+                <h4>時間帯別アクセス (0-24時)</h4>
+                <div id="diaryHourly" class="diary-hourly"></div>
+              </div>
+              <div class="diary-chart-cell">
                 <h4>ドメイン内訳</h4>
                 <div id="diaryPie" class="diary-pie"></div>
               </div>
-              <div class="diary-pie-legend-wrap">
-                <h4>よく見たドメイン</h4>
-                <ul id="diaryDomains" class="diary-domains"></ul>
-              </div>
             </div>
+            <h4>よく見たドメイン</h4>
+            <ul id="diaryDomains" class="diary-domains-pane"></ul>
             <h4>新規ブックマーク</h4>
             <ul id="diaryBookmarksCreated" class="diary-bookmarks"></ul>
             <h4>再訪したブックマーク</h4>
             <ul id="diaryBookmarksAccessed" class="diary-bookmarks"></ul>
             <h4>当日のディグ調査</h4>
             <ul id="diaryDigs" class="diary-digs"></ul>
+            <h4>🍽 食事</h4>
+            <div id="diaryMeals" class="diary-meals"></div>
+            <h4>⚖️ カロリーバランス (適正 vs 摂取 vs 消費)</h4>
+            <div id="diaryCaloricBalance" class="diary-caloric-balance"></div>
             <h4>GitHub commits (リポ別件数)</h4>
             <ul id="diaryGithub" class="diary-github"></ul>
             <h4>メモ・補足</h4>
@@ -480,6 +487,111 @@
           <ul id="tracksDays" class="tracks-days-list"></ul>
         </div>
       </div>
+
+      <div id="mealsView" class="hidden">
+        <div class="meals-bar">
+          <label class="meals-upload-btn">
+            📷 写真を追加
+            <input id="mealsPhotoInput" type="file" accept="image/*" multiple hidden />
+          </label>
+          <label class="meals-upload-btn ghost" title="モバイルではカメラを直接起動">
+            📸 撮影
+            <input id="mealsCameraInput" type="file" accept="image/*" capture="environment" hidden />
+          </label>
+          <button id="mealsManualBtn" class="meals-upload-btn ghost" title="食品名を入力して登録 (写真なし)">
+            ✍️ 写真なしで追加
+          </button>
+          <span id="mealsUploadStatus" class="muted"></span>
+          <span class="grow"></span>
+          <input id="mealsFilterDate" type="date" title="日付で絞り込む (空欄で全件)" />
+          <button id="mealsFilterClear" class="ghost" title="絞り込みクリア">×</button>
+          <button id="mealsRefresh" class="ghost">更新</button>
+        </div>
+        <div id="mealsHint" class="meals-hint muted hidden">
+          画像解析が失敗しています。 設定 → AI / 連携 で
+          <code>meal_vision</code> タスクの provider / モデルを確認してください
+          (デフォルトは Claude CLI sonnet)。
+        </div>
+        <div id="mealsList" class="meals-list"></div>
+      </div>
+
+      <!-- 単語リングメニュー — グラフ / ワードクラウドの単語クリックで開く -->
+      <div id="wordRingMenu" class="word-ring hidden" role="menu" aria-label="単語アクション">
+        <div class="word-ring-backdrop"></div>
+        <div class="word-ring-pop">
+          <button class="word-ring-btn word-ring-btn-dig" data-action="dig" title="この単語でディグる">🔎<span>ディグる</span></button>
+          <button class="word-ring-btn word-ring-btn-dict" data-action="dict" title="辞書に登録">📖<span>辞書登録</span></button>
+          <button class="word-ring-btn word-ring-btn-del" data-action="delete" title="今後表示しない (stopword)">🗑<span>削除</span></button>
+          <div class="word-ring-center">
+            <span class="word-ring-word" id="wordRingWord"></span>
+            <button class="word-ring-close" id="wordRingClose" title="閉じる">×</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 食事登録ダイアログ — <dialog> でネイティブ popup として動作 -->
+      <dialog id="mealModal" class="meal-modal" aria-labelledby="mealModalTitle">
+        <div class="meal-modal-card">
+          <header class="meal-modal-head">
+            <h3 id="mealModalTitle">食事を登録</h3>
+            <span id="mealModalProgress" class="meal-modal-progress muted"></span>
+            <button type="button" id="mealModalClose" class="meal-modal-x" aria-label="閉じる">×</button>
+          </header>
+
+          <div id="mealModalPhotoWrap" class="meal-modal-photo-wrap">
+            <img id="mealModalPhoto" alt="食事写真プレビュー" />
+            <div id="mealModalPhotoEmpty" class="meal-modal-photo-empty hidden">
+              <span class="meal-photo-empty-icon">📝</span>
+              <span class="meal-photo-empty-label">写真なし</span>
+            </div>
+          </div>
+
+          <form id="mealModalForm" class="meal-modal-form" onsubmit="return false;">
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">食事内容 <span class="required">*</span></span>
+              <textarea id="mealModalDesc" rows="2" placeholder="例: カレーライスとサラダ" required></textarea>
+              <span class="meal-modal-hint muted" id="mealModalDescHint">写真ありで空欄なら AI が解析します</span>
+            </label>
+
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">食事時刻</span>
+              <input id="mealModalEatenAt" type="datetime-local" />
+              <span class="meal-modal-hint muted">EXIF があれば後でサーバが上書き</span>
+            </label>
+
+            <div class="meal-modal-row">
+              <span class="meal-modal-label">場所</span>
+              <div class="meal-modal-loc">
+                <input id="mealModalLat" type="number" step="any" placeholder="緯度" />
+                <input id="mealModalLon" type="number" step="any" placeholder="経度" />
+                <button type="button" id="mealModalLocHere" class="ghost" title="現在地から取得">📍 現在地</button>
+                <button type="button" id="mealModalLocClear" class="ghost" title="場所を削除">∅ クリア</button>
+                <button type="button" id="mealModalMapToggle" class="ghost" title="地図を表示 / 非表示">🗺 地図</button>
+                <a id="mealModalMapOpen" href="#" target="_blank" rel="noopener" class="ghost meal-modal-map-link" title="Google Maps で開く" hidden>↗ Maps で開く</a>
+              </div>
+              <div id="mealModalMap" class="meal-modal-map hidden"></div>
+              <span class="meal-modal-hint muted">地図をクリック / タップで座標を取得。 空欄なら EXIF / GPS 軌跡から推定</span>
+            </div>
+
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">カロリー (kcal)</span>
+              <input id="mealModalCal" type="number" inputmode="numeric" placeholder="空欄で AI 推定" />
+            </label>
+
+            <label class="meal-modal-row">
+              <span class="meal-modal-label">補足メモ</span>
+              <textarea id="mealModalNote" rows="2" placeholder="任意"></textarea>
+            </label>
+          </form>
+
+          <footer class="meal-modal-actions">
+            <button type="button" id="mealModalSkip" class="ghost" hidden>このファイルは登録しない</button>
+            <span class="grow"></span>
+            <button type="button" id="mealModalCancel" class="ghost">キャンセル</button>
+            <button type="button" id="mealModalSubmit">登録</button>
+          </footer>
+        </div>
+      </dialog>
 
       <div id="multiView" class="hidden">
         <div class="multi-bar">
@@ -636,6 +748,30 @@
     </div>
     <div id="pushStatus" class="multi-status"></div>
     <ul id="pushDevicesList" class="multi-servers"></ul>
+
+    <h4>🧍 プロファイル (適正カロリー計算用)</h4>
+    <p class="ai-settings-help">日記のカロリーバランス分析で使用。 未設定だと分析されません。</p>
+    <div class="user-profile-grid">
+      <label>年齢 <input id="userAge" type="number" min="1" max="120" /></label>
+      <label>性別
+        <select id="userSex">
+          <option value="">(未選択)</option>
+          <option value="male">男性</option>
+          <option value="female">女性</option>
+        </select>
+      </label>
+      <label>体重 (kg) <input id="userWeightKg" type="number" min="20" max="300" step="0.1" /></label>
+      <label>身長 (cm) <input id="userHeightCm" type="number" min="100" max="250" step="0.1" /></label>
+      <label>活動レベル
+        <select id="userActivityLevel">
+          <option value="sedentary">座りがち (×1.2)</option>
+          <option value="light">軽運動 (×1.375)</option>
+          <option value="moderate" selected>中運動 (×1.55)</option>
+          <option value="active">活発 (×1.725)</option>
+          <option value="very_active">非常に活発 (×1.9)</option>
+        </select>
+      </label>
+    </div>
 
     <h4>🛠 ランタイム情報 (読み取り専用)</h4>
     <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
