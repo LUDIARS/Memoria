@@ -2795,7 +2795,11 @@ function renderDiaryMeals(meals, totalCal) {
     ? `<div class="diary-meals-total">総カロリー: <strong>${totalCal} kcal</strong> (${meals.length} 食)</div>`
     : `<div class="diary-meals-total muted">${meals.length} 食 (カロリー未推定)</div>`;
   const items = meals.map((m) => {
-    const t = (m.eaten_at || '').slice(11, 16);
+    // ISO は UTC なので localtime に変換して HH:MM を表示
+    const td = new Date(m.eaten_at || '');
+    const t = isNaN(td.getTime())
+      ? (m.eaten_at || '').slice(11, 16)
+      : `${String(td.getHours()).padStart(2, '0')}:${String(td.getMinutes()).padStart(2, '0')}`;
     const desc = m.description || '(未記入)';
     const cal = (typeof m.total_calories === 'number') ? `${m.total_calories} kcal` : '— kcal';
     const adds = (m.additions || []).map((a) => {

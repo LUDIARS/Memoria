@@ -654,7 +654,7 @@ function formatMealsBlock(metrics) {
   const meals = metrics?.meals || [];
   if (!meals.length) return '(食事の記録なし)';
   const lines = meals.map((m) => {
-    const t = (m.eaten_at || '').replace('T', ' ').slice(11, 16);
+    const t = formatLocalHm(m.eaten_at); // localtime HH:MM (UTC ISO を local 化)
     const desc = m.description || '(未記入)';
     const cal = (typeof m.total_calories === 'number') ? `${m.total_calories} kcal` : '— kcal';
     const loc = m.location_label ? ` @ ${m.location_label}` : '';
@@ -670,6 +670,13 @@ function formatMealsBlock(metrics) {
   const total = (typeof metrics.meals_total_calories === 'number') ? metrics.meals_total_calories : null;
   if (total != null) lines.push(`総カロリー (推定): 約 ${total} kcal`);
   return lines.join('\n');
+}
+
+function formatLocalHm(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso).slice(11, 16);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics }) => [
