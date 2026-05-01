@@ -5089,8 +5089,8 @@ function renderMeals() {
           ${m.user_note ? `<div class="meal-note">📝 ${escapeHtml(m.user_note)}</div>` : ''}
           ${additionsHtml}
           <div class="meal-actions">
+            <button class="ghost meal-edit-full-btn" data-id="${m.id}" title="ダイアログで全項目を編集">✏️ 編集</button>
             <button class="ghost meal-add-btn" data-id="${m.id}">➕ 追加で食べた</button>
-            <button class="ghost meal-note-btn" data-id="${m.id}" title="補足メモを編集">📝 メモ</button>
             <button class="ghost meal-reanalyze-btn" data-id="${m.id}" ${m.photo_path ? '' : 'hidden'}>🔄 再解析</button>
             <button class="ghost meal-delete-btn" data-id="${m.id}">🗑️ 削除</button>
           </div>
@@ -5104,8 +5104,8 @@ function renderMeals() {
     const recentErrors = mealsState.items.slice(0, 5).filter((m) => m.ai_status === 'error').length;
     hint.classList.toggle('hidden', recentErrors < 2);
   }
-  list.querySelectorAll('.meal-note-btn').forEach((b) => {
-    b.addEventListener('click', () => editMealNote(Number(b.dataset.id)));
+  list.querySelectorAll('.meal-edit-full-btn').forEach((b) => {
+    b.addEventListener('click', () => openMealEditModal(Number(b.dataset.id)));
   });
   list.querySelectorAll('.meal-reanalyze-btn').forEach((b) => {
     b.addEventListener('click', () => reanalyzeMeal(Number(b.dataset.id)));
@@ -5315,6 +5315,11 @@ function openMealModal(item) {
     photoImg.src = item.blobUrl;
     photoImg.hidden = false;
     photoEmpty.classList.add('hidden');
+  } else if (item.kind === 'edit' && item.meal?.photo_path) {
+    // 編集 mode: 既存写真をサーバ URL から表示
+    photoImg.src = `/api/meals/${item.meal.id}/photo?t=${Date.now()}`;
+    photoImg.hidden = false;
+    photoEmpty.classList.add('hidden');
   } else {
     photoImg.hidden = true;
     photoImg.removeAttribute('src');
@@ -5328,18 +5333,40 @@ function openMealModal(item) {
   const calEl = document.getElementById('mealModalCal');
   const noteEl = document.getElementById('mealModalNote');
   const descHint = document.getElementById('mealModalDescHint');
+  const titleEl = document.getElementById('mealModalTitle');
+  const submitEl = document.getElementById('mealModalSubmit');
 
-  if (descEl) descEl.value = '';
-  if (eatenEl) eatenEl.value = toDatetimeLocalValue(new Date().toISOString());
-  if (latEl) latEl.value = '';
-  if (lonEl) lonEl.value = '';
-  if (calEl) calEl.value = '';
-  if (noteEl) noteEl.value = '';
+  if (item.kind === 'edit' && item.meal) {
+    // 既存値を埋める
+    const m = item.meal;
+    if (descEl) descEl.value = m.user_corrected_description || m.description || '';
+    if (eatenEl) eatenEl.value = toDatetimeLocalValue(m.eaten_at);
+    if (latEl) latEl.value = m.lat != null ? String(m.lat) : '';
+    if (lonEl) lonEl.value = m.lon != null ? String(m.lon) : '';
+    const cal = m.user_corrected_calories ?? m.calories;
+    if (calEl) calEl.value = cal != null ? String(cal) : '';
+    if (noteEl) noteEl.value = m.user_note || '';
+    if (titleEl) titleEl.textContent = `食事を編集 #${m.id}`;
+    if (submitEl) submitEl.textContent = '保存';
+  } else {
+    if (descEl) descEl.value = '';
+    if (eatenEl) eatenEl.value = toDatetimeLocalValue(new Date().toISOString());
+    if (latEl) latEl.value = '';
+    if (lonEl) lonEl.value = '';
+    if (calEl) calEl.value = '';
+    if (noteEl) noteEl.value = '';
+    if (titleEl) titleEl.textContent = '食事を登録';
+    if (submitEl) submitEl.textContent = '登録';
+  }
+  updateMealModalMapLink();
 
-  // 写真ありなら description 任意 (AI 解析)、 写真なしなら必須
-  if (item.kind === 'photo') {
+  // 写真あり (新規 / 編集) なら description 任意、 写真なし (manual) は必須
+  const hasPhoto = item.kind === 'photo' || (item.kind === 'edit' && item.meal?.photo_path);
+  if (hasPhoto) {
     descEl?.removeAttribute('required');
-    if (descHint) descHint.textContent = '空欄なら AI が画像から推定 (Claude Vision)';
+    if (descHint) descHint.textContent = item.kind === 'edit'
+      ? '空欄なら AI 結果に戻ります'
+      : '空欄なら AI が画像から推定 (Claude Vision)';
   } else {
     descEl?.setAttribute('required', 'required');
     if (descHint) descHint.textContent = '写真なしの場合は内容必須。 カロリー空欄なら AI 推定';
@@ -5523,10 +5550,40 @@ async function submitMealModal() {
     return;
   }
 
-  if (status) status.textContent = `📤 登録中…`;
+  if (status) status.textContent = item.kind === 'edit' ? `📝 保存中…` : `📤 登録中…`;
 
   try {
-    if (item.kind === 'photo') {
+    if (item.kind === 'edit') {
+      // 既存 meal の編集 → PATCH /api/meals/:id
+      const m = item.meal;
+      const patch = {};
+      // description: 空文字なら null (= AI 結果へ戻す) に明示
+      const prevDesc = m.user_corrected_description || m.description || '';
+      if (desc !== prevDesc) {
+        patch.user_corrected_description = desc || null;
+        // 内容変更でカロリー再推定をかけたい場合は user_corrected_calories=null
+        // (背景再推定が走る)。 ただしユーザが明示的にカロリー入れた場合は保持
+      }
+      if (eatenAt) patch.eaten_at = eatenAt;
+      if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+        patch.lat = lat; patch.lon = lon;
+      } else if (lat == null && lon == null) {
+        patch.lat = null; patch.lon = null;
+      }
+      // calories: 入力値があればそのまま、 空欄なら null (再推定許可)
+      if (calories != null && isFinite(calories)) {
+        patch.user_corrected_calories = calories;
+      } else {
+        patch.user_corrected_calories = null;
+      }
+      patch.user_note = note || null;
+      await api(`/api/meals/${m.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (status) status.textContent = `✅ 保存しました`;
+    } else if (item.kind === 'photo') {
       const fd = new FormData();
       fd.append('photo', item.file);
       if (eatenAt) fd.append('eaten_at', eatenAt);
@@ -5551,6 +5608,7 @@ async function submitMealModal() {
           body: JSON.stringify(patch),
         });
       }
+      if (status) status.textContent = `✅ 登録しました`;
     } else {
       const body = { description: desc };
       if (eatenAt) body.eaten_at = eatenAt;
@@ -5564,10 +5622,12 @@ async function submitMealModal() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      if (status) status.textContent = `✅ 登録しました`;
     }
-    if (status) status.textContent = `✅ 登録しました`;
   } catch (e) {
-    if (status) status.textContent = `⚠ 登録エラー: ${e.message}`;
+    if (status) status.textContent = item.kind === 'edit'
+      ? `⚠ 保存エラー: ${e.message}`
+      : `⚠ 登録エラー: ${e.message}`;
     console.warn('[meals] submit error:', e);
   }
   await loadMeals();
@@ -5595,6 +5655,13 @@ function startMealModalForFiles(files) {
 
 function startMealModalForManual() {
   enqueueMealModal([{ kind: 'manual' }]);
+}
+
+function openMealEditModal(mealId) {
+  const m = mealsState.items.find((x) => x.id === mealId);
+  if (!m) return;
+  // 編集 mode は 1 件のみ — 既存キューがあれば優先 (連続編集は順次)
+  enqueueMealModal([{ kind: 'edit', meal: m }]);
 }
 
 async function reanalyzeMeal(id) {

@@ -3431,11 +3431,21 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 
 /* meal-desc は元 div、 button 化したので block 風スタイルを保持 */
 button.meal-desc {
-  display: block;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
   width: 100%;
   font-size: 14px;
   font-weight: 500;
   line-height: 1.4;
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
+  min-height: 1.4em;
+}
+button.meal-desc > .meal-inline-pencil {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 .meal-loc {
   display: inline-flex;
