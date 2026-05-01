@@ -2,9 +2,11 @@
 //
 // Spawns the Memoria Node server (server/index.js) as a child process and
 // loads http://localhost:<MEMORIA_PORT>/ in a BrowserWindow. The server
-// prints its readiness via stdout; we just poll the URL until it answers
-// before showing the window so the user never sees the "couldn't connect"
-// transient.
+// itself is treated as **always-on**: closing the window only hides it
+// (the process keeps running in the system tray), and OS login can be
+// configured to auto-launch the app in `--hidden` mode so the server
+// becomes a permanent background service for Chrome extension /
+// PWA / mobile clients to talk to.
 //
 // Spawn behaviour is controlled by env vars / build mode:
 //   MEMORIA_SERVER_DIR  — absolute path to the server/ directory.
@@ -14,12 +16,19 @@
 //   MEMORIA_NODE_BIN    — Node executable.
 //                          Default lookup order:
 //                            1. process.resourcesPath/node/<plat>/...  (packaged)
-//                            2. process.execPath of the running Electron
+//                            2. `node` on PATH (dev)
+//                            3. process.execPath of the running Electron
 //                               (run as Node by passing ELECTRON_RUN_AS_NODE=1)
-//                            3. "node" on PATH
 //   MEMORIA_PORT        — port the server listens on (default: 5180)
+//
+// Command-line flags:
+//   --hidden            — start without showing the main window. The
+//                          server still spawns and the tray icon is
+//                          installed; the user opens the window from the
+//                          tray when they want to interact. Used by the
+//                          OS login auto-start integration.
 
-import { app, BrowserWindow, shell, Menu } from 'electron';
+import { app, BrowserWindow, shell, Menu, Tray, nativeImage, ipcMain } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -34,8 +43,13 @@ if (!gotLock) {
   process.exit(0);
 }
 
+const startHidden = process.argv.includes('--hidden');
+
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let serverChild: ChildProcess | null = null;
+let isQuitting = false;
+let serverPort = Number(process.env.MEMORIA_PORT) || 5180;
 
 type NodeSubdir =
   | 'win-x64'
@@ -84,6 +98,25 @@ function devServerDir(): string | null {
   return fs.existsSync(p) ? p : null;
 }
 
+function findNodeOnPath(): string | null {
+  // Sync `which`-equivalent so we never start the server with Electron's
+  // own Node binary unless we deliberately mean to. Native modules in
+  // server/node_modules (better-sqlite3) are compiled against a specific
+  // NODE_MODULE_VERSION; mixing host Node 22 with Electron's bundled
+  // Node 20 throws ERR_DLOPEN_FAILED at startup.
+  const pathEnv = process.env.PATH || process.env.Path || '';
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
+  for (const dir of pathEnv.split(sep)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const p = path.join(dir, 'node' + ext);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
 function discoverGitBashWindows(): string | null {
   // Best-effort discovery so the bundled Claude CLI (spawned from Node)
   // can find its own bash on Windows. Settings can override.
@@ -110,13 +143,19 @@ function resolveServerLayout(): ServerLayout {
     || bundledServerDir()
     || devServerDir();
 
-  let nodeBin = process.env.MEMORIA_NODE_BIN || bundledNode();
+  // Resolution order:
+  //   1. MEMORIA_NODE_BIN env override
+  //   2. Bundled portable Node from resources/node/<plat>/ (production)
+  //   3. `node` on PATH (dev mode — matches the version server's native
+  //      modules were built against)
+  //   4. Electron's own Node via ELECTRON_RUN_AS_NODE=1 (last-resort
+  //      fallback — works only if better-sqlite3 et al. happen to match
+  //      Electron's NODE_MODULE_VERSION, otherwise ERR_DLOPEN_FAILED)
+  let nodeBin = process.env.MEMORIA_NODE_BIN
+    || bundledNode()
+    || findNodeOnPath();
   let runAsNode = false;
   if (!nodeBin) {
-    // Fallback: run Electron itself as Node via ELECTRON_RUN_AS_NODE=1.
-    // This is what production builds rely on if the bundle script wasn't
-    // run; it's the most portable "we always have a Node" option since
-    // Electron ships its own.
     nodeBin = process.execPath;
     runAsNode = true;
   }
@@ -177,6 +216,16 @@ async function waitForServerReady(port: number, timeoutMs = 20_000): Promise<boo
   return false;
 }
 
+function showWindow(): void {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  createWindow(serverPort);
+}
+
 function createWindow(port: number): void {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -187,6 +236,7 @@ function createWindow(port: number): void {
     show: false,                // shown after the window finishes loading
     backgroundColor: '#fafbfd',
     autoHideMenuBar: true,      // hide the default Electron menu (still toggleable with Alt)
+    icon: trayIconPath() ?? undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -211,10 +261,123 @@ function createWindow(port: number): void {
   });
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
+
+  // **Closing the window does NOT quit the app.** The Memoria server is
+  // meant to stay running in the background so the Chrome extension /
+  // mobile PWA can hit /api/* at any time. We hide the window and keep
+  // the tray icon as the only entry point. The user can quit fully from
+  // the tray menu (which sets isQuitting before calling app.quit).
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 
   void mainWindow.loadURL(`http://localhost:${port}/`);
 }
+
+// ── tray ──────────────────────────────────────────────────────────────────
+
+function trayIconPath(): string | null {
+  // Tray needs a small (16-32 px) image. We have placeholder PNGs in icons/,
+  // and in the packaged build electron-builder ships them under either
+  // <resources>/app.asar/icons/ or <resources>/icons/ depending on the
+  // asar setting. Try the dev path first, then the packaged variants.
+  const candidates: string[] = [
+    path.resolve(__dirname, '..', 'icons', '32x32.png'),                  // dev: out/main.js → desktop/icons/
+    path.join(process.resourcesPath || '', 'app.asar', 'icons', '32x32.png'),
+    path.join(process.resourcesPath || '', 'app', 'icons', '32x32.png'),
+    path.join(process.resourcesPath || '', 'icons', '32x32.png'),
+  ];
+  for (const c of candidates) if (c && fs.existsSync(c)) return c;
+  return null;
+}
+
+function buildTrayMenu(): Menu {
+  const loginItem = app.getLoginItemSettings();
+  return Menu.buildFromTemplate([
+    {
+      label: 'Memoria を開く',
+      click: () => showWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: 'ログイン時に自動起動',
+      type: 'checkbox',
+      checked: loginItem.openAtLogin,
+      click: (item) => setAutoLaunch(item.checked),
+    },
+    { type: 'separator' },
+    {
+      label: 'Memoria を終了',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
+function createTray(): void {
+  const iconPath = trayIconPath();
+  if (!iconPath) {
+    console.warn('[memoria-desktop] tray icon not found — tray will not be installed');
+    return;
+  }
+  // Resize to a sensible tray size; on macOS dark mode the auto-template
+  // would be nicer, but the placeholder is a solid colour so it's fine.
+  const img = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  tray = new Tray(img);
+  tray.setToolTip('Memoria — クリックで開く');
+  tray.setContextMenu(buildTrayMenu());
+  tray.on('click', () => showWindow());
+  tray.on('double-click', () => showWindow());
+}
+
+function refreshTrayMenu(): void {
+  tray?.setContextMenu(buildTrayMenu());
+}
+
+// ── auto-launch ────────────────────────────────────────────────────────────
+// We register the app to start at login with `--hidden` so the Memoria
+// server boots silently in the background. The user can open the window
+// any time from the tray icon. macOS / Linux are handled the same way by
+// Electron's setLoginItemSettings (which falls back to LaunchAgent /
+// xdg-autostart respectively). On Linux the .desktop file approach
+// requires the app to be packaged as an AppImage / .deb that registers
+// itself; in dev mode this call is a no-op.
+
+function setAutoLaunch(enabled: boolean): void {
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    openAsHidden: true,
+    args: enabled ? ['--hidden'] : [],
+  });
+  refreshTrayMenu();
+  console.log(`[memoria-desktop] auto-launch → ${enabled}`);
+}
+
+function getAutoLaunch(): boolean {
+  return app.getLoginItemSettings().openAtLogin;
+}
+
+// ── IPC bridge (preload talks to us via these channels) ───────────────────
+
+ipcMain.handle('memoria:get-auto-launch', () => getAutoLaunch());
+ipcMain.handle('memoria:set-auto-launch', (_event, enabled: unknown) => {
+  setAutoLaunch(Boolean(enabled));
+  return getAutoLaunch();
+});
+ipcMain.handle('memoria:get-server-port', () => serverPort);
+ipcMain.handle('memoria:quit', () => {
+  isQuitting = true;
+  app.quit();
+});
+ipcMain.handle('memoria:hide', () => mainWindow?.hide());
+
+// ── lifecycle ──────────────────────────────────────────────────────────────
 
 function killServer(): void {
   if (!serverChild) return;
@@ -236,41 +399,50 @@ function killServer(): void {
 }
 
 app.on('second-instance', () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
+  // Second launch (e.g. user double-clicked the desktop shortcut while we
+  // were already in the tray) — surface the window.
+  showWindow();
 });
 
 void app.whenReady().then(async () => {
-  const port = Number(process.env.MEMORIA_PORT) || 5180;
-  serverChild = spawnServer(port);
+  serverPort = Number(process.env.MEMORIA_PORT) || 5180;
+  serverChild = spawnServer(serverPort);
   // Even if spawn returned null (e.g. user runs server externally) we still
   // poll readiness — the URL might already be responding.
-  const ready = await waitForServerReady(port, 25_000);
+  const ready = await waitForServerReady(serverPort, 25_000);
   if (!ready) {
-    console.warn(`[memoria-desktop] server on :${port} did not become ready in time — opening the window anyway; the WebView will retry`);
+    console.warn(`[memoria-desktop] server on :${serverPort} did not become ready in time — opening the window anyway; the WebView will retry`);
   }
-  createWindow(port);
+  createTray();
+  if (!startHidden) {
+    createWindow(serverPort);
+  } else {
+    console.log('[memoria-desktop] --hidden flag set — staying in the tray (no window)');
+  }
 });
 
 app.on('window-all-closed', () => {
-  killServer();
-  // Mirror the macOS convention: keep the app alive on macOS unless the
-  // user explicitly quits, but on Win/Linux quitting on last close is the
-  // expected behaviour.
-  if (process.platform !== 'darwin') app.quit();
+  // Memoria server is meant to keep running. We deliberately do NOT call
+  // app.quit() here on Win/Linux; the tray icon stays as the only UI.
+  // (On macOS, the convention is the same — the app keeps running until
+  // the user explicitly quits via Cmd+Q or the tray.)
 });
 
-app.on('before-quit', killServer);
+app.on('before-quit', () => {
+  isQuitting = true;
+  killServer();
+  // Drop the tray reference so it disappears immediately rather than
+  // sticking around with a dead context menu.
+  tray?.destroy();
+  tray = null;
+});
 
 // macOS: re-create the window when the dock icon is clicked and there are
 // no other windows open.
 app.on('activate', async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    const port = Number(process.env.MEMORIA_PORT) || 5180;
-    if (!serverChild) serverChild = spawnServer(port);
-    await waitForServerReady(port, 25_000);
-    createWindow(port);
+    if (!serverChild) serverChild = spawnServer(serverPort);
+    await waitForServerReady(serverPort, 25_000);
+    createWindow(serverPort);
   }
 });

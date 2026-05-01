@@ -600,6 +600,18 @@
     <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
     <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
 
+    <h4 id="aiDesktopHead" hidden>🖥 デスクトップアプリ</h4>
+    <div id="aiDesktopSection" hidden>
+      <p class="ai-settings-help">この Memoria は Electron デスクトップアプリの中で動いています。 ウィンドウの × はトレイ最小化、 サーバは常駐し続けます (Chrome 拡張 / モバイル PWA からのアクセスは継続)。 完全終了はトレイ右クリック → 「Memoria を終了」。</p>
+      <label class="check-inline">
+        <input id="aiAutoLaunch" type="checkbox" />
+        ログイン時に自動起動 (バックグラウンドでサーバが立ち上がる)
+      </label>
+      <p class="ai-settings-help" style="margin-top:6px">
+        ON にすると <code>--hidden</code> フラグでウィンドウなし起動 → トレイアイコンだけ表示されます。 普段は OS スタートアップに登録するこの方式で十分。 「ログアウト中も動かしたい」 ような用途は将来 Windows サービス化を検討します (別 PR)。
+      </p>
+    </div>
+
     <h4>🧹 メンテナンス</h4>
     <p class="ai-settings-help">過去のアクセス記録に出てきたドメインのうち、まだドメイン辞書に登録されていないものを fetch + 分類キューに積みます。 force にすると既存行も再分類します (user_edited 列は保護)。</p>
     <div class="ai-settings-actions">

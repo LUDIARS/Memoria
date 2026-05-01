@@ -3826,6 +3826,21 @@ async function openAiSettings() {
         <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
       `;
     }
+    // Electron 配下のときだけ「デスクトップアプリ」セクションを出す。
+    // window.memoria は preload.ts (contextBridge) が expose する。
+    const desktop = (typeof window !== 'undefined' && window.memoria) || null;
+    if (desktop && $('aiDesktopHead') && $('aiDesktopSection') && $('aiAutoLaunch')) {
+      $('aiDesktopHead').hidden = false;
+      $('aiDesktopSection').hidden = false;
+      try {
+        const enabled = await desktop.getAutoLaunch();
+        $('aiAutoLaunch').checked = !!enabled;
+      } catch (e) { console.warn('getAutoLaunch failed:', e); }
+      $('aiAutoLaunch').onchange = async (ev) => {
+        try { await desktop.setAutoLaunch(ev.target.checked); }
+        catch (e) { alert(`自動起動の設定に失敗: ${e.message}`); }
+      };
+    }
   } catch (e) {
     console.error(e);
     alert(`設定取得失敗: ${e.message}`);

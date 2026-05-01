@@ -9,6 +9,36 @@ Electron ラッパー。既存の Memoria Node サーバを子プロセスとし
 > 系で揺れる、 (c) 保守言語を JS/TS に一本化したい、 という理由で
 > Electron に置き換えました (詳細は PR 参照)。
 
+## 常駐モデル
+
+Memoria サーバは **常駐型** として動かすことを前提に設計されています:
+
+- ウィンドウの × ボタンを押しても アプリは終了しない (タスクトレイへ
+  最小化)。 サーバプロセスは生き続け、 Chrome 拡張 / モバイル PWA から
+  `http://localhost:5180/api/*` を叩き続けられます。
+- 完全に終了するにはタスクトレイ右クリック → **「Memoria を終了」**。
+- **「ログイン時に自動起動」** をトレイメニューから ON にすると、
+  OS ログイン時に `--hidden` フラグでウィンドウなし起動 (= 純粋に
+  サーバだけ立ち上がる) になります。 ウィンドウはトレイ左クリック
+  またはダブルクリックで開けます。
+
+| OS | 自動起動の仕組み |
+| --- | --- |
+| Windows | `app.setLoginItemSettings({ openAtLogin: true })` → スタートアップ登録 (HKCU\\...\\Run)。 ユーザー権限のみで動作 |
+| macOS | LaunchAgent `~/Library/LaunchAgents/<bundle-id>.plist` |
+| Linux | xdg-autostart `~/.config/autostart/Memoria.desktop` (パッケージ AppImage / .deb 経由でインストールされている場合) |
+
+すべて **ユーザー権限** で動くスタートアップ登録なので、 管理者権限は
+不要 / インストーラの追加権限要求もありません。
+
+### Windows サービス化 (Phase 2、 別 PR)
+
+「ユーザーログアウト中も常時動かしたい」 「複数ユーザーで Memoria
+サーバを共有したい」 といった用途には Windows サービス化 (sc create /
+node-windows) が向いています。 こちらは管理者権限が必要 + インストーラ
+側で UAC 昇格が要るため、 別の PR で扱います。 当面は LoginItem
+ベースの自動起動で十分なはず。
+
 ## 必要なもの
 
 - Node 22 LTS+
@@ -41,8 +71,8 @@ npm run dev    # 内部で tsc → electron . を起動
 
 | パス | 役割 | 出力 |
 | --- | --- | --- |
-| `src/main.ts` | Electron メインプロセス | `out/main.js` (CommonJS) |
-| `src/preload.ts` | renderer preload (現在 no-op) | `out/preload.js` |
+| `src/main.ts` | Electron メインプロセス (server spawn / tray / login item / IPC) | `out/main.js` (CommonJS) |
+| `src/preload.ts` | renderer に `window.memoria.{getAutoLaunch,setAutoLaunch,hide,quit,getServerPort}` を expose | `out/preload.js` |
 | `scripts/bundle-server.ts` | リリース時に server + Node を `resources/` に展開 | `tsx` で実行 (コンパイルなし) |
 | `scripts/generate-icons.ts` | プレースホルダ icon 生成 | 同上 |
 
