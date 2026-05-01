@@ -119,6 +119,59 @@ export async function analyzeMealPhoto(photoAbsPath) {
   return parseVisionJson(stdout);
 }
 
+// ─── 食品名 → 標準カロリー推定 (LLM 経由) ─────────────────────
+
+const CALORIE_PROMPT = (foodName) => [
+  `食品名: ${foodName}`,
+  '',
+  '上記の食品の標準的な 1 食分 / 1 個分のカロリー (kcal) を推定してください。',
+  '一般的なレシピサイト・栄養データベースの値を参考にした概数で構いません。',
+  '',
+  '返答は **次の JSON 1 オブジェクトだけ** にしてください (前後の説明 / コードフェンス禁止):',
+  '{',
+  '  "calories": <推定 kcal (数値) または null>,',
+  '  "serving": "想定する分量 (例: \\"1 杯 (200g)\\", \\"1 個\\", \\"1 食分\\")",',
+  '  "confidence": "high | medium | low"',
+  '}',
+  '',
+  '一般的な食品でない / 推定不能なら calories を null、 confidence を low にしてください。',
+].join('\n');
+
+/**
+ * 食品名から標準カロリーを LLM で推定する。 失敗時は throw。
+ * 戻り値: { calories: number|null, serving: string, confidence: 'high'|'medium'|'low' }
+ */
+export async function estimateCaloriesFromName(foodName) {
+  const cleaned = String(foodName ?? '').trim();
+  if (!cleaned) return { calories: null, serving: '', confidence: 'low' };
+  const stdout = await runLlm({
+    task: 'meal_calorie',
+    prompt: CALORIE_PROMPT(cleaned),
+    timeoutMs: 60_000,
+  });
+  return parseCalorieJson(stdout);
+}
+
+function parseCalorieJson(raw) {
+  let s = (raw || '').trim();
+  const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (fence) s = fence[1].trim();
+  const first = s.indexOf('{');
+  const last = s.lastIndexOf('}');
+  if (first >= 0 && last > first) s = s.slice(first, last + 1);
+  let obj;
+  try {
+    obj = JSON.parse(s);
+  } catch (e) {
+    throw new Error(`calorie output is not JSON: ${e.message}\nRaw (first 200): ${(raw || '').slice(0, 200)}`);
+  }
+  const calories = (typeof obj.calories === 'number' && isFinite(obj.calories)) ? Math.round(obj.calories) : null;
+  const serving = typeof obj.serving === 'string' ? obj.serving.slice(0, 120) : '';
+  const confidence = (obj.confidence === 'high' || obj.confidence === 'medium' || obj.confidence === 'low')
+    ? obj.confidence : 'low';
+  return { calories, serving, confidence };
+}
+
 function parseVisionJson(raw) {
   let s = (raw || '').trim();
   // コードフェンスを取り除く

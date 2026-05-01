@@ -3343,3 +3343,106 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .diary-meal-adds {
   font-size: 11px;
 }
+
+/* ── Meals: 写真なしカード ───────────────────────────────────── */
+.meal-photo-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #f4f4f4, #e9e9e9);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.meal-photo-empty-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+/* ── Meals: 内容 / 場所 inline 編集 ──────────────────────────── */
+.meal-inline-editable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+.meal-inline-editable:hover {
+  background: var(--bg);
+  border-color: var(--border);
+}
+.meal-inline-editable.editing {
+  background: var(--bg);
+  border-color: var(--accent, #2a6df4);
+  cursor: default;
+  flex-wrap: wrap;
+  padding: 4px;
+}
+.meal-inline-pencil {
+  font-size: 10px;
+  opacity: 0.5;
+}
+.meal-inline-editable:hover .meal-inline-pencil {
+  opacity: 1;
+}
+.meal-inline-editable.editing .meal-inline-pencil {
+  display: none;
+}
+.meal-inline-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+.meal-inline-actions button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface, #fff);
+  cursor: pointer;
+  font-size: 11px;
+}
+.meal-inline-save { color: #2a8b2a; }
+.meal-inline-cancel { color: #b00; }
+.meal-desc-input {
+  flex: 1 1 100%;
+  min-height: 32px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 13px;
+  resize: vertical;
+}
+.meal-loc-lat, .meal-loc-lon {
+  width: 80px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* meal-desc は元 div、 button 化したので block 風スタイルを保持 */
+button.meal-desc {
+  display: block;
+  width: 100%;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.meal-loc {
+  display: inline-flex;
+}
+
+/* meal-actions に新しい note ボタンも横並びで */
+.meal-note-btn {
+  font-size: 12px;
+  padding: 3px 8px;
+}

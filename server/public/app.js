@@ -5041,9 +5041,12 @@ function renderMeals() {
         }).join('')}
       </ul>
     `;
+    const photoHtml = m.photo_path
+      ? `<img class="meal-photo" src="/api/meals/${m.id}/photo" loading="lazy" alt="食事写真" />`
+      : `<div class="meal-photo meal-photo-empty" aria-label="写真なし"><span class="meal-photo-empty-icon">📝</span><span class="meal-photo-empty-label">写真なし</span></div>`;
     return `
       <div class="meal-card" data-meal-id="${m.id}">
-        <img class="meal-photo" src="/api/meals/${m.id}/photo" loading="lazy" alt="食事写真" />
+        ${photoHtml}
         <div class="meal-body">
           <div class="meal-head">
             <button class="meal-time-edit" data-id="${m.id}" data-current="${escapeHtml(toDatetimeLocalValue(m.eaten_at))}" title="クリックで時刻を編集">
@@ -5052,17 +5055,23 @@ function renderMeals() {
             </button>
             ${aiBadge}
           </div>
-          <div class="meal-desc">${escapeHtml(desc)}</div>
+          <button class="meal-desc meal-inline-editable" data-id="${m.id}" data-field="description" data-current="${escapeHtml(m.user_corrected_description || m.description || '')}" title="クリックで内容を編集">
+            ${escapeHtml(desc)}
+            <span class="meal-inline-pencil">✏️</span>
+          </button>
           <div class="meal-meta">
             <span class="meal-cal">${escapeHtml(calStr)}</span>
-            <span class="meal-loc">${escapeHtml(locStr)}</span>
+            <button class="meal-loc meal-inline-editable" data-id="${m.id}" data-field="location" data-lat="${m.lat ?? ''}" data-lon="${m.lon ?? ''}" title="クリックで場所を編集">
+              ${escapeHtml(locStr)}
+              <span class="meal-inline-pencil">✏️</span>
+            </button>
           </div>
           ${m.user_note ? `<div class="meal-note">📝 ${escapeHtml(m.user_note)}</div>` : ''}
           ${additionsHtml}
           <div class="meal-actions">
             <button class="ghost meal-add-btn" data-id="${m.id}">➕ 追加で食べた</button>
-            <button class="ghost meal-edit-btn" data-id="${m.id}">✏️ 修正</button>
-            <button class="ghost meal-reanalyze-btn" data-id="${m.id}">🔄 再解析</button>
+            <button class="ghost meal-note-btn" data-id="${m.id}" title="補足メモを編集">📝 メモ</button>
+            <button class="ghost meal-reanalyze-btn" data-id="${m.id}" ${m.photo_path ? '' : 'hidden'}>🔄 再解析</button>
             <button class="ghost meal-delete-btn" data-id="${m.id}">🗑️ 削除</button>
           </div>
         </div>
@@ -5075,8 +5084,8 @@ function renderMeals() {
     const recentErrors = mealsState.items.slice(0, 5).filter((m) => m.ai_status === 'error').length;
     hint.classList.toggle('hidden', recentErrors < 2);
   }
-  list.querySelectorAll('.meal-edit-btn').forEach((b) => {
-    b.addEventListener('click', () => editMeal(Number(b.dataset.id)));
+  list.querySelectorAll('.meal-note-btn').forEach((b) => {
+    b.addEventListener('click', () => editMealNote(Number(b.dataset.id)));
   });
   list.querySelectorAll('.meal-reanalyze-btn').forEach((b) => {
     b.addEventListener('click', () => reanalyzeMeal(Number(b.dataset.id)));
@@ -5092,6 +5101,18 @@ function renderMeals() {
       // editing 状態の中の input/button が再帰しないように
       if (ev.target.closest('.meal-time-actions') || ev.target.tagName === 'INPUT') return;
       startMealTimeEdit(b);
+    });
+  });
+  list.querySelectorAll('.meal-inline-editable[data-field="description"]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('.meal-inline-actions') || ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
+      startMealDescriptionEdit(el);
+    });
+  });
+  list.querySelectorAll('.meal-inline-editable[data-field="location"]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('.meal-inline-actions') || ev.target.tagName === 'INPUT' || ev.target.tagName === 'BUTTON') return;
+      startMealLocationEdit(el);
     });
   });
   list.querySelectorAll('.meal-addition-edit').forEach((b) => {
@@ -5189,7 +5210,12 @@ function formatLocalMealDateTime(iso) {
 
 function schedulePendingPoll() {
   if (mealsState.pollTimer) clearTimeout(mealsState.pollTimer);
-  const hasPending = mealsState.items.some((m) => m.ai_status === 'pending');
+  // 解析中 (ai_status=pending) または addition の calories 未確定なら polling
+  const hasPending = mealsState.items.some((m) => {
+    if (m.ai_status === 'pending') return true;
+    const adds = parseMealAdditions(m.additions_json);
+    return adds.some((a) => a.calories == null);
+  });
   if (!hasPending) return;
   mealsState.pollTimer = setTimeout(() => {
     if (state.tab !== 'meals') return;
@@ -5258,37 +5284,178 @@ async function deleteMealRow(id) {
   }
 }
 
-function editMeal(id) {
+// ── 補足メモのみ編集 (旧 editMeal の縮小版) ─────────────────
+async function editMealNote(id) {
   const m = mealsState.items.find((x) => x.id === id);
   if (!m) return;
-  const desc = prompt('食事内容 (補正)', m.user_corrected_description || m.description || '');
-  if (desc === null) return;
-  const calRaw = prompt('カロリー (補正、 数字。 空欄でクリア)', String(m.user_corrected_calories ?? m.calories ?? ''));
-  if (calRaw === null) return;
-  const eatenAtRaw = prompt('食事時刻 (YYYY-MM-DDTHH:mm、 空欄で変更しない)', formatLocalMealDateTime(m.eaten_at).replace(' ', 'T'));
-  if (eatenAtRaw === null) return;
   const note = prompt('補足メモ', m.user_note || '');
   if (note === null) return;
-
-  const patch = {
-    user_corrected_description: desc.trim() || null,
-    user_note: note.trim() || null,
-  };
-  if (calRaw.trim() === '') {
-    patch.user_corrected_calories = null;
-  } else {
-    const n = Number(calRaw);
-    if (isFinite(n)) patch.user_corrected_calories = n;
+  try {
+    await api(`/api/meals/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_note: note }),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`メモ保存エラー: ${e.message}`);
   }
-  if (eatenAtRaw.trim()) patch.eaten_at = eatenAtRaw.trim();
+}
 
-  api(`/api/meals/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  })
-    .then(() => loadMeals())
-    .catch((e) => alert(`修正エラー: ${e.message}`));
+// ── 食事内容 inline 編集 (textarea) ─────────────────────────
+function startMealDescriptionEdit(btn) {
+  if (btn.classList.contains('editing')) return;
+  const mealId = Number(btn.dataset.id);
+  const current = btn.dataset.current || '';
+  btn.classList.add('editing');
+  const original = btn.innerHTML;
+  btn.innerHTML = `
+    <textarea class="meal-desc-input" rows="2">${escapeHtml(current)}</textarea>
+    <span class="meal-inline-actions">
+      <button class="meal-inline-save" type="button" title="保存 (カロリー再推定)">✓</button>
+      <button class="meal-inline-cancel" type="button" title="キャンセル">×</button>
+    </span>
+  `;
+  const ta = btn.querySelector('textarea');
+  ta?.focus();
+  ta?.setSelectionRange(ta.value.length, ta.value.length);
+
+  function restore() { btn.innerHTML = original; btn.classList.remove('editing'); }
+
+  async function save() {
+    const v = (ta?.value ?? '').trim();
+    if (!v) { restore(); return; }
+    if (v === current) { restore(); return; }
+    try {
+      // PATCH 後に backend が「description 変更を検出 → カロリー LLM 再推定」 を kick する。
+      // user_corrected_description を空にして基本 description (AI 推定 or manual 登録時) を活かす場合と
+      // user_corrected_description で上書きする場合があるが、 シンプルに常に user_corrected を使う。
+      await api(`/api/meals/${mealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_corrected_description: v,
+          // 内容が変わったらユーザ補正カロリーをクリアして自動再推定させる
+          user_corrected_calories: null,
+        }),
+      });
+      await loadMeals();
+    } catch (e) {
+      alert(`内容保存エラー: ${e.message}`);
+      restore();
+    }
+  }
+
+  btn.querySelector('.meal-inline-save')?.addEventListener('click', (ev) => { ev.stopPropagation(); save(); });
+  btn.querySelector('.meal-inline-cancel')?.addEventListener('click', (ev) => { ev.stopPropagation(); restore(); });
+  ta?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); save(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
+  });
+  ta?.addEventListener('click', (ev) => ev.stopPropagation());
+}
+
+// ── 場所 inline 編集 (lat,lon + 「現在地から」 + 「クリア」) ─────
+function startMealLocationEdit(btn) {
+  if (btn.classList.contains('editing')) return;
+  const mealId = Number(btn.dataset.id);
+  const curLat = btn.dataset.lat || '';
+  const curLon = btn.dataset.lon || '';
+  btn.classList.add('editing');
+  const original = btn.innerHTML;
+  btn.innerHTML = `
+    <input type="number" step="any" class="meal-loc-lat" placeholder="緯度" value="${escapeHtml(curLat)}" />
+    <input type="number" step="any" class="meal-loc-lon" placeholder="経度" value="${escapeHtml(curLon)}" />
+    <span class="meal-inline-actions">
+      <button class="meal-loc-here" type="button" title="現在地から取得">📍</button>
+      <button class="meal-loc-clear" type="button" title="場所を削除">∅</button>
+      <button class="meal-inline-save" type="button" title="保存">✓</button>
+      <button class="meal-inline-cancel" type="button" title="キャンセル">×</button>
+    </span>
+  `;
+  const latIn = btn.querySelector('.meal-loc-lat');
+  const lonIn = btn.querySelector('.meal-loc-lon');
+
+  function restore() { btn.innerHTML = original; btn.classList.remove('editing'); }
+
+  async function save() {
+    const lat = (latIn?.value ?? '').trim() === '' ? null : Number(latIn.value);
+    const lon = (lonIn?.value ?? '').trim() === '' ? null : Number(lonIn.value);
+    const body = { lat: null, lon: null };
+    if (lat != null && lon != null && isFinite(lat) && isFinite(lon)) {
+      body.lat = lat; body.lon = lon;
+    }
+    try {
+      await api(`/api/meals/${mealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      await loadMeals();
+    } catch (e) {
+      alert(`場所保存エラー: ${e.message}`);
+      restore();
+    }
+  }
+
+  btn.querySelector('.meal-loc-here')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (!navigator.geolocation) { alert('この端末は位置情報に対応していません'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (latIn) latIn.value = String(pos.coords.latitude);
+        if (lonIn) lonIn.value = String(pos.coords.longitude);
+      },
+      (err) => alert(`位置取得失敗: ${err.message}`),
+      { enableHighAccuracy: true, timeout: 10_000 },
+    );
+  });
+  btn.querySelector('.meal-loc-clear')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (latIn) latIn.value = '';
+    if (lonIn) lonIn.value = '';
+  });
+  btn.querySelector('.meal-inline-save')?.addEventListener('click', (ev) => { ev.stopPropagation(); save(); });
+  btn.querySelector('.meal-inline-cancel')?.addEventListener('click', (ev) => { ev.stopPropagation(); restore(); });
+  [latIn, lonIn].forEach((el) => {
+    el?.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
+    });
+    el?.addEventListener('click', (ev) => ev.stopPropagation());
+  });
+}
+
+// ── 写真なしで食事を追加 ─────────────────────────────────────
+async function addManualMeal() {
+  const description = prompt('食事内容を入力 (例: ラーメン、 おにぎり 1 個)');
+  if (description == null) return;
+  const trimmed = description.trim();
+  if (!trimmed) return;
+  const eatenAtRaw = prompt('食事時刻 (YYYY-MM-DDTHH:mm、 空欄で現在時刻)', toDatetimeLocalValue(new Date().toISOString()));
+  if (eatenAtRaw == null) return;
+  const calRaw = prompt('カロリー (kcal、 空欄で AI 自動推定)', '');
+  if (calRaw == null) return;
+
+  const body = { description: trimmed };
+  if (eatenAtRaw.trim()) body.eaten_at = eatenAtRaw.trim();
+  if (calRaw.trim()) {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
+  }
+  const status = document.getElementById('mealsUploadStatus');
+  if (status) status.textContent = `📝 ${trimmed.slice(0, 30)} を登録中…`;
+  try {
+    await api('/api/meals/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (status) status.textContent = `✅ 「${trimmed.slice(0, 30)}」 登録${calRaw.trim() ? '' : ' (カロリー推定中)'}`;
+    await loadMeals();
+  } catch (e) {
+    if (status) status.textContent = `⚠ 登録エラー: ${e.message}`;
+  }
 }
 
 async function addMealAddition(mealId) {
@@ -5368,6 +5535,8 @@ document.getElementById('mealsCameraInput')?.addEventListener('change', (e) => {
   if (!file) return;
   uploadMealPhoto(file).finally(() => { e.target.value = ''; });
 });
+
+document.getElementById('mealsManualBtn')?.addEventListener('click', () => addManualMeal());
 
 // ── ドラッグ&ドロップ ──────────────────────────────────────────
 (function setupMealsDropZone() {

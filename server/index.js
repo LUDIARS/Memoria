@@ -86,7 +86,7 @@ import {
 } from './db.js';
 import { initWebPush, getVapidPublicKey, saveSubscription, sendPushToAll } from './push.js';
 import {
-  extractPhotoMeta, resolveMealLocation, analyzeMealPhoto,
+  extractPhotoMeta, resolveMealLocation, analyzeMealPhoto, estimateCaloriesFromName,
 } from './meals.js';
 import {
   readMultiState, isConnected,
@@ -652,6 +652,45 @@ function enqueueMealVision(id) {
   }, { kind: 'meal-vision', meal_id: id, title: `meal #${id}` });
 }
 
+// 食品名から標準カロリーを背景で推定する。 結果は対象 meal の additions[idx]
+// (idx == -1 のときは meal 本体の calories) に書き込む。 失敗は黙認 (UI に
+// 「— kcal」 のままを残す)。
+function enqueueCalorieEstimate(mealId, additionIdx, foodName) {
+  mealVisionQueue.enqueue(async () => {
+    try {
+      const r = await estimateCaloriesFromName(foodName);
+      if (r.calories == null) return;
+      const meal = getMeal(db, mealId);
+      if (!meal) return;
+      if (additionIdx === -1) {
+        // meal 本体のカロリーを user_corrected_calories に書く (上書きしない)
+        if (meal.user_corrected_calories == null && meal.calories == null) {
+          updateMeal(db, mealId, { user_corrected_calories: r.calories });
+        }
+        return;
+      }
+      const additions = parseMealAdditionsJson(meal.additions_json);
+      if (!additions[additionIdx]) return;
+      // ユーザがその間に手動入力していたら上書きしない
+      if (additions[additionIdx].calories != null) return;
+      additions[additionIdx].calories = r.calories;
+      updateMeal(db, mealId, { additions_json: JSON.stringify(additions) });
+    } catch (e) {
+      console.warn(`[meal#${mealId}] calorie estimate failed: ${e.message}`);
+    }
+  }, { kind: 'meal-calorie', meal_id: mealId, title: `kcal: ${foodName.slice(0, 40)}` });
+}
+
+function parseMealAdditionsJson(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
 // POST /api/meals — multipart/form-data
 //   photo:      File (required)
 //   user_note:  string (optional)
@@ -751,6 +790,77 @@ app.post('/api/meals', async (c) => {
   return c.json({ meal: created }, 201);
 });
 
+// POST /api/meals/manual — 写真なしで食事を直接登録する (JSON body)
+//   description:  string (required) — 食事内容の説明
+//   eaten_at:     ISO8601 string (任意、 デフォルト現在時刻)
+//   calories:     number (任意、 未指定なら LLM で背景推定)
+//   lat / lon:    number (任意、 未指定なら GPS 軌跡から推定)
+//   user_note:    string (任意)
+app.post('/api/meals/manual', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'json body required' }, 400);
+  const description = typeof body.description === 'string' ? body.description.trim() : '';
+  if (!description) return c.json({ error: 'description (string) required' }, 400);
+
+  // 食事時刻
+  let eatenAt = '';
+  let eatenAtSource = 'manual';
+  if (typeof body.eaten_at === 'string' && body.eaten_at.trim()) {
+    const d = new Date(body.eaten_at);
+    if (!isNaN(d.getTime())) {
+      eatenAt = d.toISOString();
+    }
+  }
+  if (!eatenAt) {
+    eatenAt = new Date().toISOString();
+    eatenAtSource = 'post';
+  }
+
+  // 場所: 手動 → GPS 軌跡 → なし
+  const manualLat = (typeof body.lat === 'number' && isFinite(body.lat)) ? body.lat : null;
+  const manualLon = (typeof body.lon === 'number' && isFinite(body.lon)) ? body.lon : null;
+  const hasManualLatLon = manualLat != null && manualLon != null;
+  const loc = resolveMealLocation(
+    db,
+    { capturedAt: null, lat: null, lon: null }, // EXIF なし
+    eatenAt,
+    hasManualLatLon ? { lat: manualLat, lon: manualLon } : null,
+  );
+
+  // calories: 数値 / 文字列 / 未指定 (= 背景推定)
+  let calories = null;
+  if (typeof body.calories === 'number' && isFinite(body.calories)) {
+    calories = Math.round(body.calories);
+  } else if (typeof body.calories === 'string' && body.calories.trim() !== '') {
+    const n = Number(body.calories);
+    if (isFinite(n)) calories = Math.round(n);
+  }
+
+  const id = insertMeal(db, {
+    photo_path: '', // 写真なしマーカー
+    eaten_at: eatenAt,
+    eaten_at_source: eatenAtSource,
+    lat: loc.lat,
+    lon: loc.lon,
+    location_label: loc.label,
+    location_source: loc.source,
+    description,
+    calories, // 未指定なら null
+    items_json: null,
+    ai_status: calories != null ? 'done' : 'pending',
+    ai_error: null,
+    user_note: typeof body.user_note === 'string' ? (body.user_note.trim() || null) : null,
+  });
+
+  // calories 未指定なら LLM で背景推定 (description を食品名として渡す)
+  if (calories == null) {
+    enqueueCalorieEstimate(id, -1, description);
+  }
+
+  const created = getMeal(db, id);
+  return c.json({ meal: created }, 201);
+});
+
 app.get('/api/meals', (c) => {
   const from = c.req.query('from') || undefined;
   const to = c.req.query('to') || undefined;
@@ -772,6 +882,9 @@ app.get('/api/meals/:id/photo', (c) => {
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
+  // 写真なし meal (photo_path === '') は 404 を返し、 frontend は
+  // プレースホルダ画像を表示する。
+  if (!meal.photo_path) return c.json({ error: 'no photo' }, 404);
   const fullPath = join(MEAL_DIR, meal.photo_path);
   if (!existsSync(fullPath)) return c.json({ error: 'photo missing' }, 404);
   const buf = readFileSync(fullPath);
@@ -823,18 +936,31 @@ app.patch('/api/meals/:id', async (c) => {
   }
 
   if (Object.keys(patch).length > 0) updateMeal(db, id, patch);
-  return c.json({ meal: getMeal(db, id) });
+
+  // description が変わって user_corrected_calories を null に戻したケースは
+  // 「内容が変わったのでカロリー再推定して」 という合図。 LLM で背景推定する。
+  const updated = getMeal(db, id);
+  const descChanged = patch.user_corrected_description !== undefined &&
+    patch.user_corrected_description !== meal.user_corrected_description;
+  const calsCleared = patch.user_corrected_calories === null;
+  if (descChanged && calsCleared) {
+    const desc = updated?.user_corrected_description || updated?.description || '';
+    if (desc) enqueueCalorieEstimate(id, -1, desc);
+  }
+  return c.json({ meal: updated });
 });
 
 app.delete('/api/meals/:id', (c) => {
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
-  try {
-    const fullPath = join(MEAL_DIR, meal.photo_path);
-    if (existsSync(fullPath)) unlinkSync(fullPath);
-  } catch (e) {
-    console.warn(`[meal#${id}] failed to delete photo: ${e.message}`);
+  if (meal.photo_path) {
+    try {
+      const fullPath = join(MEAL_DIR, meal.photo_path);
+      if (existsSync(fullPath)) unlinkSync(fullPath);
+    } catch (e) {
+      console.warn(`[meal#${id}] failed to delete photo: ${e.message}`);
+    }
   }
   deleteMeal(db, id);
   return c.json({ ok: true });
@@ -895,8 +1021,14 @@ app.post('/api/meals/:id/additions', async (c) => {
     : new Date().toISOString();
 
   const additions = parseAdditions(meal.additions_json);
+  const newIdx = additions.length;
   additions.push({ name, calories, added_at: addedAt });
   updateMeal(db, id, { additions_json: JSON.stringify(additions) });
+
+  // calories 未指定なら背景で LLM 推定して非同期に書き戻す
+  if (calories == null) {
+    enqueueCalorieEstimate(id, newIdx, name);
+  }
   return c.json({ meal: getMeal(db, id) });
 });
 
