@@ -5001,7 +5001,10 @@ function renderMeals() {
         <img class="meal-photo" src="/api/meals/${m.id}/photo" loading="lazy" alt="食事写真" />
         <div class="meal-body">
           <div class="meal-head">
-            <span class="meal-time">${escapeHtml(eatenAt)}</span>
+            <button class="meal-time-edit" data-id="${m.id}" data-current="${escapeHtml(toDatetimeLocalValue(m.eaten_at))}" title="クリックで時刻を編集">
+              <span class="meal-time">${escapeHtml(eatenAt)}</span>
+              <span class="meal-time-pencil">✏️</span>
+            </button>
             ${aiBadge}
           </div>
           <div class="meal-desc">${escapeHtml(desc)}</div>
@@ -5039,6 +5042,13 @@ function renderMeals() {
   list.querySelectorAll('.meal-add-btn').forEach((b) => {
     b.addEventListener('click', () => addMealAddition(Number(b.dataset.id)));
   });
+  list.querySelectorAll('.meal-time-edit').forEach((b) => {
+    b.addEventListener('click', (ev) => {
+      // editing 状態の中の input/button が再帰しないように
+      if (ev.target.closest('.meal-time-actions') || ev.target.tagName === 'INPUT') return;
+      startMealTimeEdit(b);
+    });
+  });
   list.querySelectorAll('.meal-addition-edit').forEach((b) => {
     b.addEventListener('click', () => editMealAddition(Number(b.dataset.id), Number(b.dataset.idx)));
   });
@@ -5055,6 +5065,70 @@ function parseMealAdditions(json) {
   } catch {
     return [];
   }
+}
+
+/** ISO8601 → `YYYY-MM-DDTHH:MM` (datetime-local 用 / ローカル時刻基準)。 */
+function toDatetimeLocalValue(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+}
+
+/** 時刻表示の隣の ✏️ をクリックしたら inline picker に切り替えて即時 PATCH。 */
+function startMealTimeEdit(btn) {
+  const mealId = Number(btn.dataset.id);
+  const current = btn.dataset.current || '';
+  if (btn.classList.contains('editing')) return;
+  btn.classList.add('editing');
+
+  // 元の中身 (span 2 つ) を退避してから input に置き換える
+  const original = btn.innerHTML;
+  btn.innerHTML = `
+    <input type="datetime-local" class="meal-time-input" value="${current}" />
+    <span class="meal-time-actions">
+      <button class="meal-time-save" type="button" title="保存">✓</button>
+      <button class="meal-time-cancel" type="button" title="キャンセル">×</button>
+    </span>
+  `;
+  const input = btn.querySelector('input');
+  const saveBtn = btn.querySelector('.meal-time-save');
+  const cancelBtn = btn.querySelector('.meal-time-cancel');
+  input?.focus();
+
+  function restore() {
+    btn.innerHTML = original;
+    btn.classList.remove('editing');
+  }
+
+  async function save() {
+    const v = input?.value || '';
+    if (!v) { restore(); return; }
+    try {
+      // datetime-local の文字列をそのまま PATCH に渡す (サーバ側で new Date() → ISO8601)
+      await api(`/api/meals/${mealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eaten_at: v }),
+      });
+      await loadMeals();
+    } catch (e) {
+      alert(`時刻修正エラー: ${e.message}`);
+      restore();
+    }
+  }
+
+  saveBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); save(); });
+  cancelBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); restore(); });
+  input?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
+  });
+  input?.addEventListener('click', (ev) => ev.stopPropagation());
 }
 
 function formatLocalMealDateTime(iso) {

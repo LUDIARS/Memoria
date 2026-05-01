@@ -3222,3 +3222,64 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .meal-addition button:hover {
   filter: brightness(0.96);
 }
+
+/* ── Meals: 時刻 inline 編集 ─────────────────────────────────── */
+.meal-time-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.meal-time-edit:hover {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+.meal-time-edit.editing {
+  background: var(--bg);
+  border-color: var(--accent, #2a6df4);
+  cursor: default;
+}
+.meal-time-pencil {
+  font-size: 10px;
+  opacity: 0.6;
+}
+.meal-time-edit:hover .meal-time-pencil {
+  opacity: 1;
+}
+.meal-time-input {
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface, #fff);
+}
+.meal-time-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+.meal-time-actions button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface, #fff);
+  cursor: pointer;
+  font-size: 12px;
+}
+.meal-time-actions button:hover {
+  filter: brightness(0.96);
+}
+.meal-time-save {
+  color: #2a8b2a;
+}
+.meal-time-cancel {
+  color: #b00;
+}
