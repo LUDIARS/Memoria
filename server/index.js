@@ -596,6 +596,12 @@ app.delete('/api/recommendations/dismissals', (c) => {
 const MEAL_PHOTO_MAX_BYTES = 12 * 1024 * 1024; // 12 MiB
 const MEAL_VISION_TIMEOUT = 90_000;
 
+function randomHex8() {
+  const buf = new Uint8Array(4);
+  globalThis.crypto.getRandomValues(buf);
+  return [...buf].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 function pickPhotoExt(filename, mime) {
   const lower = (filename || '').toLowerCase();
   if (lower.endsWith('.png')) return '.png';
@@ -716,8 +722,21 @@ app.post('/api/meals', async (c) => {
     user_note: userNote,
   });
 
-  const filename = `${id}${ext}`;
-  const fullPath = join(MEAL_DIR, filename);
+  // ファイル名は `<id>-<8hex><ext>` 形式 (id は単調増加 PK + 短い乱数 suffix で
+  // 万一の衝突 / DB リセット後の id 再利用に備える)。 既存ファイルがあれば
+  // suffix を再生成するループでガード。
+  let filename = '';
+  let fullPath = '';
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const suffix = randomHex8();
+    filename = `${id}-${suffix}${ext}`;
+    fullPath = join(MEAL_DIR, filename);
+    if (!existsSync(fullPath)) break;
+  }
+  if (!filename || existsSync(fullPath)) {
+    deleteMeal(db, id);
+    return c.json({ error: 'failed to allocate unique photo filename' }, 500);
+  }
   try {
     writeFileSync(fullPath, buf);
   } catch (e) {

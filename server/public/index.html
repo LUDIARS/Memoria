@@ -486,15 +486,26 @@
 
       <div id="mealsView" class="hidden">
         <div class="meals-bar">
-          <label class="meals-upload-btn ghost">
+          <label class="meals-upload-btn">
             📷 写真を追加
-            <input id="mealsPhotoInput" type="file" accept="image/*" capture="environment" hidden />
+            <input id="mealsPhotoInput" type="file" accept="image/*" multiple hidden />
+          </label>
+          <label class="meals-upload-btn ghost" title="モバイルではカメラを直接起動">
+            📸 撮影
+            <input id="mealsCameraInput" type="file" accept="image/*" capture="environment" hidden />
           </label>
           <span id="mealsUploadStatus" class="muted"></span>
           <span class="grow"></span>
           <input id="mealsFromDate" type="date" title="開始日" />
           <input id="mealsToDate" type="date" title="終了日" />
           <button id="mealsRefresh" class="ghost">更新</button>
+        </div>
+        <div id="mealsDropZone" class="meals-drop-zone">
+          <div class="meals-drop-zone-inner">
+            <div class="meals-drop-icon">📷</div>
+            <div>ファイルをドロップ、 または <kbd>Ctrl</kbd>+<kbd>V</kbd> で貼り付け</div>
+            <div class="muted">複数選択可 — JPEG / PNG / HEIC / WebP (各 12 MB まで)</div>
+          </div>
         </div>
         <div id="mealsHint" class="meals-hint muted hidden">
           画像解析が失敗しています。 設定 → AI / 連携 で

@@ -5037,22 +5037,46 @@ function schedulePendingPoll() {
   }, 4000);
 }
 
-async function uploadMealPhoto(file) {
+async function uploadMealPhotos(files) {
+  if (!files || files.length === 0) return;
   const status = document.getElementById('mealsUploadStatus');
-  const fd = new FormData();
-  fd.append('photo', file);
-  if (status) status.textContent = `📤 ${file.name} を送信中…`;
-  try {
-    const res = await fetch('/api/meals', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody.error || `HTTP ${res.status}`);
+  const total = files.length;
+  let ok = 0;
+  let failed = 0;
+  for (let i = 0; i < total; i++) {
+    const file = files[i];
+    if (!file || !file.type?.startsWith?.('image/')) {
+      failed += 1;
+      continue;
     }
-    if (status) status.textContent = '✅ 登録しました (解析中)';
-    await loadMeals();
-  } catch (e) {
-    if (status) status.textContent = `⚠ エラー: ${e.message}`;
+    if (status) {
+      status.textContent = `📤 ${i + 1}/${total} 送信中… (${file.name || 'image'})`;
+    }
+    try {
+      const fd = new FormData();
+      fd.append('photo', file);
+      const res = await fetch('/api/meals', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `HTTP ${res.status}`);
+      }
+      ok += 1;
+    } catch (e) {
+      failed += 1;
+      console.warn(`[meals] upload failed (${file.name}):`, e);
+    }
   }
+  if (status) {
+    if (failed === 0) status.textContent = `✅ ${ok} 件 登録しました (解析中)`;
+    else if (ok === 0) status.textContent = `⚠ 全 ${total} 件 失敗しました`;
+    else status.textContent = `⚠ ${ok} 件 成功 / ${failed} 件 失敗`;
+  }
+  await loadMeals();
+}
+
+// 単一互換 (古い call 元用)
+function uploadMealPhoto(file) {
+  return uploadMealPhotos([file]);
 }
 
 async function reanalyzeMeal(id) {
@@ -5107,10 +5131,78 @@ function editMeal(id) {
     .catch((e) => alert(`修正エラー: ${e.message}`));
 }
 
-// イベント結線
+// ── イベント結線 ─────────────────────────────────────────────
 document.getElementById('mealsRefresh')?.addEventListener('click', () => loadMeals());
+
 document.getElementById('mealsPhotoInput')?.addEventListener('change', (e) => {
+  const files = Array.from(e.target.files || []);
+  if (files.length === 0) return;
+  uploadMealPhotos(files).finally(() => { e.target.value = ''; });
+});
+
+document.getElementById('mealsCameraInput')?.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
   uploadMealPhoto(file).finally(() => { e.target.value = ''; });
 });
+
+// ── ドラッグ&ドロップ ──────────────────────────────────────────
+(function setupMealsDropZone() {
+  const view = document.getElementById('mealsView');
+  const zone = document.getElementById('mealsDropZone');
+  if (!view || !zone) return;
+
+  // window 全体で dragover/drop を受けて、 食事タブが active な場合のみ処理
+  function isMealsActive() {
+    return state.tab === 'meals' && !view.classList.contains('hidden');
+  }
+
+  let dragDepth = 0;
+  function onDragEnter(e) {
+    if (!isMealsActive()) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    dragDepth += 1;
+    zone.classList.add('drag-over');
+  }
+  function onDragLeave() {
+    if (!isMealsActive()) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) zone.classList.remove('drag-over');
+  }
+  function onDragOver(e) {
+    if (!isMealsActive()) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault(); // drop を有効化
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }
+  function onDrop(e) {
+    if (!isMealsActive()) return;
+    e.preventDefault();
+    dragDepth = 0;
+    zone.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith?.('image/'));
+    if (files.length === 0) return;
+    uploadMealPhotos(files);
+  }
+
+  window.addEventListener('dragenter', onDragEnter);
+  window.addEventListener('dragleave', onDragLeave);
+  window.addEventListener('dragover', onDragOver);
+  window.addEventListener('drop', onDrop);
+
+  // ── クリップボード貼り付け (Ctrl+V) ─────────────────────────
+  window.addEventListener('paste', (e) => {
+    if (!isMealsActive()) return;
+    // テキスト入力中は素通し
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+    const items = Array.from(e.clipboardData?.items || []);
+    const files = items
+      .filter((it) => it.kind === 'file' && it.type?.startsWith?.('image/'))
+      .map((it) => it.getAsFile())
+      .filter((f) => !!f);
+    if (files.length === 0) return;
+    e.preventDefault();
+    uploadMealPhotos(files);
+  });
+})();

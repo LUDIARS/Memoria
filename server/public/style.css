@@ -3110,3 +3110,74 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Meals: drop zone & multi-button bar ─────────────────────── */
+.meals-drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 12px;
+  margin: 8px 0 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--bg);
+  transition: background 120ms, border-color 120ms;
+}
+.meals-drop-zone.drag-over {
+  border-color: var(--accent, #2a6df4);
+  background: rgba(42, 109, 244, 0.06);
+  color: var(--text);
+}
+.meals-drop-zone-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  pointer-events: none;
+}
+.meals-drop-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+.meals-drop-zone kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface, #fff);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  margin: 0 2px;
+}
+
+/* primary/ghost styling for the new upload buttons */
+.meals-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  background: var(--accent, #2a6df4);
+  color: #fff;
+  border: 1px solid transparent;
+}
+.meals-upload-btn.ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+.meals-upload-btn:hover {
+  filter: brightness(1.05);
+}
+
+@media (max-width: 600px) {
+  .meals-drop-zone {
+    padding: 10px 8px;
+    font-size: 12px;
+  }
+  .meals-drop-icon {
+    font-size: 22px;
+  }
+}
