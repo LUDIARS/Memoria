@@ -1,0 +1,4 @@
+# Populated by `node scripts/bundle-server.mjs` with a portable Node
+# runtime per platform. In dev it stays empty and main.cjs runs the
+# server via Electron's own Node (ELECTRON_RUN_AS_NODE=1) or whatever
+# `node` is on PATH.

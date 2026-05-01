@@ -1,0 +1,75 @@
+{
+  "name": "memoria-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Memoria desktop wrapper — Electron shell that runs the Memoria Node server as a child process and shows its UI in a Chromium window.",
+  "main": "out/main.js",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
+    "build:ts": "tsc -p tsconfig.json",
+    "icons": "tsx scripts/generate-icons.ts",
+    "bundle:server": "tsx scripts/bundle-server.ts",
+    "predev": "npm run icons && npm run build:ts",
+    "dev": "electron .",
+    "start": "npm run dev",
+    "build": "npm run icons && npm run build:ts && npm run bundle:server && electron-builder",
+    "build:win": "npm run icons && npm run build:ts && npm run bundle:server -- --platform=win-x64 && electron-builder --win",
+    "build:mac": "npm run icons && npm run build:ts && npm run bundle:server -- --platform=darwin-arm64 && electron-builder --mac",
+    "build:linux": "npm run icons && npm run build:ts && npm run bundle:server -- --platform=linux-x64 && electron-builder --linux"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.ludiars.memoria",
+    "productName": "Memoria",
+    "asar": true,
+    "files": [
+      "out/**",
+      "package.json",
+      "icons/**",
+      "!**/.gitkeep"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/server",
+        "to": "server",
+        "filter": ["**/*", "!.gitkeep"]
+      },
+      {
+        "from": "resources/node",
+        "to": "node",
+        "filter": ["**/*", "!.gitkeep"]
+      }
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "icons"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Memoria"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "icons/icon.icns",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "icons/icon.png",
+      "category": "Office",
+      "synopsis": "Web bookmarking + research + diary"
+    }
+  }
+}
