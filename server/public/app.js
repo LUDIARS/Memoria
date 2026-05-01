@@ -2670,6 +2670,9 @@ function renderDiaryDetail() {
   const digsTotal = metrics.digs_total ?? digs.length;
   renderDiaryDigList(digs, digsTotal);
 
+  // 食事
+  renderDiaryMeals(metrics.meals || [], metrics.meals_total_calories);
+
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
     $('diaryGithub').innerHTML = `<li class="queue-empty">${d.github_commits?.error ? escapeHtml('GitHub: ' + d.github_commits.error) : 'commit 記録なし'}</li>`;
@@ -2779,6 +2782,48 @@ function renderDiaryBookmarkList(elId, items, total, kind, emptyMsg) {
       return { items: (r.items || []).map(b => bookmarkLi(b, withAccess)), total: r.total };
     });
   }
+}
+
+function renderDiaryMeals(meals, totalCal) {
+  const wrap = document.getElementById('diaryMeals');
+  if (!wrap) return;
+  if (!meals || meals.length === 0) {
+    wrap.innerHTML = '<div class="queue-empty">この日の食事記録はなし</div>';
+    return;
+  }
+  const totalLine = (typeof totalCal === 'number')
+    ? `<div class="diary-meals-total">総カロリー: <strong>${totalCal} kcal</strong> (${meals.length} 食)</div>`
+    : `<div class="diary-meals-total muted">${meals.length} 食 (カロリー未推定)</div>`;
+  const items = meals.map((m) => {
+    const t = (m.eaten_at || '').slice(11, 16);
+    const desc = m.description || '(未記入)';
+    const cal = (typeof m.total_calories === 'number') ? `${m.total_calories} kcal` : '— kcal';
+    const adds = (m.additions || []).map((a) => {
+      const ac = typeof a.calories === 'number' ? ` ${a.calories}kcal` : '';
+      return `＋${a.name}${ac}`;
+    }).join(', ');
+    const addsHtml = adds ? `<span class="diary-meal-adds muted"> · ${escapeHtml(adds)}</span>` : '';
+    return `<li class="diary-meal-row">
+      <a class="diary-meal-thumb" href="#" data-meal-id="${m.id}">
+        <img src="/api/meals/${m.id}/photo" loading="lazy" alt="" />
+      </a>
+      <div class="diary-meal-body">
+        <div class="diary-meal-head">
+          <span class="diary-meal-time">${escapeHtml(t)}</span>
+          <span class="diary-meal-cal">${escapeHtml(cal)}</span>
+        </div>
+        <div class="diary-meal-desc">${escapeHtml(desc)}${addsHtml}</div>
+      </div>
+    </li>`;
+  }).join('');
+  wrap.innerHTML = `${totalLine}<ul class="diary-meals-list">${items}</ul>`;
+  // クリック → 食事タブに飛ばす
+  wrap.querySelectorAll('.diary-meal-thumb').forEach((a) => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      switchTab('meals');
+    });
+  });
 }
 
 function renderDiaryDigList(items, total) {

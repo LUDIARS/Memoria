@@ -1972,3 +1972,12 @@ export function listPendingMeals(db, { limit = 20 } = {}) {
   `).all(limit);
 }
 
+/** 指定日 (ローカル YYYY-MM-DD) の食事を eaten_at 昇順で返す。 */
+export function listMealsForDate(db, dateStr) {
+  return db.prepare(`
+    SELECT * FROM meals
+    WHERE date(eaten_at, 'localtime') = ?
+    ORDER BY eaten_at ASC
+  `).all(dateStr);
+}
+

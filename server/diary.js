@@ -4,7 +4,7 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate } from './db.js';
+import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate, listMealsForDate } from './db.js';
 import { runLlm } from './llm.js';
 
 // Downtimes >5 min make it into the diary; shorter gaps are treated as
@@ -161,6 +161,42 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
   const gpsPoints = listGpsLocationsForDate(db, dateStr);
   const gps = summarizeGpsForDate(gpsPoints);
 
+  // 食事ログ — eaten_at がその日に該当する meal をすべて拾う。
+  // 総カロリーは「base (user_corrected_calories ?? calories) + sum(additions[].calories)」 を
+  // 各レコードで計算した合計。 calories null 値は 0 として扱う (ユーザが
+  // 不明としたものを過大計上しないため、 集計上は欠損扱い)。
+  const mealsRows = listMealsForDate(db, dateStr);
+  const meals = mealsRows.map((m) => {
+    const additions = parseMealAdditions(m.additions_json);
+    const baseCal = (typeof m.user_corrected_calories === 'number') ? m.user_corrected_calories
+      : (typeof m.calories === 'number') ? m.calories : null;
+    const addCalSum = additions.reduce(
+      (s, a) => s + (typeof a.calories === 'number' && isFinite(a.calories) ? a.calories : 0), 0,
+    );
+    const totalCal = (baseCal == null && additions.length === 0)
+      ? null
+      : (baseCal ?? 0) + addCalSum;
+    return {
+      id: m.id,
+      eaten_at: m.eaten_at,
+      description: m.user_corrected_description || m.description || null,
+      base_calories: baseCal,
+      addition_calories: addCalSum,
+      total_calories: totalCal,
+      additions: additions.map((a) => ({
+        name: a.name,
+        calories: typeof a.calories === 'number' ? a.calories : null,
+        added_at: a.added_at || null,
+      })),
+      location_label: m.location_label || null,
+      ai_status: m.ai_status,
+      user_note: m.user_note || null,
+    };
+  });
+  const mealsCalories = meals.reduce(
+    (s, m) => s + (typeof m.total_calories === 'number' ? m.total_calories : 0), 0,
+  );
+
   return {
     date: dateStr,
     total_events: totalEvents,
@@ -176,11 +212,23 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
     downtimes,
     total_downtime_ms: totalDowntimeMs,
     gps,
+    meals,
+    meals_total_calories: meals.length > 0 ? mealsCalories : null,
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
     },
   };
+}
+
+function parseMealAdditions(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
 
 // Haversine 距離 (m)。地球半径 6371008 m (mean)。短距離では誤差は数 cm 以下。
@@ -602,6 +650,28 @@ function formatDowntimeBlock(metrics) {
   }).join('\n');
 }
 
+function formatMealsBlock(metrics) {
+  const meals = metrics?.meals || [];
+  if (!meals.length) return '(食事の記録なし)';
+  const lines = meals.map((m) => {
+    const t = (m.eaten_at || '').replace('T', ' ').slice(11, 16);
+    const desc = m.description || '(未記入)';
+    const cal = (typeof m.total_calories === 'number') ? `${m.total_calories} kcal` : '— kcal';
+    const loc = m.location_label ? ` @ ${m.location_label}` : '';
+    const adds = (m.additions || [])
+      .map((a) => {
+        const ac = typeof a.calories === 'number' ? ` ${a.calories}kcal` : '';
+        return `＋${a.name}${ac}`;
+      })
+      .join(', ');
+    const addsLine = adds ? ` (追加: ${adds})` : '';
+    return `- ${t} ${desc} — ${cal}${loc}${addsLine}`;
+  });
+  const total = (typeof metrics.meals_total_calories === 'number') ? metrics.meals_total_calories : null;
+  if (total != null) lines.push(`総カロリー (推定): 約 ${total} kcal`);
+  return lines.join('\n');
+}
+
 const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics }) => [
   `あなたは ${dateStr} の「ハイライト」セクションを書きます。`,
   '以下の情報を統合し、その日の重要なポイントを箇条書きで 3〜6 個。',
@@ -639,6 +709,10 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   '## サーバ停止 (5 分超のダウンタイム)',
   formatDowntimeBlock(metrics),
   '上記時間帯はアクセスログが欠落しているので、その時間帯の活動についてはデータがない旨を簡潔に注記してください。',
+  '',
+  '## 食事 (写真投稿 + AI 推定 / 手動補正、 参考情報)',
+  formatMealsBlock(metrics),
+  '※ カロリーは推定値で誤差を含む。 ハイライトに含める時は「総カロリー約 X kcal」 のような概数表記で。',
   '',
   notes ? `## ユーザのメモ・補足 (反映してください)\n${notes}\n` : '',
   '',

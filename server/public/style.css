@@ -3283,3 +3283,63 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .meal-time-cancel {
   color: #b00;
 }
+
+/* ── Diary: 食事セクション ──────────────────────────────────── */
+.diary-meals-total {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.diary-meals-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.diary-meal-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  background: var(--bg);
+  border-radius: 4px;
+}
+.diary-meal-thumb {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: block;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #eee;
+}
+.diary-meal-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.diary-meal-body {
+  flex: 1;
+  min-width: 0;
+}
+.diary-meal-head {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.diary-meal-cal {
+  color: #c25500;
+  font-weight: 500;
+}
+.diary-meal-desc {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diary-meal-adds {
+  font-size: 11px;
+}
