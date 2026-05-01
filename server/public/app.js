@@ -5936,109 +5936,57 @@ function startMealLocationEdit(btn) {
   });
 }
 
-// 追加 / 編集はモバイルで prompt() の popup が見落とされやすかったため、
-// inline form パターン (startMealDescriptionEdit と同系) に移行。
-function addMealAddition(mealId) {
-  const card = document.querySelector(`.meal-card[data-meal-id="${mealId}"]`);
-  if (!card) return;
-  if (card.querySelector('.meal-addition-form')) return; // 既に開いてる
-  const actions = card.querySelector('.meal-actions');
-  if (!actions) return;
-  const form = document.createElement('div');
-  form.className = 'meal-addition-form';
-  form.innerHTML = `
-    <input type="text" class="meal-addition-name-input" placeholder="例: アイスクリーム" />
-    <input type="number" class="meal-addition-cal-input" placeholder="kcal" inputmode="numeric" />
-    <button type="button" class="meal-addition-save" title="追加">✓ 追加</button>
-    <button type="button" class="ghost meal-addition-form-cancel" title="キャンセル">×</button>
-  `;
-  actions.parentElement.insertBefore(form, actions);
-  const nameEl = form.querySelector('.meal-addition-name-input');
-  const calEl = form.querySelector('.meal-addition-cal-input');
-  nameEl?.focus();
-
-  function close() { form.remove(); }
-
-  async function save() {
-    const name = (nameEl?.value || '').trim();
-    if (!name) { nameEl?.focus(); return; }
-    const calRaw = (calEl?.value || '').trim();
-    const body = { name };
-    if (calRaw !== '') {
-      const n = Number(calRaw);
-      if (isFinite(n)) body.calories = n;
-    }
-    try {
-      await api(`/api/meals/${mealId}/additions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      await loadMeals();
-    } catch (e) {
-      alert(`追加エラー: ${e.message}`);
-    }
+async function addMealAddition(mealId) {
+  const name = prompt('追加で食べたものは? (例: アイスクリーム)');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const calRaw = prompt('カロリー (kcal、 不明なら空欄)', '');
+  if (calRaw === null) return;
+  const body = { name: trimmed };
+  if (calRaw.trim() !== '') {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
   }
-
-  form.querySelector('.meal-addition-save')?.addEventListener('click', save);
-  form.querySelector('.meal-addition-form-cancel')?.addEventListener('click', close);
-  [nameEl, calEl].forEach((el) => el?.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); save(); }
-    if (ev.key === 'Escape') { ev.preventDefault(); close(); }
-  }));
+  try {
+    await api(`/api/meals/${mealId}/additions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`追加エラー: ${e.message}`);
+  }
 }
 
-function editMealAddition(mealId, idx) {
+async function editMealAddition(mealId, idx) {
   const m = mealsState.items.find((x) => x.id === mealId);
   if (!m) return;
   const additions = parseMealAdditions(m.additions_json);
   const cur = additions[idx];
   if (!cur) return;
-  const li = document.querySelector(`.meal-addition[data-meal-id="${mealId}"][data-idx="${idx}"]`);
-  if (!li || li.classList.contains('editing')) return;
-  li.classList.add('editing');
-  const original = li.innerHTML;
-  li.innerHTML = `
-    <input type="text" class="meal-addition-name-input" value="${escapeHtml(cur.name || '')}" />
-    <input type="number" class="meal-addition-cal-input" placeholder="kcal" inputmode="numeric" value="${cur.calories == null ? '' : escapeHtml(String(cur.calories))}" />
-    <button type="button" class="meal-addition-save" title="保存">✓</button>
-    <button type="button" class="ghost meal-addition-form-cancel" title="キャンセル">×</button>
-  `;
-  const nameEl = li.querySelector('.meal-addition-name-input');
-  const calEl = li.querySelector('.meal-addition-cal-input');
-  nameEl?.focus();
-
-  function restore() { li.innerHTML = original; li.classList.remove('editing'); }
-
-  async function save() {
-    const name = (nameEl?.value || '').trim();
-    if (!name) { nameEl?.focus(); return; }
-    const calRaw = (calEl?.value || '').trim();
-    const body = { name };
-    if (calRaw === '') body.calories = null;
-    else {
-      const n = Number(calRaw);
-      if (isFinite(n)) body.calories = n;
-    }
-    try {
-      await api(`/api/meals/${mealId}/additions/${idx}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      await loadMeals();
-    } catch (e) {
-      alert(`編集エラー: ${e.message}`);
-      restore();
-    }
+  const name = prompt('項目名', cur.name || '');
+  if (name === null) return;
+  const calRaw = prompt('カロリー (kcal、 空欄でクリア)', cur.calories == null ? '' : String(cur.calories));
+  if (calRaw === null) return;
+  const body = {};
+  if (name.trim()) body.name = name.trim();
+  if (calRaw.trim() === '') body.calories = null;
+  else {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
   }
-
-  li.querySelector('.meal-addition-save')?.addEventListener('click', save);
-  li.querySelector('.meal-addition-form-cancel')?.addEventListener('click', restore);
-  [nameEl, calEl].forEach((el) => el?.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); save(); }
-    if (ev.key === 'Escape') { ev.preventDefault(); restore(); }
-  }));
+  try {
+    await api(`/api/meals/${mealId}/additions/${idx}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`編集エラー: ${e.message}`);
+  }
 }
 
 async function deleteMealAddition(mealId, idx) {
