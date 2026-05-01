@@ -5299,14 +5299,31 @@ function advanceMealQueue() {
 function openMealModal(item) {
   const modal = document.getElementById('mealModal');
   if (!modal) return;
-  // <dialog>.showModal() でネイティブ popup として開く (focus trap / Esc 自動)
-  if (typeof modal.showModal === 'function') {
-    if (!modal.open) {
-      try { modal.showModal(); }
-      catch { modal.classList.remove('hidden'); }
+  // <dialog>.showModal() でネイティブ popup として開く (focus trap / Esc 自動)。
+  // 古い iOS Safari (< 15.4) や一部の WebView では showModal が未実装。
+  // どんな環境でも確実に開けるよう、 stub 失敗時は手動で open 属性 + flex を強制。
+  let openedNatively = false;
+  if (typeof modal.showModal === 'function' && !modal.open) {
+    try {
+      modal.showModal();
+      openedNatively = true;
+    } catch (e) {
+      console.warn('[meal-modal] showModal failed, falling back:', e);
     }
-  } else {
+  }
+  if (!openedNatively) {
+    // dialog 非対応 / showModal 失敗時の fallback — open 属性 + 直接 style 指定
+    modal.setAttribute('open', '');
     modal.classList.remove('hidden');
+    modal.style.display = 'flex';
+    modal.style.position = 'fixed';
+    modal.style.inset = '0';
+    modal.style.zIndex = '1000';
+    // ネイティブ ::backdrop が出ない fallback の場合、 dialog 自体の背景で
+    // 半透明黒を塗って他クリックを封じる
+    modal.style.background = 'rgba(0, 0, 0, 0.45)';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
   }
 
   const photoImg = document.getElementById('mealModalPhoto');
@@ -5386,10 +5403,19 @@ function closeMealModal() {
   const modal = document.getElementById('mealModal');
   if (modal) {
     if (typeof modal.close === 'function' && modal.open) {
-      try { modal.close(); } catch { modal.classList.add('hidden'); }
-    } else {
-      modal.classList.add('hidden');
+      try { modal.close(); }
+      catch (e) { console.warn('[meal-modal] close failed:', e); }
     }
+    // fallback で付けた open 属性 / inline style もクリア
+    modal.removeAttribute('open');
+    modal.classList.add('hidden');
+    modal.style.display = '';
+    modal.style.position = '';
+    modal.style.inset = '';
+    modal.style.zIndex = '';
+    modal.style.background = '';
+    modal.style.alignItems = '';
+    modal.style.justifyContent = '';
   }
   // 地図リソースもクリア
   mealMapState.marker = null;
