@@ -8,7 +8,9 @@
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
     "owntracks": "node --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "owntracks:dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
-    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 && npx tsc --noEmit -p tsconfig.json"
+    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 && npx tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
@@ -19,5 +21,8 @@
     "node-html-parser": "^6.1.13",
     "web-push": "^3.6.7",
     "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
   }
 }
