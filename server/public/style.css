@@ -3618,3 +3618,55 @@ button.meal-desc {
     border-radius: 0;
   }
 }
+
+/* ── Meal modal: <dialog> 化 + Map 連携 ──────────────────────── */
+dialog.meal-modal {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+}
+dialog.meal-modal::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+dialog.meal-modal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Map 埋め込み */
+.meal-modal-map {
+  width: 100%;
+  height: 240px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f4f4f4;
+}
+.meal-modal-map.hidden { display: none; }
+.meal-modal-map-link {
+  font-size: 12px;
+  text-decoration: none;
+  padding: 6px 10px;
+}
+.meal-modal-map-link[hidden] { display: none; }
+
+/* meal-card の場所行: Map 外部リンク */
+.meal-loc-map-link {
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--accent, #2a6df4);
+  text-decoration: none;
+}
+.meal-loc-map-link:hover { text-decoration: underline; }
+
+@media (max-width: 480px) {
+  .meal-modal-map {
+    height: 200px;
+  }
+}

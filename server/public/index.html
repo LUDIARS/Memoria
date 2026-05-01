@@ -501,16 +501,9 @@
           </button>
           <span id="mealsUploadStatus" class="muted"></span>
           <span class="grow"></span>
-          <input id="mealsFromDate" type="date" title="開始日" />
-          <input id="mealsToDate" type="date" title="終了日" />
+          <input id="mealsFilterDate" type="date" title="日付で絞り込む (空欄で全件)" />
+          <button id="mealsFilterClear" class="ghost" title="絞り込みクリア">×</button>
           <button id="mealsRefresh" class="ghost">更新</button>
-        </div>
-        <div id="mealsDropZone" class="meals-drop-zone">
-          <div class="meals-drop-zone-inner">
-            <div class="meals-drop-icon">📷</div>
-            <div>ファイルをドロップ、 または <kbd>Ctrl</kbd>+<kbd>V</kbd> で貼り付け</div>
-            <div class="muted">複数選択可 — JPEG / PNG / HEIC / WebP (各 12 MB まで)</div>
-          </div>
         </div>
         <div id="mealsHint" class="meals-hint muted hidden">
           画像解析が失敗しています。 設定 → AI / 連携 で
@@ -520,9 +513,8 @@
         <div id="mealsList" class="meals-list"></div>
       </div>
 
-      <!-- 食事登録モーダル — 写真 / 写真なしどちらの経路も 1 件ずつここで確認 -->
-      <div id="mealModal" class="meal-modal hidden" role="dialog" aria-modal="true" aria-labelledby="mealModalTitle">
-        <div class="meal-modal-backdrop"></div>
+      <!-- 食事登録ダイアログ — <dialog> でネイティブ popup として動作 -->
+      <dialog id="mealModal" class="meal-modal" aria-labelledby="mealModalTitle">
         <div class="meal-modal-card">
           <header class="meal-modal-head">
             <h3 id="mealModalTitle">食事を登録</h3>
@@ -556,10 +548,13 @@
               <div class="meal-modal-loc">
                 <input id="mealModalLat" type="number" step="any" placeholder="緯度" />
                 <input id="mealModalLon" type="number" step="any" placeholder="経度" />
-                <button type="button" id="mealModalLocHere" class="ghost" title="現在地から取得">📍</button>
-                <button type="button" id="mealModalLocClear" class="ghost" title="場所を削除">∅</button>
+                <button type="button" id="mealModalLocHere" class="ghost" title="現在地から取得">📍 現在地</button>
+                <button type="button" id="mealModalLocClear" class="ghost" title="場所を削除">∅ クリア</button>
+                <button type="button" id="mealModalMapToggle" class="ghost" title="地図を表示 / 非表示">🗺 地図</button>
+                <a id="mealModalMapOpen" href="#" target="_blank" rel="noopener" class="ghost meal-modal-map-link" title="Google Maps で開く" hidden>↗ Maps で開く</a>
               </div>
-              <span class="meal-modal-hint muted">空欄なら EXIF / GPS 軌跡から推定</span>
+              <div id="mealModalMap" class="meal-modal-map hidden"></div>
+              <span class="meal-modal-hint muted">地図をクリック / タップで座標を取得。 空欄なら EXIF / GPS 軌跡から推定</span>
             </div>
 
             <label class="meal-modal-row">
@@ -580,7 +575,7 @@
             <button type="button" id="mealModalSubmit">登録</button>
           </footer>
         </div>
-      </div>
+      </dialog>
 
       <div id="multiView" class="hidden">
         <div class="multi-bar">

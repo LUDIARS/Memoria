@@ -4988,11 +4988,14 @@ const mealsState = {
 async function loadMeals() {
   const list = document.getElementById('mealsList');
   if (!list) return;
-  const fromEl = document.getElementById('mealsFromDate');
-  const toEl = document.getElementById('mealsToDate');
+  // 単一日付フィルタ — 値があれば「その日 0:00 〜 23:59」 で絞り込み
+  const dateEl = document.getElementById('mealsFilterDate');
   const params = new URLSearchParams();
-  if (fromEl?.value) params.set('from', fromEl.value);
-  if (toEl?.value) params.set('to', toEl.value + 'T23:59:59');
+  const v = dateEl?.value;
+  if (v) {
+    params.set('from', v + 'T00:00:00');
+    params.set('to', v + 'T23:59:59');
+  }
   try {
     const r = await api(`/api/meals?${params.toString()}`);
     mealsState.items = r.meals || [];
@@ -5065,6 +5068,7 @@ function renderMeals() {
               ${escapeHtml(locStr)}
               <span class="meal-inline-pencil">✏️</span>
             </button>
+            ${(m.lat != null && m.lon != null) ? `<a class="meal-loc-map-link" href="https://www.google.com/maps?q=${encodeURIComponent(m.lat)},${encodeURIComponent(m.lon)}" target="_blank" rel="noopener" title="Google Maps で開く" onclick="event.stopPropagation()">↗ Maps</a>` : ''}
           </div>
           ${m.user_note ? `<div class="meal-note">📝 ${escapeHtml(m.user_note)}</div>` : ''}
           ${additionsHtml}
@@ -5279,7 +5283,15 @@ function advanceMealQueue() {
 function openMealModal(item) {
   const modal = document.getElementById('mealModal');
   if (!modal) return;
-  modal.classList.remove('hidden');
+  // <dialog>.showModal() でネイティブ popup として開く (focus trap / Esc 自動)
+  if (typeof modal.showModal === 'function') {
+    if (!modal.open) {
+      try { modal.showModal(); }
+      catch { modal.classList.remove('hidden'); }
+    }
+  } else {
+    modal.classList.remove('hidden');
+  }
 
   const photoImg = document.getElementById('mealModalPhoto');
   const photoEmpty = document.getElementById('mealModalPhotoEmpty');
@@ -5329,10 +5341,146 @@ function openMealModal(item) {
 
 function closeMealModal() {
   const modal = document.getElementById('mealModal');
-  if (modal) modal.classList.add('hidden');
+  if (modal) {
+    if (typeof modal.close === 'function' && modal.open) {
+      try { modal.close(); } catch { modal.classList.add('hidden'); }
+    } else {
+      modal.classList.add('hidden');
+    }
+  }
+  // 地図リソースもクリア
+  mealMapState.marker = null;
   mealModalState.current = null;
   mealModalState.currentIndex = 0;
   mealModalState.totalCount = 0;
+}
+
+// ── 食事モーダル: Google Map 連携 ───────────────────────────────
+//
+// 既存の tracksMap で使う API key とローダ (ensureGoogleMapsLoaded) を
+// 流用。 モーダル内に小さな地図を埋め込み、 クリック/タップで lat/lon を
+// フォームへ反映。 API key 未設定時は外部リンク (Maps で開く) のみ提供。
+
+const mealMapState = {
+  apiKey: null,         // null=未取得、 ''=未設定確定、 string=取得済
+  fetched: false,
+  map: null,            // google.maps.Map インスタンス
+  marker: null,
+};
+
+async function fetchMapsApiKey() {
+  if (mealMapState.fetched) return mealMapState.apiKey;
+  try {
+    const cfg = await api('/api/maps/config');
+    mealMapState.apiKey = cfg.hasKey ? (cfg.apiKey || '') : '';
+  } catch {
+    mealMapState.apiKey = '';
+  }
+  mealMapState.fetched = true;
+  return mealMapState.apiKey;
+}
+
+async function ensureMealModalMap(initialLat, initialLon) {
+  const wrap = document.getElementById('mealModalMap');
+  if (!wrap) return;
+  const apiKey = await fetchMapsApiKey();
+  if (!apiKey) {
+    wrap.innerHTML = '<div class="hint">Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps.api_key</code> を入れるか、 「↗ Maps で開く」 リンクで外部表示してください。</div>';
+    return;
+  }
+  try {
+    await ensureGoogleMapsLoaded(apiKey);
+  } catch (e) {
+    wrap.innerHTML = `<div class="hint">Google Maps の読み込みに失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!window.google?.maps) return;
+
+  // 中心点: 既存値 → 直近の GPS 軌跡 → 東京駅
+  const center = (initialLat != null && initialLon != null)
+    ? { lat: Number(initialLat), lng: Number(initialLon) }
+    : { lat: 35.681, lng: 139.767 };
+
+  // 既存の Map インスタンスがあれば再利用、 そうでなければ新規作成
+  if (!mealMapState.map) {
+    mealMapState.map = new google.maps.Map(wrap, {
+      center,
+      zoom: 15,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+    });
+    mealMapState.map.addListener('click', (ev) => {
+      const lat = ev.latLng.lat();
+      const lon = ev.latLng.lng();
+      setMealModalLatLon(lat, lon, /*recenter*/ false);
+    });
+  } else {
+    mealMapState.map.setCenter(center);
+    mealMapState.map.setZoom(15);
+    google.maps.event.trigger(mealMapState.map, 'resize');
+  }
+  if (initialLat != null && initialLon != null) {
+    placeMealModalMarker(Number(initialLat), Number(initialLon));
+  } else if (mealMapState.marker) {
+    mealMapState.marker.setMap(null);
+    mealMapState.marker = null;
+  }
+}
+
+function placeMealModalMarker(lat, lon) {
+  if (!mealMapState.map) return;
+  const pos = new google.maps.LatLng(lat, lon);
+  if (!mealMapState.marker) {
+    mealMapState.marker = new google.maps.Marker({
+      position: pos,
+      map: mealMapState.map,
+      draggable: true,
+    });
+    mealMapState.marker.addListener('dragend', (ev) => {
+      const dlat = ev.latLng.lat();
+      const dlon = ev.latLng.lng();
+      setMealModalLatLon(dlat, dlon, /*recenter*/ false);
+    });
+  } else {
+    mealMapState.marker.setPosition(pos);
+    mealMapState.marker.setMap(mealMapState.map);
+  }
+}
+
+function setMealModalLatLon(lat, lon, recenter) {
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  if (latEl) latEl.value = String(lat.toFixed ? lat.toFixed(6) : lat);
+  if (lonEl) lonEl.value = String(lon.toFixed ? lon.toFixed(6) : lon);
+  placeMealModalMarker(Number(lat), Number(lon));
+  if (recenter && mealMapState.map) {
+    mealMapState.map.setCenter(new google.maps.LatLng(Number(lat), Number(lon)));
+  }
+  updateMealModalMapLink();
+}
+
+function clearMealModalMarker() {
+  if (mealMapState.marker) {
+    mealMapState.marker.setMap(null);
+    mealMapState.marker = null;
+  }
+}
+
+function updateMealModalMapLink() {
+  const link = document.getElementById('mealModalMapOpen');
+  if (!link) return;
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const lat = latEl?.value?.trim();
+  const lon = lonEl?.value?.trim();
+  if (lat && lon && isFinite(Number(lat)) && isFinite(Number(lon))) {
+    link.href = `https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+    link.removeAttribute('href');
+  }
 }
 
 function readMealModalForm() {
@@ -5686,10 +5834,7 @@ document.getElementById('mealModalLocHere')?.addEventListener('click', () => {
   if (!navigator.geolocation) { alert('この端末は位置情報に対応していません'); return; }
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      const latEl = document.getElementById('mealModalLat');
-      const lonEl = document.getElementById('mealModalLon');
-      if (latEl) latEl.value = String(pos.coords.latitude);
-      if (lonEl) lonEl.value = String(pos.coords.longitude);
+      setMealModalLatLon(pos.coords.latitude, pos.coords.longitude, /*recenter*/ true);
     },
     (err) => alert(`位置取得失敗: ${err.message}`),
     { enableHighAccuracy: true, timeout: 10_000 },
@@ -5700,72 +5845,53 @@ document.getElementById('mealModalLocClear')?.addEventListener('click', () => {
   const lonEl = document.getElementById('mealModalLon');
   if (latEl) latEl.value = '';
   if (lonEl) lonEl.value = '';
-});
-// Esc キーで全 cancel
-window.addEventListener('keydown', (ev) => {
-  if (ev.key !== 'Escape') return;
-  const modal = document.getElementById('mealModal');
-  if (!modal || modal.classList.contains('hidden')) return;
-  cancelMealModal();
+  clearMealModalMarker();
+  updateMealModalMapLink();
 });
 
-// ── ドラッグ&ドロップ ──────────────────────────────────────────
-(function setupMealsDropZone() {
-  const view = document.getElementById('mealsView');
-  const zone = document.getElementById('mealsDropZone');
-  if (!view || !zone) return;
+// 🗺 地図ボタンで開閉 + 必要なら Google Maps を初期化
+document.getElementById('mealModalMapToggle')?.addEventListener('click', async () => {
+  const wrap = document.getElementById('mealModalMap');
+  if (!wrap) return;
+  const open = wrap.classList.toggle('hidden');
+  if (open) return; // 閉じた
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const lat = latEl?.value ? Number(latEl.value) : null;
+  const lon = lonEl?.value ? Number(lonEl.value) : null;
+  await ensureMealModalMap(lat, lon);
+  // resize trigger (hidden → show のとき必須)
+  if (mealMapState.map && window.google?.maps) {
+    setTimeout(() => google.maps.event.trigger(mealMapState.map, 'resize'), 50);
+  }
+});
 
-  // window 全体で dragover/drop を受けて、 食事タブが active な場合のみ処理
-  function isMealsActive() {
-    return state.tab === 'meals' && !view.classList.contains('hidden');
-  }
-
-  let dragDepth = 0;
-  function onDragEnter(e) {
-    if (!isMealsActive()) return;
-    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
-    dragDepth += 1;
-    zone.classList.add('drag-over');
-  }
-  function onDragLeave() {
-    if (!isMealsActive()) return;
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) zone.classList.remove('drag-over');
-  }
-  function onDragOver(e) {
-    if (!isMealsActive()) return;
-    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
-    e.preventDefault(); // drop を有効化
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-  }
-  function onDrop(e) {
-    if (!isMealsActive()) return;
-    e.preventDefault();
-    dragDepth = 0;
-    zone.classList.remove('drag-over');
-    const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type?.startsWith?.('image/'));
-    if (files.length === 0) return;
-    startMealModalForFiles(files);
-  }
-
-  window.addEventListener('dragenter', onDragEnter);
-  window.addEventListener('dragleave', onDragLeave);
-  window.addEventListener('dragover', onDragOver);
-  window.addEventListener('drop', onDrop);
-
-  // ── クリップボード貼り付け (Ctrl+V) ─────────────────────────
-  window.addEventListener('paste', (e) => {
-    if (!isMealsActive()) return;
-    // テキスト入力中は素通し
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
-    const items = Array.from(e.clipboardData?.items || []);
-    const files = items
-      .filter((it) => it.kind === 'file' && it.type?.startsWith?.('image/'))
-      .map((it) => it.getAsFile())
-      .filter((f) => !!f);
-    if (files.length === 0) return;
-    e.preventDefault();
-    startMealModalForFiles(files);
+// lat/lon 手入力時に map と link を追従
+['mealModalLat', 'mealModalLon'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('input', () => {
+    const lat = Number(document.getElementById('mealModalLat')?.value);
+    const lon = Number(document.getElementById('mealModalLon')?.value);
+    if (isFinite(lat) && isFinite(lon)) {
+      placeMealModalMarker(lat, lon);
+    } else {
+      clearMealModalMarker();
+    }
+    updateMealModalMapLink();
   });
-})();
+});
+
+// <dialog> のネイティブ close (Esc 含む) を cancel として扱う
+document.getElementById('mealModal')?.addEventListener('close', () => {
+  // showModal で開いた場合、 Esc で close → ここに来る
+  if (mealModalState.queue.length > 0 || mealModalState.current) {
+    clearMealQueue();
+  }
+});
+
+// 単一日付フィルタの結線 (絞り込み変更で即時 reload + クリアボタン)
+document.getElementById('mealsFilterDate')?.addEventListener('change', () => loadMeals());
+document.getElementById('mealsFilterClear')?.addEventListener('click', () => {
+  const el = document.getElementById('mealsFilterDate');
+  if (el) el.value = '';
+  loadMeals();
+});
