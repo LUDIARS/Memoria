@@ -361,7 +361,20 @@ export function deletePushSubscription(db, id) {
 
 // ── bookmarks DAO ─────────────────────────────────────────────
 
-export function listBookmarks(db, { category, sort = 'created_desc' } = {}) {
+/**
+ * List bookmarks with optional category / search / pagination.
+ *
+ * - `q` does a SQL LIKE across title / url / summary so the front-end
+ *   doesn't have to keep all rows in memory just to do client-side filtering
+ *   (the original UI fetched everything and filtered locally — fine at
+ *   100 bookmarks, painful at thousands).
+ * - `limit` is opt-in. Internal callers that want every bookmark (cloud
+ *   extraction, export, recommendations) keep working unchanged because
+ *   the function still returns a plain array; pagination is only applied
+ *   when `limit` is a positive number. Use `countBookmarks` for the total
+ *   when paginating.
+ */
+export function listBookmarks(db, { category, sort = 'created_desc', limit, offset = 0, q } = {}) {
   const orderClauses = {
     created_desc: 'b.created_at DESC',
     created_asc: 'b.created_at ASC',
@@ -370,18 +383,50 @@ export function listBookmarks(db, { category, sort = 'created_desc' } = {}) {
     title_asc: 'b.title ASC',
   };
   const orderBy = orderClauses[sort] ?? orderClauses.created_desc;
-  let rows;
+  const where = [];
+  const params = [];
+  let join = '';
   if (category) {
-    rows = db.prepare(`
-      SELECT b.* FROM bookmarks b
-      JOIN bookmark_categories bc ON bc.bookmark_id = b.id
-      WHERE bc.category = ?
-      ORDER BY ${orderBy}
-    `).all(category);
-  } else {
-    rows = db.prepare(`SELECT b.* FROM bookmarks b ORDER BY ${orderBy}`).all();
+    join = 'JOIN bookmark_categories bc ON bc.bookmark_id = b.id';
+    where.push('bc.category = ?');
+    params.push(category);
   }
+  if (q) {
+    where.push('(b.title LIKE ? OR b.url LIKE ? OR COALESCE(b.summary, \'\') LIKE ?)');
+    const pat = `%${q}%`;
+    params.push(pat, pat, pat);
+  }
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  let sql = `SELECT b.* FROM bookmarks b ${join} ${whereClause} ORDER BY ${orderBy}`;
+  const queryParams = [...params];
+  if (Number.isFinite(limit) && limit > 0) {
+    sql += ' LIMIT ? OFFSET ?';
+    queryParams.push(Math.floor(limit), Math.max(0, Math.floor(offset) || 0));
+  }
+  const rows = db.prepare(sql).all(...queryParams);
   return rows.map(r => ({ ...r, categories: getCategories(db, r.id) }));
+}
+
+/** Count bookmarks matching the same filters as `listBookmarks`. Cheaper
+ * than fetching everything just to check `length`, and lets the UI show
+ * "全 N 件中 M 件表示中" when paginating. */
+export function countBookmarks(db, { category, q } = {}) {
+  const where = [];
+  const params = [];
+  let join = '';
+  if (category) {
+    join = 'JOIN bookmark_categories bc ON bc.bookmark_id = b.id';
+    where.push('bc.category = ?');
+    params.push(category);
+  }
+  if (q) {
+    where.push('(b.title LIKE ? OR b.url LIKE ? OR COALESCE(b.summary, \'\') LIKE ?)');
+    const pat = `%${q}%`;
+    params.push(pat, pat, pat);
+  }
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const row = db.prepare(`SELECT COUNT(DISTINCT b.id) AS n FROM bookmarks b ${join} ${whereClause}`).get(...params);
+  return row.n;
 }
 
 export function getBookmark(db, id) {

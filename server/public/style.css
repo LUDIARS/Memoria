@@ -105,6 +105,39 @@ body {
 .bookmarks-toolbar input[type=search] { min-width: 240px; flex: 0 1 320px; }
 .bookmarks-toolbar .categories-toggle { display: none; }
 
+/* Pagination footer — sits under the card grid. Shows "M / N 件表示中" and
+ * a 「もっと表示」 button when more rows are available server-side. */
+.bookmarks-more-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 8px 8px;
+  flex-wrap: wrap;
+}
+.bookmarks-more-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.bookmarks-more-btn {
+  background: var(--panel);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.bookmarks-more-btn:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+.bookmarks-more-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.bookmarks-more-btn[hidden] { display: none; }
+
 button, .ghost, .file-btn {
   font-size: 13px;
   padding: 6px 12px;
