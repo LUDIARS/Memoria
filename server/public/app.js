@@ -281,7 +281,9 @@ function renderDetailCloud() {
   const kept = (r.words || []).filter(w => w.kept);
   el.innerHTML = renderCloudWords(kept);
   el.querySelectorAll('.cloud-word').forEach(w => {
-    w.addEventListener('click', () => onCloudWordClick(w.dataset.word));
+    w.addEventListener('click', (ev) => {
+      openWordRingMenu(w.dataset.word, ev.clientX, ev.clientY, { onDig: () => onCloudWordClick(w.dataset.word) });
+    });
   });
 }
 
@@ -1143,21 +1145,21 @@ function renderDigSession() {
     </div>
     <div class="dig-sources">${sourceCards}</div>
   `;
-  // Cloud node clicks — explored word jumps to its past session, new word
-  // hands off to digOnWordPick (one-cushion flow: focus the textarea with a
-  // prefilled "○○ について 何を知りたいか?" prompt, plus a "別テーマとして
-  // 検索" button alongside the regular ディグる).
-  const handleNodeClick = (target) => {
+  // Cloud node clicks — explored word はその過去 session へジャンプ。
+  // それ以外は単語リングメニューを開いて 「ディグる / 辞書登録 / 削除」
+  // を選ばせる (one-cushion 廃止、 明示的な分岐に)。
+  const handleNodeClick = (target, ev) => {
     const exploredId = target.dataset.exploredId;
     if (exploredId) {
       loadDigSession(Number(exploredId));
       return;
     }
     const word = target.dataset.word;
-    if (word) digOnWordPick(s, word);
+    if (!word) return;
+    openWordRingMenu(word, ev?.clientX, ev?.clientY, { session: s });
   };
   el.querySelectorAll('.dig-graph-node, .dig-cloud-word').forEach(node => {
-    node.addEventListener('click', () => handleNodeClick(node));
+    node.addEventListener('click', (ev) => handleNodeClick(node, ev));
   });
   el.querySelectorAll('.dig-source').forEach(card => {
     const url = card.dataset.url;
@@ -1844,7 +1846,9 @@ function renderCloud() {
     });
   });
   el.querySelectorAll('.cloud-word').forEach(w => {
-    w.addEventListener('click', () => onCloudWordClick(w.dataset.word));
+    w.addEventListener('click', (ev) => {
+      openWordRingMenu(w.dataset.word, ev.clientX, ev.clientY, { onDig: () => onCloudWordClick(w.dataset.word) });
+    });
   });
   el.querySelector('#cloudManualBtn')?.addEventListener('click', submitManualWord);
   el.querySelector('#cloudManualInput')?.addEventListener('keydown', (e) => {
@@ -5907,3 +5911,156 @@ document.getElementById('mealsFilterClear')?.addEventListener('click', () => {
   if (el) el.value = '';
   loadMeals();
 });
+
+// ── 単語リングメニュー ────────────────────────────────────────
+//
+// グラフ / ワードクラウドの単語をクリックすると、 黒背景の上に
+// 単語を中心としたリング状のボタン (ディグる / 辞書登録 / 削除) が
+// 浮く。 削除は user_stopwords (server) に保存し、 既存の表示からは
+// userStopwordSet で hide。
+
+const wordRingState = {
+  word: null,
+  context: null, // { session?, onDig? }
+};
+const userStopwordSet = new Set();
+
+async function loadUserStopwords() {
+  try {
+    const r = await api('/api/stopwords');
+    userStopwordSet.clear();
+    for (const it of (r.items || [])) userStopwordSet.add(String(it.lower || it.word || '').toLowerCase());
+  } catch {
+    // 無視 — 失敗しても致命的ではない
+  }
+}
+
+function isUserStopword(word) {
+  if (!word) return false;
+  return userStopwordSet.has(String(word).toLowerCase());
+}
+
+function openWordRingMenu(word, clientX, clientY, ctx = {}) {
+  const menu = document.getElementById('wordRingMenu');
+  const wEl = document.getElementById('wordRingWord');
+  const pop = menu?.querySelector('.word-ring-pop');
+  if (!menu || !wEl || !pop) return;
+  wordRingState.word = String(word || '').trim();
+  wordRingState.context = ctx;
+  wEl.textContent = wordRingState.word;
+
+  // ポップ位置: クリック座標を中心に。 端だと画面外へ出るので clamp
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const PAD = 130; // pop の半径 (110) + 余白
+  const cx = Math.max(PAD, Math.min(W - PAD, Number.isFinite(clientX) ? clientX : W / 2));
+  const cy = Math.max(PAD, Math.min(H - PAD, Number.isFinite(clientY) ? clientY : H / 2));
+  pop.style.left = `${cx}px`;
+  pop.style.top = `${cy}px`;
+
+  menu.classList.remove('hidden');
+}
+
+function closeWordRingMenu() {
+  const menu = document.getElementById('wordRingMenu');
+  if (menu) menu.classList.add('hidden');
+  wordRingState.word = null;
+  wordRingState.context = null;
+}
+
+async function wordRingAction(action) {
+  const word = wordRingState.word;
+  const ctx = wordRingState.context || {};
+  closeWordRingMenu();
+  if (!word) return;
+
+  if (action === 'dig') {
+    if (typeof ctx.onDig === 'function') {
+      ctx.onDig(word);
+    } else {
+      // dig session 文脈の場合は textarea にプリフィル
+      digOnWordPick(ctx.session || null, word);
+    }
+    return;
+  }
+
+  if (action === 'dict') {
+    try {
+      const r = await api('/api/dictionary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ term: word }),
+      });
+      const msg = r.existed
+        ? `「${word}」 は既に辞書に登録済 (id ${r.id})`
+        : `📖 「${word}」 を辞書に登録しました`;
+      // 辞書タブに反映 + 通知
+      flashMessage(msg);
+    } catch (e) {
+      alert(`辞書登録エラー: ${e.message}`);
+    }
+    return;
+  }
+
+  if (action === 'delete') {
+    if (!confirm(`「${word}」 を今後表示しない (stopword) ように設定しますか?`)) return;
+    try {
+      await api('/api/stopwords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word }),
+      });
+      userStopwordSet.add(word.toLowerCase());
+      // 即時 hide: 該当 dataset.word を持つノード / cloud-word を CSS で隠す
+      hideWordsInDom(word);
+      flashMessage(`🗑 「${word}」 を以後の表示から除外しました`);
+    } catch (e) {
+      alert(`stopword 追加エラー: ${e.message}`);
+    }
+    return;
+  }
+}
+
+function hideWordsInDom(word) {
+  const lower = String(word || '').toLowerCase();
+  document.querySelectorAll('[data-word]').forEach((el) => {
+    if (String(el.dataset.word || '').toLowerCase() === lower) {
+      el.style.display = 'none';
+    }
+  });
+}
+
+function flashMessage(text) {
+  // 軽量な toast (既存 .share-toast 流用)
+  const div = document.createElement('div');
+  div.className = 'share-toast';
+  div.textContent = text;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 3500);
+}
+
+// イベント結線
+document.addEventListener('DOMContentLoaded', () => {
+  // 起動時に user stopwords をロード
+  loadUserStopwords();
+});
+
+document.getElementById('wordRingMenu')?.querySelectorAll('.word-ring-btn').forEach((btn) => {
+  btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const action = btn.dataset.action;
+    if (action) wordRingAction(action);
+  });
+});
+document.getElementById('wordRingClose')?.addEventListener('click', () => closeWordRingMenu());
+document.querySelector('#wordRingMenu .word-ring-backdrop')?.addEventListener('click', () => closeWordRingMenu());
+window.addEventListener('keydown', (ev) => {
+  const menu = document.getElementById('wordRingMenu');
+  if (menu && !menu.classList.contains('hidden') && ev.key === 'Escape') {
+    ev.preventDefault();
+    closeWordRingMenu();
+  }
+});
+
+// 起動時にも一度ロード (DOMContentLoaded を待たないコード経路用)
+loadUserStopwords();

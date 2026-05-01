@@ -3731,3 +3731,126 @@ dialog.meal-modal[open] {
   color: #2c3344;
   margin-top: 3px;
 }
+
+/* ── 単語リングメニュー (グラフ / ワードクラウドのクリックで開く) ─── */
+.word-ring {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+}
+.word-ring.hidden { display: none; }
+.word-ring-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+.word-ring-pop {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  margin-left: -110px;
+  margin-top: -110px;
+  /* JS で left/top を設定 (クリックされた単語の中心) */
+}
+.word-ring-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 14px;
+  font-weight: 600;
+  max-width: 160px;
+  text-align: center;
+}
+.word-ring-word {
+  word-break: break-all;
+  line-height: 1.2;
+}
+.word-ring-close {
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.word-ring-close:hover { color: var(--text); }
+
+.word-ring-btn {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-surface, #fff);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: transform 120ms;
+}
+.word-ring-btn:hover {
+  transform: scale(1.08);
+  z-index: 1;
+}
+.word-ring-btn span {
+  font-size: 10px;
+  font-weight: 500;
+}
+/* 上 (ディグる) / 左 (辞書登録) / 右 (削除) の 3 方向に配置 */
+.word-ring-btn-dig {
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, 0);
+  background: linear-gradient(135deg, #fff, #e6f0ff);
+  color: #2a6df4;
+}
+.word-ring-btn-dig:hover {
+  transform: translate(-50%, -4px) scale(1.08);
+}
+.word-ring-btn-dict {
+  left: 0;
+  top: 50%;
+  transform: translate(0, -50%);
+  background: linear-gradient(135deg, #fff, #fff3d6);
+  color: #8a6d00;
+}
+.word-ring-btn-dict:hover {
+  transform: translate(-4px, -50%) scale(1.08);
+}
+.word-ring-btn-del {
+  right: 0;
+  top: 50%;
+  transform: translate(0, -50%);
+  background: linear-gradient(135deg, #fff, #ffd6d6);
+  color: #b00;
+}
+.word-ring-btn-del:hover {
+  transform: translate(4px, -50%) scale(1.08);
+}
+
+@media (max-width: 480px) {
+  .word-ring-pop {
+    width: 180px;
+    height: 180px;
+    margin-left: -90px;
+    margin-top: -90px;
+  }
+  .word-ring-btn {
+    width: 56px;
+    height: 56px;
+  }
+}

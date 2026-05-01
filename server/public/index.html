@@ -513,6 +513,20 @@
         <div id="mealsList" class="meals-list"></div>
       </div>
 
+      <!-- 単語リングメニュー — グラフ / ワードクラウドの単語クリックで開く -->
+      <div id="wordRingMenu" class="word-ring hidden" role="menu" aria-label="単語アクション">
+        <div class="word-ring-backdrop"></div>
+        <div class="word-ring-pop">
+          <button class="word-ring-btn word-ring-btn-dig" data-action="dig" title="この単語でディグる">🔎<span>ディグる</span></button>
+          <button class="word-ring-btn word-ring-btn-dict" data-action="dict" title="辞書に登録">📖<span>辞書登録</span></button>
+          <button class="word-ring-btn word-ring-btn-del" data-action="delete" title="今後表示しない (stopword)">🗑<span>削除</span></button>
+          <div class="word-ring-center">
+            <span class="word-ring-word" id="wordRingWord"></span>
+            <button class="word-ring-close" id="wordRingClose" title="閉じる">×</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 食事登録ダイアログ — <dialog> でネイティブ popup として動作 -->
       <dialog id="mealModal" class="meal-modal" aria-labelledby="mealModalTitle">
         <div class="meal-modal-card">

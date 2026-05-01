@@ -1981,3 +1981,38 @@ export function listMealsForDate(db, dateStr) {
   `).all(dateStr);
 }
 
+// ─── user stopwords (ユーザカスタムの語彙除外) ─────────────────
+//
+// dig graph / wordcloud などで「もう出さなくていい」 単語を蓄積する。
+// 表示側 (app.js) で随時 filter するのと、 サーバ抽出側で除外するのと
+// 両方で参照する想定 (今は表示側 filter のみで運用)。
+
+export function ensureUserStopwordsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_stopwords (
+      word        TEXT PRIMARY KEY,
+      lower       TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_stopwords_lower ON user_stopwords(lower);
+  `);
+}
+
+export function listUserStopwords(db) {
+  return db.prepare(`SELECT word, lower, created_at FROM user_stopwords ORDER BY created_at DESC`).all();
+}
+
+export function addUserStopword(db, word) {
+  const w = String(word ?? '').trim();
+  if (!w) return false;
+  db.prepare(`INSERT OR IGNORE INTO user_stopwords (word, lower) VALUES (?, ?)`).run(w, w.toLowerCase());
+  return true;
+}
+
+export function removeUserStopword(db, word) {
+  const w = String(word ?? '').trim();
+  if (!w) return false;
+  const info = db.prepare(`DELETE FROM user_stopwords WHERE lower = ?`).run(w.toLowerCase());
+  return info.changes > 0;
+}
+

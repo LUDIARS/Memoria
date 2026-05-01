@@ -84,6 +84,9 @@ import { listPushSubscriptions, deletePushSubscription } from './db.js';
 import {
   insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
 } from './db.js';
+import {
+  ensureUserStopwordsTable, listUserStopwords, addUserStopword, removeUserStopword,
+} from './db.js';
 import { initWebPush, getVapidPublicKey, saveSubscription, sendPushToAll } from './push.js';
 import {
   extractPhotoMeta, resolveMealLocation, analyzeMealPhoto, estimateCaloriesFromName,
@@ -107,6 +110,7 @@ const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
 mkdirSync(HTML_DIR, { recursive: true });
 mkdirSync(MEAL_DIR, { recursive: true });
 const db = openDb(DB_PATH);
+ensureUserStopwordsTable(db);
 loadLlmConfigFromSettings(getAppSettings(db));
 initWebPush(DATA_DIR);
 const HEARTBEAT_FILE = join(DATA_DIR, 'heartbeat.json');
@@ -1503,6 +1507,23 @@ app.get('/api/dictionary/:id', (c) => {
   const e = getDictionaryEntry(db, id);
   if (!e) return c.json({ error: 'not found' }, 404);
   return c.json(e);
+});
+
+// ---- user stopwords (グラフ / ワードクラウド除外語) ----------------------
+app.get('/api/stopwords', (c) => {
+  return c.json({ items: listUserStopwords(db) });
+});
+app.post('/api/stopwords', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const word = (body?.word ?? '').toString().trim();
+  if (!word) return c.json({ error: 'word required' }, 400);
+  addUserStopword(db, word);
+  return c.json({ ok: true, word });
+});
+app.delete('/api/stopwords/:word', (c) => {
+  const word = decodeURIComponent(c.req.param('word'));
+  const removed = removeUserStopword(db, word);
+  return c.json({ ok: removed });
 });
 
 app.post('/api/dictionary', async (c) => {
