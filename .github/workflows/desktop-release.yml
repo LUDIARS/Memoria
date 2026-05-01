@@ -1,14 +1,14 @@
 name: Desktop Release
 
-# Builds the Tauri desktop app on each tagged release and publishes a zipped
-# installer per platform to the GitHub Release.
+# Builds the Electron desktop app on each tagged release and publishes a
+# zipped installer per platform to the GitHub Release.
 #
 # Trigger:
 #   - Push a tag matching v* (e.g. `git tag v0.1.0 && git push --tags`)
 #   - Or run "Run workflow" manually (workflow_dispatch) on any branch.
 #
 # Outputs (per platform, attached to the Release):
-#   Memoria-<version>-windows-x64.zip   # NSIS exe installer
+#   Memoria-<version>-windows-x64.zip   # NSIS installer
 #   Memoria-<version>-macos-arm64.zip   # dmg
 #   Memoria-<version>-linux-x64.zip     # AppImage + deb
 
@@ -34,16 +34,22 @@ jobs:
         include:
           - os: windows-latest
             label: windows-x64
-            bundle_glob: 'desktop/src-tauri/target/release/bundle/nsis/*-setup.exe'
-            extra_glob:  ''
+            bundle_target: win-x64
+            builder_flag: --win
+            installer_glob: 'desktop/dist/*Setup*.exe'
+            extra_glob:    ''
           - os: macos-14
             label: macos-arm64
-            bundle_glob: 'desktop/src-tauri/target/release/bundle/dmg/*.dmg'
-            extra_glob:  ''
+            bundle_target: darwin-arm64
+            builder_flag: --mac
+            installer_glob: 'desktop/dist/*.dmg'
+            extra_glob:    ''
           - os: ubuntu-latest
             label: linux-x64
-            bundle_glob: 'desktop/src-tauri/target/release/bundle/appimage/*.AppImage'
-            extra_glob:  'desktop/src-tauri/target/release/bundle/deb/*.deb'
+            bundle_target: linux-x64
+            builder_flag: --linux
+            installer_glob: 'desktop/dist/*.AppImage'
+            extra_glob:    'desktop/dist/*.deb'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -52,37 +58,35 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Linux build deps
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libgtk-3-dev \
-            patchelf
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Typecheck
+        working-directory: desktop
+        run: npm run typecheck
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: desktop/src-tauri -> target
+      - name: Compile TypeScript
+        working-directory: desktop
+        run: npm run build:ts
+
+      - name: Generate placeholder icons
+        working-directory: desktop
+        run: npx --no-install tsx scripts/generate-icons.ts
 
       - name: Bundle Memoria server + Node runtime
         working-directory: desktop
-        run: node scripts/bundle-server.mjs --node-version=22.11.0
+        run: npx --no-install tsx scripts/bundle-server.ts --node-version=22.11.0 --platform=${{ matrix.bundle_target }}
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0" --locked
-
-      - name: Build desktop app
+      - name: Build Electron installer
         working-directory: desktop
         env:
-          # Skip the beforeBuildCommand re-run; we just bundled.
-          TAURI_SKIP_DEVSERVER_CHECK: '1'
-        run: cargo tauri build
+          # electron-builder picks up GH_TOKEN to publish, but we attach
+          # artefacts ourselves via gh release upload — leave it unset so
+          # the build step doesn't try to publish twice. Disable the macOS
+          # codesign auto-discovery in unsigned CI builds.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx --no-install electron-builder ${{ matrix.builder_flag }} --publish=never
 
       - name: Resolve release tag
         id: tag
@@ -99,9 +103,8 @@ jobs:
         run: |
           set -e
           mkdir -p release-staging release-out
-          # Collect every match into release-staging/.
           shopt -s nullglob
-          for f in ${{ matrix.bundle_glob }} ${{ matrix.extra_glob }}; do
+          for f in ${{ matrix.installer_glob }} ${{ matrix.extra_glob }}; do
             cp "$f" release-staging/
           done
           ls -la release-staging
@@ -111,7 +114,6 @@ jobs:
           fi
           tag="${{ steps.tag.outputs.tag }}"
           zip_name="Memoria-${tag}-${{ matrix.label }}.zip"
-          # Zip from inside release-staging so the archive is flat.
           (cd release-staging && \
             if command -v 7z >/dev/null 2>&1; then \
               7z a -tzip "../release-out/${zip_name}" ./* >/dev/null; \
@@ -156,7 +158,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.tag.outputs.tag }}"
-          # workflow_dispatch needs the tag created before we can attach to it.
           if ! git rev-parse "$tag" >/dev/null 2>&1; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

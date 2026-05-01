@@ -1,0 +1,2 @@
+# Populated by `node scripts/bundle-server.mjs` at build time.
+# Empty in dev — main.cjs falls back to `../server` (the sibling repo dir).
