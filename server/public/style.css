@@ -3181,3 +3181,44 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
     font-size: 22px;
   }
 }
+
+/* ── Meals: additions (追加で食べた項目) ────────────────────── */
+.meal-additions {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.meal-addition {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.meal-addition-name {
+  flex: 1;
+}
+.meal-addition-cal {
+  color: #c25500;
+  font-weight: 500;
+}
+.meal-addition-time {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.meal-addition button {
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-surface, #fff);
+  cursor: pointer;
+}
+.meal-addition button:hover {
+  filter: brightness(0.96);
+}

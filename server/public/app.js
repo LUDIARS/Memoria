@@ -4967,8 +4967,11 @@ function renderMeals() {
   }
   list.innerHTML = mealsState.items.map((m) => {
     const desc = m.user_corrected_description || m.description || (m.ai_status === 'pending' ? '解析中…' : m.ai_status === 'error' ? '解析失敗' : '(未記入)');
-    const cal = m.user_corrected_calories ?? m.calories;
-    const calStr = (cal == null) ? '— kcal' : `${cal} kcal`;
+    const baseCal = m.user_corrected_calories ?? m.calories;
+    const additions = parseMealAdditions(m.additions_json);
+    const addCalSum = additions.reduce((s, a) => s + (typeof a.calories === 'number' ? a.calories : 0), 0);
+    const totalCal = (baseCal == null && additions.length === 0) ? null : (baseCal ?? 0) + addCalSum;
+    const calStr = totalCal == null ? '— kcal' : `${totalCal} kcal`;
     const eatenAt = formatLocalMealDateTime(m.eaten_at);
     const locStr = m.location_label || (m.lat != null && m.lon != null ? `${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}` : '場所不明');
     const aiBadge = m.ai_status === 'pending'
@@ -4976,6 +4979,23 @@ function renderMeals() {
       : m.ai_status === 'error'
       ? `<span class="meal-badge meal-badge-error" title="${escapeHtml(m.ai_error || '')}">解析失敗</span>`
       : '';
+    const additionsHtml = additions.length === 0 ? '' : `
+      <ul class="meal-additions">
+        ${additions.map((a, i) => {
+          const calLabel = typeof a.calories === 'number' ? `${a.calories} kcal` : '— kcal';
+          const timeLabel = a.added_at ? formatLocalMealDateTime(a.added_at) : '';
+          return `
+            <li class="meal-addition" data-meal-id="${m.id}" data-idx="${i}">
+              <span class="meal-addition-name">＋ ${escapeHtml(a.name)}</span>
+              <span class="meal-addition-cal">${escapeHtml(calLabel)}</span>
+              ${timeLabel ? `<span class="meal-addition-time">${escapeHtml(timeLabel)}</span>` : ''}
+              <button class="ghost meal-addition-edit" data-id="${m.id}" data-idx="${i}" title="編集">✏️</button>
+              <button class="ghost meal-addition-delete" data-id="${m.id}" data-idx="${i}" title="削除">×</button>
+            </li>
+          `;
+        }).join('')}
+      </ul>
+    `;
     return `
       <div class="meal-card" data-meal-id="${m.id}">
         <img class="meal-photo" src="/api/meals/${m.id}/photo" loading="lazy" alt="食事写真" />
@@ -4990,7 +5010,9 @@ function renderMeals() {
             <span class="meal-loc">${escapeHtml(locStr)}</span>
           </div>
           ${m.user_note ? `<div class="meal-note">📝 ${escapeHtml(m.user_note)}</div>` : ''}
+          ${additionsHtml}
           <div class="meal-actions">
+            <button class="ghost meal-add-btn" data-id="${m.id}">➕ 追加で食べた</button>
             <button class="ghost meal-edit-btn" data-id="${m.id}">✏️ 修正</button>
             <button class="ghost meal-reanalyze-btn" data-id="${m.id}">🔄 再解析</button>
             <button class="ghost meal-delete-btn" data-id="${m.id}">🗑️ 削除</button>
@@ -5014,6 +5036,25 @@ function renderMeals() {
   list.querySelectorAll('.meal-delete-btn').forEach((b) => {
     b.addEventListener('click', () => deleteMealRow(Number(b.dataset.id)));
   });
+  list.querySelectorAll('.meal-add-btn').forEach((b) => {
+    b.addEventListener('click', () => addMealAddition(Number(b.dataset.id)));
+  });
+  list.querySelectorAll('.meal-addition-edit').forEach((b) => {
+    b.addEventListener('click', () => editMealAddition(Number(b.dataset.id), Number(b.dataset.idx)));
+  });
+  list.querySelectorAll('.meal-addition-delete').forEach((b) => {
+    b.addEventListener('click', () => deleteMealAddition(Number(b.dataset.id), Number(b.dataset.idx)));
+  });
+}
+
+function parseMealAdditions(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
 
 function formatLocalMealDateTime(iso) {
@@ -5129,6 +5170,69 @@ function editMeal(id) {
   })
     .then(() => loadMeals())
     .catch((e) => alert(`修正エラー: ${e.message}`));
+}
+
+async function addMealAddition(mealId) {
+  const name = prompt('追加で食べたものは? (例: アイスクリーム)');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const calRaw = prompt('カロリー (kcal、 不明なら空欄)', '');
+  if (calRaw === null) return;
+  const body = { name: trimmed };
+  if (calRaw.trim() !== '') {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
+  }
+  try {
+    await api(`/api/meals/${mealId}/additions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`追加エラー: ${e.message}`);
+  }
+}
+
+async function editMealAddition(mealId, idx) {
+  const m = mealsState.items.find((x) => x.id === mealId);
+  if (!m) return;
+  const additions = parseMealAdditions(m.additions_json);
+  const cur = additions[idx];
+  if (!cur) return;
+  const name = prompt('項目名', cur.name || '');
+  if (name === null) return;
+  const calRaw = prompt('カロリー (kcal、 空欄でクリア)', cur.calories == null ? '' : String(cur.calories));
+  if (calRaw === null) return;
+  const body = {};
+  if (name.trim()) body.name = name.trim();
+  if (calRaw.trim() === '') body.calories = null;
+  else {
+    const n = Number(calRaw);
+    if (isFinite(n)) body.calories = n;
+  }
+  try {
+    await api(`/api/meals/${mealId}/additions/${idx}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await loadMeals();
+  } catch (e) {
+    alert(`編集エラー: ${e.message}`);
+  }
+}
+
+async function deleteMealAddition(mealId, idx) {
+  if (!confirm('この追加項目を削除しますか?')) return;
+  try {
+    await api(`/api/meals/${mealId}/additions/${idx}`, { method: 'DELETE' });
+    await loadMeals();
+  } catch (e) {
+    alert(`削除エラー: ${e.message}`);
+  }
 }
 
 // ── イベント結線 ─────────────────────────────────────────────

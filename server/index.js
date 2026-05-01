@@ -849,6 +849,103 @@ app.post('/api/meals/:id/reanalyze', (c) => {
   return c.json({ meal: getMeal(db, id), queued: true });
 });
 
+// ---- meals: 追加で食べた項目 (additions) ---------------------------------
+//
+// 既存 meal レコードに「あとから食べたもの」 を追記する。 data shape:
+//   meal.additions_json = JSON.stringify([
+//     { name: string, calories: number|null, added_at: ISO8601 }, ...
+//   ])
+//
+// カロリー総計は frontend 側で計算 (base + sum(additions))。
+
+const MEAL_ADDITION_NAME_MAX = 200;
+
+function parseAdditions(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+app.post('/api/meals/:id/additions', async (c) => {
+  const id = Number(c.req.param('id'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'json body required' }, 400);
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name) return c.json({ error: 'name (string) required' }, 400);
+  if (name.length > MEAL_ADDITION_NAME_MAX) {
+    return c.json({ error: `name too long (max ${MEAL_ADDITION_NAME_MAX})` }, 400);
+  }
+  let calories = null;
+  if (body.calories === null) {
+    calories = null;
+  } else if (typeof body.calories === 'number' && isFinite(body.calories)) {
+    calories = Math.round(body.calories);
+  } else if (typeof body.calories === 'string' && body.calories.trim() !== '') {
+    const n = Number(body.calories);
+    if (isFinite(n)) calories = Math.round(n);
+  }
+  const addedAt = (typeof body.added_at === 'string' && body.added_at.trim())
+    ? (() => { const d = new Date(body.added_at); return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString(); })()
+    : new Date().toISOString();
+
+  const additions = parseAdditions(meal.additions_json);
+  additions.push({ name, calories, added_at: addedAt });
+  updateMeal(db, id, { additions_json: JSON.stringify(additions) });
+  return c.json({ meal: getMeal(db, id) });
+});
+
+app.patch('/api/meals/:id/additions/:idx', async (c) => {
+  const id = Number(c.req.param('id'));
+  const idx = Number(c.req.param('idx'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  const additions = parseAdditions(meal.additions_json);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= additions.length) {
+    return c.json({ error: 'index out of range' }, 400);
+  }
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'json body required' }, 400);
+  const cur = additions[idx];
+  if (typeof body.name === 'string') {
+    const nm = body.name.trim();
+    if (nm) cur.name = nm.slice(0, MEAL_ADDITION_NAME_MAX);
+  }
+  if (body.calories === null) {
+    cur.calories = null;
+  } else if (typeof body.calories === 'number' && isFinite(body.calories)) {
+    cur.calories = Math.round(body.calories);
+  } else if (typeof body.calories === 'string' && body.calories.trim() !== '') {
+    const n = Number(body.calories);
+    if (isFinite(n)) cur.calories = Math.round(n);
+  }
+  if (typeof body.added_at === 'string' && body.added_at.trim()) {
+    const d = new Date(body.added_at);
+    if (!isNaN(d.getTime())) cur.added_at = d.toISOString();
+  }
+  updateMeal(db, id, { additions_json: JSON.stringify(additions) });
+  return c.json({ meal: getMeal(db, id) });
+});
+
+app.delete('/api/meals/:id/additions/:idx', (c) => {
+  const id = Number(c.req.param('id'));
+  const idx = Number(c.req.param('idx'));
+  const meal = getMeal(db, id);
+  if (!meal) return c.json({ error: 'not found' }, 404);
+  const additions = parseAdditions(meal.additions_json);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= additions.length) {
+    return c.json({ error: 'index out of range' }, 400);
+  }
+  additions.splice(idx, 1);
+  updateMeal(db, id, { additions_json: additions.length > 0 ? JSON.stringify(additions) : null });
+  return c.json({ meal: getMeal(db, id) });
+});
+
 // 起動時に pending 食事があれば解析を再投入 (前回終了時の中断分)
 for (const m of listPendingMeals(db, { limit: 50 })) {
   enqueueMealVision(m.id);

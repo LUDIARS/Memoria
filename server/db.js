@@ -262,12 +262,19 @@ export function openDb(dbPath) {
       user_note                   TEXT,
       user_corrected_description  TEXT,
       user_corrected_calories     INTEGER,
+      additions_json              TEXT,
       created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_meals_eaten_at ON meals(eaten_at DESC);
     CREATE INDEX IF NOT EXISTS idx_meals_ai_status ON meals(ai_status);
   `);
+
+  // Forward-compat: 既存 DB に additions_json 列が無ければ ALTER で追加
+  const mealsCols = db.prepare(`PRAGMA table_info(meals)`).all().map(c => c.name);
+  if (mealsCols.length > 0 && !mealsCols.includes('additions_json')) {
+    db.exec(`ALTER TABLE meals ADD COLUMN additions_json TEXT`);
+  }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
   const wcCols = db.prepare(`PRAGMA table_info(word_clouds)`).all().map(c => c.name);
