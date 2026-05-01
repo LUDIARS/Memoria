@@ -46,7 +46,7 @@ import {
   listDictionaryEntries, getDictionaryEntry, findDictionaryEntryByTerm,
   insertDictionaryEntry, updateDictionaryEntry, deleteDictionaryEntry,
   addDictionaryLink, removeDictionaryLink,
-  insertVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
+  insertVisitEvent, insertExternalVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
   deleteDiary, getDiarySettings, setDiarySettings,
   getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
   getDomainCatalog, listDomainCatalog, listDomainCatalogWithCounts, getDomainCatalogMap,
@@ -2308,6 +2308,44 @@ app.post('/api/visits/bookmark', async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body || !Array.isArray(body.urls)) return c.json({ error: 'urls[] required' }, 400);
   return c.json({ results: await bulkSaveUrls(body.urls) });
+});
+
+/**
+ * 外部 (Legatus DNS / SNI tap) からの domain visit batch 取り込み。
+ *
+ * - 受信: Legatus が dnsmasq query log を tail → Tailscale で device tag → 5 秒
+ *   dedupe + 30 秒 flush で集約した {events[], flushed_at} 形式
+ * - 永続化: visit_events に device_label / device_os / source 付きで insert
+ * - 副作用: domain_catalog にヒットがあれば既存 maybeQueueDomain で description
+ *   を背景生成 (URL 単位の page_metadata は走らせない、 domain 集計のみ)
+ *
+ * 個人 PC ローカル前提なので 認証ヘッダは v0.1 では要求しない (Memoria の
+ * 既存 API と同方針)。 v0.2 で PeerAdapter / Cernere 経由化する。
+ */
+app.post('/api/visits/external', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const events = Array.isArray(body?.events) ? body.events : null;
+  if (!events) return c.json({ error: 'events[] required' }, 400);
+
+  let inserted = 0;
+  let skipped = 0;
+  for (const ev of events) {
+    const domain = typeof ev?.domain === 'string' ? ev.domain.toLowerCase() : '';
+    const source = ev?.source === 'sni' ? 'sni' : 'dns';
+    if (!domain || !/^[a-z0-9.-]+$/.test(domain)) { skipped++; continue; }
+    insertExternalVisitEvent(db, {
+      domain,
+      visitedAt: typeof ev.ts === 'string' ? ev.ts : null,
+      source,
+      deviceLabel: typeof ev.device_label === 'string' ? ev.device_label.slice(0, 200) : null,
+      deviceOs: typeof ev.device_os === 'string' ? ev.device_os.slice(0, 50) : null,
+    });
+    // 既知の domain_catalog があれば description を埋める。 maybeQueueDomain
+    // は内部で skipDomain (localhost / 内部 IP) を弾いてくれる。
+    maybeQueueDomain(`https://${domain}/`);
+    inserted++;
+  }
+  return c.json({ ok: true, inserted, skipped });
 });
 
 async function fetchPageHtml(url, timeoutMs = 30_000) {

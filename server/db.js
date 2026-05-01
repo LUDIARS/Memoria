@@ -328,6 +328,16 @@ export function openDb(dbPath) {
     }
   }
 
+  // visit_events: external タップ (Legatus DNS / SNI) 対応カラム
+  // device_label = Tailscale でタグ付けされた発信元 (例: "iphone-of-foo")
+  // device_os    = "iOS" / "Android" / "macOS" / "Windows" / "Linux" / null
+  // source       = "browser" (拡張機能からの POST), "dns" (Legatus dnstap),
+  //                "sni" (Legatus SNI tap, 将来拡張)
+  const veCols = db.prepare(`PRAGMA table_info(visit_events)`).all().map(c => c.name);
+  if (!veCols.includes('device_label')) db.exec(`ALTER TABLE visit_events ADD COLUMN device_label TEXT`);
+  if (!veCols.includes('device_os'))    db.exec(`ALTER TABLE visit_events ADD COLUMN device_os TEXT`);
+  if (!veCols.includes('source'))       db.exec(`ALTER TABLE visit_events ADD COLUMN source TEXT`);
+
   // Forward-compat: ensure newer columns exist on older DBs.
   const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
   if (!cols.includes('last_accessed_at')) {
@@ -1200,8 +1210,28 @@ export function listServerEventsForDate(db, dateStr) {
 export function insertVisitEvent(db, { url, title }) {
   const domain = extractDomain(url);
   db.prepare(`
-    INSERT INTO visit_events (url, domain, title) VALUES (?, ?, ?)
+    INSERT INTO visit_events (url, domain, title, source) VALUES (?, ?, ?, 'browser')
   `).run(url, domain, title ?? null);
+}
+
+/**
+ * Insert a visit event sourced from outside the browser (e.g. Legatus DNS
+ * tap on the user's home PC). `domain` は LFQDN (already lower-cased) を
+ * 受ける前提。 url は擬似形式 (`dns://<domain>` or `sni://<domain>`) で
+ * 保存し、 既存の page_visits / bookmark テーブルとは衝突させない。
+ */
+export function insertExternalVisitEvent(db, {
+  domain,
+  visitedAt,
+  source,
+  deviceLabel,
+  deviceOs,
+}) {
+  const url = `${source}://${domain}`;
+  db.prepare(`
+    INSERT INTO visit_events (url, domain, title, visited_at, device_label, device_os, source)
+    VALUES (?, ?, NULL, COALESCE(?, datetime('now')), ?, ?, ?)
+  `).run(url, domain, visitedAt ?? null, deviceLabel ?? null, deviceOs ?? null, source);
 }
 
 /** Visit events for a single local date (YYYY-MM-DD). */
