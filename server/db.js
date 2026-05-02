@@ -132,6 +132,32 @@ export function openDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_visit_events_domain
       ON visit_events(domain);
 
+    -- 開発系の活動イベント (git commit / Claude Code prompt 等) を時系列で保存。
+    -- ブラウザ閲覧 (visit_events) では拾えない作業 (スマホ開発、 ターミナル作業
+    -- 中心の日) を可視化し、 仕事時間推定の根拠にする。
+    -- kind: 'git_commit' | 'claude_code_prompt' (将来追加可能)
+    -- source: kind 別の文脈 (リポ名 / セッション ID 等)
+    -- ref_id: 一意性のあるキー (commit sha / prompt UUID) — 重複登録防止
+    -- content: 短い本文 (commit message 1 行目 / プロンプト先頭〜200 文字)
+    -- metadata_json: JSON で kind 別の追加情報 (branch, author, model, cwd 等)
+    CREATE TABLE IF NOT EXISTS activity_events (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind          TEXT NOT NULL,
+      occurred_at   TEXT NOT NULL,
+      source        TEXT,
+      ref_id        TEXT,
+      content       TEXT,
+      metadata_json TEXT,
+      ingested_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_events_at
+      ON activity_events(occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_activity_events_kind_at
+      ON activity_events(kind, occurred_at DESC);
+    -- 同一 ref_id (sha 等) の重複登録を防ぐ — kind+ref_id の組で一意。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_events_ref
+      ON activity_events(kind, ref_id) WHERE ref_id IS NOT NULL;
+
     CREATE TABLE IF NOT EXISTS diary_entries (
       date                  TEXT PRIMARY KEY,
       summary               TEXT,
@@ -1202,6 +1228,69 @@ export function listServerEventsForDate(db, dateStr) {
     ORDER BY occurred_at ASC
   `).all(dateStr, dateStr).map(r => ({
     ...r, details: r.details_json ? safeParse(r.details_json) : null,
+  }));
+}
+
+// ── activity events (git commit / claude code prompt 等) ─────────────────
+
+const ACTIVITY_KINDS = new Set(['git_commit', 'claude_code_prompt']);
+
+/**
+ * 活動イベントを 1 件記録する。
+ * kind+ref_id の重複は INSERT OR IGNORE で吸収 (同じ commit sha / prompt id が
+ * 二度送られても重複しない)。 戻り値は inserted=true|false + id。
+ */
+export function recordActivityEvent(db, { kind, occurred_at, source, ref_id, content, metadata }) {
+  if (!ACTIVITY_KINDS.has(kind)) {
+    throw new Error(`unknown activity kind: ${kind}`);
+  }
+  const ts = occurred_at || new Date().toISOString();
+  const info = db.prepare(`
+    INSERT OR IGNORE INTO activity_events
+      (kind, occurred_at, source, ref_id, content, metadata_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    kind,
+    ts,
+    source ?? null,
+    ref_id ?? null,
+    content ?? null,
+    metadata ? JSON.stringify(metadata) : null,
+  );
+  return { inserted: info.changes > 0, id: info.lastInsertRowid };
+}
+
+/** 当日 (local) の活動イベントを時刻昇順で返す。 */
+export function activityEventsForDate(db, dateStr) {
+  return db.prepare(`
+    SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
+    FROM activity_events
+    WHERE date(occurred_at, 'localtime') = ?
+    ORDER BY occurred_at ASC
+  `).all(dateStr).map((r) => ({
+    ...r,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
+  }));
+}
+
+/** 直近 limit 件 (新しい順)。 全期間 / 任意 kind フィルタつき。 */
+export function listActivityEvents(db, { limit = 200, kind = null } = {}) {
+  const args = [];
+  let where = '';
+  if (kind && ACTIVITY_KINDS.has(kind)) {
+    where = 'WHERE kind = ?';
+    args.push(kind);
+  }
+  args.push(Number(limit) || 200);
+  return db.prepare(`
+    SELECT id, kind, occurred_at, source, ref_id, content, metadata_json, ingested_at
+    FROM activity_events
+    ${where}
+    ORDER BY occurred_at DESC
+    LIMIT ?
+  `).all(...args).map((r) => ({
+    ...r,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
 }
 

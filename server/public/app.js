@@ -2646,7 +2646,10 @@ function renderDiaryDetail() {
   // page_visits as a fallback for events captured before visit_events existed,
   // so it's preferred over the snapshot stored at generation time.
   const metrics = d.live_metrics || d.metrics || { hourly_visits: new Array(24).fill(0), top_domains: [] };
-  $('diaryHourly').innerHTML = renderHourlyChart(metrics.hourly_visits || []);
+  // 開発活動 (git commit + Claude Code prompt) を時間帯バーに重ねる。
+  // kind 別を合算して 1 系列にして表示 (kind 別内訳はリスト側で見せる)。
+  const activityHourlyTotal = sumActivityHourly(metrics.activity);
+  $('diaryHourly').innerHTML = renderHourlyChart(metrics.hourly_visits || [], activityHourlyTotal);
   const domains = metrics.top_domains || [];
   $('diaryPie').innerHTML = renderDomainPie(domains);
   $('diaryDomains').innerHTML = domains.length === 0
@@ -2688,6 +2691,8 @@ function renderDiaryDetail() {
   renderDiaryMeals(metrics.meals || [], metrics.meals_total_calories, metrics.meals_nutrients, metrics.meals_pfc_label);
   // カロリーバランス
   renderDiaryCaloricBalance(metrics.caloric_balance);
+  // 開発活動 (git commit + Claude Code prompt) のログ — 10 件以上なら collapse。
+  renderDiaryActivity(metrics.activity, d.date);
 
   const commits = d.github_commits?.commits || [];
   if (commits.length === 0) {
@@ -2979,23 +2984,150 @@ function appendDiaryMoreButton(ul, currentLen, total, fetchPage) {
   ul.appendChild(li);
 }
 
-function renderHourlyChart(hours) {
-  const max = Math.max(1, ...hours);
+/** activity.hourly = { git_commit: [24], claude_code_prompt: [24], ... } を 1 系列に合算する。 */
+function sumActivityHourly(activity) {
+  const out = new Array(24).fill(0);
+  if (!activity || !activity.hourly) return out;
+  for (const arr of Object.values(activity.hourly)) {
+    if (!Array.isArray(arr)) continue;
+    for (let i = 0; i < 24 && i < arr.length; i++) {
+      out[i] += Number(arr[i]) || 0;
+    }
+  }
+  return out;
+}
+
+function renderHourlyChart(hours, activityHours) {
+  // visits = ブラウザ閲覧の時間帯バー (青系 .diary-bar)
+  // activityHours = git commit + Claude Code prompt 等の活動バー (橙 .diary-bar-activity)
+  // 件数オーダーが大きく異なる (visits: 100-500/h, activity: 1-20/h) ため
+  // それぞれ自分の max でスケールする — 視覚的に比較可能にしつつ両者ゼロでない時間帯を見える化。
+  const visits = hours || new Array(24).fill(0);
+  const activity = activityHours || new Array(24).fill(0);
+  const visitMax = Math.max(1, ...visits);
+  const activityMax = Math.max(1, ...activity);
   const w = 720, h = 140, padL = 30, padR = 12, padT = 12, padB = 24;
   const cw = (w - padL - padR) / 24;
+  // 1 セル幅を 2 等分して左 = visits, 右 = activity に。
+  const halfW = (cw - 4) / 2; // 4px の安全マージン
   let bars = '';
   for (let i = 0; i < 24; i++) {
-    const v = hours[i] || 0;
-    const bh = Math.round((v / max) * (h - padT - padB));
-    const x = padL + i * cw;
-    const y = h - padB - bh;
+    const v = visits[i] || 0;
+    const a = activity[i] || 0;
+    const vh = Math.round((v / visitMax) * (h - padT - padB));
+    const ah = Math.round((a / activityMax) * (h - padT - padB));
+    const xCell = padL + i * cw;
+    const xV = xCell + 1;
+    const xA = xCell + 1 + halfW + 1;
+    const yV = h - padB - vh;
+    const yA = h - padB - ah;
     bars += `
-      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(cw - 2).toFixed(1)}" height="${bh}" class="diary-bar" />
-      <text x="${(x + cw / 2).toFixed(1)}" y="${(h - padB + 12).toFixed(1)}" class="diary-bar-label">${i}</text>
-      ${v > 0 ? `<text x="${(x + cw / 2).toFixed(1)}" y="${(y - 2).toFixed(1)}" class="diary-bar-value">${v}</text>` : ''}
+      <rect x="${xV.toFixed(1)}" y="${yV.toFixed(1)}" width="${halfW.toFixed(1)}" height="${vh}" class="diary-bar" />
+      ${a > 0 ? `<rect x="${xA.toFixed(1)}" y="${yA.toFixed(1)}" width="${halfW.toFixed(1)}" height="${ah}" class="diary-bar-activity" />` : ''}
+      <text x="${(xCell + cw / 2).toFixed(1)}" y="${(h - padB + 12).toFixed(1)}" class="diary-bar-label">${i}</text>
+      ${v > 0 ? `<text x="${(xV + halfW / 2).toFixed(1)}" y="${(yV - 2).toFixed(1)}" class="diary-bar-value">${v}</text>` : ''}
+      ${a > 0 ? `<text x="${(xA + halfW / 2).toFixed(1)}" y="${(yA - 2).toFixed(1)}" class="diary-bar-value diary-bar-value-activity">${a}</text>` : ''}
     `;
   }
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${bars}</svg>`;
+  // 凡例 — 右上に小さく
+  const legend = `
+    <g class="diary-bar-legend" transform="translate(${(w - padR - 200).toFixed(1)}, 2)">
+      <rect width="10" height="10" y="2" class="diary-bar" />
+      <text x="14" y="11" class="diary-bar-legend-text">閲覧</text>
+      <rect x="60" width="10" height="10" y="2" class="diary-bar-activity" />
+      <text x="74" y="11" class="diary-bar-legend-text">開発活動 (commit/CC)</text>
+    </g>
+  `;
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${legend}${bars}</svg>`;
+}
+
+/**
+ * Activity log: render up to first 10 items, append "more ▽" button if more.
+ * Click loads the rest from /api/activity/events?date=YYYY-MM-DD and replaces the list.
+ */
+function renderDiaryActivity(activity, dateStr) {
+  const ul = $('diaryActivityList');
+  const help = $('diaryActivitySummary');
+  if (!ul) return;
+  const items = activity?.items || [];
+  const total = activity?.total || items.length || 0;
+  if (total === 0) {
+    if (help) help.textContent = 'この日の活動 (git commit / Claude Code 指示) は記録されていません。';
+    ul.innerHTML = '';
+    return;
+  }
+  if (help) {
+    const parts = [];
+    const k = activity.kinds || {};
+    if (k.git_commit) parts.push(`git commit ${k.git_commit} 件`);
+    if (k.claude_code_prompt) parts.push(`Claude Code 指示 ${k.claude_code_prompt} 件`);
+    help.textContent = parts.length ? `合計 ${total} 件 (${parts.join(' / ')})` : `合計 ${total} 件`;
+  }
+  const sorted = [...items].sort((a, b) => String(a.occurred_at).localeCompare(String(b.occurred_at)));
+  const initial = sorted.slice(0, 10);
+  ul.innerHTML = initial.map(activityLi).join('');
+  if (total > initial.length) {
+    appendActivityMoreButton(ul, initial.length, total, dateStr);
+  }
+}
+
+function activityLi(it) {
+  const d = it.occurred_at ? new Date(it.occurred_at.replace(' ', 'T') + (it.occurred_at.endsWith('Z') ? '' : 'Z')) : null;
+  const t = d && !isNaN(d.getTime())
+    ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    : '??:??';
+  const kindLabel = it.kind === 'git_commit' ? 'git'
+    : it.kind === 'claude_code_prompt' ? 'CC'
+    : it.kind;
+  const klass = it.kind === 'git_commit' ? 'kind-git' : it.kind === 'claude_code_prompt' ? 'kind-cc' : 'kind-other';
+  const src = it.source ? `<span class="activity-src">${escapeHtml(it.source)}</span>` : '';
+  const content = it.content
+    ? `<div class="activity-content">${escapeHtml(String(it.content).slice(0, 240))}</div>`
+    : '';
+  const ref = it.ref_id
+    ? `<span class="activity-ref">${escapeHtml(String(it.ref_id).slice(0, 12))}</span>`
+    : '';
+  return `<li class="diary-activity-item ${klass}">
+    <div class="activity-head">
+      <span class="activity-time">${t}</span>
+      <span class="activity-kind">${kindLabel}</span>
+      ${src}
+      ${ref}
+    </div>
+    ${content}
+  </li>`;
+}
+
+function appendActivityMoreButton(ul, currentLen, total, dateStr) {
+  const li = document.createElement('li');
+  li.className = 'diary-more';
+  const remaining = () => Math.max(0, total - currentLen);
+  function syncLabel(loading) {
+    li.innerHTML = loading
+      ? '読込中…'
+      : `more ▽ <span class="diary-more-count">残り ${remaining()} 件</span>`;
+  }
+  syncLabel(false);
+  li.addEventListener('click', async () => {
+    if (li.dataset.busy === '1') return;
+    li.dataset.busy = '1';
+    syncLabel(true);
+    try {
+      const r = await api(`/api/activity/events?date=${encodeURIComponent(dateStr)}`);
+      const items = (r.items || []).sort((a, b) =>
+        String(a.occurred_at).localeCompare(String(b.occurred_at)));
+      // ul の先頭 currentLen 件はそのまま、 li (more ボタン) を撤去して残りを差し込む。
+      const rest = items.slice(currentLen);
+      const frag = document.createElement('div');
+      frag.innerHTML = rest.map(activityLi).join('');
+      while (frag.firstChild) ul.insertBefore(frag.firstChild, li);
+      li.remove();
+    } catch (e) {
+      li.innerHTML = `<span class="error">取得失敗: ${escapeHtml(e.message)}</span>`;
+      li.dataset.busy = '';
+    }
+  });
+  ul.appendChild(li);
 }
 
 async function generateDiary({ improve = '' } = {}) {

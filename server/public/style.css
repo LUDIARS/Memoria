@@ -1745,8 +1745,75 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .diary-hourly svg { width: 100%; height: 140px; display: block; }
 .diary-hourly .diary-bar { fill: var(--accent); }
+.diary-hourly .diary-bar-activity { fill: #e07b00; }
 .diary-hourly .diary-bar-label { fill: var(--muted); font-size: 10px; }
 .diary-hourly .diary-bar-value { fill: #1f56c0; font-size: 9px; }
+.diary-hourly .diary-bar-value-activity { fill: #c66800; font-size: 9px; }
+.diary-hourly .diary-bar-legend-text { fill: var(--muted); font-size: 9px; }
+
+/* 開発活動 (git commit / Claude Code prompt) のログ */
+.diary-activity-help {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 8px 0;
+}
+.diary-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.diary-activity-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.diary-activity-item.kind-git { border-left-color: #388e3c; }
+.diary-activity-item.kind-cc  { border-left-color: #e07b00; }
+.diary-activity-item.kind-other { border-left-color: var(--muted); }
+.diary-activity-item .activity-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.diary-activity-item .activity-time {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  color: var(--muted);
+  font-size: 11px;
+}
+.diary-activity-item .activity-kind {
+  font-weight: 600;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.diary-activity-item.kind-git .activity-kind { background: #e8f5e9; color: #2e7d32; }
+.diary-activity-item.kind-cc  .activity-kind { background: #fff3e0; color: #c66800; }
+.diary-activity-item .activity-src {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.diary-activity-item .activity-ref {
+  color: var(--muted);
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  margin-left: auto;
+}
+.diary-activity-item .activity-content {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
 .diary-domains, .diary-github {
   list-style: none;
   margin: 0;
