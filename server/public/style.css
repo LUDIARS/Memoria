@@ -3954,3 +3954,134 @@ dialog.meal-modal[open] {
 .cb-diff.under .cb-value { color: #1455a8; }
 .cb-diff.ok { background: #e6f7e6; border-color: #95cf95; }
 .cb-diff.ok .cb-value { color: #2a8b2a; }
+
+/* ── 外部情報設定タブ (Legatus / dnstap セットアップ) ────────── */
+.ext-cfg {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.ext-cfg-head h2 { margin: 0 0 8px; font-size: 20px; }
+.ext-cfg-intro { color: var(--text-muted); font-size: 13px; line-height: 1.6; margin: 0; }
+.ext-cfg-status,
+.ext-cfg-step {
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.ext-cfg-status h3,
+.ext-cfg-step h3 { margin: 0 0 10px; font-size: 16px; }
+.ext-cfg-step h4 { margin: 8px 0 4px; font-size: 13px; color: var(--text-muted); }
+.ext-cfg-help { color: var(--text-muted); font-size: 12px; margin: 4px 0 8px; line-height: 1.5; }
+
+.ext-cfg-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ext-cfg-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+.ext-cfg-stat-label { font-size: 11px; color: var(--text-muted); }
+.ext-cfg-stat-val { font-size: 18px; font-weight: 600; }
+
+.ext-cfg-recent { margin-top: 6px; }
+.ext-cfg-recent h4 { margin: 6px 0; font-size: 12px; }
+.ext-cfg-recent-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ext-cfg-recent-tbl th,
+.ext-cfg-recent-tbl td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.ext-cfg-recent-tbl th { color: var(--text-muted); font-weight: 500; }
+.ext-cfg-src {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  border: 1px solid var(--border);
+}
+.ext-cfg-src-dns { background: #e6f0ff; color: #1455a8; border-color: #97b8d4; }
+.ext-cfg-src-sni { background: #f0e6ff; color: #5b1ca8; border-color: #b497d4; }
+
+.ext-cfg-env {
+  position: relative;
+  margin: 6px 0;
+}
+.ext-cfg-env pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin: 0;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ext-cfg-env button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.ext-cfg-detail summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.ext-cfg-detail ul { margin: 6px 0 0 18px; font-size: 12px; line-height: 1.7; }
+.ext-cfg-detail code { background: var(--bg); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+
+.ext-cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.ext-cfg-grid ul { margin: 4px 0 0 18px; font-size: 12px; line-height: 1.7; }
+.ext-cfg-grid code { background: var(--bg); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+
+.ext-cfg-warning {
+  background: #fff7d6;
+  border: 1px solid #e6c97a;
+  color: #6a4a00;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.ext-cfg-ios-list,
+.ext-cfg-optout {
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 4px 0 0 18px;
+}
+.ext-cfg-links { font-size: 13px; margin: 0 0 0 18px; }
+.ext-cfg-links a { color: var(--accent, #2a6df4); text-decoration: none; }
+.ext-cfg-links a:hover { text-decoration: underline; }
+
+@media (max-width: 600px) {
+  .ext-cfg { padding: 8px; gap: 12px; }
+  .ext-cfg-status,
+  .ext-cfg-step { padding: 10px 12px; }
+  .ext-cfg-status-grid { grid-template-columns: 1fr 1fr; }
+}

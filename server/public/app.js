@@ -616,6 +616,7 @@ function switchTab(tab) {
   $('eventsView').classList.toggle('hidden', tab !== 'events');
   $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
+  $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
   if (tab === 'visits') loadVisits();
@@ -628,6 +629,7 @@ function switchTab(tab) {
   if (tab === 'events') loadEvents();
   if (tab === 'tracks') loadTracks();
   if (tab === 'meals') loadMeals();
+  if (tab === 'external') loadExternalConfig();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   closeTabMoreMenu();
@@ -5081,6 +5083,59 @@ const mealsState = {
   items: [],
   pollTimer: null,
 };
+
+// ── 外部情報設定 (Legatus DNS/SNI tap) ────────────────────────────
+async function loadExternalConfig() {
+  try {
+    const r = await api('/api/visits/external/stats');
+    const $set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    $set('extCfgCount24h', String(r.count_24h ?? 0));
+    $set('extCfgCount7d', String(r.count_7d ?? 0));
+    $set('extCfgDeviceCount', String(r.device_count ?? 0));
+    $set('extCfgLatest', r.latest ? new Date(r.latest.replace(' ', 'T') + 'Z').toLocaleString() : '—');
+
+    const recent = document.getElementById('extCfgRecent');
+    if (recent) {
+      const items = Array.isArray(r.recent) ? r.recent : [];
+      if (items.length === 0) {
+        recent.innerHTML = '<div class="hint">まだ取り込みがありません。 下のセットアップ手順を実施してください。</div>';
+      } else {
+        recent.innerHTML = `
+          <h4>直近 20 件</h4>
+          <table class="ext-cfg-recent-tbl">
+            <thead><tr><th>時刻</th><th>device</th><th>OS</th><th>source</th><th>domain</th></tr></thead>
+            <tbody>
+              ${items.map((e) => `
+                <tr>
+                  <td>${escapeHtml(new Date((e.visited_at || '').replace(' ', 'T') + 'Z').toLocaleString())}</td>
+                  <td>${escapeHtml(e.device_label || '—')}</td>
+                  <td>${escapeHtml(e.device_os || '—')}</td>
+                  <td><span class="ext-cfg-src ext-cfg-src-${escapeHtml(e.source || 'unknown')}">${escapeHtml(e.source || '—')}</span></td>
+                  <td>${escapeHtml(e.domain || '—')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+    }
+  } catch (e) {
+    const recent = document.getElementById('extCfgRecent');
+    if (recent) recent.innerHTML = `<div class="hint">取得エラー: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// コピーボタン (data-copy-env="legatus" / "dnsmasq")
+document.addEventListener('click', (ev) => {
+  const btn = ev.target?.closest?.('[data-copy-env]');
+  if (!btn) return;
+  const block = btn.previousElementSibling?.querySelector('code');
+  if (!block) return;
+  navigator.clipboard?.writeText(block.textContent || '').then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ コピー済';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  }).catch(() => {});
+});
 
 async function loadMeals() {
   const list = document.getElementById('mealsList');

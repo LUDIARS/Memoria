@@ -2322,6 +2322,38 @@ app.post('/api/visits/bookmark', async (c) => {
  * 個人 PC ローカル前提なので 認証ヘッダは v0.1 では要求しない (Memoria の
  * 既存 API と同方針)。 v0.2 で PeerAdapter / Cernere 経由化する。
  */
+/**
+ * 外部 visit の取り込み状況サマリ。 「外部情報設定」 タブの status セクション用。
+ * source IN ('dns', 'sni') を対象に件数 / device 数 / 最新時刻 / 直近 N 件を返す。
+ */
+app.get('/api/visits/external/stats', (c) => {
+  const c24 = db.prepare(`
+    SELECT COUNT(*) AS n FROM visit_events
+    WHERE source IN ('dns','sni') AND visited_at >= datetime('now','-1 day')
+  `).get()?.n ?? 0;
+  const c7 = db.prepare(`
+    SELECT COUNT(*) AS n FROM visit_events
+    WHERE source IN ('dns','sni') AND visited_at >= datetime('now','-7 days')
+  `).get()?.n ?? 0;
+  const dev = db.prepare(`
+    SELECT COUNT(DISTINCT device_label) AS n FROM visit_events
+    WHERE source IN ('dns','sni') AND device_label IS NOT NULL
+      AND visited_at >= datetime('now','-7 days')
+  `).get()?.n ?? 0;
+  const latest = db.prepare(`
+    SELECT visited_at FROM visit_events
+    WHERE source IN ('dns','sni')
+    ORDER BY visited_at DESC LIMIT 1
+  `).get()?.visited_at ?? null;
+  const recent = db.prepare(`
+    SELECT visited_at, domain, device_label, device_os, source
+    FROM visit_events
+    WHERE source IN ('dns','sni')
+    ORDER BY visited_at DESC LIMIT 20
+  `).all();
+  return c.json({ count_24h: c24, count_7d: c7, device_count: dev, latest, recent });
+});
+
 app.post('/api/visits/external', async (c) => {
   const body = await c.req.json().catch(() => null);
   const events = Array.isArray(body?.events) ? body.events : null;

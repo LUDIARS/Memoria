@@ -110,6 +110,9 @@
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
           </button>
+          <button class="tab" data-tab="external">
+            <span class="tab-label" data-full="🔌 外部情報設定" data-short="🔌 設定">🔌 外部情報設定</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -513,6 +516,136 @@
           (デフォルトは Claude CLI sonnet)。
         </div>
         <div id="mealsList" class="meals-list"></div>
+      </div>
+
+      <!-- 🔌 外部情報設定 — Legatus / dnsmasq / Tailscale / iPhone のセットアップ手順 -->
+      <div id="externalView" class="hidden">
+        <div class="ext-cfg">
+          <header class="ext-cfg-head">
+            <h2>🔌 外部情報設定</h2>
+            <p class="ext-cfg-intro">
+              iPhone (Tailscale 経由) のドメインアクセスをライフログに取り込む設定。
+              <strong>Legatus</strong> + <strong>dnsmasq</strong> + <strong>Tailscale</strong> の連携で
+              「いつ・どのデバイスが・どのドメイン」を捕捉します。
+              ページ本文 / アプリ内イベントは取得しません (HTTPS のため不可)。
+            </p>
+          </header>
+
+          <section class="ext-cfg-status">
+            <h3>📊 取り込み状況</h3>
+            <div id="extCfgStatus" class="ext-cfg-status-grid">
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 24 時間</span><span id="extCfgCount24h" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 7 日</span><span id="extCfgCount7d" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">識別デバイス数</span><span id="extCfgDeviceCount" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最新イベント</span><span id="extCfgLatest" class="ext-cfg-stat-val">—</span></div>
+            </div>
+            <div id="extCfgRecent" class="ext-cfg-recent"></div>
+          </section>
+
+          <section class="ext-cfg-step">
+            <h3>1️⃣ Legatus を起動 (env vars)</h3>
+            <p class="ext-cfg-help">個人 PC で動かす Legatus に以下の環境変数を渡します。 全項目 default OFF — 明示的に enable する必要があります。</p>
+            <div class="ext-cfg-env">
+              <pre><code>LEGATUS_DNSTAP_ENABLED=true
+LEGATUS_DNSMASQ_LOG_PATH=/var/log/dnsmasq.log
+LEGATUS_DNSTAP_FLUSH_MS=30000
+LEGATUS_DNSTAP_DEDUPE_MS=5000
+LEGATUS_TAILSCALE_BIN=tailscale
+LEGATUS_TAILSCALE_REFRESH_MS=300000
+LEGATUS_DNSTAP_SKIP_DOMAINS=bank.example,hospital.test
+LEGATUS_DNSTAP_FORWARD_URL=http://localhost:5180/api/visits/external</code></pre>
+              <button class="ghost" data-copy-env="legatus">コピー</button>
+            </div>
+            <details class="ext-cfg-detail">
+              <summary>各キーの意味</summary>
+              <ul>
+                <li><code>LEGATUS_DNSTAP_ENABLED</code> — モジュール ON/OFF。 default <code>false</code></li>
+                <li><code>LEGATUS_DNSMASQ_LOG_PATH</code> — tail 対象の query log。 dnsmasq 側 <code>--log-facility</code> と一致</li>
+                <li><code>LEGATUS_DNSTAP_FLUSH_MS</code> — Memoria への flush 周期 (default 30 秒)</li>
+                <li><code>LEGATUS_DNSTAP_DEDUPE_MS</code> — A/AAAA/HTTPS RR バーストの統合窓 (default 5 秒)</li>
+                <li><code>LEGATUS_TAILSCALE_BIN</code> — <code>tailscale</code> CLI のパス</li>
+                <li><code>LEGATUS_TAILSCALE_REFRESH_MS</code> — IP→hostname map の更新間隔 (default 5 分)</li>
+                <li><code>LEGATUS_DNSTAP_SKIP_DOMAINS</code> — カンマ区切り skip 一覧 (suffix match)</li>
+                <li><code>LEGATUS_DNSTAP_FORWARD_URL</code> — この Memoria の <code>/api/visits/external</code></li>
+              </ul>
+            </details>
+          </section>
+
+          <section class="ext-cfg-step">
+            <h3>2️⃣ dnsmasq の設定 (<code>/etc/dnsmasq.conf</code>)</h3>
+            <div class="ext-cfg-env">
+              <pre><code>log-queries
+log-facility=/var/log/dnsmasq.log
+interface=tailscale0
+interface=lo
+bind-interfaces
+domain-needed
+bogus-priv</code></pre>
+              <button class="ghost" data-copy-env="dnsmasq">コピー</button>
+            </div>
+            <p class="ext-cfg-help"><code>tailscale0</code> インターフェイスでのみ listen させて、 公開しない構成。 logrotate も忘れず。</p>
+          </section>
+
+          <section class="ext-cfg-step">
+            <h3>3️⃣ Tailscale 設定</h3>
+            <div class="ext-cfg-grid">
+              <div>
+                <h4>home PC (Legatus 同居)</h4>
+                <ul>
+                  <li><code>tailscale up --advertise-exit-node</code></li>
+                  <li>admin console で <strong>承認</strong></li>
+                  <li>必要なら <code>--advertise-routes=192.168.x.0/24</code></li>
+                </ul>
+              </div>
+              <div>
+                <h4>Tailscale admin console</h4>
+                <ul>
+                  <li>DNS → <strong>Override local DNS</strong> ON</li>
+                  <li>Nameservers に home PC の Tailscale IP を登録</li>
+                  <li><strong>MagicDNS</strong> ON</li>
+                </ul>
+              </div>
+              <div>
+                <h4>iPhone Tailscale アプリ</h4>
+                <ul>
+                  <li><strong>Use Tailscale DNS</strong> ON</li>
+                  <li><strong>Exit Node</strong> = home PC を選択</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section class="ext-cfg-step">
+            <h3>4️⃣ iPhone iOS 側</h3>
+            <div class="ext-cfg-warning">
+              ⚠ 設定 → Apple ID → iCloud → <strong>Private Relay を OFF</strong> (該当 Wi-Fi のみで可)。
+              ON のままだと DNS が Apple/Cloudflare に飛んで home resolver を bypass し、 ログが空になります。
+            </div>
+            <ul class="ext-cfg-ios-list">
+              <li>Tailscale 接続を常時 ON (切れると当然 capture 不可)</li>
+              <li>Wi-Fi → Configure DNS = <strong>Automatic</strong> (Tailscale の DNS に任せる)</li>
+              <li>Tailscale exit node を home PC にしている時のみ home dnsmasq 経由になる</li>
+            </ul>
+          </section>
+
+          <section class="ext-cfg-step">
+            <h3>5️⃣ オプトアウト</h3>
+            <ol class="ext-cfg-optout">
+              <li><strong>デバイス側</strong>: iPhone Tailscale を切る or exit node を外す → 即座に取込停止</li>
+              <li><strong>module 設定</strong>: <code>LEGATUS_DNSTAP_SKIP_DOMAINS</code> に銀行 / 医療 / 内部社内系を列挙</li>
+              <li><strong>全体停止</strong>: <code>LEGATUS_DNSTAP_ENABLED=false</code> (default 値)</li>
+            </ol>
+          </section>
+
+          <section class="ext-cfg-step">
+            <h3>📚 関連</h3>
+            <ul class="ext-cfg-links">
+              <li><a href="https://github.com/LUDIARS/Legatus" target="_blank" rel="noopener">LUDIARS/Legatus (リポジトリ)</a></li>
+              <li>Legatus PR <a href="https://github.com/LUDIARS/Legatus/pull/2" target="_blank" rel="noopener">#2 — feat(dnstap)</a></li>
+              <li>Memoria endpoint: <code>POST /api/visits/external</code></li>
+            </ul>
+          </section>
+        </div>
       </div>
 
       <!-- 単語リングメニュー — グラフ / ワードクラウドの単語クリックで開く -->
