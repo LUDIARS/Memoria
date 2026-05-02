@@ -4964,7 +4964,9 @@ function renderTracksDaysList(days) {
 }
 
 function ensureGoogleMapsLoaded(apiKey) {
-  if (tracksState.loaded || (window.google && window.google.maps)) {
+  // places ライブラリを最初から要求 — 後続の場所編集モーダルで PlacesService /
+  // AutocompleteService を使うため。 既存の tracks / meals モーダルには影響しない。
+  if (tracksState.loaded || (window.google && window.google.maps?.places)) {
     tracksState.loaded = true;
     return Promise.resolve();
   }
@@ -4976,7 +4978,7 @@ function ensureGoogleMapsLoaded(apiKey) {
       resolve();
     };
     const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=${cb}&v=weekly`;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=${cb}&v=weekly&libraries=places`;
     s.async = true;
     s.defer = true;
     s.onerror = () => reject(new Error('Google Maps script failed to load'));
@@ -6312,6 +6314,37 @@ document.getElementById('mealModalMapToggle')?.addEventListener('click', async (
   }
 });
 
+// 「📌 詳細編集」 で全画面 location modal を開く。 onApply で meal modal の
+// lat/lon フィールドに反映 (DB 保存は meal modal 側の保存ボタンで実行)。
+document.getElementById('mealModalLocPick')?.addEventListener('click', () => {
+  const latEl = document.getElementById('mealModalLat');
+  const lonEl = document.getElementById('mealModalLon');
+  const noteEl = document.getElementById('mealModalNote');
+  const lat = latEl?.value ? Number(latEl.value) : null;
+  const lon = lonEl?.value ? Number(lonEl.value) : null;
+  const initial = (isFinite(lat) && isFinite(lon))
+    ? { lat, lon, label: '' }
+    : null;
+  openLocationEditModal({
+    initial,
+    title: '食事の場所を編集',
+    subtitle: '',
+    onApply: async ({ lat, lon, place_name }) => {
+      if (latEl) latEl.value = lat.toFixed(6);
+      if (lonEl) lonEl.value = lon.toFixed(6);
+      // 施設名は note に追記提案 (上書きしないで先頭に prepend)
+      if (place_name && noteEl) {
+        const cur = (noteEl.value || '').trim();
+        if (!cur.includes(place_name)) {
+          noteEl.value = cur ? `${place_name}\n${cur}` : place_name;
+        }
+      }
+      placeMealModalMarker(lat, lon);
+      updateMealModalMapLink();
+    },
+  });
+});
+
 // lat/lon 手入力時に map と link を追従
 ['mealModalLat', 'mealModalLon'].forEach((id) => {
   document.getElementById(id)?.addEventListener('input', () => {
@@ -6494,3 +6527,287 @@ window.addEventListener('keydown', (ev) => {
 
 // 起動時にも一度ロード (DOMContentLoaded を待たないコード経路用)
 loadUserStopwords();
+
+// ── 場所編集モーダル (軌跡 / 食事 / その他で再利用される共通) ─────
+//
+// API:
+//   await openLocationEditModal({
+//     initial: { lat, lon, label?, place_id? } | null,
+//     title?: '場所を編集',
+//     subtitle?: 'meal #12 の場所',
+//     onApply?: ({lat, lon, place_name?, place_id?}) => Promise<void>,
+//   })
+
+const locEditState = {
+  map: null,
+  marker: null,
+  placesService: null,
+  autocomplete: null,
+  geocoder: null,
+  current: null,
+};
+
+async function openLocationEditModal(opts = {}) {
+  const modal = document.getElementById('locationEditModal');
+  if (!modal) return;
+
+  locEditState.current = {
+    onApply: typeof opts.onApply === 'function' ? opts.onApply : null,
+    initial: opts.initial || null,
+    place_id: opts.initial?.place_id || null,
+  };
+
+  const titleEl = document.getElementById('locationEditTitle');
+  if (titleEl) titleEl.textContent = opts.title || '場所を編集';
+  const subEl = document.getElementById('locEditSubtitle');
+  if (subEl) subEl.textContent = opts.subtitle || '';
+
+  const latEl = document.getElementById('locEditLat');
+  const lonEl = document.getElementById('locEditLon');
+  const nameEl = document.getElementById('locEditPlaceName');
+  const initial = opts.initial || {};
+  if (latEl) latEl.value = (initial.lat != null) ? String(initial.lat) : '';
+  if (lonEl) lonEl.value = (initial.lon != null) ? String(initial.lon) : '';
+  if (nameEl) nameEl.value = initial.label || '';
+  const sresList = document.getElementById('locEditSearchResults');
+  if (sresList) { sresList.innerHTML = ''; sresList.hidden = true; }
+  const suggest = document.getElementById('locEditPlaceSuggest');
+  if (suggest) suggest.hidden = true;
+  const sinput = document.getElementById('locEditSearchInput');
+  if (sinput) sinput.value = '';
+
+  modal.classList.remove('hidden');
+  if (typeof modal.showModal === 'function' && !modal.open) {
+    try { modal.showModal(); } catch { modal.setAttribute('open', ''); }
+  } else if (!modal.open) {
+    modal.setAttribute('open', '');
+  }
+
+  await ensureLocEditMap(initial);
+}
+
+function closeLocationEditModal() {
+  const modal = document.getElementById('locationEditModal');
+  if (!modal) return;
+  if (typeof modal.close === 'function' && modal.open) {
+    try { modal.close(); } catch (e) { /* ignore */ }
+  }
+  modal.removeAttribute('open');
+  locEditState.current = null;
+}
+
+async function ensureLocEditMap(initial) {
+  const wrap = document.getElementById('locEditMap');
+  const missing = document.getElementById('locEditMapMissing');
+  if (!wrap) return;
+
+  const apiKey = await fetchMapsApiKey();
+  if (!apiKey) {
+    if (missing) missing.classList.remove('hidden');
+    wrap.style.display = 'none';
+    return;
+  }
+  if (missing) missing.classList.add('hidden');
+  wrap.style.display = '';
+
+  try {
+    await ensureGoogleMapsLoaded(apiKey);
+  } catch (e) {
+    if (missing) {
+      missing.textContent = `Google Maps の読み込みに失敗: ${e.message}`;
+      missing.classList.remove('hidden');
+    }
+    return;
+  }
+  if (!window.google?.maps) return;
+
+  const startCenter = (initial?.lat != null && initial?.lon != null)
+    ? { lat: Number(initial.lat), lng: Number(initial.lon) }
+    : { lat: 35.681, lng: 139.767 };
+
+  if (!locEditState.map) {
+    locEditState.map = new google.maps.Map(wrap, {
+      center: startCenter,
+      zoom: (initial?.lat != null) ? 16 : 12,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+    });
+    locEditState.map.addListener('click', (ev) => {
+      placeLocEditMarker(ev.latLng.lat(), ev.latLng.lng(), { recenter: false });
+    });
+    locEditState.placesService = new google.maps.places.PlacesService(locEditState.map);
+    locEditState.autocomplete = new google.maps.places.AutocompleteService();
+    locEditState.geocoder = new google.maps.Geocoder();
+  } else {
+    locEditState.map.setCenter(startCenter);
+    locEditState.map.setZoom((initial?.lat != null) ? 16 : 12);
+  }
+
+  setTimeout(() => google.maps.event.trigger(locEditState.map, 'resize'), 60);
+
+  if (initial?.lat != null && initial?.lon != null) {
+    placeLocEditMarker(Number(initial.lat), Number(initial.lon), { recenter: true });
+  } else if (locEditState.marker) {
+    locEditState.marker.setMap(null);
+    locEditState.marker = null;
+  }
+}
+
+function placeLocEditMarker(lat, lng, { recenter = false } = {}) {
+  if (!locEditState.map || !window.google?.maps) return;
+  if (locEditState.marker) {
+    locEditState.marker.setPosition({ lat, lng });
+  } else {
+    locEditState.marker = new google.maps.Marker({
+      position: { lat, lng },
+      map: locEditState.map,
+      draggable: true,
+    });
+    locEditState.marker.addListener('dragend', (ev) => {
+      const p = ev.latLng;
+      placeLocEditMarker(p.lat(), p.lng(), { recenter: false });
+    });
+  }
+  if (recenter) locEditState.map.panTo({ lat, lng });
+  const latEl = document.getElementById('locEditLat');
+  const lonEl = document.getElementById('locEditLon');
+  if (latEl) latEl.value = lat.toFixed(6);
+  if (lonEl) lonEl.value = lng.toFixed(6);
+  const suggest = document.getElementById('locEditPlaceSuggest');
+  if (suggest) suggest.hidden = true;
+}
+
+async function runLocEditSearch() {
+  if (!locEditState.placesService) return;
+  const q = (document.getElementById('locEditSearchInput')?.value || '').trim();
+  const list = document.getElementById('locEditSearchResults');
+  if (!q || !list) { if (list) list.hidden = true; return; }
+  await new Promise((resolve) => {
+    const opts = { query: q };
+    if (locEditState.map) {
+      opts.location = locEditState.map.getCenter();
+      opts.radius = 50_000;
+    }
+    locEditState.placesService.textSearch(opts, (results, status) => {
+      list.innerHTML = '';
+      if (status !== google.maps.places.PlacesServiceStatus.OK || !results?.length) {
+        list.innerHTML = `<li class="muted">該当なし (${escapeHtml(status || 'unknown')})</li>`;
+        list.hidden = false;
+        resolve();
+        return;
+      }
+      const top = results.slice(0, 8);
+      list.innerHTML = top.map((r, i) => `
+        <li data-idx="${i}">
+          <div class="loc-edit-search-result-name">${escapeHtml(r.name || '(名前なし)')}</div>
+          <div class="loc-edit-search-result-addr">${escapeHtml(r.formatted_address || '')}</div>
+        </li>`).join('');
+      list.hidden = false;
+      list.querySelectorAll('li[data-idx]').forEach((li) => {
+        li.addEventListener('click', () => {
+          const idx = Number(li.dataset.idx);
+          const r = top[idx];
+          if (!r?.geometry?.location) return;
+          const lat = r.geometry.location.lat();
+          const lng = r.geometry.location.lng();
+          placeLocEditMarker(lat, lng, { recenter: true });
+          const nameEl = document.getElementById('locEditPlaceName');
+          if (nameEl) nameEl.value = r.name || '';
+          locEditState.current = locEditState.current || {};
+          locEditState.current.place_id = r.place_id || null;
+          list.hidden = true;
+        });
+      });
+      resolve();
+    });
+  });
+}
+
+async function fetchLocEditPlaceSuggestions() {
+  if (!locEditState.placesService || !locEditState.marker) return;
+  const pos = locEditState.marker.getPosition();
+  const suggestEl = document.getElementById('locEditPlaceSuggest');
+  const listEl = document.getElementById('locEditPlaceSuggestList');
+  if (!suggestEl || !listEl) return;
+  listEl.innerHTML = '<span class="muted">取得中…</span>';
+  suggestEl.hidden = false;
+  await new Promise((resolve) => {
+    locEditState.placesService.nearbySearch(
+      { location: pos, rankBy: google.maps.places.RankBy.DISTANCE },
+      (results, status) => {
+        if (status !== google.maps.places.PlacesServiceStatus.OK || !results?.length) {
+          listEl.innerHTML = '<span class="muted">候補なし</span>';
+          resolve();
+          return;
+        }
+        const top = results.slice(0, 6);
+        listEl.innerHTML = top.map((r, i) =>
+          `<button type="button" data-idx="${i}" title="${escapeHtml(r.vicinity || '')}">${escapeHtml(r.name || '')}</button>`
+        ).join('');
+        listEl.querySelectorAll('button').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const idx = Number(btn.dataset.idx);
+            const r = top[idx];
+            const nameEl = document.getElementById('locEditPlaceName');
+            if (nameEl && r?.name) nameEl.value = r.name;
+            locEditState.current = locEditState.current || {};
+            locEditState.current.place_id = r?.place_id || null;
+          });
+        });
+        resolve();
+      },
+    );
+  });
+}
+
+function wireLocationEditModal() {
+  const modal = document.getElementById('locationEditModal');
+  if (!modal || modal.dataset.wired === '1') return;
+  modal.dataset.wired = '1';
+
+  document.getElementById('locEditClose')?.addEventListener('click', closeLocationEditModal);
+  document.getElementById('locEditCancel')?.addEventListener('click', closeLocationEditModal);
+  modal.addEventListener('cancel', () => { locEditState.current = null; });
+
+  document.getElementById('locEditSearchBtn')?.addEventListener('click', () => runLocEditSearch());
+  document.getElementById('locEditSearchInput')?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); runLocEditSearch(); }
+  });
+
+  document.getElementById('locEditUseCurrent')?.addEventListener('click', () => {
+    if (!navigator.geolocation) { alert('この端末は位置情報に対応していません'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => placeLocEditMarker(pos.coords.latitude, pos.coords.longitude, { recenter: true }),
+      (err) => alert(`位置取得失敗: ${err.message}`),
+      { enableHighAccuracy: true, timeout: 10_000 },
+    );
+  });
+
+  document.getElementById('locEditFetchPlaceBtn')?.addEventListener('click', () => fetchLocEditPlaceSuggestions());
+
+  document.getElementById('locEditApply')?.addEventListener('click', async () => {
+    const lat = Number(document.getElementById('locEditLat')?.value);
+    const lng = Number(document.getElementById('locEditLon')?.value);
+    if (!isFinite(lat) || !isFinite(lng)) { alert('緯度 / 経度が不正です'); return; }
+    const place_name = (document.getElementById('locEditPlaceName')?.value || '').trim() || null;
+    const place_id = locEditState.current?.place_id || null;
+    const fn = locEditState.current?.onApply;
+    if (!fn) { closeLocationEditModal(); return; }
+    try {
+      await fn({ lat, lon: lng, place_name, place_id });
+      closeLocationEditModal();
+    } catch (e) {
+      alert(`保存エラー: ${e.message}`);
+    }
+  });
+
+  ['locEditLat', 'locEditLon'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      const lat = Number(document.getElementById('locEditLat')?.value);
+      const lng = Number(document.getElementById('locEditLon')?.value);
+      if (isFinite(lat) && isFinite(lng)) placeLocEditMarker(lat, lng, { recenter: true });
+    });
+  });
+}
+wireLocationEditModal();

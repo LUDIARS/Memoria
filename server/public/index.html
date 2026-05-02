@@ -781,10 +781,11 @@ bogus-priv</code></pre>
                 <button type="button" id="mealModalLocHere" class="ghost" title="現在地から取得">📍 現在地</button>
                 <button type="button" id="mealModalLocClear" class="ghost" title="場所を削除">∅ クリア</button>
                 <button type="button" id="mealModalMapToggle" class="ghost" title="地図を表示 / 非表示">🗺 地図</button>
+                <button type="button" id="mealModalLocPick" class="ghost" title="検索 + ピン留め + 施設名取得">📌 詳細編集</button>
                 <a id="mealModalMapOpen" href="#" target="_blank" rel="noopener" class="ghost meal-modal-map-link" title="Google Maps で開く" hidden>↗ Maps で開く</a>
               </div>
               <div id="mealModalMap" class="meal-modal-map hidden"></div>
-              <span class="meal-modal-hint muted">地図をクリック / タップで座標を取得。 空欄なら EXIF / GPS 軌跡から推定</span>
+              <span class="meal-modal-hint muted">地図クリック or 「📌 詳細編集」 で検索 + ピン留め + 施設名取得。 空欄なら EXIF / GPS 軌跡から推定。</span>
             </div>
 
             <label class="meal-modal-row">
@@ -803,6 +804,62 @@ bogus-priv</code></pre>
             <span class="grow"></span>
             <button type="button" id="mealModalCancel" class="ghost">キャンセル</button>
             <button type="button" id="mealModalSubmit">登録</button>
+          </footer>
+        </div>
+      </dialog>
+
+      <!-- ── 場所編集ダイアログ — 軌跡 / 食事 / その他で再利用される共通 modal -->
+      <dialog id="locationEditModal" class="loc-edit-modal" aria-labelledby="locationEditTitle">
+        <div class="loc-edit-card">
+          <header class="loc-edit-head">
+            <h3 id="locationEditTitle">場所を編集</h3>
+            <span id="locEditSubtitle" class="loc-edit-subtitle muted"></span>
+            <button type="button" id="locEditClose" class="loc-edit-x" aria-label="閉じる">×</button>
+          </header>
+
+          <div class="loc-edit-search">
+            <input id="locEditSearchInput" type="search"
+              placeholder="お店 / 住所で検索 (例: スターバックス 渋谷)"
+              autocomplete="off" />
+            <button type="button" id="locEditSearchBtn" class="ghost" title="検索">🔎</button>
+          </div>
+          <ul id="locEditSearchResults" class="loc-edit-search-results" hidden></ul>
+
+          <div id="locEditMap" class="loc-edit-map"></div>
+          <div id="locEditMapMissing" class="loc-edit-map-missing hidden">
+            Google Maps API key 未設定。 ⚙ 設定 → AI / 連携 で <code>maps_api_key</code> を入れてください。
+          </div>
+
+          <div class="loc-edit-pin">
+            <div class="loc-edit-pin-row">
+              <label class="loc-edit-pin-coord">緯度
+                <input id="locEditLat" type="number" step="any" placeholder="35.6812" />
+              </label>
+              <label class="loc-edit-pin-coord">経度
+                <input id="locEditLon" type="number" step="any" placeholder="139.7671" />
+              </label>
+              <button type="button" id="locEditUseCurrent" class="ghost" title="現在地から取得">📍 現在地</button>
+            </div>
+            <div class="loc-edit-pin-row">
+              <label class="loc-edit-pin-name">施設名 / ラベル
+                <input id="locEditPlaceName" type="text" placeholder="(自動取得 or 手入力)" />
+              </label>
+              <button type="button" id="locEditFetchPlaceBtn" class="ghost"
+                title="ピンの位置から Google Places の名前を取得">📥 ここの施設名を取得</button>
+            </div>
+            <div id="locEditPlaceSuggest" class="loc-edit-suggest" hidden>
+              <span class="loc-edit-suggest-label">候補:</span>
+              <span id="locEditPlaceSuggestList"></span>
+            </div>
+            <div id="locEditPinHint" class="loc-edit-hint muted">
+              地図をクリック / タップでピンを置いてください。 場所名 (Google) は「📥 取得」で取込み。
+            </div>
+          </div>
+
+          <footer class="loc-edit-actions">
+            <button type="button" id="locEditCancel" class="ghost">キャンセル</button>
+            <span class="grow"></span>
+            <button type="button" id="locEditApply">📌 ここに修正</button>
           </footer>
         </div>
       </dialog>

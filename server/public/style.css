@@ -4202,3 +4202,175 @@ dialog.meal-modal[open] {
 .ext-cfg-howto-dns { border-left: 3px solid #2a6df4; }
 
 .ext-cfg-step h5 { margin: 4px 0; font-size: 12px; color: var(--text-muted); }
+
+/* ── 場所編集ダイアログ (軌跡 / 食事 / その他共通) ─────────────── */
+dialog.loc-edit-modal {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+}
+dialog.loc-edit-modal::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+dialog.loc-edit-modal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loc-edit-card {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  background: var(--bg-surface, #fff);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.loc-edit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.loc-edit-head h3 { margin: 0; font-size: 15px; }
+.loc-edit-subtitle { font-size: 12px; color: var(--text-muted); }
+.loc-edit-x {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.loc-edit-x:hover { color: var(--text); background: transparent; }
+
+.loc-edit-search {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px 4px;
+}
+.loc-edit-search input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.loc-edit-search button { padding: 4px 10px; font-size: 13px; }
+.loc-edit-search-results {
+  list-style: none;
+  margin: 0 14px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 12px;
+  background: var(--bg-surface, #fff);
+}
+.loc-edit-search-results li {
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.loc-edit-search-results li:last-child { border-bottom: none; }
+.loc-edit-search-results li:hover { background: var(--bg); }
+.loc-edit-search-result-name { font-weight: 500; }
+.loc-edit-search-result-addr { color: var(--text-muted); font-size: 11px; }
+
+.loc-edit-map {
+  width: 100%;
+  height: 320px;
+  margin: 8px 0 0;
+  background: #f4f4f4;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.loc-edit-map-missing {
+  margin: 8px 14px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff7d6;
+  color: #6a4a00;
+  font-size: 12px;
+}
+
+.loc-edit-pin { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.loc-edit-pin-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.loc-edit-pin-coord {
+  flex: 1 1 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.loc-edit-pin-coord input {
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.loc-edit-pin-name {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.loc-edit-pin-name input {
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.loc-edit-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+.loc-edit-suggest-label { color: var(--text-muted); }
+.loc-edit-suggest button {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--accent, #2a6df4);
+  background: var(--bg);
+  color: var(--accent, #2a6df4);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.loc-edit-suggest button:hover { background: var(--accent, #2a6df4); color: #fff; }
+.loc-edit-hint { font-size: 11px; }
+
+.loc-edit-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.loc-edit-actions .grow { flex: 1; }
+.loc-edit-actions button { font-size: 13px; padding: 6px 14px; }
+
+@media (max-width: 600px) {
+  .loc-edit-card { width: calc(100vw - 12px); max-height: calc(100vh - 12px); }
+  .loc-edit-map { height: 260px; }
+  .loc-edit-head h3 { font-size: 14px; }
+}
