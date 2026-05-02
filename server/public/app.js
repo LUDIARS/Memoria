@@ -3063,11 +3063,11 @@ function renderDiaryActivity(activity, dateStr) {
     if (k.claude_code_prompt) parts.push(`Claude Code 指示 ${k.claude_code_prompt} 件`);
     help.textContent = parts.length ? `合計 ${total} 件 (${parts.join(' / ')})` : `合計 ${total} 件`;
   }
-  const sorted = [...items].sort((a, b) => String(a.occurred_at).localeCompare(String(b.occurred_at)));
-  const initial = sorted.slice(0, 10);
-  ul.innerHTML = initial.map(activityLi).join('');
-  if (total > initial.length) {
-    appendActivityMoreButton(ul, initial.length, total, dateStr);
+  // items はサーバから DESC (新しい順) で渡ってくる前提。 そのまま表示。
+  // 古い側を取りたい時は appendActivityMoreButton が offset = ul.children.length で paginate。
+  ul.innerHTML = items.map(activityLi).join('');
+  if (total > items.length) {
+    appendActivityMoreButton(ul, items.length, total, dateStr);
   }
 }
 
@@ -3098,14 +3098,21 @@ function activityLi(it) {
   </li>`;
 }
 
-function appendActivityMoreButton(ul, currentLen, total, dateStr) {
+/**
+ * 「more ▽」 — 古い側 100 件をページング取得して末尾に追加する。
+ * クリックごとに offset += PAGE_SIZE で次の 100 件 (より古い側) を読む。
+ * 全件読み終わったらボタンが消える。
+ */
+function appendActivityMoreButton(ul, initialLen, total, dateStr) {
+  const PAGE_SIZE = 100;
+  let displayed = initialLen;
   const li = document.createElement('li');
   li.className = 'diary-more';
-  const remaining = () => Math.max(0, total - currentLen);
+  const remaining = () => Math.max(0, total - displayed);
   function syncLabel(loading) {
     li.innerHTML = loading
       ? '読込中…'
-      : `more ▽ <span class="diary-more-count">残り ${remaining()} 件</span>`;
+      : `more ▽ <span class="diary-more-count">古い 100 件 (残り ${remaining()} 件)</span>`;
   }
   syncLabel(false);
   li.addEventListener('click', async () => {
@@ -3113,15 +3120,22 @@ function appendActivityMoreButton(ul, currentLen, total, dateStr) {
     li.dataset.busy = '1';
     syncLabel(true);
     try {
-      const r = await api(`/api/activity/events?date=${encodeURIComponent(dateStr)}`);
-      const items = (r.items || []).sort((a, b) =>
-        String(a.occurred_at).localeCompare(String(b.occurred_at)));
-      // ul の先頭 currentLen 件はそのまま、 li (more ボタン) を撤去して残りを差し込む。
-      const rest = items.slice(currentLen);
+      const url = `/api/activity/events?date=${encodeURIComponent(dateStr)}`
+        + `&limit=${PAGE_SIZE}&offset=${displayed}`;
+      const r = await api(url);
+      const items = r.items || [];   // サーバから DESC で来る (古い側)
       const frag = document.createElement('div');
-      frag.innerHTML = rest.map(activityLi).join('');
+      frag.innerHTML = items.map(activityLi).join('');
       while (frag.firstChild) ul.insertBefore(frag.firstChild, li);
-      li.remove();
+      displayed += items.length;
+      // total を最新値で更新 (新規 commit が ingest されてれば変動しうる)
+      if (typeof r.total === 'number') total = r.total;
+      if (displayed >= total || items.length === 0) {
+        li.remove();
+      } else {
+        syncLabel(false);
+        li.dataset.busy = '';
+      }
     } catch (e) {
       li.innerHTML = `<span class="error">取得失敗: ${escapeHtml(e.message)}</span>`;
       li.dataset.busy = '';
