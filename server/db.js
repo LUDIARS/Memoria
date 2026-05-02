@@ -2187,8 +2187,6 @@ export function deleteGpsLocationsOlderThan(db, olderThan, { userId = 'me' } = {
   return info.changes;
 }
 
-void GPS_INSERT_STMT_KEY; // reserved for prepared-stmt cache
-
 // ─── meals ────────────────────────────────────────────────
 
 /** Find the GPS point closest to `at` (ISO8601), within `windowMs`. */
