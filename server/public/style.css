@@ -4085,3 +4085,53 @@ dialog.meal-modal[open] {
   .ext-cfg-step { padding: 10px 12px; }
   .ext-cfg-status-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── 外部情報設定: 情報源別ステータス ────────────────────────── */
+.ext-cfg-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ext-cfg-source {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ext-cfg-source > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ext-cfg-source-icon { font-size: 18px; }
+.ext-cfg-source-name { font-weight: 600; font-size: 13px; }
+.ext-cfg-pill {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ext-cfg-pill-loading { background: var(--bg-surface, #fff); color: var(--text-muted); }
+.ext-cfg-pill-active { background: #e6f7e6; color: #2a8b2a; border-color: #95cf95; }
+.ext-cfg-pill-configured { background: #fff7d6; color: #8a6d00; border-color: #e6c97a; }
+.ext-cfg-pill-inactive { background: var(--bg-surface, #fff); color: var(--text-muted); }
+
+.ext-cfg-howto {
+  background: var(--bg-surface, #fff);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, #2a6df4);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.ext-cfg-howto h3 { margin: 0 0 4px; font-size: 16px; }
+.ext-cfg-howto-loc { border-left: 3px solid #2a8b2a; }
+.ext-cfg-howto-dns { border-left: 3px solid #2a6df4; }
+
+.ext-cfg-step h5 { margin: 4px 0; font-size: 12px; color: var(--text-muted); }

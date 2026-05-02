@@ -5084,30 +5084,65 @@ const mealsState = {
   pollTimer: null,
 };
 
-// ── 外部情報設定 (Legatus DNS/SNI tap) ────────────────────────────
+// ── 外部情報設定 (Legatus 系統別ステータス + チュートリアル) ────────
 async function loadExternalConfig() {
-  try {
-    const r = await api('/api/visits/external/stats');
-    const $set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    $set('extCfgCount24h', String(r.count_24h ?? 0));
-    $set('extCfgCount7d', String(r.count_7d ?? 0));
-    $set('extCfgDeviceCount', String(r.device_count ?? 0));
-    $set('extCfgLatest', r.latest ? new Date(r.latest.replace(' ', 'T') + 'Z').toLocaleString() : '—');
+  const $set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  const fmtTime = (s) => s ? new Date(s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z')).toLocaleString() : '—';
 
+  try {
+    const r = await api('/api/external/stats');
+
+    // 📍 位置情報 (OwnTracks)
+    const loc = r.location || {};
+    $set('extCfgLocCount24h', String(loc.count_24h ?? 0));
+    $set('extCfgLocCount7d', String(loc.count_7d ?? 0));
+    $set('extCfgLocDeviceCount', String(loc.device_count ?? 0));
+    $set('extCfgLocLatest', fmtTime(loc.latest));
+    setExtCfgPill('extCfgLocationPill', loc, {
+      activeMsg: '稼働中',
+      configuredMsg: '受信待機',
+      inactiveMsg: '未受信',
+    });
+    const locHint = document.getElementById('extCfgLocationHint');
+    if (locHint) {
+      if (loc.active) locHint.textContent = '直近 24 時間に GPS 点が届いています。';
+      else if (loc.configured) locHint.textContent = 'ingest key が設定済み。 OwnTracks 側の publish 状況を確認してください。';
+      else locHint.textContent = 'ingest key 未設定 — まず「🗺 軌跡」 タブで key を生成してください。';
+    }
+
+    // 🌐 DNS / SNI tap
+    const dns = r.dns || {};
+    $set('extCfgCount24h', String(dns.count_24h ?? 0));
+    $set('extCfgCount7d', String(dns.count_7d ?? 0));
+    $set('extCfgDeviceCount', String(dns.device_count ?? 0));
+    $set('extCfgLatest', fmtTime(dns.latest));
+    setExtCfgPill('extCfgDnsPill', dns, {
+      activeMsg: '稼働中',
+      configuredMsg: '受信待機',
+      inactiveMsg: '未受信',
+    });
+    const dnsHint = document.getElementById('extCfgDnsHint');
+    if (dnsHint) {
+      if (dns.active) dnsHint.textContent = '直近 24 時間に Legatus dnstap からドメインアクセスが届いています。';
+      else if (dns.configured) dnsHint.textContent = '直近 1 週間にデータあり、 24h 内は未到達。 Legatus / dnsmasq の稼働を確認してください。';
+      else dnsHint.textContent = 'まだデータが届いていません。 下記「📖 設定方法 B」 を実施してください。';
+    }
+
+    // 直近 20 件 (DNS のみ — domain 単位なので位置情報と混ぜない)
     const recent = document.getElementById('extCfgRecent');
     if (recent) {
-      const items = Array.isArray(r.recent) ? r.recent : [];
+      const items = Array.isArray(dns.recent) ? dns.recent : [];
       if (items.length === 0) {
-        recent.innerHTML = '<div class="hint">まだ取り込みがありません。 下のセットアップ手順を実施してください。</div>';
+        recent.innerHTML = '<div class="hint">DNS / SNI 取り込みは未受信。 下記「設定方法 B」 を実施してください。</div>';
       } else {
         recent.innerHTML = `
-          <h4>直近 20 件</h4>
+          <h4>🌐 DNS / SNI 直近 20 件</h4>
           <table class="ext-cfg-recent-tbl">
             <thead><tr><th>時刻</th><th>device</th><th>OS</th><th>source</th><th>domain</th></tr></thead>
             <tbody>
               ${items.map((e) => `
                 <tr>
-                  <td>${escapeHtml(new Date((e.visited_at || '').replace(' ', 'T') + 'Z').toLocaleString())}</td>
+                  <td>${escapeHtml(fmtTime(e.visited_at))}</td>
                   <td>${escapeHtml(e.device_label || '—')}</td>
                   <td>${escapeHtml(e.device_os || '—')}</td>
                   <td><span class="ext-cfg-src ext-cfg-src-${escapeHtml(e.source || 'unknown')}">${escapeHtml(e.source || '—')}</span></td>
@@ -5121,6 +5156,22 @@ async function loadExternalConfig() {
   } catch (e) {
     const recent = document.getElementById('extCfgRecent');
     if (recent) recent.innerHTML = `<div class="hint">取得エラー: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function setExtCfgPill(id, src, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('ext-cfg-pill-loading', 'ext-cfg-pill-active', 'ext-cfg-pill-configured', 'ext-cfg-pill-inactive');
+  if (src.active) {
+    el.classList.add('ext-cfg-pill-active');
+    el.textContent = `🟢 ${msg.activeMsg}`;
+  } else if (src.configured) {
+    el.classList.add('ext-cfg-pill-configured');
+    el.textContent = `🟡 ${msg.configuredMsg}`;
+  } else {
+    el.classList.add('ext-cfg-pill-inactive');
+    el.textContent = `⚪ ${msg.inactiveMsg}`;
   }
 }
 

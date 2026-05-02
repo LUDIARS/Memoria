@@ -518,32 +518,118 @@
         <div id="mealsList" class="meals-list"></div>
       </div>
 
-      <!-- 🔌 外部情報設定 — Legatus / dnsmasq / Tailscale / iPhone のセットアップ手順 -->
+      <!-- 🔌 外部情報設定 — Legatus / OwnTracks / dnsmasq / Tailscale / iPhone のセットアップ手順 -->
       <div id="externalView" class="hidden">
         <div class="ext-cfg">
           <header class="ext-cfg-head">
             <h2>🔌 外部情報設定</h2>
             <p class="ext-cfg-intro">
-              iPhone (Tailscale 経由) のドメインアクセスをライフログに取り込む設定。
-              <strong>Legatus</strong> + <strong>dnsmasq</strong> + <strong>Tailscale</strong> の連携で
-              「いつ・どのデバイスが・どのドメイン」を捕捉します。
-              ページ本文 / アプリ内イベントは取得しません (HTTPS のため不可)。
+              iPhone (Tailscale 経由) のライフログ取込み設定。 現在 2 系統対応:
+              <strong>📍 位置情報</strong> (OwnTracks GPS) と
+              <strong>🌐 DNS / SNI tap</strong> (アクセスドメイン) を別々の経路で受け、
+              Memoria に永続化します。 HTTPS 本文 / アプリ内イベントは取得しません。
             </p>
           </header>
 
+          <!-- ステータスサマリ — 各情報源の現状 -->
           <section class="ext-cfg-status">
-            <h3>📊 取り込み状況</h3>
-            <div id="extCfgStatus" class="ext-cfg-status-grid">
-              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 24 時間</span><span id="extCfgCount24h" class="ext-cfg-stat-val">—</span></div>
-              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 7 日</span><span id="extCfgCount7d" class="ext-cfg-stat-val">—</span></div>
-              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">識別デバイス数</span><span id="extCfgDeviceCount" class="ext-cfg-stat-val">—</span></div>
-              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最新イベント</span><span id="extCfgLatest" class="ext-cfg-stat-val">—</span></div>
+            <h3>📊 各情報の取込ステータス</h3>
+            <div class="ext-cfg-sources">
+              <div class="ext-cfg-source" id="extCfgSrcLocation">
+                <header>
+                  <span class="ext-cfg-source-icon">📍</span>
+                  <span class="ext-cfg-source-name">位置情報 (OwnTracks GPS)</span>
+                  <span class="ext-cfg-pill ext-cfg-pill-loading" id="extCfgLocationPill">読み込み中…</span>
+                </header>
+                <div class="ext-cfg-status-grid">
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 24h</span><span id="extCfgLocCount24h" class="ext-cfg-stat-val">—</span></div>
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 7 日</span><span id="extCfgLocCount7d" class="ext-cfg-stat-val">—</span></div>
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">デバイス</span><span id="extCfgLocDeviceCount" class="ext-cfg-stat-val">—</span></div>
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最新</span><span id="extCfgLocLatest" class="ext-cfg-stat-val">—</span></div>
+                </div>
+                <p class="ext-cfg-help" id="extCfgLocationHint"></p>
+              </div>
+
+              <div class="ext-cfg-source" id="extCfgSrcDns">
+                <header>
+                  <span class="ext-cfg-source-icon">🌐</span>
+                  <span class="ext-cfg-source-name">DNS / SNI tap (Legatus dnstap)</span>
+                  <span class="ext-cfg-pill ext-cfg-pill-loading" id="extCfgDnsPill">読み込み中…</span>
+                </header>
+                <div class="ext-cfg-status-grid">
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 24h</span><span id="extCfgCount24h" class="ext-cfg-stat-val">—</span></div>
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">直近 7 日</span><span id="extCfgCount7d" class="ext-cfg-stat-val">—</span></div>
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">デバイス</span><span id="extCfgDeviceCount" class="ext-cfg-stat-val">—</span></div>
+                  <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最新</span><span id="extCfgLatest" class="ext-cfg-stat-val">—</span></div>
+                </div>
+                <p class="ext-cfg-help" id="extCfgDnsHint"></p>
+              </div>
             </div>
             <div id="extCfgRecent" class="ext-cfg-recent"></div>
           </section>
 
-          <section class="ext-cfg-step">
-            <h3>1️⃣ Legatus を起動 (env vars)</h3>
+          <!-- ── 設定方法 (情報源別) ─────────────────────────────── -->
+          <section class="ext-cfg-howto">
+            <h3>📖 設定方法</h3>
+            <p class="ext-cfg-help">取り込みたい情報源ごとに必要なステップを実施してください。 どちらも default OFF で、 明示的に enable しないと取込まれません。</p>
+          </section>
+
+          <!-- ── A. 位置情報 (OwnTracks GPS) ─────────────────────── -->
+          <section class="ext-cfg-step ext-cfg-howto-loc">
+            <h3>📍 A. 位置情報 (OwnTracks GPS) の設定</h3>
+            <p class="ext-cfg-help">iPhone の OwnTracks アプリが Tailscale 経由で home PC 同居 Mosquitto に publish → Legatus が subscribe → Memoria の <code>gps_locations</code> に永続化。</p>
+
+            <h4>1️⃣ Memoria 側で ingest key を発行</h4>
+            <p class="ext-cfg-help">「🗺 軌跡」 タブで「ingest key を再生成」 を押す → 32 桁 hex が発行される (= Mosquitto Basic auth password として使える)。</p>
+
+            <h4>2️⃣ home PC で Mosquitto を起動 (Legatus 同居)</h4>
+            <div class="ext-cfg-env">
+              <pre><code># /etc/mosquitto/mosquitto.conf (抜粋)
+listener 1883 0.0.0.0
+allow_anonymous false
+password_file /etc/mosquitto/passwd
+# tailnet 経由のみ受ける場合 (推奨):
+# listener 1883 100.x.y.z   (home PC の Tailscale IP)</code></pre>
+              <button class="ghost" data-copy-env="mosquitto">コピー</button>
+            </div>
+            <p class="ext-cfg-help"><code>mosquitto_passwd -c /etc/mosquitto/passwd owntracks</code> で user 作成、 password に上の ingest key を入れる。</p>
+
+            <h4>3️⃣ Legatus に env vars を渡す</h4>
+            <div class="ext-cfg-env">
+              <pre><code>OWNTRACKS_ENABLED=true
+OWNTRACKS_MQTT_URL=mqtt://127.0.0.1:1883
+OWNTRACKS_MQTT_USERNAME=owntracks
+OWNTRACKS_MQTT_PASSWORD=&lt;ingest key&gt;
+OWNTRACKS_MQTT_TOPIC=owntracks/+/+
+LEGATUS_LOCATION_FLUSH_INTERVAL_MS=300000
+LEGATUS_LOCATION_MIN_DISPLACEMENT_M=100</code></pre>
+              <button class="ghost" data-copy-env="owntracks">コピー</button>
+            </div>
+
+            <h4>4️⃣ iPhone OwnTracks アプリ</h4>
+            <ul class="ext-cfg-ios-list">
+              <li>Mode = <strong>MQTT</strong></li>
+              <li>Host = home PC の Tailscale IP (例 <code>100.64.0.5</code>)</li>
+              <li>Port = <code>1883</code></li>
+              <li>User = <code>owntracks</code> / Password = ingest key</li>
+              <li>Topic format は default (<code>owntracks/&lt;user&gt;/&lt;device&gt;</code>)</li>
+              <li>「Move」 mode 推奨 (バッテリー寄りなら Significant)</li>
+            </ul>
+
+            <h4>5️⃣ オプトアウト</h4>
+            <ol class="ext-cfg-optout">
+              <li>iPhone 側 OwnTracks の publish を OFF</li>
+              <li>Legatus の <code>OWNTRACKS_ENABLED=false</code></li>
+              <li>Memoria 「🗺 軌跡」 タブで ingest key を削除 (= 受信を恒久停止)</li>
+            </ol>
+          </section>
+
+          <!-- ── B. DNS / SNI tap ─────────────────────────────── -->
+          <section class="ext-cfg-step ext-cfg-howto-dns">
+            <h3>🌐 B. DNS / SNI tap (Legatus dnstap) の設定</h3>
+            <p class="ext-cfg-help">home PC の dnsmasq が iPhone (Tailscale exit node) からの DNS query log を吐き、 Legatus dnstap が tail → Tailscale で device tag → Memoria に forward。</p>
+
+            <h4>1️⃣ Legatus dnstap を起動 (env vars)</h4>
             <p class="ext-cfg-help">個人 PC で動かす Legatus に以下の環境変数を渡します。 全項目 default OFF — 明示的に enable する必要があります。</p>
             <div class="ext-cfg-env">
               <pre><code>LEGATUS_DNSTAP_ENABLED=true
@@ -569,10 +655,8 @@ LEGATUS_DNSTAP_FORWARD_URL=http://localhost:5180/api/visits/external</code></pre
                 <li><code>LEGATUS_DNSTAP_FORWARD_URL</code> — この Memoria の <code>/api/visits/external</code></li>
               </ul>
             </details>
-          </section>
 
-          <section class="ext-cfg-step">
-            <h3>2️⃣ dnsmasq の設定 (<code>/etc/dnsmasq.conf</code>)</h3>
+            <h4>2️⃣ dnsmasq の設定 (<code>/etc/dnsmasq.conf</code>)</h4>
             <div class="ext-cfg-env">
               <pre><code>log-queries
 log-facility=/var/log/dnsmasq.log
@@ -583,14 +667,12 @@ domain-needed
 bogus-priv</code></pre>
               <button class="ghost" data-copy-env="dnsmasq">コピー</button>
             </div>
-            <p class="ext-cfg-help"><code>tailscale0</code> インターフェイスでのみ listen させて、 公開しない構成。 logrotate も忘れず。</p>
-          </section>
+            <p class="ext-cfg-help"><code>tailscale0</code> インターフェイスでのみ listen、 公開しない構成。 logrotate も忘れず。</p>
 
-          <section class="ext-cfg-step">
-            <h3>3️⃣ Tailscale 設定</h3>
+            <h4>3️⃣ Tailscale 設定</h4>
             <div class="ext-cfg-grid">
               <div>
-                <h4>home PC (Legatus 同居)</h4>
+                <h5>home PC (Legatus 同居)</h5>
                 <ul>
                   <li><code>tailscale up --advertise-exit-node</code></li>
                   <li>admin console で <strong>承認</strong></li>
@@ -598,7 +680,7 @@ bogus-priv</code></pre>
                 </ul>
               </div>
               <div>
-                <h4>Tailscale admin console</h4>
+                <h5>Tailscale admin console</h5>
                 <ul>
                   <li>DNS → <strong>Override local DNS</strong> ON</li>
                   <li>Nameservers に home PC の Tailscale IP を登録</li>
@@ -606,33 +688,29 @@ bogus-priv</code></pre>
                 </ul>
               </div>
               <div>
-                <h4>iPhone Tailscale アプリ</h4>
+                <h5>iPhone Tailscale アプリ</h5>
                 <ul>
                   <li><strong>Use Tailscale DNS</strong> ON</li>
                   <li><strong>Exit Node</strong> = home PC を選択</li>
                 </ul>
               </div>
             </div>
-          </section>
 
-          <section class="ext-cfg-step">
-            <h3>4️⃣ iPhone iOS 側</h3>
+            <h4>4️⃣ iPhone iOS 側</h4>
             <div class="ext-cfg-warning">
               ⚠ 設定 → Apple ID → iCloud → <strong>Private Relay を OFF</strong> (該当 Wi-Fi のみで可)。
               ON のままだと DNS が Apple/Cloudflare に飛んで home resolver を bypass し、 ログが空になります。
             </div>
             <ul class="ext-cfg-ios-list">
-              <li>Tailscale 接続を常時 ON (切れると当然 capture 不可)</li>
-              <li>Wi-Fi → Configure DNS = <strong>Automatic</strong> (Tailscale の DNS に任せる)</li>
-              <li>Tailscale exit node を home PC にしている時のみ home dnsmasq 経由になる</li>
+              <li>Tailscale 接続を常時 ON</li>
+              <li>Wi-Fi → Configure DNS = <strong>Automatic</strong></li>
+              <li>Tailscale exit node を home PC にしている時のみ home dnsmasq 経由</li>
             </ul>
-          </section>
 
-          <section class="ext-cfg-step">
-            <h3>5️⃣ オプトアウト</h3>
+            <h4>5️⃣ オプトアウト</h4>
             <ol class="ext-cfg-optout">
               <li><strong>デバイス側</strong>: iPhone Tailscale を切る or exit node を外す → 即座に取込停止</li>
-              <li><strong>module 設定</strong>: <code>LEGATUS_DNSTAP_SKIP_DOMAINS</code> に銀行 / 医療 / 内部社内系を列挙</li>
+              <li><strong>module 設定</strong>: <code>LEGATUS_DNSTAP_SKIP_DOMAINS</code> に銀行 / 医療 / 内部系を列挙</li>
               <li><strong>全体停止</strong>: <code>LEGATUS_DNSTAP_ENABLED=false</code> (default 値)</li>
             </ol>
           </section>

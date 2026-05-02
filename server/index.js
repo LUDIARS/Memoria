@@ -2323,6 +2323,78 @@ app.post('/api/visits/bookmark', async (c) => {
  * 既存 API と同方針)。 v0.2 で PeerAdapter / Cernere 経由化する。
  */
 /**
+ * 外部情報の取込状況をまとめて返す ("外部情報設定" タブ用)。
+ * 位置情報 (gps_locations) と DNS/SNI tap (visit_events.source IN dns/sni) を
+ * 1 endpoint で集約する。
+ */
+app.get('/api/external/stats', (c) => {
+  // GPS
+  const g24 = db.prepare(`
+    SELECT COUNT(*) AS n FROM gps_locations
+    WHERE recorded_at >= datetime('now','-1 day')
+  `).get()?.n ?? 0;
+  const g7 = db.prepare(`
+    SELECT COUNT(*) AS n FROM gps_locations
+    WHERE recorded_at >= datetime('now','-7 days')
+  `).get()?.n ?? 0;
+  const gDev = db.prepare(`
+    SELECT COUNT(DISTINCT device_id) AS n FROM gps_locations
+    WHERE device_id IS NOT NULL AND recorded_at >= datetime('now','-7 days')
+  `).get()?.n ?? 0;
+  const gLatest = db.prepare(`
+    SELECT recorded_at FROM gps_locations ORDER BY recorded_at DESC LIMIT 1
+  `).get()?.recorded_at ?? null;
+  const gKey = (getAppSettings(db)['locations.ingest_key'] || '').trim();
+  const gKeyConfigured = !!gKey || !!process.env.LOCATIONS_INGEST_KEY;
+
+  // DNS/SNI
+  const d24 = db.prepare(`
+    SELECT COUNT(*) AS n FROM visit_events
+    WHERE source IN ('dns','sni') AND visited_at >= datetime('now','-1 day')
+  `).get()?.n ?? 0;
+  const d7 = db.prepare(`
+    SELECT COUNT(*) AS n FROM visit_events
+    WHERE source IN ('dns','sni') AND visited_at >= datetime('now','-7 days')
+  `).get()?.n ?? 0;
+  const dDev = db.prepare(`
+    SELECT COUNT(DISTINCT device_label) AS n FROM visit_events
+    WHERE source IN ('dns','sni') AND device_label IS NOT NULL
+      AND visited_at >= datetime('now','-7 days')
+  `).get()?.n ?? 0;
+  const dLatest = db.prepare(`
+    SELECT visited_at FROM visit_events
+    WHERE source IN ('dns','sni') ORDER BY visited_at DESC LIMIT 1
+  `).get()?.visited_at ?? null;
+  const dRecent = db.prepare(`
+    SELECT visited_at, domain, device_label, device_os, source FROM visit_events
+    WHERE source IN ('dns','sni')
+    ORDER BY visited_at DESC LIMIT 20
+  `).all();
+
+  return c.json({
+    location: {
+      configured: gKeyConfigured,
+      active: g24 > 0,
+      count_24h: g24,
+      count_7d: g7,
+      device_count: gDev,
+      latest: gLatest,
+    },
+    dns: {
+      // configured フラグは Legatus 側 env なので Memoria からは正確に分からない。
+      // 直近にデータが届いているかで「実質 ON」 を判定する。
+      configured: d7 > 0,
+      active: d24 > 0,
+      count_24h: d24,
+      count_7d: d7,
+      device_count: dDev,
+      latest: dLatest,
+      recent: dRecent,
+    },
+  });
+});
+
+/**
  * 外部 visit の取り込み状況サマリ。 「外部情報設定」 タブの status セクション用。
  * source IN ('dns', 'sni') を対象に件数 / device 数 / 最新時刻 / 直近 N 件を返す。
  */
