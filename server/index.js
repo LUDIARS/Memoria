@@ -79,7 +79,7 @@ import {
 } from './db.js';
 import {
   insertGpsLocation, listGpsLocationsInRange, listGpsLocationDays,
-  listGpsLocationsForDate, deleteGpsLocationsOlderThan,
+  listGpsLocationsForDate, deleteGpsLocationsOlderThan, compressGpsHistory,
 } from './db.js';
 import { listPushSubscriptions, deletePushSubscription } from './db.js';
 import {
@@ -3384,6 +3384,20 @@ app.delete('/api/locations', (c) => {
   if (!olderThan) return c.json({ error: 'older_than (ISO) required' }, 400);
   const removed = deleteGpsLocationsOlderThan(db, olderThan);
   return c.json({ removed });
+});
+
+/**
+ * 既存 GPS 履歴を遡及圧縮する (停止区間の中間点を削除し、 始点+終点 2 行に集約)。
+ *   POST /api/locations/compress
+ *   body: { device_id?, threshold? }   — 省略可、 全デバイス + default 50m
+ */
+app.post('/api/locations/compress', async (c) => {
+  let body = {};
+  try { body = await c.req.json(); } catch {}
+  const deviceId = typeof body.device_id === 'string' && body.device_id.length > 0 ? body.device_id : null;
+  const threshold = Number.isFinite(body.threshold) && body.threshold > 0 ? body.threshold : undefined;
+  const summary = compressGpsHistory(db, { deviceId, threshold });
+  return c.json(summary);
 });
 
 // ---- static UI ------------------------------------------------------------
