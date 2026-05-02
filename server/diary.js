@@ -46,7 +46,11 @@ function parseSqliteUtc(s) {
 // Anything beyond this is loaded on-demand via the per-list endpoints.
 const DIARY_LIST_INITIAL = 10;
 
-export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {}) {
+// 開発活動 (git commit / Claude Code prompt) は件数が多くなりがちなので、
+// 初期表示は別途 100 件まで。 古い側は API ページングで取得 (more ▽)。
+const ACTIVITY_LIST_INITIAL = 100;
+
+export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, activityLimit = ACTIVITY_LIST_INITIAL } = {}) {
   const hourlyVisits = new Array(24).fill(0);
   const domainTally = new Map();
   const domainHours = new Map(); // domain -> Set of hour buckets seen
@@ -225,9 +229,11 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
   }
 
   // 開発活動イベント (git commit / Claude Code prompt 等)。 ブラウザ閲覧で
-  // 拾えない作業をカバーする。 list_limit でページング、 hourly bucket 別途。
+  // 拾えない作業をカバーする。 hourly + 集計は全件から、 items は最新
+  // activityLimit 件 (DESC、 新しい順) にして UI 側でページングできるよう
+  // total を渡す。
   const allActivity = activityEventsForDate(db, dateStr);
-  const activity = summarizeActivityForDate(allActivity, listLimit);
+  const activity = summarizeActivityForDate(allActivity, activityLimit);
 
   return {
     date: dateStr,
@@ -263,10 +269,15 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
 
 /**
  * 当日分の活動イベントを集計する。
- * - hourly: kind 別の 24 時間バケット (バーグラフ用)
- * - kinds:  kind 別の総件数
- * - items:  時系列リスト (listLimit で先頭 N 件、 null なら全件 — highlights プロンプト用)
+ *
+ * - hourly: kind 別の 24 時間バケット (バーグラフ用、 全件から計算)
+ * - kinds:  kind 別の総件数 (全件から計算)
+ * - items:  **最新 listLimit 件** (DESC、 新しいが先頭)。 listLimit==null なら全件。
+ *           UI のリスト表示用、 古い側は API (`/api/activity/events?offset=...`) で
+ *           ページングする。
  * - total:  全イベント件数
+ *
+ * 入力 rows は時刻昇順 (activityEventsForDate の出力) を想定。
  */
 function summarizeActivityForDate(rows, listLimit) {
   const kinds = {};
@@ -277,7 +288,11 @@ function summarizeActivityForDate(rows, listLimit) {
     const h = parseSqliteUtc(r.occurred_at)?.getHours();
     if (Number.isFinite(h)) hourly[r.kind][h] += 1;
   }
-  const items = (listLimit == null ? rows : rows.slice(0, listLimit)).map((r) => ({
+  // 最新 listLimit 件 = rows の末尾から listLimit 件、 reverse して DESC に
+  const sliced = listLimit == null
+    ? [...rows].reverse()
+    : rows.slice(-Math.max(0, listLimit)).reverse();
+  const items = sliced.map((r) => ({
     id: r.id,
     kind: r.kind,
     occurred_at: r.occurred_at,
@@ -291,6 +306,12 @@ function summarizeActivityForDate(rows, listLimit) {
     kinds,
     hourly,
     items,
+    // UI が next page を組み立てる時の参考に渡しておく (offset = items.length が次の起点)
+    page: {
+      limit: listLimit,
+      offset: 0,
+      returned: items.length,
+    },
   };
 }
 

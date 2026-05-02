@@ -60,7 +60,7 @@ import { fetchPageMetadata } from './page-metadata.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './local/uptime.js';
 import { listServerEvents, listServerEventsForDate } from './db.js';
-import { recordActivityEvent, activityEventsForDate, listActivityEvents } from './db.js';
+import { recordActivityEvent, activityEventsForDate, listActivityEvents, activityEventsPage } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
   generateDiary, generateWorkContent, generateHighlights,
@@ -2895,13 +2895,21 @@ app.post('/api/activity/event', async (c) => {
   }
 });
 
-// 当日の活動イベント (バーグラフ + ログ表示用)。 ?date=YYYY-MM-DD。
+// 当日の活動イベント (バーグラフ + ログ表示用、 ページング対応)。
+//   ?date=YYYY-MM-DD&limit=100&offset=0   — 当日分を時刻 DESC で paginate
+//   ?limit=200&kind=...                   — 全期間 (date 無し): listActivityEvents
+//
+// 戻り値 (date 指定時): { date, items, total, limit, offset }
+//   items は最新が先頭 (DESC)、 古い側を取りたければ offset += items.length。
+//   total は当日全件数。 limit は 1-1000、 offset は >= 0。
 app.get('/api/activity/events', (c) => {
   const date = c.req.query('date');
   if (date) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
-    const items = activityEventsForDate(db, date);
-    return c.json({ date, items, total: items.length });
+    const limit = Number(c.req.query('limit')) || 100;
+    const offset = Number(c.req.query('offset')) || 0;
+    const page = activityEventsPage(db, date, { limit, offset });
+    return c.json({ date, ...page });
   }
   const limit = Math.min(Number(c.req.query('limit')) || 200, 1000);
   const kind = c.req.query('kind') || null;

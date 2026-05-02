@@ -1275,7 +1275,11 @@ export function recordActivityEvent(db, { kind, occurred_at, source, ref_id, con
   return { inserted: info.changes > 0, id: info.lastInsertRowid };
 }
 
-/** 当日 (local) の活動イベントを時刻昇順で返す。 */
+/**
+ * 当日 (local) の活動イベントを時刻昇順で全件返す。
+ * 内部集計 (hourly bucket / kind 別件数) で全部欲しい時用。
+ * UI のリスト表示には activityEventsPage を使うこと。
+ */
 export function activityEventsForDate(db, dateStr) {
   return db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
@@ -1286,6 +1290,33 @@ export function activityEventsForDate(db, dateStr) {
     ...r,
     metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
+}
+
+/**
+ * 当日 (local) の活動イベントを **時刻降順で** ページング取得する。
+ * UI のリスト表示 + 「more ▽」 用。 limit は 1-1000、 offset は >= 0。
+ * 戻り値: { items, total, limit, offset }
+ *   items   — 取得した行 (DESC、 最新が先頭)
+ *   total   — 当日の全件数 (offset/limit 無関係)
+ */
+export function activityEventsPage(db, dateStr, { limit = 100, offset = 0 } = {}) {
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 100));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const total = db.prepare(`
+    SELECT COUNT(*) AS n FROM activity_events
+    WHERE date(occurred_at, 'localtime') = ?
+  `).get(dateStr).n;
+  const items = db.prepare(`
+    SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
+    FROM activity_events
+    WHERE date(occurred_at, 'localtime') = ?
+    ORDER BY occurred_at DESC
+    LIMIT ? OFFSET ?
+  `).all(dateStr, safeLimit, safeOffset).map((r) => ({
+    ...r,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
+  }));
+  return { items, total, limit: safeLimit, offset: safeOffset };
 }
 
 /** 直近 limit 件 (新しい順)。 全期間 / 任意 kind フィルタつき。 */
