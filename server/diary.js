@@ -402,6 +402,8 @@ export function summarizeGpsForDate(points) {
   if (!points || points.length === 0) {
     return {
       points: 0,
+      raw_publishes: 0,
+      compressed_segments: 0,
       devices: [],
       distance_meters: 0,
       bbox: null,
@@ -415,9 +417,15 @@ export function summarizeGpsForDate(points) {
   const hourSet = new Set();
   let minLat = +Infinity, maxLat = -Infinity;
   let minLon = +Infinity, maxLon = -Infinity;
-  let dist = 0;
-  let prev = null;
+  let rawPublishes = 0;
+  let compressedSegments = 0;
+  // 距離は **device 別に独立計算** して合算する。 異 device の点列を
+  // 時系列でつないで haversine を取ると、 端末間で 100km 級の幻 jump が
+  // 「移動」 として加算されてしまう (例: test-dev と iphone を混ぜた時の
+  // 107km 誤計上)。 device ごとに run を分ければこの誤計上は起きない。
+  const byDevice = new Map();
   for (const p of points) {
+    const dev = p.device_id || '(none)';
     if (p.device_id) devices.add(p.device_id);
     if (p.lat < minLat) minLat = p.lat;
     if (p.lat > maxLat) maxLat = p.lat;
@@ -425,15 +433,27 @@ export function summarizeGpsForDate(points) {
     if (p.lon > maxLon) maxLon = p.lon;
     const h = parseSqliteUtc(p.recorded_at)?.getHours();
     if (Number.isFinite(h)) hourSet.add(h);
-    if (prev) {
-      // Skip outliers: accuracy なし or > 200m の点は連続性を信頼しない
-      const accOk = !p.accuracy_m || p.accuracy_m < 200;
-      if (accOk) dist += haversineMeters(prev, p);
+    rawPublishes += Number.isFinite(p.samples_count) && p.samples_count > 0 ? p.samples_count : 1;
+    if ((p.samples_count || 1) > 1) compressedSegments++;
+    if (!byDevice.has(dev)) byDevice.set(dev, []);
+    byDevice.get(dev).push(p);
+  }
+  let dist = 0;
+  for (const list of byDevice.values()) {
+    let prev = null;
+    for (const p of list) {
+      if (prev) {
+        // accuracy なし or > 200m の点は連続性を信頼しない
+        const accOk = !p.accuracy_m || p.accuracy_m < 200;
+        if (accOk) dist += haversineMeters(prev, p);
+      }
+      prev = p;
     }
-    prev = p;
   }
   return {
     points: points.length,
+    raw_publishes: rawPublishes,
+    compressed_segments: compressedSegments,
     devices: [...devices],
     distance_meters: Math.round(dist),
     bbox: {

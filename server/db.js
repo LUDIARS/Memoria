@@ -236,20 +236,26 @@ export function openDb(dbPath) {
       ON word_clouds(origin_bookmark_id);
 
     CREATE TABLE IF NOT EXISTS gps_locations (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id       TEXT NOT NULL DEFAULT 'me',
-      device_id     TEXT,
-      recorded_at   TEXT NOT NULL,
-      lat           REAL NOT NULL,
-      lon           REAL NOT NULL,
-      accuracy_m    REAL,
-      altitude_m    REAL,
-      velocity_kmh  REAL,
-      course_deg    REAL,
-      battery_pct   INTEGER,
-      conn          TEXT,
-      raw_json      TEXT,
-      received_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id          TEXT NOT NULL DEFAULT 'me',
+      device_id        TEXT,
+      recorded_at      TEXT NOT NULL,
+      lat              REAL NOT NULL,
+      lon              REAL NOT NULL,
+      accuracy_m       REAL,
+      altitude_m       REAL,
+      velocity_kmh     REAL,
+      course_deg       REAL,
+      battery_pct      INTEGER,
+      conn             TEXT,
+      raw_json         TEXT,
+      received_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      -- 圧縮メタデータ: 停止区間で 2 行 (始点 + 終点) に集約する際、 終点行が
+      -- 何件の raw 発行を代表しているかを保持する。
+      -- samples_count: この行が代表する raw 発行数 (通常は 1、 圧縮後の終点行は 2+)
+      -- samples_first_at: 圧縮窓の開始時刻 (NULL = recorded_at と同じ = 未圧縮)
+      samples_count    INTEGER NOT NULL DEFAULT 1,
+      samples_first_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_gps_locations_at
       ON gps_locations(recorded_at DESC);
@@ -336,6 +342,15 @@ export function openDb(dbPath) {
   // and writes it here. Replaces the visit_events session heuristic, which
   // over-counted days with long idle browser tabs (see trendsWorkHours).
   if (!deCols.includes('work_minutes')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_minutes INTEGER`);
+
+  // gps_locations: 圧縮メタ列を後付けで足す
+  const gpsCols = db.prepare(`PRAGMA table_info(gps_locations)`).all().map(c => c.name);
+  if (gpsCols.length > 0 && !gpsCols.includes('samples_count')) {
+    db.exec(`ALTER TABLE gps_locations ADD COLUMN samples_count INTEGER NOT NULL DEFAULT 1`);
+  }
+  if (gpsCols.length > 0 && !gpsCols.includes('samples_first_at')) {
+    db.exec(`ALTER TABLE gps_locations ADD COLUMN samples_first_at TEXT`);
+  }
 
   const dcCols = db.prepare(`PRAGMA table_info(domain_catalog)`).all().map(c => c.name);
   if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);
@@ -1879,11 +1894,38 @@ export function insertImportedBookmark(db, b) {
 // gps_locations — OwnTracks 由来の位置情報
 // ---------------------------------------------------------------------------
 
-const GPS_INSERT_STMT_KEY = Symbol('gpsInsertStmt');
+// 停止区間判定の距離閾値 (メートル)。 GPS 精度 (5-20m) より十分大きく取り、
+// 数 m の jitter を停止扱いに集約する。 50m を超える移動は別セグメント扱い。
+export const GPS_STATIONARY_THRESHOLD_M = 50;
+
+/**
+ * Haversine 距離 (m)。地球半径 6371008 (mean)。db.js 内専用ヘルパ。
+ */
+function gpsHaversine(a, b) {
+  const R = 6_371_008;
+  const t = (d) => (d * Math.PI) / 180;
+  const dLat = t(b.lat - a.lat);
+  const dLon = t(b.lon - a.lon);
+  const sa = Math.sin(dLat / 2);
+  const so = Math.sin(dLon / 2);
+  const h = sa * sa + Math.cos(t(a.lat)) * Math.cos(t(b.lat)) * so * so;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
 
 /**
  * 1 点の GPS 位置を挿入する。同一 (user_id, device_id, recorded_at) は無視 (重複防止)。
  * `loc.recordedAt` は ISO 8601、`loc.tst` (OwnTracks の epoch 秒) どちらか必須。
+ *
+ * **圧縮**: 同 user+device の直近 2 行 (PREV, LAST) を見て、 PREV-LAST-NEW
+ * の 3 つすべてが {@link GPS_STATIONARY_THRESHOLD_M} 内にあれば「停止区間が
+ * 継続している」 とみなし、 LAST 行を NEW で UPDATE する (start = PREV を残し、
+ * tail = LAST が NEW にスライド)。 結果として停止区間は常に 2 行 (start + end)
+ * に圧縮される。 移動した瞬間 (どれかが threshold 超過) は通常 INSERT。
+ *
+ * 戻り値:
+ *   { skipped: true, id }   — 重複 (同 ts の同点が既にある)
+ *   { merged: true, id }    — 圧縮 (UPDATE LAST → NEW)
+ *   { inserted: true, id }  — 通常挿入
  */
 export function insertGpsLocation(db, loc) {
   const userId = loc.userId || 'me';
@@ -1892,6 +1934,7 @@ export function insertGpsLocation(db, loc) {
     : (typeof loc.tst === 'number'
         ? new Date(loc.tst * 1000).toISOString()
         : new Date().toISOString());
+
   // CONFLICT 回避: 同一 (user, device, time) の点は dedup
   const dupCheck = db.prepare(`
     SELECT id FROM gps_locations
@@ -1900,11 +1943,61 @@ export function insertGpsLocation(db, loc) {
   `).get(userId, loc.deviceId ?? null, recordedAt);
   if (dupCheck) return { skipped: true, id: dupCheck.id };
 
+  // 圧縮判定: 直近 2 行を確認
+  const recent = db.prepare(`
+    SELECT id, lat, lon, recorded_at, samples_count, samples_first_at
+    FROM gps_locations
+    WHERE user_id = ? AND IFNULL(device_id, '') = IFNULL(?, '')
+    ORDER BY recorded_at DESC
+    LIMIT 2
+  `).all(userId, loc.deviceId ?? null);
+
+  if (recent.length === 2) {
+    const LAST = recent[0];
+    const PREV = recent[1];
+    const N = { lat: loc.lat, lon: loc.lon };
+    const T = GPS_STATIONARY_THRESHOLD_M;
+    if (
+      gpsHaversine(PREV, LAST) < T &&
+      gpsHaversine(PREV, N) < T &&
+      gpsHaversine(LAST, N) < T
+    ) {
+      // 停止区間継続。 LAST を NEW で上書き (PREV = anchor, LAST = tail を更新)。
+      // samples_first_at は LAST が初めて圧縮対象になった瞬間を保持する。
+      const samplesFirstAt = LAST.samples_first_at || LAST.recorded_at;
+      db.prepare(`
+        UPDATE gps_locations
+        SET recorded_at = ?, lat = ?, lon = ?,
+            accuracy_m = ?, altitude_m = ?, velocity_kmh = ?, course_deg = ?,
+            battery_pct = ?, conn = ?, raw_json = ?,
+            samples_count = samples_count + 1,
+            samples_first_at = COALESCE(samples_first_at, ?)
+        WHERE id = ?
+      `).run(
+        recordedAt,
+        loc.lat,
+        loc.lon,
+        loc.accuracy ?? null,
+        loc.altitude ?? null,
+        loc.velocity ?? null,
+        loc.course ?? null,
+        loc.battery ?? null,
+        loc.conn ?? null,
+        loc.rawJson ?? null,
+        samplesFirstAt,
+        LAST.id,
+      );
+      return { merged: true, id: LAST.id };
+    }
+  }
+
+  // 通常 INSERT
   const info = db.prepare(`
     INSERT INTO gps_locations
       (user_id, device_id, recorded_at, lat, lon,
-       accuracy_m, altitude_m, velocity_kmh, course_deg, battery_pct, conn, raw_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       accuracy_m, altitude_m, velocity_kmh, course_deg, battery_pct, conn, raw_json,
+       samples_count, samples_first_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL)
   `).run(
     userId,
     loc.deviceId ?? null,
@@ -1919,7 +2012,104 @@ export function insertGpsLocation(db, loc) {
     loc.conn ?? null,
     loc.rawJson ?? null,
   );
-  return { skipped: false, id: info.lastInsertRowid };
+  return { inserted: true, id: info.lastInsertRowid };
+}
+
+/**
+ * 既存 GPS データに対して圧縮を遡及適用する (backfill)。
+ *
+ * デバイスごとに時系列で点列を読み、 連続点が threshold 内にある「停止クラスタ」を
+ * 検出して、 始点 (anchor) と終点 (tail) の 2 行のみ残し中間を削除する。
+ * tail の samples_count にはクラスタ内の元 raw 発行数 (削除分含む) が
+ * 集約される。
+ *
+ * 引数:
+ *   userId   — 対象ユーザ (default 'me')
+ *   deviceId — 特定デバイスのみ処理 (default 全デバイス)
+ *   threshold — 距離閾値 m (default GPS_STATIONARY_THRESHOLD_M)
+ *
+ * 戻り値: { devices: [{device_id, before, after, deleted, segments}], total_deleted, total_segments }
+ */
+export function compressGpsHistory(db, { userId = 'me', deviceId = null, threshold = GPS_STATIONARY_THRESHOLD_M } = {}) {
+  const T = threshold;
+
+  // 対象デバイスを列挙
+  const deviceRows = deviceId
+    ? [{ device_id: deviceId }]
+    : db.prepare(`
+        SELECT DISTINCT device_id FROM gps_locations WHERE user_id = ?
+      `).all(userId);
+
+  const summary = { devices: [], total_deleted: 0, total_segments: 0, total_kept: 0 };
+
+  for (const { device_id } of deviceRows) {
+    const rows = db.prepare(`
+      SELECT id, recorded_at, lat, lon, samples_count, samples_first_at
+      FROM gps_locations
+      WHERE user_id = ? AND IFNULL(device_id, '') = IFNULL(?, '')
+      ORDER BY recorded_at ASC
+    `).all(userId, device_id);
+
+    const before = rows.length;
+    if (rows.length < 3) {
+      summary.devices.push({ device_id, before, after: before, deleted: 0, segments: rows.length > 0 ? 1 : 0 });
+      summary.total_kept += before;
+      continue;
+    }
+
+    let deleted = 0;
+    let segments = 0;
+
+    const tx = db.transaction(() => {
+      let i = 0;
+      while (i < rows.length) {
+        const anchor = rows[i];
+        // クラスタ拡張: 次点が anchor + 直前点 両方から threshold 内にある間延長
+        let j = i + 1;
+        while (
+          j < rows.length &&
+          gpsHaversine(anchor, rows[j]) < T &&
+          gpsHaversine(rows[j - 1], rows[j]) < T
+        ) {
+          j++;
+        }
+        // クラスタは rows[i .. j-1]
+        const clusterSize = j - i;
+        segments++;
+        if (clusterSize > 2) {
+          // 中間 rows[i+1 .. j-2] を削除、 tail = rows[j-1] を更新
+          const tail = rows[j - 1];
+          const middleIds = rows.slice(i + 1, j - 1).map((r) => r.id);
+          // tail の samples_count = anchor を除いたクラスタ全 raw 発行数 (= 削除分 + 元 tail 自身)
+          const tailNewSamples = rows.slice(i + 1, j).reduce((s, r) => s + (r.samples_count || 1), 0);
+          const samplesFirstAt = rows[i + 1].samples_first_at || rows[i + 1].recorded_at;
+          const delStmt = db.prepare(`DELETE FROM gps_locations WHERE id = ?`);
+          for (const id of middleIds) delStmt.run(id);
+          db.prepare(`
+            UPDATE gps_locations
+            SET samples_count = ?, samples_first_at = ?
+            WHERE id = ?
+          `).run(tailNewSamples, samplesFirstAt, tail.id);
+          deleted += middleIds.length;
+        }
+        i = j;
+      }
+    });
+    tx();
+
+    summary.devices.push({
+      device_id,
+      before,
+      after: before - deleted,
+      deleted,
+      segments,
+    });
+    summary.total_deleted += deleted;
+    summary.total_segments += segments;
+    summary.total_kept += before - deleted;
+  }
+
+  return summary;
 }
 
 /**
@@ -1934,7 +2124,8 @@ export function listGpsLocationsInRange(db, { from, to, userId = 'me', deviceId 
   if (deviceId) { where.push('device_id = ?'); params.push(deviceId); }
   return db.prepare(`
     SELECT id, user_id, device_id, recorded_at, lat, lon,
-           accuracy_m, altitude_m, velocity_kmh, course_deg, battery_pct, conn
+           accuracy_m, altitude_m, velocity_kmh, course_deg, battery_pct, conn,
+           samples_count, samples_first_at
     FROM gps_locations
     WHERE ${where.join(' AND ')}
     ORDER BY recorded_at ASC
@@ -1977,7 +2168,8 @@ export function gpsLocationCountForDate(db, dateStr, { userId = 'me' } = {}) {
 export function listGpsLocationsForDate(db, dateStr, { userId = 'me' } = {}) {
   return db.prepare(`
     SELECT id, device_id, recorded_at, lat, lon,
-           accuracy_m, altitude_m, velocity_kmh, course_deg
+           accuracy_m, altitude_m, velocity_kmh, course_deg,
+           samples_count, samples_first_at
     FROM gps_locations
     WHERE user_id = ? AND date(recorded_at, 'localtime') = ?
     ORDER BY recorded_at ASC
@@ -1994,8 +2186,6 @@ export function deleteGpsLocationsOlderThan(db, olderThan, { userId = 'me' } = {
   `).run(userId, olderThan);
   return info.changes;
 }
-
-void GPS_INSERT_STMT_KEY; // reserved for prepared-stmt cache
 
 // ─── meals ────────────────────────────────────────────────
 
