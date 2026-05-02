@@ -60,6 +60,7 @@ import { fetchPageMetadata } from './page-metadata.js';
 import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './local/uptime.js';
 import { listServerEvents, listServerEventsForDate } from './db.js';
+import { recordActivityEvent, activityEventsForDate, listActivityEvents } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
   generateDiary, generateWorkContent, generateHighlights,
@@ -2683,6 +2684,7 @@ function enqueueDiaryStages(dateStr, opts = {}) {
         githubByRepo: ctx.githubByRepo,
         highlights: ctx.highlights,
         digs,
+        activity: ctx.metrics?.activity,
       });
       upsertDiary(db, {
         date: dateStr,
@@ -2713,7 +2715,7 @@ function enqueueDiaryStages(dateStr, opts = {}) {
 
 // Mirror of `composeSummary` from diary.js — extracted here so we can run
 // the highlights stage independently in the queue chain.
-function composeDiarySummary({ workContent, githubByRepo, highlights, digs }) {
+function composeDiarySummary({ workContent, githubByRepo, highlights, digs, activity }) {
   const parts = [];
   if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
   if (digs && digs.length > 0) {
@@ -2726,6 +2728,24 @@ function composeDiarySummary({ workContent, githubByRepo, highlights, digs }) {
   if (githubByRepo?.repos?.length) {
     const repoLines = githubByRepo.repos.map(r => `- ${r.repo}: ${r.count} commits`).join('\n');
     parts.push(`## GitHub commits (${githubByRepo.total} 件)\n${repoLines}`);
+  }
+  if (activity && activity.total > 0) {
+    const countParts = [];
+    if (activity.kinds?.git_commit) countParts.push(`git commit ${activity.kinds.git_commit} 件`);
+    if (activity.kinds?.claude_code_prompt) countParts.push(`Claude Code 指示 ${activity.kinds.claude_code_prompt} 件`);
+    const head = countParts.length > 0 ? countParts.join(' / ') : `${activity.total} 件`;
+    const items = (activity.items || []).slice(0, 10).map((it) => {
+      const t = (it.occurred_at || '').slice(11, 16);
+      const tag = it.kind === 'git_commit' ? 'git'
+        : it.kind === 'claude_code_prompt' ? 'cc' : it.kind;
+      const src = it.source ? ` ${it.source}:` : '';
+      const content = (it.content || '').replace(/\s+/g, ' ').slice(0, 120);
+      return `- ${t} [${tag}]${src} ${content}`.trim();
+    });
+    const tail = (activity.items || []).length > 10
+      ? `\n- … ほか ${activity.items.length - 10} 件`
+      : '';
+    parts.push(`## 開発活動\n合計: ${head}\n${items.join('\n')}${tail}`);
   }
   if (highlights) parts.push(`## ハイライト\n${highlights.trim()}`);
   return parts.join('\n\n');
@@ -2831,6 +2851,61 @@ app.get('/api/diary/:date/bookmarks', (c) => {
     total: kind === 'accessed' ? r.accessed_total : r.created_total,
     offset, limit,
   });
+});
+
+// ─── activity events (git commit / claude code prompt 等) ─────────────────
+//
+// 外部のフック (グローバル git post-commit / Claude Code UserPromptSubmit hook
+// 等) からこのエンドポイントに POST してもらう。 同一 ref_id (commit sha 等) は
+// kind+ref_id の UNIQUE 制約で自動的に重複弾き。
+//
+// Body:
+//   {
+//     "kind": "git_commit" | "claude_code_prompt",
+//     "occurred_at": "YYYY-MM-DDTHH:MM:SSZ"   // 省略時は now
+//     "source": "<repo path / project name>",
+//     "ref_id": "<sha or session_id>",        // 重複弾き用、 省略可
+//     "content": "<commit msg 1 行目 / プロンプト先頭 200 文字>",
+//     "metadata": { ... }                     // 追加情報 (branch / cwd / model 等)
+//   }
+app.post('/api/activity/event', async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid json' }, 400);
+  }
+  const kind = String(body.kind || '');
+  if (!kind) return c.json({ error: 'kind required' }, 400);
+  if (kind !== 'git_commit' && kind !== 'claude_code_prompt') {
+    return c.json({ error: `unknown kind: ${kind}` }, 400);
+  }
+  try {
+    const result = recordActivityEvent(db, {
+      kind,
+      occurred_at: typeof body.occurred_at === 'string' ? body.occurred_at : null,
+      source: typeof body.source === 'string' ? body.source.slice(0, 500) : null,
+      ref_id: typeof body.ref_id === 'string' ? body.ref_id.slice(0, 200) : null,
+      content: typeof body.content === 'string' ? body.content.slice(0, 4000) : null,
+      metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : null,
+    });
+    return c.json({ ok: true, id: result.id, deduped: !result.inserted });
+  } catch (e) {
+    return c.json({ error: e.message }, 400);
+  }
+});
+
+// 当日の活動イベント (バーグラフ + ログ表示用)。 ?date=YYYY-MM-DD。
+app.get('/api/activity/events', (c) => {
+  const date = c.req.query('date');
+  if (date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
+    const items = activityEventsForDate(db, date);
+    return c.json({ date, items, total: items.length });
+  }
+  const limit = Math.min(Number(c.req.query('limit')) || 200, 1000);
+  const kind = c.req.query('kind') || null;
+  return c.json({ items: listActivityEvents(db, { limit, kind }) });
 });
 
 // Paginated dig list for the diary panel.

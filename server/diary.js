@@ -4,7 +4,7 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate, listMealsForDate, getAppSettings } from './db.js';
+import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate, listMealsForDate, getAppSettings, activityEventsForDate } from './db.js';
 import { runLlm } from './llm.js';
 
 // Downtimes >5 min make it into the diary; shorter gaps are treated as
@@ -224,6 +224,11 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
     }
   }
 
+  // 開発活動イベント (git commit / Claude Code prompt 等)。 ブラウザ閲覧で
+  // 拾えない作業をカバーする。 list_limit でページング、 hourly bucket 別途。
+  const allActivity = activityEventsForDate(db, dateStr);
+  const activity = summarizeActivityForDate(allActivity, listLimit);
+
   return {
     date: dateStr,
     total_events: totalEvents,
@@ -247,10 +252,45 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL } = {
       intake: meals.length > 0 ? mealsCalories : null,
       gpsDistanceM: gps?.distance_m ?? 0,
     }),
+    activity,
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
+      activity_events: allActivity.length,
     },
+  };
+}
+
+/**
+ * 当日分の活動イベントを集計する。
+ * - hourly: kind 別の 24 時間バケット (バーグラフ用)
+ * - kinds:  kind 別の総件数
+ * - items:  時系列リスト (listLimit で先頭 N 件、 null なら全件 — highlights プロンプト用)
+ * - total:  全イベント件数
+ */
+function summarizeActivityForDate(rows, listLimit) {
+  const kinds = {};
+  const hourly = {};
+  for (const r of rows) {
+    kinds[r.kind] = (kinds[r.kind] || 0) + 1;
+    if (!hourly[r.kind]) hourly[r.kind] = new Array(24).fill(0);
+    const h = parseSqliteUtc(r.occurred_at)?.getHours();
+    if (Number.isFinite(h)) hourly[r.kind][h] += 1;
+  }
+  const items = (listLimit == null ? rows : rows.slice(0, listLimit)).map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    occurred_at: r.occurred_at,
+    source: r.source,
+    ref_id: r.ref_id,
+    content: r.content,
+    metadata: r.metadata,
+  }));
+  return {
+    total: rows.length,
+    kinds,
+    hourly,
+    items,
   };
 }
 
@@ -639,9 +679,10 @@ export function summarizeGithubByRepo(github) {
   return { repos, total: commits.length };
 }
 
-const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) => [
+const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts }) => [
   `あなたは ${dateStr} の「作業内容」セクションを書きます。`,
-  'ブラウザ閲覧履歴 (URL + 時刻) を読み、**大まかな時間帯**で何をしていたかを 1 文でまとめ、',
+  'ブラウザ閲覧履歴 (URL + 時刻) と開発活動 (git commit / Claude Code への指示) を両方読み、',
+  '**大まかな時間帯**で何をしていたかを 1 文でまとめ、',
   'その下に主な作業を箇条書きで添えてください。細かい行動を全部書く必要はありません。',
   '',
   '出力フォーマット (markdown のみ。前置き・コードフェンス禁止):',
@@ -682,15 +723,23 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, totalEvents, totalDomains }) =>
   '  単純な開始〜終了の wall clock ではなく、移動・休憩・離席・SNS 流し見等は除く。',
   '- ブラウザのタブが開きっぱなしでもアクセス記録に動きがない時間は作業していないとみなす。',
   '- 「記録なし」のブロックは 0 分。',
+  '- **重要**: 開発活動 (git commit / Claude Code への指示) は強い作業シグナル。',
+  '  ブラウザ履歴が空でも、 commit / 指示が連続している時間帯は作業していたとみなす。',
+  '  特にスマホ開発・ターミナル中心の作業日はブラウザ履歴がほぼ無いので、',
+  '  開発活動を主たる根拠にして時間帯を組み立てる。',
   '- 24 時間 (1440 分) を超えてはいけない。実態として 12 時間を超えるのは長時間集中日のみ。',
-  '- 推定材料が足りない (例: 1 件しかアクセスがない) 場合は WORK_MINUTES: 0 と書く。',
+  '- 推定材料が足りない (例: 1 件しかアクセスがない、 開発活動も 0) 場合は WORK_MINUTES: 0 と書く。',
   '',
   `日付: ${dateStr}`,
   `総アクセス: ${totalEvents}`,
   `ユニークドメイン: ${totalDomains}`,
+  `開発活動: ${activityCounts || '(なし)'}`,
   '',
   'URL 履歴 (時刻 + URL):',
-  urlList,
+  urlList || '(ブラウザ閲覧記録なし)',
+  '',
+  '開発活動 (時刻 + イベント):',
+  activityList || '(なし)',
 ].join('\n');
 
 /**
@@ -802,6 +851,32 @@ function formatMealsBlock(metrics) {
   return lines.join('\n');
 }
 
+function formatActivityBlock(activity) {
+  if (!activity || !activity.total) return '(なし)';
+  const lines = [];
+  const counts = formatActivityCounts(activity);
+  if (counts) lines.push(`- 合計: ${counts}`);
+  // 最大 30 件まで時刻昇順で並べる (highlights プロンプトのサイズ管理)。
+  const sorted = [...(activity.items || [])].sort((a, b) => {
+    const at = parseSqliteUtc(a.occurred_at)?.getTime() || 0;
+    const bt = parseSqliteUtc(b.occurred_at)?.getTime() || 0;
+    return at - bt;
+  }).slice(0, 30);
+  for (const it of sorted) {
+    const t = formatLocalHm(it.occurred_at);
+    const tag = it.kind === 'git_commit' ? 'git'
+      : it.kind === 'claude_code_prompt' ? 'cc'
+      : it.kind;
+    const src = it.source ? ` ${it.source}:` : '';
+    const content = (it.content || '').replace(/\s+/g, ' ').slice(0, 140);
+    lines.push(`- ${t} [${tag}]${src} ${content}`.trim());
+  }
+  if ((activity.items || []).length > 30) {
+    lines.push(`- … ほか ${activity.items.length - 30} 件`);
+  }
+  return lines.join('\n');
+}
+
 function formatLocalHm(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -827,6 +902,9 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   githubByRepo.repos.length
     ? githubByRepo.repos.map(r => `- ${r.repo}: ${r.count} commits`).join('\n')
     : '(なし)',
+  '',
+  '## 入力 3b: ローカル開発活動 (git commit + Claude Code 指示)',
+  formatActivityBlock(metrics.activity),
   '',
   '## 入力 4: 当日のディグ調査 (検索 + 取得した情報源)',
   (digs && digs.length > 0)
@@ -1003,19 +1081,65 @@ function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
  * the day's focused work minutes (tail line `WORK_MINUTES: <int>`). Returns
  * `{ content, workMinutes }` — content is the markdown shown to the user
  * (tail stripped), workMinutes feeds the trends chart.
+ *
+ * URL 履歴に加えて開発活動 (git commit / Claude Code prompt) も
+ * 時系列で渡し、 ブラウザ履歴が薄い日 (スマホ開発等) でも作業時間が
+ * 適切に推定されるようにする。
  */
 export async function generateWorkContent({ db, dateStr, metrics, globalMemo, improve, timeoutMs = 180_000 }) {
   const urlList = buildUrlList(db, dateStr);
-  if (!urlList.trim()) return { content: '', workMinutes: null };
+  const activityList = buildActivityList(metrics.activity);
+  // どちらか片方でもシグナルがあれば走らせる (スマホ開発日などは URL が空でも commit がある)。
+  if (!urlList.trim() && !activityList.trim()) return { content: '', workMinutes: null };
+  const activityCounts = formatActivityCounts(metrics.activity);
   const base = WORK_CONTENT_PROMPT({
     dateStr,
     urlList,
+    activityList,
     totalEvents: metrics.total_events,
     totalDomains: metrics.unique_domains,
+    activityCounts,
   });
   const prompt = appendMemoAndImprove(base, { globalMemo, improve });
   const raw = await runLlm({ task: 'diary_work', prompt, timeoutMs });
   return extractWorkMinutes(raw);
+}
+
+/**
+ * Sonnet プロンプトに渡す活動タイムラインを組み立てる。
+ * 形式: "HH:MM [git/cc] <短い content>" を時刻昇順で並べる。
+ * 上限 800 行 (URL 側と揃える) でトリム — 直近側を残す。
+ */
+function buildActivityList(activity) {
+  if (!activity || !activity.items || activity.items.length === 0) return '';
+  // items は listLimit 切り取り済 (frontend 用) なので、 prompt 用には全件欲しい。
+  // ただし aggregateDay の listLimit=null 経路 (highlights 用) でないと不足する場合あり。
+  // 妥協: items を時刻昇順にし直し、 そのまま渡す。
+  const sorted = [...activity.items].sort((a, b) => {
+    const at = parseSqliteUtc(a.occurred_at)?.getTime() || 0;
+    const bt = parseSqliteUtc(b.occurred_at)?.getTime() || 0;
+    return at - bt;
+  });
+  const lines = sorted.map((it) => {
+    const d = parseSqliteUtc(it.occurred_at);
+    const hh = d ? String(d.getHours()).padStart(2, '0') : '??';
+    const mm = d ? String(d.getMinutes()).padStart(2, '0') : '??';
+    const tag = it.kind === 'git_commit' ? 'git'
+      : it.kind === 'claude_code_prompt' ? 'cc'
+      : it.kind;
+    const src = it.source ? ` ${it.source}:` : '';
+    const content = (it.content || '').replace(/\s+/g, ' ').slice(0, 160);
+    return `${hh}:${mm} [${tag}]${src} ${content}`.trim();
+  });
+  return lines.slice(-800).join('\n');
+}
+
+function formatActivityCounts(activity) {
+  if (!activity || !activity.total) return null;
+  const parts = [];
+  if (activity.kinds.git_commit) parts.push(`git commit ${activity.kinds.git_commit} 件`);
+  if (activity.kinds.claude_code_prompt) parts.push(`Claude Code 指示 ${activity.kinds.claude_code_prompt} 件`);
+  return parts.join(' / ') || `${activity.total} 件`;
 }
 
 /** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits + dig into highlights. */
@@ -1054,7 +1178,7 @@ export async function generateDiary({ db, dateStr, metrics, github, notes }) {
   });
 
   // Combined summary for legacy display.
-  const summary = composeSummary({ workContent, githubByRepo, highlights, digs });
+  const summary = composeSummary({ workContent, githubByRepo, highlights, digs, activity: metrics.activity });
   return { workContent, workMinutes, githubByRepo, highlights, summary, digs };
 }
 
@@ -1072,7 +1196,7 @@ function buildBookmarkSummary(metrics) {
   };
 }
 
-function composeSummary({ workContent, githubByRepo, highlights, digs }) {
+function composeSummary({ workContent, githubByRepo, highlights, digs, activity }) {
   const parts = [];
   if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
   if (digs && digs.length > 0) {
@@ -1087,6 +1211,29 @@ function composeSummary({ workContent, githubByRepo, highlights, digs }) {
       .map(r => `- ${r.repo}: ${r.count} commits`)
       .join('\n');
     parts.push(`## GitHub commits (${githubByRepo.total} 件)\n${repoLines}`);
+  }
+  if (activity && activity.total > 0) {
+    const counts = formatActivityCounts(activity);
+    const head = counts ? `合計: ${counts}` : `合計: ${activity.total} 件`;
+    // 先頭から最大 10 件をサマリに出す (フル一覧は activity 個別パネルで)。
+    const sorted = [...(activity.items || [])].sort((a, b) => {
+      const at = parseSqliteUtc(a.occurred_at)?.getTime() || 0;
+      const bt = parseSqliteUtc(b.occurred_at)?.getTime() || 0;
+      return at - bt;
+    }).slice(0, 10);
+    const lines = sorted.map((it) => {
+      const t = formatLocalHm(it.occurred_at);
+      const tag = it.kind === 'git_commit' ? 'git'
+        : it.kind === 'claude_code_prompt' ? 'cc'
+        : it.kind;
+      const src = it.source ? ` ${it.source}:` : '';
+      const content = (it.content || '').replace(/\s+/g, ' ').slice(0, 120);
+      return `- ${t} [${tag}]${src} ${content}`.trim();
+    });
+    const tail = (activity.items || []).length > 10
+      ? `\n- … ほか ${activity.items.length - 10} 件`
+      : '';
+    parts.push(`## 開発活動\n${head}\n${lines.join('\n')}${tail}`);
   }
   if (highlights) parts.push(`## ハイライト\n${highlights.trim()}`);
   return parts.join('\n\n');
