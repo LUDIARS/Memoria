@@ -82,7 +82,7 @@ import {
   listGpsLocationsForDate, deleteGpsLocationsOlderThan, compressGpsHistory,
   findGpsLocationById, listUnresolvedGpsLocations,
 } from './db.js';
-import { resolvePlaceForRow, resolveUnresolvedBatch } from './lib/place-resolver.js';
+import { resolvePlaceForRow, resolveUnresolvedBatch, getResolverDebug } from './lib/place-resolver.js';
 import { listPushSubscriptions, deletePushSubscription } from './db.js';
 import {
   insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
@@ -3592,6 +3592,8 @@ app.delete('/api/locations', (c) => {
  * 'location.resolved' で UI に通知される. レート制限対策に各リクエスト間
  * step_ms (default 150ms) 空ける.
  */
+app.get('/api/locations/resolve-debug', (c) => c.json(getResolverDebug()));
+
 app.post('/api/locations/resolve-all', async (c) => {
   let body = {};
   try { body = await c.req.json(); } catch {}

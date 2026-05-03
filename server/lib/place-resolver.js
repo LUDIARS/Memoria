@@ -27,6 +27,20 @@ import {
 const PLACES_RADIUS_M = 20;
 const TIMEOUT_MS = 5000;
 const NEAR_CACHE_GRID_M = 10;
+const PLACES_NEW_URL = 'https://places.googleapis.com/v1/places:searchNearby';
+
+// 直近の API エラーを保持して /api/locations/resolve-debug で覗けるようにする.
+// stdout が複数 npm run dev に分散して追えないので、 ここに記録するのが最速.
+let lastApiErrors = [];
+function recordError(api, info) {
+  const entry = { ts: Math.floor(Date.now() / 1000), api, ...info };
+  lastApiErrors.unshift(entry);
+  if (lastApiErrors.length > 20) lastApiErrors.length = 20;
+  console.warn(`[place-resolver] ${api} ${JSON.stringify(info).slice(0, 240)}`);
+}
+export function getResolverDebug() {
+  return { recent_errors: lastApiErrors };
+}
 
 /**
  * 場所照合に使う API key を返す.
@@ -47,18 +61,21 @@ function readApiKey(db) {
   return settings?.['maps.api_key'] || '';
 }
 
-async function fetchWithTimeout(url, ms = TIMEOUT_MS) {
+async function fetchWithTimeout(url, init = {}, ms = TIMEOUT_MS) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
-      console.warn(`[place-resolver] HTTP ${res.status} ${res.statusText} for ${maskKey(url)}`);
+      // 新 Places API は 403/400 を返す. Body にエラー詳細があるので拾う.
+      let body = '';
+      try { body = await res.text(); } catch {}
+      recordError('http', { url: maskKey(url), status: res.status, statusText: res.statusText, body: body.slice(0, 400) });
       return null;
     }
     return await res.json();
   } catch (err) {
-    console.warn(`[place-resolver] fetch failed (${err?.name}: ${err?.message}) for ${maskKey(url)}`);
+    recordError('fetch', { url: maskKey(url), error: `${err?.name}: ${err?.message}` });
     return null;
   } finally {
     clearTimeout(t);
@@ -73,24 +90,39 @@ function maskKey(url) {
  * Places API Nearby Search で半径 20m 以内の最も近い 1 件を取る (language=ja).
  * 返り値: { name, address } | null
  */
+/**
+ * Places API (New) — POST {url}/v1/places:searchNearby.
+ * Legacy Places API は段階的に無効化されているため (New) を使う.
+ * key は X-Goog-Api-Key header で渡し, 必要 field を X-Goog-FieldMask で指定 (必須).
+ */
 async function tryPlacesNearby(lat, lon, apiKey) {
-  const url =
-    `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
-    `?location=${lat},${lon}` +
-    `&radius=${PLACES_RADIUS_M}` +
-    `&language=ja&rankby=prominence` +
-    `&key=${encodeURIComponent(apiKey)}`;
-  const j = await fetchWithTimeout(url);
+  const body = {
+    maxResultCount: 1,
+    locationRestriction: {
+      circle: {
+        center: { latitude: lat, longitude: lon },
+        radius: PLACES_RADIUS_M,
+      },
+    },
+    languageCode: 'ja',
+    regionCode: 'JP',
+  };
+  const j = await fetchWithTimeout(PLACES_NEW_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.shortFormattedAddress',
+    },
+    body: JSON.stringify(body),
+  });
   if (!j) return null;
-  if (j.status !== 'OK') {
-    if (j.status === 'ZERO_RESULTS') return null;       // 該当無し: 静かに次へ
-    console.warn(`[place-resolver] Places API status=${j.status} error=${j.error_message ?? ''}`);
-    return null;
-  }
-  const r = j.results?.[0];
+  const r = j.places?.[0];
   if (!r) return null;
-  // vicinity = 周辺住所 (formatted_address は Place Details で別 call が要る).
-  return { name: r.name ?? null, address: r.vicinity ?? null };
+  const name = r.displayName?.text ?? null;
+  // shortFormattedAddress は (New) で 短い表記 (例: "東京都渋谷区..."), なければ formattedAddress.
+  const address = r.shortFormattedAddress ?? r.formattedAddress ?? null;
+  return { name, address };
 }
 
 /**
@@ -114,7 +146,7 @@ async function tryReverseGeocode(lat, lon, apiKey) {
   if (!j) return null;
   if (j.status !== 'OK') {
     if (j.status === 'ZERO_RESULTS') return null;
-    console.warn(`[place-resolver] Geocoding API status=${j.status} error=${j.error_message ?? ''}`);
+    recordError('geocode', { status: j.status, error_message: j.error_message ?? '' });
     return null;
   }
   const r = j.results?.[0];
