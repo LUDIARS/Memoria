@@ -4162,6 +4162,28 @@ async function openAiSettings() {
         <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
       `;
     }
+    // Google Maps API key の現在値ステータス (実値はブラウザに渡さない方針 — masked)
+    if ($('mapsApiKey')) {
+      try {
+        const m = await api('/api/maps/config');
+        $('mapsApiKey').value = '';
+        $('mapsApiKeyStatus').textContent = m.hasKey
+          ? '✓ 設定済み (再入力で上書き / 空欄保存は維持)'
+          : '(未設定)';
+      } catch (e) {
+        $('mapsApiKeyStatus').textContent = `取得失敗: ${e.message}`;
+      }
+    }
+    // Tracks 間引き距離
+    if ($('tracksDecimateMeters')) {
+      try {
+        const ts = await api('/api/tracks/settings');
+        $('tracksDecimateMeters').value = String(ts.decimate_meters ?? 2);
+        $('tracksDecimateStatus').textContent = `現在: ${ts.decimate_meters}m`;
+      } catch (e) {
+        $('tracksDecimateStatus').textContent = `取得失敗: ${e.message}`;
+      }
+    }
     // Electron 配下のときだけ「デスクトップアプリ」セクションを出す。
     // window.memoria は preload.ts (contextBridge) が expose する。
     const desktop = (typeof window !== 'undefined' && window.memoria) || null;
@@ -4474,12 +4496,61 @@ async function saveAiSettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    // Google Maps API key を別 endpoint で保存 (空欄なら維持、 入力済なら上書き)
+    const mk = $('mapsApiKey')?.value || '';
+    if (mk && mk !== '***') {
+      try {
+        await api('/api/maps/config', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: mk }),
+        });
+      } catch (e) {
+        alert(`Maps API key 保存失敗: ${e.message}`);
+        return;
+      }
+    }
+    // Tracks 間引き距離
+    const dmRaw = $('tracksDecimateMeters')?.value;
+    if (dmRaw !== undefined && dmRaw !== '') {
+      const v = Number(dmRaw);
+      if (Number.isFinite(v) && v >= 0 && v <= 1000) {
+        try {
+          await api('/api/tracks/settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ decimate_meters: v }),
+          });
+          tracksState.decimateMeters = v; // すぐ map にも反映
+        } catch (e) {
+          alert(`間引き距離保存失敗: ${e.message}`);
+          return;
+        }
+      }
+    }
     alert('保存しました。次回のジョブから反映されます。');
     $('aiSettingsPanel').classList.add('hidden');
   } catch (e) {
     alert(`保存失敗: ${e.message}`);
   }
 }
+
+// ── settings 内部タブ切替 ─────────────────────────────
+document.addEventListener('click', (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return;
+  const btn = target.closest('.settings-tab');
+  if (!btn || !btn.dataset.stab) return;
+  const panel = $('aiSettingsPanel');
+  if (!panel || panel.classList.contains('hidden')) return;
+  const stab = btn.dataset.stab;
+  panel.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b === btn));
+  panel.querySelectorAll('.settings-tab-body').forEach(sec => {
+    sec.classList.toggle('hidden', sec.dataset.stab !== stab);
+  });
+  // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
+  panel.scrollTop = 0;
+});
 
 document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
 document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
@@ -4787,6 +4858,7 @@ async function loadTracks() {
     tracksState._bound = true;
     dateInput?.addEventListener('change', renderTracksForCurrentDate);
     $('tracksRefresh')?.addEventListener('click', renderTracksForCurrentDate);
+    $('tracksRecentRefresh')?.addEventListener('click', refreshTracksRecent);
     $('tracksKeyToggle')?.addEventListener('click', () => {
       $('tracksKeyPanel').classList.toggle('hidden');
       refreshTracksKeyPanel();
@@ -4807,11 +4879,13 @@ async function loadTracks() {
   }
 
   try {
-    const [{ apiKey, hasKey }, { days }] = await Promise.all([
+    const [{ apiKey, hasKey }, { days }, ts] = await Promise.all([
       api('/api/maps/config'),
       api('/api/locations/days?limit=180'),
+      api('/api/tracks/settings').catch(() => ({ decimate_meters: 2 })),
     ]);
     tracksState.apiKey = apiKey;
+    tracksState.decimateMeters = Number(ts.decimate_meters ?? 2);
     $('tracksMissingKey').classList.toggle('hidden', !!hasKey);
     renderTracksDaysList(days);
     if (hasKey) {
@@ -4820,6 +4894,7 @@ async function loadTracks() {
       renderTracksForCurrentDate();
     }
     refreshTracksKeyPanel();
+    refreshTracksRecent();
     ensureLiveSocket();
   } catch (e) {
     console.error('[tracks] load failed', e);
@@ -4905,6 +4980,9 @@ function setLiveStatus(s) {
 }
 
 function handleLivePoint(point) {
+  // 最新リストには 日付関係なく即時 prepend (live 通知が一番大事)
+  prependTracksRecent(point);
+
   const dateStr = $('tracksDate')?.value;
   if (!dateStr) return;
   const localDay = isoToLocalYmd(point.recorded_at);
@@ -4915,8 +4993,137 @@ function handleLivePoint(point) {
   if (!tracksState.map) return;
   tracksState.todayPoints.push(point);
   appendLivePointToPolyline(point);
-  const km = computeDistanceMeters(tracksState.todayPoints) / 1000;
-  $('tracksStats').textContent = `${tracksState.todayPoints.length} 点 / 概算 ${km.toFixed(2)} km (live)`;
+
+  // 徒歩判定: 直前点との区間で集計. walk は運動、 fast は交通機関 (運動外).
+  const arr = tracksState.todayPoints;
+  if (arr.length >= 2) {
+    const prev = arr[arr.length - 2];
+    const cur = arr[arr.length - 1];
+    const seg = classifySegment(prev, cur);
+    const w = tracksState.walkingStats || { walkMeters: 0, walkSec: 0, transitMeters: 0, transitSec: 0, stillMeters: 0, stillSec: 0 };
+    if (seg.category === 'walk') {
+      w.walkMeters += seg.meters; w.walkSec += seg.dt;
+    } else if (seg.category === 'fast') {
+      w.transitMeters += seg.meters; w.transitSec += seg.dt;
+    } else {
+      w.stillMeters += seg.meters; w.stillSec += seg.dt;
+    }
+    tracksState.walkingStats = w;
+
+    // 新着点を category 色で打つ
+    const c = CAT_COLORS[seg.category] || CAT_COLORS.still;
+    if (window.google?.maps && tracksState.pointMarkers) {
+      tracksState.pointMarkers.push(new google.maps.Marker({
+        position: { lat: cur.lat, lng: cur.lon },
+        map: tracksState.map,
+        title: `#${cur.id ?? '?'} ${seg.category} (${seg.kmh.toFixed(1)} km/h)`,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 3,
+          fillColor: c.fill,
+          fillOpacity: 0.9,
+          strokeColor: c.stroke,
+          strokeWeight: 1,
+        },
+        zIndex: 5,
+      }));
+    }
+    // 直前との区間に専用色 polyline を追加 (drawTracks で全描き直しせず差分のみ)
+    if (window.google?.maps && tracksState.polylines) {
+      const cat = seg.category;
+      tracksState.polylines.push(new google.maps.Polyline({
+        path: [{ lat: prev.lat, lng: prev.lon }, { lat: cur.lat, lng: cur.lon }],
+        geodesic: true,
+        strokeColor: cat === 'walk' ? '#10b981' : cat === 'fast' ? '#3b82f6' : '#9ca3af',
+        strokeOpacity: cat === 'still' ? 0.35 : 0.85,
+        strokeWeight: cat === 'walk' ? 4 : (cat === 'fast' ? 3 : 2),
+        map: tracksState.map,
+        icons: cat === 'fast' ? [{
+          icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
+          offset: '0', repeat: '12px',
+        }] : undefined,
+        zIndex: cat === 'walk' ? 3 : (cat === 'fast' ? 2 : 1),
+      }));
+    }
+  }
+
+  updateTracksStatsLine(tracksState.todayPoints, { live: true });
+}
+
+// ── 最新 GPS ログリスト ─────────────────────────────────────────────────
+async function refreshTracksRecent() {
+  try {
+    const r = await api('/api/locations/recent?limit=50');
+    renderTracksRecent(r.points || []);
+  } catch (e) {
+    console.warn('[tracks] recent fetch failed', e);
+  }
+}
+
+function renderTracksRecent(points) {
+  const ul = $('tracksRecentList');
+  if (!ul) return;
+  $('tracksRecentCount').textContent = points.length ? `${points.length} 件` : '';
+  if (!points.length) {
+    ul.innerHTML = '<li class="muted">まだ記録なし</li>';
+    return;
+  }
+  ul.innerHTML = points.map(p => trackRecentRowHtml(p)).join('');
+  bindTracksRecentRows();
+}
+
+function prependTracksRecent(point) {
+  const ul = $('tracksRecentList');
+  if (!ul) return;
+  // 0 件状態の muted li を除去
+  if (ul.querySelector('.muted')) ul.innerHTML = '';
+  const tmp = document.createElement('div');
+  tmp.innerHTML = trackRecentRowHtml(point);
+  const newRow = tmp.firstElementChild;
+  if (newRow) ul.prepend(newRow);
+  // 50 件超えたら末尾切り
+  while (ul.children.length > 50) ul.lastElementChild?.remove();
+  bindTracksRecentRows();
+  $('tracksRecentCount').textContent = `${ul.children.length} 件`;
+}
+
+function trackRecentRowHtml(p) {
+  const t = p.recorded_at ? new Date(p.recorded_at) : null;
+  const tStr = t && !isNaN(t.getTime())
+    ? t.toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '-';
+  const dev = p.device_id ?? '?';
+  const lat = Number(p.lat).toFixed(5);
+  const lon = Number(p.lon).toFixed(5);
+  const acc = p.accuracy_m != null ? `±${Math.round(p.accuracy_m)}m` : '';
+  const vel = p.velocity_kmh != null ? `${Math.round(p.velocity_kmh)}km/h` : '';
+  return `
+    <li class="tracks-recent-row" data-lat="${lat}" data-lon="${lon}" data-id="${p.id}">
+      <div class="tracks-recent-time">${escapeHtml(tStr)}</div>
+      <div class="tracks-recent-meta">
+        <span class="tracks-recent-dev">${escapeHtml(dev)}</span>
+        <span class="tracks-recent-coord"><code>${lat},${lon}</code></span>
+        <span class="muted">${acc} ${vel}</span>
+      </div>
+    </li>
+  `;
+}
+
+function bindTracksRecentRows() {
+  const ul = $('tracksRecentList');
+  if (!ul) return;
+  ul.querySelectorAll('.tracks-recent-row[data-lat]').forEach(li => {
+    if (li._bound) return;
+    li._bound = true;
+    li.addEventListener('click', () => {
+      const lat = Number(li.dataset.lat);
+      const lon = Number(li.dataset.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      if (!tracksState.map) return;
+      tracksState.map.panTo({ lat, lng: lon });
+      if ((tracksState.map.getZoom() ?? 12) < 16) tracksState.map.setZoom(17);
+    });
+  });
 }
 
 function isoToLocalYmd(iso) {
@@ -4930,14 +5137,29 @@ function isoToLocalYmd(iso) {
 }
 
 function appendLivePointToPolyline(point) {
-  if (!tracksState.polyline) {
-    drawTracks([point]);
-    return;
+  const ll = new google.maps.LatLng(point.lat, point.lon);
+
+  // 区間色付け済みの polylines 配列が既にある場合 (drawTracks 後 + handleLivePoint で
+  // segment polyline を追加してる場合) は、 追加描画は handleLivePoint 側に任せる.
+  // ここでは終端 marker 追従と panTo のみ.
+  const haveSegmented = (tracksState.polylines && tracksState.polylines.length > 0);
+
+  if (!haveSegmented) {
+    // 初回 (まだ何も描かれてない): 全点配列で drawTracks にやらせる.
+    drawTracks(tracksState.todayPoints || [point]);
+  } else {
+    // 終端 marker を最新点に追従 (dotMarkers[1] = 終端).
+    if (tracksState.dotMarkers[1]) {
+      tracksState.dotMarkers[1].setPosition({ lat: point.lat, lng: point.lon });
+    }
   }
-  const path = tracksState.polyline.getPath();
-  path.push(new google.maps.LatLng(point.lat, point.lon));
-  if (tracksState.dotMarkers[1]) {
-    tracksState.dotMarkers[1].setPosition({ lat: point.lat, lng: point.lon });
+
+  // 現在地追従: 新着点を常に map center にして smooth pan.
+  if (tracksState.map) {
+    tracksState.map.panTo(ll);
+    if ((tracksState.map.getZoom() ?? 12) < 14) {
+      tracksState.map.setZoom(15);
+    }
   }
 }
 
@@ -4990,7 +5212,7 @@ function ensureMapInstance() {
   if (tracksState.map || !window.google?.maps) return;
   const el = $('tracksMap');
   if (!el) return;
-  // 起動時の暫定中心 (東京駅)。最初のロード後に bbox に fit する。
+  // 起動時の暫定中心 (東京駅)。 直後に latest GPS 点 / 現在位置で上書きする。
   tracksState.map = new google.maps.Map(el, {
     center: { lat: 35.681, lng: 139.767 },
     zoom: 12,
@@ -4998,6 +5220,37 @@ function ensureMapInstance() {
     streetViewControl: false,
     fullscreenControl: true,
   });
+  void recenterMapOnLatestOrCurrent();
+}
+
+/**
+ * 初期 center 戦略:
+ *   1. 最終 GPS 点 (/api/locations/latest) があれば その周囲を表示 (zoom 15)
+ *   2. 1 が無ければ navigator.geolocation で現在位置を取得 (zoom 15)
+ *   3. どちらも失敗したら 東京駅のまま放置
+ * 何回呼ばれても安全 (idempotent — 表示中の date が今日の点で fitBounds されると上書きされる).
+ */
+async function recenterMapOnLatestOrCurrent() {
+  if (!tracksState.map) return;
+  try {
+    const r = await api('/api/locations/latest').catch(() => ({ point: null }));
+    if (r?.point && Number.isFinite(r.point.lat) && Number.isFinite(r.point.lon)) {
+      tracksState.map.setCenter({ lat: r.point.lat, lng: r.point.lon });
+      tracksState.map.setZoom(15);
+      return;
+    }
+  } catch (e) { console.warn('[tracks] latest fetch failed', e); }
+  // fallback: 現在位置
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      if (!tracksState.map) return;
+      tracksState.map.setCenter({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      tracksState.map.setZoom(15);
+    },
+    (err) => { console.info('[tracks] geolocation skipped:', err?.message); },
+    { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 },
+  );
 }
 
 async function renderTracksForCurrentDate() {
@@ -5010,52 +5263,206 @@ async function renderTracksForCurrentDate() {
     drawTracks(pts);
     // live append のキャッシュ。 表示中の日付が「今日 (local)」なら使われる。
     tracksState.todayPoints = (date === todayLocalIso()) ? pts.slice() : [];
-    const km = computeDistanceMeters(pts) / 1000;
-    $('tracksStats').textContent = pts.length
-      ? `${pts.length} 点 / 概算 ${km.toFixed(2)} km`
-      : '点なし';
+    updateTracksStatsLine(pts);
   } catch (e) {
     console.error('[tracks] render failed', e);
     $('tracksStats').textContent = '取得失敗';
   }
 }
 
+function updateTracksStatsLine(pts, { live = false } = {}) {
+  const el = $('tracksStats');
+  if (!el) return;
+  if (!pts.length) { el.textContent = '点なし'; return; }
+  const w = tracksState.walkingStats || { walkMeters: 0, walkSec: 0, transitMeters: 0, transitSec: 0 };
+  const walkKm = w.walkMeters / 1000;
+  const walkMin = w.walkSec / 60;
+  const transitKm = (w.transitMeters || 0) / 1000;
+  const liveTag = live ? ' (live)' : '';
+  // 運動 = 徒歩のみ. 交通機関 (>5 km/h) は移動量として別立てで表示するが運動換算しない.
+  el.textContent =
+    `${pts.length} 点 · 🚶 徒歩 ${walkKm.toFixed(2)} km / ${walkMin.toFixed(0)} 分 (運動) · 🚃 交通機関 ${transitKm.toFixed(2)} km${liveTag}`;
+}
+
+// 徒歩判定 — 連続 2 点の速度が 1〜5 km/h なら walk と分類.
+const WALK_MIN_KMH = 1.0;
+const WALK_MAX_KMH = 5.0;
+
+/**
+ * 連続点を tracksState.decimateMeters (default 2m) で間引く.
+ * 統計 (徒歩 km / 時間) も間引き後で計算する (生 GPS ジッタ除外).
+ */
+function decimatePoints(points) {
+  const minM = Number.isFinite(tracksState.decimateMeters) ? tracksState.decimateMeters : 2;
+  if (minM <= 0) return points || [];
+  if (!points || points.length === 0) return [];
+  const out = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const prev = out[out.length - 1];
+    if (haversineMeters(prev, points[i]) >= minM) {
+      out.push(points[i]);
+    }
+  }
+  return out;
+}
+
+function classifySegment(prev, cur) {
+  if (!prev || !cur) return { kmh: 0, category: 'still' };
+  const dt = (Date.parse(cur.recorded_at) - Date.parse(prev.recorded_at)) / 1000;
+  if (!Number.isFinite(dt) || dt <= 0) return { kmh: 0, category: 'still' };
+  const meters = haversineMeters(prev, cur);
+  const kmh = (meters / dt) * 3.6;
+  let category;
+  if (kmh < WALK_MIN_KMH) category = 'still';
+  else if (kmh <= WALK_MAX_KMH) category = 'walk';
+  else category = 'fast';
+  return { kmh, category, meters, dt };
+}
+
+function haversineMeters(a, b) {
+  const R = 6_371_008;
+  const toRad = d => (d * Math.PI) / 180;
+  const f1 = toRad(a.lat), f2 = toRad(b.lat);
+  const df = toRad(b.lat - a.lat), dl = toRad(b.lon - a.lon);
+  const h = Math.sin(df/2) ** 2 + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function classifyAll(points) {
+  // 各点の category は「自分に向かってきた区間」の category. 先頭は still 扱い.
+  const cats = new Array(points.length);
+  cats[0] = 'still';
+  let walkMeters = 0, walkSec = 0;
+  let transitMeters = 0, transitSec = 0;
+  let stillMeters = 0, stillSec = 0;
+  for (let i = 1; i < points.length; i++) {
+    const seg = classifySegment(points[i-1], points[i]);
+    cats[i] = seg.category;
+    if (seg.category === 'walk') {
+      walkMeters += seg.meters;
+      walkSec += seg.dt;
+    } else if (seg.category === 'fast') {
+      // 5 km/h 超 = 交通機関想定. 軌跡には出すが運動換算しない.
+      transitMeters += seg.meters;
+      transitSec += seg.dt;
+    } else {
+      stillMeters += seg.meters;
+      stillSec += seg.dt;
+    }
+  }
+  return { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec };
+}
+
+const CAT_COLORS = {
+  walk:  { fill: '#10b981', stroke: '#065f46' },
+  still: { fill: '#9ca3af', stroke: '#374151' },
+  fast:  { fill: '#3b82f6', stroke: '#1e3a8a' },
+};
+
 function drawTracks(points) {
   // 既存 overlay をクリア
+  if (tracksState.polylines) for (const p of tracksState.polylines) p.setMap(null);
+  tracksState.polylines = [];
+  // 旧 single polyline 互換クリア (live append が参照)
   if (tracksState.polyline) {
     tracksState.polyline.setMap(null);
     tracksState.polyline = null;
   }
   for (const m of tracksState.dotMarkers) m.setMap(null);
   tracksState.dotMarkers = [];
+  if (tracksState.pointMarkers) for (const m of tracksState.pointMarkers) m.setMap(null);
+  tracksState.pointMarkers = [];
   if (!points.length) return;
 
-  const path = points.map(p => ({ lat: p.lat, lng: p.lon }));
-  tracksState.polyline = new google.maps.Polyline({
-    path,
-    geodesic: true,
-    strokeColor: '#3b82f6',
-    strokeOpacity: 0.85,
-    strokeWeight: 4,
-    map: tracksState.map,
-  });
+  // 2m 以内の連続点を間引く (GPS ノイズ除去). 描画も統計もこれを使う.
+  const raw = points;
+  points = decimatePoints(raw);
+  tracksState.lastDrawnRawCount = raw.length;
+  tracksState.lastDrawnKeptCount = points.length;
 
-  // 始点 / 終点に小さなマーカーを置く (path が長くてもマーカーは 2 個だけ)
+  // 徒歩判定 → 各点を色分けで打つ
+  const { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec } = classifyAll(points);
+
+  // 区間ごとに polyline を 1 本ずつ描画 (cats[i] = points[i-1] → points[i] の category).
+  // 64 点でも polyline 63 本程度なので Maps の負荷的には許容.
+  if (points.length >= 2) {
+    for (let i = 1; i < points.length; i++) {
+      const cat = cats[i] || 'still';
+      tracksState.polylines.push(new google.maps.Polyline({
+        path: [
+          { lat: points[i-1].lat, lng: points[i-1].lon },
+          { lat: points[i].lat,   lng: points[i].lon   },
+        ],
+        geodesic: true,
+        strokeColor: cat === 'walk' ? '#10b981'
+                   : cat === 'fast' ? '#3b82f6'
+                   : '#9ca3af',
+        strokeOpacity: cat === 'still' ? 0.35 : 0.85,
+        strokeWeight: cat === 'walk' ? 4 : (cat === 'fast' ? 3 : 2),
+        map: tracksState.map,
+        // fast (交通機関) は破線で「運動外」を視覚的に示す
+        icons: cat === 'fast' ? [{
+          icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
+          offset: '0', repeat: '12px',
+        }] : undefined,
+        zIndex: cat === 'walk' ? 3 : (cat === 'fast' ? 2 : 1),
+      }));
+    }
+    // 旧 API 互換: appendLivePointToPolyline 用に最後の polyline を polyline に
+    tracksState.polyline = tracksState.polylines[tracksState.polylines.length - 1] ?? null;
+  }
+  for (let i = 0; i < points.length; i++) {
+    const c = CAT_COLORS[cats[i]] || CAT_COLORS.still;
+    const m = new google.maps.Marker({
+      position: { lat: points[i].lat, lng: points[i].lon },
+      map: tracksState.map,
+      title: `#${points[i].id ?? '?'} ${cats[i]} ${i > 0 ? '(' + classifySegment(points[i-1], points[i]).kmh.toFixed(1) + ' km/h)' : ''}`,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 3,
+        fillColor: c.fill,
+        fillOpacity: 0.9,
+        strokeColor: c.stroke,
+        strokeWeight: 1,
+      },
+      zIndex: 5,
+    });
+    tracksState.pointMarkers.push(m);
+  }
+
+  // 始点 / 終点に大きい marker
   const start = path[0];
   const end = path[path.length - 1];
   tracksState.dotMarkers.push(new google.maps.Marker({
     position: start, map: tracksState.map, title: '開始',
-    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#10b981', fillOpacity: 1, strokeColor: '#065f46', strokeWeight: 1 },
+    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#10b981', fillOpacity: 1, strokeColor: '#065f46', strokeWeight: 2 },
+    zIndex: 10,
   }));
-  tracksState.dotMarkers.push(new google.maps.Marker({
-    position: end, map: tracksState.map, title: '終端',
-    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#7f1d1d', strokeWeight: 1 },
-  }));
+  if (path.length >= 2) {
+    tracksState.dotMarkers.push(new google.maps.Marker({
+      position: end, map: tracksState.map, title: '終端',
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#7f1d1d', strokeWeight: 2 },
+      zIndex: 10,
+    }));
+  } else {
+    tracksState.dotMarkers.push(new google.maps.Marker({
+      position: start, map: tracksState.map, title: '現在',
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#7f1d1d', strokeWeight: 2 },
+      zIndex: 10,
+    }));
+  }
 
-  // bbox に fit
-  const b = new google.maps.LatLngBounds();
-  for (const p of path) b.extend(p);
-  tracksState.map.fitBounds(b, 60);
+  // 区分別 stats を保持. 表示は renderTracksForCurrentDate / handleLivePoint が更新.
+  tracksState.walkingStats = { walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec };
+
+  if (path.length >= 2) {
+    const b = new google.maps.LatLngBounds();
+    for (const p of path) b.extend(p);
+    tracksState.map.fitBounds(b, 60);
+  } else {
+    tracksState.map.setCenter(end);
+    if ((tracksState.map.getZoom() ?? 12) < 14) tracksState.map.setZoom(15);
+  }
 }
 
 function computeDistanceMeters(points) {
@@ -6811,3 +7218,149 @@ function wireLocationEditModal() {
   });
 }
 wireLocationEditModal();
+
+// ── Legatus WS client (loopback ws://127.0.0.1:17320/ws) ─────────────
+// 接続状態 / MQTT 受信 / relay 成否を live で取り込む。
+// loopback 専用 (mobile PWA からは到達しないので unhide しない)。
+(function setupLegatusWatcher() {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // loopback 固定。 Memoria が別ホスト経由 (PWA / 別 PC) で開かれたときは接続試行のみ。
+  const url = `${proto}//127.0.0.1:17320/ws`;
+  const RECONNECT_BASE_MS = 1000;
+  const RECONNECT_MAX_MS = 30000;
+  let ws = null;
+  let attempt = 0;
+  let reconnectTimer = null;
+  let lastHeartbeatTs = 0;
+  let lastEventLine = '';
+  let lastSnapshot = null;
+
+  const dot = () => document.querySelector('#legatusBadge .legatus-dot');
+  const labelEl = () => document.querySelector('#legatusBadge .legatus-label');
+  const badge = () => document.getElementById('legatusBadge');
+
+  function setState(state, hint) {
+    const d = dot();
+    if (d) d.dataset.state = state;
+    const lab = labelEl();
+    if (lab) lab.textContent = hint || 'Legatus';
+    const b = badge();
+    if (b) b.hidden = false;
+  }
+
+  function fmtAgo(ts) {
+    if (!ts) return '—';
+    const now = Math.floor(Date.now() / 1000);
+    const d = Math.max(0, now - ts);
+    if (d < 60) return `${d}s 前`;
+    if (d < 3600) return `${Math.floor(d / 60)}m 前`;
+    return `${Math.floor(d / 3600)}h 前`;
+  }
+
+  function refreshDetailBox() {
+    if (!lastSnapshot) return;
+    const s = lastSnapshot;
+    const $ = (id) => document.getElementById(id);
+    if ($('legatusConnState')) {
+      $('legatusConnState').textContent = lastHeartbeatTs
+        ? `WS open · 最終 heartbeat ${fmtAgo(lastHeartbeatTs)}`
+        : 'connecting…';
+    }
+    if ($('legatusMqttState')) {
+      $('legatusMqttState').textContent = s.mqtt?.connected
+        ? `connected (${s.mqtt.url}, topic ${s.mqtt.topic ?? '?'})`
+        : 'disconnected';
+    }
+    if ($('legatusLastEvent')) {
+      $('legatusLastEvent').textContent = fmtAgo(s.last_event_ts);
+    }
+    if ($('legatusBufferPending')) {
+      $('legatusBufferPending').textContent = String(s.buffer_pending ?? 0);
+    }
+    if ($('legatusRelayStats')) {
+      const r = s.audit_24h || { ok: 0, error: 0 };
+      $('legatusRelayStats').textContent = `ok ${r.ok} / error ${r.error}`;
+    }
+    if ($('legatusEventTail')) {
+      $('legatusEventTail').textContent = lastEventLine || '(まだ受信なし)';
+    }
+  }
+
+  function ageBucketFromHeartbeat() {
+    if (!lastHeartbeatTs) return 'unknown';
+    const age = Math.floor(Date.now() / 1000) - lastHeartbeatTs;
+    if (age <= 30) return 'connected';
+    if (age <= 90) return 'stale';
+    return 'disconnected';
+  }
+
+  function applyEvent(ev) {
+    const ts = Math.floor(Date.now() / 1000);
+    if (ev.type === 'hello' || ev.type === 'heartbeat') {
+      lastHeartbeatTs = ev.ts || ts;
+      if (ev.type === 'heartbeat') {
+        lastSnapshot = {
+          mqtt: ev.mqtt,
+          last_event_ts: ev.last_event_ts,
+          buffer_pending: ev.buffer_pending,
+          audit_24h: ev.audit_24h,
+        };
+      }
+    } else if (ev.type === 'mqtt.status') {
+      if (lastSnapshot) lastSnapshot.mqtt = { connected: ev.connected, url: ev.url };
+      lastEventLine = `[mqtt] ${ev.connected ? 'connected' : 'disconnected'} ${ev.reason || ''}`.trim();
+    } else if (ev.type === 'owntracks.received') {
+      if (lastSnapshot) {
+        lastSnapshot.last_event_ts = ev.ts;
+        lastSnapshot.buffer_pending = (lastSnapshot.buffer_pending || 0) + 1;
+      }
+      lastEventLine = `[gps] ${ev.topic_user}/${ev.device} lat=${ev.lat?.toFixed?.(4) ?? '?'} lon=${ev.lon?.toFixed?.(4) ?? '?'} acc=${ev.acc ?? '?'}`;
+    } else if (ev.type === 'relay.attempt') {
+      if (lastSnapshot) {
+        const a = lastSnapshot.audit_24h || { ok: 0, error: 0 };
+        if (ev.ok) a.ok += 1; else a.error += 1;
+        lastSnapshot.audit_24h = a;
+      }
+      lastEventLine = `[relay] ${ev.target} ${ev.kind} ${ev.ok ? 'OK' : 'ERR ' + (ev.error_code || '')} ${ev.duration_ms ?? '?'}ms`;
+    } else if (ev.type === 'buffer.flushed') {
+      if (lastSnapshot) lastSnapshot.buffer_pending = 0;
+      const skip = ev.skipped ? `skipped (${ev.reason}, net ${ev.net_meters ?? '?'}m)` : `flushed (${ev.points}pt, net ${ev.net_meters ?? '?'}m)`;
+      lastEventLine = `[buffer] ${skip}`;
+    }
+    setState(ageBucketFromHeartbeat(), `Legatus`);
+    refreshDetailBox();
+  }
+
+  function connect() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    try { ws = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
+    ws.addEventListener('open', () => { attempt = 0; setState('connected', 'Legatus'); });
+    ws.addEventListener('message', (e) => {
+      let parsed = null;
+      try { parsed = JSON.parse(e.data); } catch { return; }
+      if (parsed && typeof parsed.type === 'string') applyEvent(parsed);
+    });
+    ws.addEventListener('close', () => {
+      ws = null;
+      setState('disconnected', 'Legatus');
+      scheduleReconnect();
+    });
+    ws.addEventListener('error', () => { /* close ハンドラに任せる */ });
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, attempt), RECONNECT_MAX_MS);
+    attempt += 1;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+  }
+
+  // 30 秒おきに status bucket を再評価 (heartbeat タイムアウトを検出)
+  setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    setState(ageBucketFromHeartbeat(), 'Legatus');
+    refreshDetailBox();
+  }, 5000);
+
+  connect();
+})();

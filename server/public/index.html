@@ -19,6 +19,10 @@
     <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
       <button id="howToBookmarkBtn" class="ghost topbar-howto" title="ブックマークの追加方法" hidden>💡 やり方</button>
+      <button id="legatusBadge" class="ghost topbar-legatus" type="button" title="Legatus 接続状態" hidden>
+        <span class="legatus-dot" data-state="unknown">●</span>
+        <span class="legatus-label">Legatus</span>
+      </button>
       <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定">⚙ 設定</button>
     </div>
   </header>
@@ -488,6 +492,14 @@
           を入れるか、 環境変数 <code>GOOGLE_MAPS_API_KEY</code> を設定してください。
         </div>
         <div id="tracksMap" class="tracks-map"></div>
+        <div class="tracks-recent">
+          <div class="tracks-recent-head">
+            <h4>📍 GPS ログ (最新 50 件)</h4>
+            <span id="tracksRecentCount" class="muted"></span>
+            <button id="tracksRecentRefresh" class="ghost" title="再読込">↻</button>
+          </div>
+          <ul id="tracksRecentList" class="tracks-recent-list"></ul>
+        </div>
         <div class="tracks-days">
           <h4>記録のある日</h4>
           <ul id="tracksDays" class="tracks-days-list"></ul>
@@ -958,107 +970,170 @@ bogus-priv</code></pre>
 
   <div id="aiSettingsPanel" class="ai-settings hidden">
     <div class="ai-settings-head">
-      <h3>AI モデル / プロバイダ設定</h3>
+      <h3>設定</h3>
       <button id="aiSettingsClose" class="ghost">×</button>
     </div>
-    <p class="ai-settings-help">タスクごとに使う LLM プロバイダを選びます。Claude CLI / Gemini CLI / Codex CLI / OpenAI API を切り替え可能。Tools (WebSearch 等) が必要なタスクで非対応プロバイダを選ぶと、そのタスクは Tools なしで動きます。</p>
-    <div id="aiTaskRows"></div>
-    <h4>CLI バイナリパス (PATH に通っていない場合のみ指定)</h4>
-    <label>claude: <input id="aiBinClaude" type="text" placeholder="claude" /></label>
-    <label>gemini: <input id="aiBinGemini" type="text" placeholder="gemini" /></label>
-    <label>codex:  <input id="aiBinCodex"  type="text" placeholder="codex" /></label>
-    <h4>🐚 Bash (Windows のみ)</h4>
-    <p class="ai-settings-help">Claude CLI は内部で bash を呼び出します。Windows でデスクトップアプリから動かすときだけ git-bash の絶対パスを指定してください (例: <code>C:\Program Files\Git\bin\bash.exe</code>)。空欄なら環境変数 <code>CLAUDE_CODE_GIT_BASH_PATH</code> を尊重します。</p>
-    <label>git-bash path: <input id="aiGitBashPath" type="text" placeholder="C:\\Program Files\\Git\\bin\\bash.exe" /></label>
-    <h4>OpenAI API</h4>
-    <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." /></label>
-    <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
-    <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
-    <h4>📤 エクスポート / 📥 インポート</h4>
-    <p class="ai-settings-help">ブックマークを JSON で書き出し / 取り込み (URL 重複はスキップ)。エクスポートはチェックを入れたカードのみ。</p>
-    <div class="ai-settings-actions">
-      <button id="exportBtn" class="ghost" title="選択中をエクスポート">Export</button>
-      <label class="ghost file-btn">
-        Import<input id="importInput" type="file" accept="application/json" hidden />
-      </label>
-    </div>
+    <nav class="settings-tabs" role="tablist">
+      <button type="button" class="settings-tab active" data-stab="ai" role="tab">🤖 AI / モデル</button>
+      <button type="button" class="settings-tab" data-stab="api" role="tab">🔌 連携 / API key</button>
+      <button type="button" class="settings-tab" data-stab="notif" role="tab">🔔 通知 / 端末</button>
+      <button type="button" class="settings-tab" data-stab="profile" role="tab">🧍 プロフィール</button>
+      <button type="button" class="settings-tab" data-stab="data" role="tab">📦 データ / Hub</button>
+      <button type="button" class="settings-tab" data-stab="runtime" role="tab">🛠 ランタイム</button>
+    </nav>
 
-    <h4>📝 日記の常設メモ</h4>
-    <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
-    <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
+    <!-- ── 🤖 AI / モデル ── -->
+    <section class="settings-tab-body" data-stab="ai">
+      <p class="ai-settings-help">タスクごとに使う LLM プロバイダを選びます。Claude CLI / Gemini CLI / Codex CLI / OpenAI API を切り替え可能。Tools (WebSearch 等) が必要なタスクで非対応プロバイダを選ぶと、そのタスクは Tools なしで動きます。</p>
+      <div id="aiTaskRows"></div>
+      <h4>CLI バイナリパス (PATH に通っていない場合のみ指定)</h4>
+      <label>claude: <input id="aiBinClaude" type="text" placeholder="claude" /></label>
+      <label>gemini: <input id="aiBinGemini" type="text" placeholder="gemini" /></label>
+      <label>codex:  <input id="aiBinCodex"  type="text" placeholder="codex" /></label>
+      <h4>🐚 Bash (Windows のみ)</h4>
+      <p class="ai-settings-help">Claude CLI は内部で bash を呼び出します。Windows でデスクトップアプリから動かすときだけ git-bash の絶対パスを指定してください (例: <code>C:\Program Files\Git\bin\bash.exe</code>)。空欄なら環境変数 <code>CLAUDE_CODE_GIT_BASH_PATH</code> を尊重します。</p>
+      <label>git-bash path: <input id="aiGitBashPath" type="text" placeholder="C:\\Program Files\\Git\\bin\\bash.exe" /></label>
+      <h4>📝 日記の常設メモ</h4>
+      <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
+      <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
+    </section>
 
-    <h4 id="aiDesktopHead" hidden>🖥 デスクトップアプリ</h4>
-    <div id="aiDesktopSection" hidden>
-      <p class="ai-settings-help">この Memoria は Electron デスクトップアプリの中で動いています。 ウィンドウの × はトレイ最小化、 サーバは常駐し続けます (Chrome 拡張 / モバイル PWA からのアクセスは継続)。 完全終了はトレイ右クリック → 「Memoria を終了」。</p>
-      <label class="check-inline">
-        <input id="aiAutoLaunch" type="checkbox" />
-        ログイン時に自動起動 (バックグラウンドでサーバが立ち上がる)
-      </label>
-      <p class="ai-settings-help" style="margin-top:6px">
-        ON にすると <code>--hidden</code> フラグでウィンドウなし起動 → トレイアイコンだけ表示されます。 普段は OS スタートアップに登録するこの方式で十分。 「ログアウト中も動かしたい」 ような用途は将来 Windows サービス化を検討します (別 PR)。
+    <!-- ── 🔌 連携 / API key ── -->
+    <section class="settings-tab-body hidden" data-stab="api">
+      <h4>🤖 OpenAI API</h4>
+      <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
+      <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
+      <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+
+      <h4>📍 Legatus 連携 (GPS / 位置情報リレー)</h4>
+      <p class="ai-settings-help">
+        この PC 上の <strong>Legatus</strong> (loopback 17320) と WebSocket で接続し、 OwnTracks の MQTT 受信状態 / Memoria 向け relay の成否を live で表示します。 Legatus が落ちている場合 🔴 disconnected。
       </p>
-    </div>
+      <div id="legatusStatusBox" class="legatus-status-box">
+        <div class="legatus-row"><span class="legatus-key">接続</span><span id="legatusConnState" class="legatus-val">checking…</span></div>
+        <div class="legatus-row"><span class="legatus-key">MQTT</span><span id="legatusMqttState" class="legatus-val">—</span></div>
+        <div class="legatus-row"><span class="legatus-key">直近 GPS</span><span id="legatusLastEvent" class="legatus-val">—</span></div>
+        <div class="legatus-row"><span class="legatus-key">buffer pending</span><span id="legatusBufferPending" class="legatus-val">—</span></div>
+        <div class="legatus-row"><span class="legatus-key">relay 24h</span><span id="legatusRelayStats" class="legatus-val">—</span></div>
+        <div class="legatus-row"><span class="legatus-key">最終受信ログ</span><span id="legatusEventTail" class="legatus-val legatus-tail">—</span></div>
+      </div>
 
-    <h4>🧹 メンテナンス</h4>
-    <p class="ai-settings-help">過去のアクセス記録に出てきたドメインのうち、まだドメイン辞書に登録されていないものを fetch + 分類キューに積みます。 force にすると既存行も再分類します (user_edited 列は保護)。</p>
-    <div class="ai-settings-actions">
-      <button id="recatalogAllBtn">アクセス記録から全ドメインを走査</button>
-      <button id="recatalogAllForceBtn" class="ghost" title="既存の辞書行も含めて全部再分類する">force 再分類</button>
-    </div>
-    <div id="recatalogAllStatus" class="multi-status"></div>
-
-    <h4>📱 通知 (WebPush)</h4>
-    <p class="ai-settings-help">
-      日記生成完了などをこの端末に通知します。
-      iOS は <strong>「ホーム画面に追加」 して PWA として開いた状態</strong>でないと
-      通知許可ダイアログが出ません (16.4+ の仕様)。
-    </p>
-    <div class="ai-settings-actions">
-      <button id="pushSubscribeBtn">この端末で通知を有効化</button>
-      <button id="pushTestBtn" class="ghost">テスト送信</button>
-    </div>
-    <div id="pushStatus" class="multi-status"></div>
-    <ul id="pushDevicesList" class="multi-servers"></ul>
-
-    <h4>🧍 プロファイル (適正カロリー計算用)</h4>
-    <p class="ai-settings-help">日記のカロリーバランス分析で使用。 未設定だと分析されません。</p>
-    <div class="user-profile-grid">
-      <label>年齢 <input id="userAge" type="number" min="1" max="120" /></label>
-      <label>性別
-        <select id="userSex">
-          <option value="">(未選択)</option>
-          <option value="male">男性</option>
-          <option value="female">女性</option>
-        </select>
+      <h4>📐 GPS ノイズ間引き距離</h4>
+      <p class="ai-settings-help">
+        Tracks ページの map と「GPS ログ最新 50 件」 list でこの距離以内の連続点を間引きます。 単位は m。 GPS の数 m ジッタを除外して実移動だけ表示するためのもの (徒歩 / 交通機関の判定にも影響)。 既定 2m、 0 で間引き OFF、 大きいほど点が減って軌跡が荒くなる。
+      </p>
+      <label>
+        間引き距離 (m):
+        <input id="tracksDecimateMeters" type="number" min="0" max="1000" step="0.5" placeholder="2" />
       </label>
-      <label>体重 (kg) <input id="userWeightKg" type="number" min="20" max="300" step="0.1" /></label>
-      <label>身長 (cm) <input id="userHeightCm" type="number" min="100" max="250" step="0.1" /></label>
-      <label>活動レベル
-        <select id="userActivityLevel">
-          <option value="sedentary">座りがち (×1.2)</option>
-          <option value="light">軽運動 (×1.375)</option>
-          <option value="moderate" selected>中運動 (×1.55)</option>
-          <option value="active">活発 (×1.725)</option>
-          <option value="very_active">非常に活発 (×1.9)</option>
-        </select>
-      </label>
-    </div>
+      <span id="tracksDecimateStatus" class="ai-keystatus"></span>
 
-    <h4>🛠 ランタイム情報 (読み取り専用)</h4>
-    <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
-    <div id="aiRuntimeInfo" class="ai-runtime-info"></div>
-    <div class="ai-settings-actions">
+      <h4>🗺 Google Maps API key</h4>
+      <p class="ai-settings-help">
+        軌跡 / 食事メモ等の地図表示に使用。 Google Cloud Console で <strong>Maps JavaScript API</strong> を有効化し、 発行した key の HTTP referrer 制限 (例: <code>http://localhost:5180/*</code>) と API 制限を必ず設定してください (Maps JS は HTML に embed されるため公開鍵)。
+      </p>
+      <label>API key:
+        <input id="mapsApiKey" type="password" placeholder="AIzaSy..." autocomplete="off" />
+      </label>
+      <span id="mapsApiKeyStatus" class="ai-keystatus"></span>
+      <p class="ai-settings-help">優先順: <code>app_settings.maps.api_key</code> &gt; 環境変数 <code>GOOGLE_MAPS_API_KEY</code>。 ここで保存すれば DB 側に書かれ、 再起動不要で反映。</p>
+    </section>
+
+    <!-- ── 🔔 通知 / 端末 ── -->
+    <section class="settings-tab-body hidden" data-stab="notif">
+      <h4 id="aiDesktopHead" hidden>🖥 デスクトップアプリ</h4>
+      <div id="aiDesktopSection" hidden>
+        <p class="ai-settings-help">この Memoria は Electron デスクトップアプリの中で動いています。 ウィンドウの × はトレイ最小化、 サーバは常駐し続けます (Chrome 拡張 / モバイル PWA からのアクセスは継続)。 完全終了はトレイ右クリック → 「Memoria を終了」。</p>
+        <label class="check-inline">
+          <input id="aiAutoLaunch" type="checkbox" />
+          ログイン時に自動起動 (バックグラウンドでサーバが立ち上がる)
+        </label>
+        <p class="ai-settings-help" style="margin-top:6px">
+          ON にすると <code>--hidden</code> フラグでウィンドウなし起動 → トレイアイコンだけ表示されます。 普段は OS スタートアップに登録するこの方式で十分。 「ログアウト中も動かしたい」 ような用途は将来 Windows サービス化を検討します (別 PR)。
+        </p>
+      </div>
+      <h4>📱 通知 (WebPush)</h4>
+      <p class="ai-settings-help">
+        日記生成完了などをこの端末に通知します。
+        iOS は <strong>「ホーム画面に追加」 して PWA として開いた状態</strong>でないと
+        通知許可ダイアログが出ません (16.4+ の仕様)。
+      </p>
+      <div class="ai-settings-actions">
+        <button id="pushSubscribeBtn">この端末で通知を有効化</button>
+        <button id="pushTestBtn" class="ghost">テスト送信</button>
+      </div>
+      <div id="pushStatus" class="multi-status"></div>
+      <ul id="pushDevicesList" class="multi-servers"></ul>
+    </section>
+
+    <!-- ── 🧍 プロフィール ── -->
+    <section class="settings-tab-body hidden" data-stab="profile">
+      <h4>🧍 プロファイル (適正カロリー計算用)</h4>
+      <p class="ai-settings-help">日記のカロリーバランス分析で使用。 未設定だと分析されません。</p>
+      <div class="user-profile-grid">
+        <label>年齢 <input id="userAge" type="number" min="1" max="120" /></label>
+        <label>性別
+          <select id="userSex">
+            <option value="">(未選択)</option>
+            <option value="male">男性</option>
+            <option value="female">女性</option>
+          </select>
+        </label>
+        <label>体重 (kg) <input id="userWeightKg" type="number" min="20" max="300" step="0.1" /></label>
+        <label>身長 (cm) <input id="userHeightCm" type="number" min="100" max="250" step="0.1" /></label>
+        <label>活動レベル
+          <select id="userActivityLevel">
+            <option value="sedentary">座りがち (×1.2)</option>
+            <option value="light">軽運動 (×1.375)</option>
+            <option value="moderate" selected>中運動 (×1.55)</option>
+            <option value="active">活発 (×1.725)</option>
+            <option value="very_active">非常に活発 (×1.9)</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <!-- ── 📦 データ / Hub ── -->
+    <section class="settings-tab-body hidden" data-stab="data">
+      <h4>📤 エクスポート / 📥 インポート</h4>
+      <p class="ai-settings-help">ブックマークを JSON で書き出し / 取り込み (URL 重複はスキップ)。エクスポートはチェックを入れたカードのみ。</p>
+      <div class="ai-settings-actions">
+        <button id="exportBtn" class="ghost" title="選択中をエクスポート">Export</button>
+        <label class="ghost file-btn">
+          Import<input id="importInput" type="file" accept="application/json" hidden />
+        </label>
+      </div>
+
+      <h4>🧹 メンテナンス</h4>
+      <p class="ai-settings-help">過去のアクセス記録に出てきたドメインのうち、まだドメイン辞書に登録されていないものを fetch + 分類キューに積みます。 force にすると既存行も再分類します (user_edited 列は保護)。</p>
+      <div class="ai-settings-actions">
+        <button id="recatalogAllBtn">アクセス記録から全ドメインを走査</button>
+        <button id="recatalogAllForceBtn" class="ghost" title="既存の辞書行も含めて全部再分類する">force 再分類</button>
+      </div>
+      <div id="recatalogAllStatus" class="multi-status"></div>
+
+      <h4>🌐 マルチサーバ (Memoria Hub)</h4>
+      <p class="ai-settings-help">辞書 / ディグ / ブックマークを共有できるハブを複数登録できます。各エントリは独立した Cernere ログインを持ち、左の topbar スイッチで個別 ON/OFF (複数同時 ON 可)。</p>
+      <ul id="multiServersList" class="multi-servers"></ul>
+      <div class="multi-add-row">
+        <input id="multiAddLabel" type="text" placeholder="ラベル (例: 社内ハブ)" />
+        <input id="multiAddUrl" type="text" placeholder="https://memoria-hub.example.com" />
+        <button id="multiAddBtn">＋ 追加</button>
+      </div>
+      <div id="multiStatus" class="multi-status"></div>
+    </section>
+
+    <!-- ── 🛠 ランタイム ── -->
+    <section class="settings-tab-body hidden" data-stab="runtime">
+      <h4>🛠 ランタイム情報 (読み取り専用)</h4>
+      <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
+      <div id="aiRuntimeInfo" class="ai-runtime-info"></div>
+    </section>
+
+    <!-- ── 共通 footer (どの tab でも見える) ── -->
+    <div class="ai-settings-actions settings-footer">
       <button id="aiSettingsSave">保存</button>
     </div>
-    <h4>🌐 マルチサーバ (Memoria Hub)</h4>
-    <p class="ai-settings-help">辞書 / ディグ / ブックマークを共有できるハブを複数登録できます。各エントリは独立した Cernere ログインを持ち、左の topbar スイッチで個別 ON/OFF (複数同時 ON 可)。</p>
-    <ul id="multiServersList" class="multi-servers"></ul>
-    <div class="multi-add-row">
-      <input id="multiAddLabel" type="text" placeholder="ラベル (例: 社内ハブ)" />
-      <input id="multiAddUrl" type="text" placeholder="https://memoria-hub.example.com" />
-      <button id="multiAddBtn">＋ 追加</button>
-    </div>
-    <div id="multiStatus" class="multi-status"></div>
   </div>
   <script src="app.js"></script>
 </body>

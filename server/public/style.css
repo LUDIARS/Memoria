@@ -1929,6 +1929,92 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .ai-settings-head #aiSettingsClose:hover { background: #f0f2f7; color: var(--text); }
 .ai-settings-help { font-size: 11px; color: var(--muted); margin: 8px 0 16px; line-height: 1.5; }
+
+/* ── settings tabs (内部タブ) ─────────────────────── */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: 12px 0 14px;
+  padding-bottom: 0;
+}
+.settings-tab {
+  padding: 6px 10px;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0;
+  white-space: nowrap;
+  transform: translateY(1px);
+}
+.settings-tab:hover { color: var(--text); background: rgba(0,0,0,0.03); }
+.settings-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+  background: transparent;
+}
+.settings-tab-body { animation: settingsTabFade .12s ease-out; }
+.settings-tab-body.hidden { display: none; }
+@keyframes settingsTabFade {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.settings-footer {
+  position: sticky;
+  bottom: -18px;
+  margin: 18px -22px -18px;
+  padding: 12px 22px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  z-index: 1;
+}
+
+/* ── Legatus 接続バッジ (topbar) ─────────────────────── */
+.topbar-legatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.legatus-dot {
+  font-size: 10px;
+  line-height: 1;
+}
+.legatus-dot[data-state="connected"]   { color: #16a34a; }
+.legatus-dot[data-state="stale"]       { color: #f59e0b; }
+.legatus-dot[data-state="disconnected"]{ color: #dc2626; }
+.legatus-dot[data-state="unknown"]     { color: var(--muted); }
+.legatus-label { color: var(--muted); }
+
+/* ── Legatus 詳細 status box (設定モーダル内) ─────────── */
+.legatus-status-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 8px 12px;
+  margin: 6px 0 14px;
+  font-size: 12px;
+}
+.legatus-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+.legatus-row:last-child { border-bottom: none; }
+.legatus-key { color: var(--muted); font-size: 11px; }
+.legatus-val { color: var(--text); font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+.legatus-val.legatus-tail { color: var(--muted); white-space: pre-wrap; }
 .ai-settings h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ai-task-row {
   display: grid;
@@ -2951,6 +3037,76 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   border-radius: 6px;
   background: var(--bg);
 }
+/* ── tracks 最新 GPS ログ ─────────────────────── */
+.tracks-recent {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 10px 12px;
+}
+.tracks-recent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.tracks-recent-head h4 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.tracks-recent-head .muted {
+  font-size: 11px;
+}
+.tracks-recent-head button {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.tracks-recent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.tracks-recent-row {
+  padding: 5px 4px;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+  cursor: pointer;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.tracks-recent-row:last-child { border-bottom: none; }
+.tracks-recent-row:hover { background: rgba(59,130,246,0.06); }
+.tracks-recent-time {
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+  font-size: 11px;
+}
+.tracks-recent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.tracks-recent-dev {
+  background: rgba(59,130,246,0.12);
+  color: #1e40af;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.tracks-recent-coord code {
+  font-size: 11px;
+  color: var(--text);
+}
+
 .tracks-days {
   margin-top: 16px;
 }
