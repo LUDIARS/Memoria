@@ -3593,6 +3593,15 @@ app.post('/api/locations/compress', async (c) => {
 
 // ---- static UI ------------------------------------------------------------
 
+// SPA assets: ブラウザの aggressive cache を無効化 (古い app.js が掴まれて
+// UI 機能 — Tracks の最新 GPS リスト等 — が出ない事故を防ぐ).
+app.use('/*', async (c, next) => {
+  await next();
+  const p = c.req.path;
+  if (p === '/' || p.endsWith('.html') || p.endsWith('.js') || p.endsWith('.css')) {
+    c.header('cache-control', 'no-cache, must-revalidate');
+  }
+});
 app.use('/*', serveStatic({ root: './public' }));
 app.get('/', serveStatic({ path: './public/index.html' }));
 
