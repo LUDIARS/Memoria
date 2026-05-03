@@ -4982,6 +4982,7 @@ function ensureLiveSocket() {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'location' && msg.point) handleLivePoint(msg.point);
+    else if (msg.type === 'location.resolved') applyLocationResolved(msg);
   });
 }
 
@@ -5120,9 +5121,20 @@ function trackRecentRowHtml(p) {
   const lon = Number(p.lon).toFixed(5);
   const acc = p.accuracy_m != null ? `±${Math.round(p.accuracy_m)}m` : '';
   const vel = p.velocity_kmh != null ? `${Math.round(p.velocity_kmh)}km/h` : '';
+  // 場所照合結果 (Google Geocoding/Places). 未解決行は薄字で「(調べ中…)」.
+  const placeName = p.place_name || '';
+  const placeAddr = p.place_address || '';
+  const placeLine = placeName || placeAddr
+    ? `<div class="tracks-recent-place" data-source="${escapeHtml(p.place_source || '')}">${
+        placeName ? `<strong>${escapeHtml(placeName)}</strong>` : ''
+      }${placeName && placeAddr ? ' / ' : ''}${
+        placeAddr ? `<span class="muted">${escapeHtml(placeAddr)}</span>` : ''
+      }</div>`
+    : `<div class="tracks-recent-place tracks-recent-place--pending muted">(場所を調べ中…)</div>`;
   return `
     <li class="tracks-recent-row" data-lat="${lat}" data-lon="${lon}" data-id="${p.id}">
       <div class="tracks-recent-time">${escapeHtml(tStr)}</div>
+      ${placeLine}
       <div class="tracks-recent-meta">
         <span class="tracks-recent-dev">${escapeHtml(dev)}</span>
         <span class="tracks-recent-coord"><code>${lat},${lon}</code></span>
@@ -5130,6 +5142,46 @@ function trackRecentRowHtml(p) {
       </div>
     </li>
   `;
+}
+
+/**
+ * `location.resolved` を受け取って既存リスト行と Marker title を差分更新.
+ */
+function applyLocationResolved(payload) {
+  const id = payload?.id;
+  if (!id) return;
+  const ul = $('tracksRecentList');
+  if (ul) {
+    const li = ul.querySelector(`.tracks-recent-row[data-id="${id}"]`);
+    if (li) {
+      const placeEl = li.querySelector('.tracks-recent-place');
+      if (placeEl) {
+        const name = payload.place_name || '';
+        const addr = payload.place_address || '';
+        if (name || addr) {
+          placeEl.classList.remove('tracks-recent-place--pending', 'muted');
+          placeEl.dataset.source = payload.place_source || '';
+          placeEl.innerHTML = (name ? `<strong>${escapeHtml(name)}</strong>` : '')
+            + (name && addr ? ' / ' : '')
+            + (addr ? `<span class="muted">${escapeHtml(addr)}</span>` : '');
+        } else {
+          placeEl.classList.add('muted');
+          placeEl.textContent = '(照合不可)';
+        }
+      }
+    }
+  }
+  // 地図 Marker の title を後付け更新.
+  if (tracksState.pointMarkers && window.google?.maps) {
+    for (const m of tracksState.pointMarkers) {
+      if (!m._gpsId || m._gpsId !== id) continue;
+      const label = payload.place_name || payload.place_address || '';
+      if (label) {
+        try { m.setTitle((m.getTitle?.() ?? '') + ' — ' + label); } catch {}
+      }
+      break;
+    }
+  }
 }
 
 function bindTracksRecentRows() {
@@ -5437,10 +5489,12 @@ function drawTracks(points) {
   }
   for (let i = 0; i < points.length; i++) {
     const c = CAT_COLORS[cats[i]] || CAT_COLORS.still;
+    const place = points[i].place_name || points[i].place_address || '';
+    const baseTitle = `#${points[i].id ?? '?'} ${cats[i]} ${i > 0 ? '(' + classifySegment(points[i-1], points[i]).kmh.toFixed(1) + ' km/h)' : ''}`;
     const m = new google.maps.Marker({
       position: { lat: points[i].lat, lng: points[i].lon },
       map: tracksState.map,
-      title: `#${points[i].id ?? '?'} ${cats[i]} ${i > 0 ? '(' + classifySegment(points[i-1], points[i]).kmh.toFixed(1) + ' km/h)' : ''}`,
+      title: place ? `${baseTitle} — ${place}` : baseTitle,
       icon: {
         path: google.maps.SymbolPath.CIRCLE,
         scale: 3,
@@ -5451,6 +5505,7 @@ function drawTracks(points) {
       },
       zIndex: 5,
     });
+    m._gpsId = points[i].id;
     tracksState.pointMarkers.push(m);
   }
 

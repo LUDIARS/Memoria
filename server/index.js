@@ -80,7 +80,9 @@ import {
 import {
   insertGpsLocation, listGpsLocationsInRange, listGpsLocationDays,
   listGpsLocationsForDate, deleteGpsLocationsOlderThan, compressGpsHistory,
+  findGpsLocationById, listUnresolvedGpsLocations,
 } from './db.js';
+import { resolvePlaceForRow, resolveUnresolvedBatch } from './lib/place-resolver.js';
 import { listPushSubscriptions, deletePushSubscription } from './db.js';
 import {
   insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
@@ -3354,6 +3356,7 @@ app.post('/api/legatus/location-summary', async (c) => {
         velocity_kmh: rec.velocity ?? null,
         course_deg: null,
       });
+      triggerResolveAsync(result.id, point.lat, point.lon);
     }
   }
 
@@ -3419,6 +3422,7 @@ app.post('/api/locations/ingest', async (c) => {
       velocity_kmh: rec.velocity ?? null,
       course_deg: rec.course ?? null,
     });
+    triggerResolveAsync(result.id, rec.lat, rec.lon);
   }
   // OwnTracks の HTTP モードはレスポンスとして JSON 配列 (友達の cards 等) を
   // 期待するので空配列で返す。 手動テスト時は X-Memoria-Insert-* header で
@@ -3491,7 +3495,8 @@ app.get('/api/locations/recent', (c) => {
   const pool = Math.max(limit, Math.min(1500, limit * 30));
   const rows = db.prepare(
     `SELECT id, user_id, device_id, recorded_at, lat, lon,
-            accuracy_m, altitude_m, velocity_kmh, course_deg, raw_json
+            accuracy_m, altitude_m, velocity_kmh, course_deg, raw_json,
+            place_name, place_address, place_source
      FROM gps_locations${where} ORDER BY id DESC LIMIT ?`
   ).all(...params, pool);
 
@@ -3527,7 +3532,8 @@ app.get('/api/locations/recent', (c) => {
 app.get('/api/locations/latest', (c) => {
   const row = db.prepare(
     `SELECT id, user_id, device_id, recorded_at, lat, lon,
-            accuracy_m, altitude_m, velocity_kmh, course_deg
+            accuracy_m, altitude_m, velocity_kmh, course_deg,
+            place_name, place_address, place_source
      FROM gps_locations ORDER BY recorded_at DESC LIMIT 1`
   ).get();
   return c.json({ point: row ?? null });
@@ -3575,6 +3581,37 @@ app.delete('/api/locations', (c) => {
   if (!olderThan) return c.json({ error: 'older_than (ISO) required' }, 400);
   const removed = deleteGpsLocationsOlderThan(db, olderThan);
   return c.json({ removed });
+});
+
+/**
+ * 未解決 GPS 点をまとめて場所照合する (Google Geocoding/Places).
+ *   POST /api/locations/resolve-all
+ *   body: { limit?, step_ms? } — 省略可
+ *
+ * 1 件ずつ /v1/processes ws subscriber と同じ経路で resolve. 完了行は WS の
+ * 'location.resolved' で UI に通知される. レート制限対策に各リクエスト間
+ * step_ms (default 150ms) 空ける.
+ */
+app.post('/api/locations/resolve-all', async (c) => {
+  let body = {};
+  try { body = await c.req.json(); } catch {}
+  const limit = Math.min(500, Math.max(1, Number(body.limit ?? 100)));
+  const stepMs = Math.max(0, Number(body.step_ms ?? 150));
+  // reset=1 で 'failed' 状態をリセット (Cloud Console で API 有効化後の再試行用).
+  let resetCount = 0;
+  if (body.reset === true || body.reset === 1) {
+    const info = db.prepare(
+      `UPDATE gps_locations SET place_resolved_at = NULL, place_source = NULL
+        WHERE place_source = 'failed'`
+    ).run();
+    resetCount = info.changes;
+  }
+  const r = await resolveUnresolvedBatch(db, {
+    limit,
+    stepMs,
+    onResolved: (id, result) => broadcastLocationResolved(id, result),
+  });
+  return c.json({ ...r, reset: resetCount });
 });
 
 /**
@@ -3627,11 +3664,59 @@ function broadcastLocation(point) {
   }
 }
 
+function broadcastLocationResolved(id, result) {
+  if (wsClients.size === 0) return;
+  const msg = JSON.stringify({
+    type: 'location.resolved',
+    id,
+    place_name: result?.name ?? null,
+    place_address: result?.address ?? null,
+    place_source: result?.source ?? 'failed',
+  });
+  for (const c of wsClients) {
+    if (c.readyState === 1) { try { c.send(msg); } catch {} }
+  }
+}
+
+/**
+ * 新着 GPS 点 1 件の location 解決を fire-and-forget で起動.
+ * insertGpsLocation の戻り値 (`inserted: true, id`) を渡す.
+ * resolvePlaceForRow が完了したら WS で `location.resolved` を broadcast.
+ */
+function triggerResolveAsync(id, lat, lon) {
+  if (!Number.isFinite(id) || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  setImmediate(async () => {
+    try {
+      const r = await resolvePlaceForRow(db, { id, lat, lon });
+      broadcastLocationResolved(id, r);
+    } catch (e) {
+      console.warn(`[place-resolver] id=${id} failed: ${e?.message ?? e}`);
+    }
+  });
+}
+
 const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
+
+// 起動時に未解決 GPS の backfill を 1 batch だけ走らせる. listen 直後でなく
+// 5 秒遅延させて、 Memoria 起動直後のバタつき (server / WS / RAG init) と
+// 重ならないようにする. API key 未設定なら全件 'failed' で帰すので副作用なし.
+setTimeout(() => {
+  resolveUnresolvedBatch(db, {
+    limit: 100,
+    stepMs: 200,
+    onResolved: (id, result) => broadcastLocationResolved(id, result),
+  })
+    .then((r) => {
+      if (r.processed > 0) {
+        console.log(`[place-resolver] backfill: processed=${r.processed} ok=${r.ok} failed=${r.failed}`);
+      }
+    })
+    .catch((e) => console.warn(`[place-resolver] backfill failed: ${e?.message ?? e}`));
+}, 5_000);
 
 const wss = new WebSocketServer({ noServer: true });
 
@@ -3791,6 +3876,7 @@ if (process.env.MEMORIA_LEGATUS_WS !== 'off') {
             velocity_kmh: null,
             course_deg: null,
           });
+          triggerResolveAsync(result.id, rec.lat, rec.lon);
           console.log(`[legatus-ws] insert id=${result.id} ${rec.deviceId} (${rec.lat.toFixed(5)}, ${rec.lon.toFixed(5)})`);
         }
       });
