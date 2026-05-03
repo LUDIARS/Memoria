@@ -80,7 +80,9 @@ import {
 import {
   insertGpsLocation, listGpsLocationsInRange, listGpsLocationDays,
   listGpsLocationsForDate, deleteGpsLocationsOlderThan, compressGpsHistory,
+  findGpsLocationById, listUnresolvedGpsLocations,
 } from './db.js';
+import { resolvePlaceForRow, resolveUnresolvedBatch, getResolverDebug } from './lib/place-resolver.js';
 import { listPushSubscriptions, deletePushSubscription } from './db.js';
 import {
   insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
@@ -3283,6 +3285,85 @@ app.delete('/api/locations/settings/key', (c) => {
 });
 
 /**
+ * Legatus が 60 秒ごとにまとめて投げる location summary を受ける。
+ * loopback / tailnet 内のみ。 認証なし (Memoria 自体が同じ範囲で公開)。
+ *
+ * 受信した summary を 2 点 (start / end) として gps_locations に INSERT。
+ * via=legatus / requestId / pointCount などは raw_json に保管。
+ *
+ * payload (Legatus owntracks/types.ts:LocationSummary + userId / source):
+ *   { userId, intervalStart (ISO), intervalEnd (ISO), start: {lat,lon}, end: {lat,lon},
+ *     totalDistanceMeters, netDistanceMeters, maxSpeedKmh?, meanSpeedKmh?, pointCount,
+ *     deviceIds[], source: { via, tool, requestId } }
+ */
+app.post('/api/legatus/location-summary', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return c.json({ error: 'json body required' }, 400);
+  }
+  const userId = (body.userId || 'legatus').toString().slice(0, 64);
+  const start = body.start;
+  const end = body.end;
+  if (!start || !end || typeof start.lat !== 'number' || typeof start.lon !== 'number'
+      || typeof end.lat !== 'number' || typeof end.lon !== 'number') {
+    return c.json({ error: 'start / end (lat,lon) required' }, 400);
+  }
+  const deviceId = (Array.isArray(body.deviceIds) && body.deviceIds[0]) || 'legatus';
+  const requestId = body.source?.requestId ?? null;
+  const meta = {
+    via: 'legatus',
+    tool: body.source?.tool ?? 'owntracks-mqtt',
+    requestId,
+    pointCount: body.pointCount,
+    totalDistanceMeters: body.totalDistanceMeters,
+    netDistanceMeters: body.netDistanceMeters,
+    maxSpeedKmh: body.maxSpeedKmh,
+    meanSpeedKmh: body.meanSpeedKmh,
+  };
+
+  const inserted = [];
+  for (const [point, recordedAt, role] of [
+    [start, body.intervalStart, 'start'],
+    [end,   body.intervalEnd,   'end'],
+  ]) {
+    const rec = {
+      userId,
+      deviceId,
+      tst: undefined,
+      recordedAt: recordedAt ?? new Date().toISOString(),
+      lat: point.lat,
+      lon: point.lon,
+      accuracy: null,
+      altitude: null,
+      velocity: role === 'end' ? (body.maxSpeedKmh ?? null) : null,
+      course: null,
+      battery: null,
+      conn: null,
+      rawJson: JSON.stringify({ ...meta, role }),
+    };
+    const result = insertGpsLocation(db, rec);
+    if (!result.skipped) {
+      inserted.push({ id: result.id, role });
+      broadcastLocation({
+        id: result.id,
+        user_id: userId,
+        device_id: deviceId,
+        recorded_at: rec.recordedAt,
+        lat: point.lat,
+        lon: point.lon,
+        accuracy_m: null,
+        altitude_m: null,
+        velocity_kmh: rec.velocity ?? null,
+        course_deg: null,
+      });
+      triggerResolveAsync(result.id, point.lat, point.lon);
+    }
+  }
+
+  return c.json({ ok: true, inserted, requestId });
+});
+
+/**
  * 直接 1 点の位置を投入する (OwnTracks HTTP モード or 手動テスト)。
  * 受け取れる形式:
  *   - OwnTracks 形式: { _type:'location', lat, lon, tst, acc?, alt?, vel?, cog?, batt?, conn? }
@@ -3341,6 +3422,7 @@ app.post('/api/locations/ingest', async (c) => {
       velocity_kmh: rec.velocity ?? null,
       course_deg: rec.course ?? null,
     });
+    triggerResolveAsync(result.id, rec.lat, rec.lon);
   }
   // OwnTracks の HTTP モードはレスポンスとして JSON 配列 (友達の cards 等) を
   // 期待するので空配列で返す。 手動テスト時は X-Memoria-Insert-* header で
@@ -3348,6 +3430,113 @@ app.post('/api/locations/ingest', async (c) => {
   c.header('X-Memoria-Insert-Id', String(result.id ?? ''));
   c.header('X-Memoria-Insert-Skipped', String(!!result.skipped));
   return c.json([]);
+});
+
+/**
+ * Tracks タブ全般の設定.
+ *   GET  /api/tracks/settings → { decimate_meters, show_polyline }
+ *   PATCH /api/tracks/settings { decimate_meters?, show_polyline? }
+ *
+ * - decimate_meters: 0 = 全点描画 (既定). >0 で連続点を間引く.
+ * - show_polyline:   false = 点マーカーのみ (既定). true で区間色分け線も描く.
+ */
+app.get('/api/tracks/settings', (c) => {
+  const s = getAppSettings(db);
+  const v = Number(s['tracks.decimate_meters'] ?? '0');
+  return c.json({
+    decimate_meters: Number.isFinite(v) ? v : 0,
+    show_polyline: (s['tracks.show_polyline'] ?? 'false') === 'true',
+  });
+});
+app.patch('/api/tracks/settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (body.decimate_meters !== undefined) {
+    const v = Number(body.decimate_meters);
+    if (!Number.isFinite(v) || v < 0 || v > 1000) {
+      return c.json({ error: 'decimate_meters must be 0-1000' }, 400);
+    }
+    patch['tracks.decimate_meters'] = String(v);
+  }
+  if (body.show_polyline !== undefined) {
+    patch['tracks.show_polyline'] = body.show_polyline ? 'true' : 'false';
+  }
+  if (Object.keys(patch).length > 0) setAppSettings(db, patch);
+  const s = getAppSettings(db);
+  return c.json({
+    decimate_meters: Number(s['tracks.decimate_meters'] ?? '0'),
+    show_polyline: (s['tracks.show_polyline'] ?? 'false') === 'true',
+  });
+});
+
+/**
+ * GPS ログを最新 N 件 (default 50, max 500) 返す.
+ * Tracks page の右下リスト用.
+ *
+ * 既定で **2m 以内の連続点を間引いた後の N 件** を返す.
+ * 生 GPS ジッタ (停止中の数 m ノイズ) を取り除いて「実際に動いた点」だけ
+ * 列挙するため. 間引きを切りたい時は ?decimate=0.
+ *
+ * 実装: 新→旧 順で walk しながら、 直前 kept 点との距離が >= decimate m
+ * の点だけ keep. limit 件貯まったら停止. raw が pool 上限 (500) より
+ * 多くても OK.
+ */
+app.get('/api/locations/recent', (c) => {
+  const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? '50')));
+  const settingsDecimate = Number(getAppSettings(db)['tracks.decimate_meters'] ?? '0');
+  const decimateM = Math.max(0, Number(c.req.query('decimate') ?? settingsDecimate));
+  const device = c.req.query('device') || null;
+  const params = [];
+  let where = '';
+  if (device) { where = ' WHERE device_id = ?'; params.push(device); }
+
+  // 新しい順に大きめに取ってから decimate. limit*30 か 1500 の小さい方.
+  // (停止中ジッタが多くても 50 件確保できる量).
+  const pool = Math.max(limit, Math.min(1500, limit * 30));
+  const rows = db.prepare(
+    `SELECT id, user_id, device_id, recorded_at, lat, lon,
+            accuracy_m, altitude_m, velocity_kmh, course_deg, raw_json,
+            place_name, place_address, place_source
+     FROM gps_locations${where} ORDER BY id DESC LIMIT ?`
+  ).all(...params, pool);
+
+  if (decimateM <= 0) {
+    return c.json({ points: rows.slice(0, limit), decimated: 0, pool: rows.length });
+  }
+
+  const R = 6_371_008;
+  const toRad = d => (d * Math.PI) / 180;
+  function distM(a, b) {
+    const f1 = toRad(a.lat), f2 = toRad(b.lat);
+    const df = toRad(b.lat - a.lat), dl = toRad(b.lon - a.lon);
+    const h = Math.sin(df/2) ** 2 + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  const kept = [];
+  for (const p of rows) {
+    if (kept.length === 0) { kept.push(p); continue; }
+    const last = kept[kept.length - 1];
+    if (distM(last, p) >= decimateM) {
+      kept.push(p);
+      if (kept.length >= limit) break;
+    }
+  }
+  return c.json({ points: kept, decimated: decimateM, pool: rows.length });
+});
+
+/**
+ * 直近 1 件の GPS 点を返す (Tracks page の map 初期 center 用)。
+ * 何も無ければ { point: null } を返す。
+ */
+app.get('/api/locations/latest', (c) => {
+  const row = db.prepare(
+    `SELECT id, user_id, device_id, recorded_at, lat, lon,
+            accuracy_m, altitude_m, velocity_kmh, course_deg,
+            place_name, place_address, place_source
+     FROM gps_locations ORDER BY recorded_at DESC LIMIT 1`
+  ).get();
+  return c.json({ point: row ?? null });
 });
 
 /**
@@ -3395,6 +3584,39 @@ app.delete('/api/locations', (c) => {
 });
 
 /**
+ * 未解決 GPS 点をまとめて場所照合する (Google Geocoding/Places).
+ *   POST /api/locations/resolve-all
+ *   body: { limit?, step_ms? } — 省略可
+ *
+ * 1 件ずつ /v1/processes ws subscriber と同じ経路で resolve. 完了行は WS の
+ * 'location.resolved' で UI に通知される. レート制限対策に各リクエスト間
+ * step_ms (default 150ms) 空ける.
+ */
+app.get('/api/locations/resolve-debug', (c) => c.json(getResolverDebug()));
+
+app.post('/api/locations/resolve-all', async (c) => {
+  let body = {};
+  try { body = await c.req.json(); } catch {}
+  const limit = Math.min(500, Math.max(1, Number(body.limit ?? 100)));
+  const stepMs = Math.max(0, Number(body.step_ms ?? 150));
+  // reset=1 で 'failed' 状態をリセット (Cloud Console で API 有効化後の再試行用).
+  let resetCount = 0;
+  if (body.reset === true || body.reset === 1) {
+    const info = db.prepare(
+      `UPDATE gps_locations SET place_resolved_at = NULL, place_source = NULL
+        WHERE place_source = 'failed'`
+    ).run();
+    resetCount = info.changes;
+  }
+  const r = await resolveUnresolvedBatch(db, {
+    limit,
+    stepMs,
+    onResolved: (id, result) => broadcastLocationResolved(id, result),
+  });
+  return c.json({ ...r, reset: resetCount });
+});
+
+/**
  * 既存 GPS 履歴を遡及圧縮する (停止区間の中間点を削除し、 始点+終点 2 行に集約)。
  *   POST /api/locations/compress
  *   body: { device_id?, threshold? }   — 省略可、 全デバイス + default 50m
@@ -3410,6 +3632,15 @@ app.post('/api/locations/compress', async (c) => {
 
 // ---- static UI ------------------------------------------------------------
 
+// SPA assets: ブラウザの aggressive cache を無効化 (古い app.js が掴まれて
+// UI 機能 — Tracks の最新 GPS リスト等 — が出ない事故を防ぐ).
+app.use('/*', async (c, next) => {
+  await next();
+  const p = c.req.path;
+  if (p === '/' || p.endsWith('.html') || p.endsWith('.js') || p.endsWith('.css')) {
+    c.header('cache-control', 'no-cache, must-revalidate');
+  }
+});
 app.use('/*', serveStatic({ root: './public' }));
 app.get('/', serveStatic({ path: './public/index.html' }));
 
@@ -3435,11 +3666,59 @@ function broadcastLocation(point) {
   }
 }
 
+function broadcastLocationResolved(id, result) {
+  if (wsClients.size === 0) return;
+  const msg = JSON.stringify({
+    type: 'location.resolved',
+    id,
+    place_name: result?.name ?? null,
+    place_address: result?.address ?? null,
+    place_source: result?.source ?? 'failed',
+  });
+  for (const c of wsClients) {
+    if (c.readyState === 1) { try { c.send(msg); } catch {} }
+  }
+}
+
+/**
+ * 新着 GPS 点 1 件の location 解決を fire-and-forget で起動.
+ * insertGpsLocation の戻り値 (`inserted: true, id`) を渡す.
+ * resolvePlaceForRow が完了したら WS で `location.resolved` を broadcast.
+ */
+function triggerResolveAsync(id, lat, lon) {
+  if (!Number.isFinite(id) || !Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  setImmediate(async () => {
+    try {
+      const r = await resolvePlaceForRow(db, { id, lat, lon });
+      broadcastLocationResolved(id, r);
+    } catch (e) {
+      console.warn(`[place-resolver] id=${id} failed: ${e?.message ?? e}`);
+    }
+  });
+}
+
 const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
+
+// 起動時に未解決 GPS の backfill を 1 batch だけ走らせる. listen 直後でなく
+// 5 秒遅延させて、 Memoria 起動直後のバタつき (server / WS / RAG init) と
+// 重ならないようにする. API key 未設定なら全件 'failed' で帰すので副作用なし.
+setTimeout(() => {
+  resolveUnresolvedBatch(db, {
+    limit: 100,
+    stepMs: 200,
+    onResolved: (id, result) => broadcastLocationResolved(id, result),
+  })
+    .then((r) => {
+      if (r.processed > 0) {
+        console.log(`[place-resolver] backfill: processed=${r.processed} ok=${r.ok} failed=${r.failed}`);
+      }
+    })
+    .catch((e) => console.warn(`[place-resolver] backfill failed: ${e?.message ?? e}`));
+}, 5_000);
 
 const wss = new WebSocketServer({ noServer: true });
 
@@ -3523,5 +3802,103 @@ if (process.env.MEMORIA_MQTT_URL) {
     });
   } catch (e) {
     console.error(`[mqtt] in-process subscriber failed to start: ${e?.message ?? e}`);
+  }
+}
+
+// ---- Legatus WS subscriber (recommended path) -----------------------------
+//
+// 同じ PC 上で動く Legatus (loopback 17320) が OwnTracks → MQTT → /ws で
+// 個別 GPS 点を broadcast する。 Memoria はそれを subscribe して
+// gps_locations に即時 insert + /ws/locations に broadcast →
+// Tracks UI の地図にリアルタイムで点が増える設計。
+//
+// Legatus 側の summary 経路 (5 分集計) は startイ/end の 2 点しか作らない
+// ので、 細かい軌跡が欲しい場合はこちらが正解 (用途が違う path として共存)。
+//
+// 無効化: MEMORIA_LEGATUS_WS=off
+const LEGATUS_WS_URL = process.env.MEMORIA_LEGATUS_WS_URL || 'ws://127.0.0.1:17320/ws';
+if (process.env.MEMORIA_LEGATUS_WS !== 'off') {
+  try {
+    const { default: WebSocket } = await import('ws');
+    // Memoria single-user 運用前提: gps_locations は user_id='me' で query される
+    // (listGpsLocationsForDate の default). Lg の owner_user_id は Cernere UUID で
+    // 別 namespace なので、 Memoria 内では 'me' で統一する.
+    // 上書きしたい場合は MEMORIA_LEGATUS_USER_ID で指定.
+    let lgUserId = process.env.MEMORIA_LEGATUS_USER_ID || 'me';
+    let attempt = 0;
+    let reconnectTimer = null;
+    let ws = null;
+    const RECONNECT_BASE_MS = 1000;
+    const RECONNECT_MAX_MS = 30000;
+
+    function connect() {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      try { ws = new WebSocket(LEGATUS_WS_URL); }
+      catch (e) { scheduleReconnect(); return; }
+      ws.on('open', () => {
+        attempt = 0;
+        console.log(`[legatus-ws] connected ${LEGATUS_WS_URL}`);
+      });
+      ws.on('message', (raw) => {
+        let ev;
+        try { ev = JSON.parse(raw.toString('utf8')); } catch { return; }
+        if (!ev || typeof ev.type !== 'string') return;
+        // owner_user_id は Cernere namespace なので Memoria の 'me' は上書きしない.
+        // ただし MEMORIA_LEGATUS_USER_ID で明示的に Cernere UUID 使う設定にしたい
+        // 場合のみ override 可能.
+        // (現状 'me' 固定で動く設計)
+        if (ev.type !== 'owntracks.received') return;
+        const lat = Number(ev.lat), lon = Number(ev.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        const rec = {
+          userId: lgUserId,
+          deviceId: ev.device || ev.topic_user || 'phone',
+          tst: typeof ev.tst === 'number' ? ev.tst : Math.floor(Date.now() / 1000),
+          recordedAt: null,
+          lat, lon,
+          accuracy: typeof ev.acc === 'number' ? ev.acc : null,
+          altitude: null,
+          velocity: null,
+          course: null,
+          battery: null,
+          conn: null,
+          rawJson: JSON.stringify({ via: 'legatus-ws', topic_user: ev.topic_user, device: ev.device }),
+        };
+        const result = insertGpsLocation(db, rec);
+        if (!result.skipped) {
+          broadcastLocation({
+            id: result.id,
+            user_id: rec.userId,
+            device_id: rec.deviceId,
+            recorded_at: new Date(rec.tst * 1000).toISOString(),
+            lat: rec.lat,
+            lon: rec.lon,
+            accuracy_m: rec.accuracy,
+            altitude_m: null,
+            velocity_kmh: null,
+            course_deg: null,
+          });
+          triggerResolveAsync(result.id, rec.lat, rec.lon);
+          console.log(`[legatus-ws] insert id=${result.id} ${rec.deviceId} (${rec.lat.toFixed(5)}, ${rec.lon.toFixed(5)})`);
+        }
+      });
+      ws.on('close', () => {
+        ws = null;
+        scheduleReconnect();
+      });
+      ws.on('error', () => { /* close handler に任せる */ });
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, attempt), RECONNECT_MAX_MS);
+      attempt += 1;
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+    }
+
+    connect();
+    console.log(`[legatus-ws] subscriber started (url=${LEGATUS_WS_URL})`);
+  } catch (e) {
+    console.error(`[legatus-ws] subscriber failed to start: ${e?.message ?? e}`);
   }
 }
