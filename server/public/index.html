@@ -1018,15 +1018,19 @@ bogus-priv</code></pre>
         <div class="legatus-row"><span class="legatus-key">最終受信ログ</span><span id="legatusEventTail" class="legatus-val legatus-tail">—</span></div>
       </div>
 
-      <h4>📐 GPS ノイズ間引き距離</h4>
+      <h4>📐 軌跡描画</h4>
       <p class="ai-settings-help">
-        Tracks ページの map と「GPS ログ最新 50 件」 list でこの距離以内の連続点を間引きます。 単位は m。 GPS の数 m ジッタを除外して実移動だけ表示するためのもの (徒歩 / 交通機関の判定にも影響)。 既定 2m、 0 で間引き OFF、 大きいほど点が減って軌跡が荒くなる。
+        Tracks ページの map に GPS 点をどう描くかの設定. 既定は「全点を点 marker のみ」で描画 (ポリライン無し / 間引き無し). 軌跡を線で繋ぎたい時は下のチェックを ON、 ジッタを減らしたい時は間引き距離を上げる.
       </p>
       <label>
         間引き距離 (m):
-        <input id="tracksDecimateMeters" type="number" min="0" max="1000" step="0.5" placeholder="2" />
+        <input id="tracksDecimateMeters" type="number" min="0" max="1000" step="0.5" placeholder="0" />
       </label>
       <span id="tracksDecimateStatus" class="ai-keystatus"></span>
+      <label class="tracks-toggle-row">
+        <input id="tracksShowPolyline" type="checkbox" />
+        ポリライン表示 (区間色分け線). 既定 OFF (= 点 marker のみ).
+      </label>
 
       <h4>🗺 Google Maps API key</h4>
       <p class="ai-settings-help">

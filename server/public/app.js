@@ -4174,15 +4174,23 @@ async function openAiSettings() {
         $('mapsApiKeyStatus').textContent = `取得失敗: ${e.message}`;
       }
     }
-    // Tracks 間引き距離
+    // Tracks 間引き距離 + ポリライン表示
     if ($('tracksDecimateMeters')) {
       try {
         const ts = await api('/api/tracks/settings');
-        $('tracksDecimateMeters').value = String(ts.decimate_meters ?? 2);
-        $('tracksDecimateStatus').textContent = `現在: ${ts.decimate_meters}m`;
+        $('tracksDecimateMeters').value = String(ts.decimate_meters ?? 0);
+        $('tracksDecimateStatus').textContent = ts.decimate_meters > 0
+          ? `現在: ${ts.decimate_meters}m`
+          : `現在: 全点 (間引きなし)`;
       } catch (e) {
         $('tracksDecimateStatus').textContent = `取得失敗: ${e.message}`;
       }
+    }
+    if ($('tracksShowPolyline')) {
+      try {
+        const ts = await api('/api/tracks/settings');
+        $('tracksShowPolyline').checked = !!ts.show_polyline;
+      } catch { /* swallow */ }
     }
     // Electron 配下のときだけ「デスクトップアプリ」セクションを出す。
     // window.memoria は preload.ts (contextBridge) が expose する。
@@ -4510,22 +4518,35 @@ async function saveAiSettings() {
         return;
       }
     }
-    // Tracks 間引き距離
+    // Tracks 間引き距離 + ポリライン表示
     const dmRaw = $('tracksDecimateMeters')?.value;
+    const showPolyline = !!$('tracksShowPolyline')?.checked;
+    const tracksPatch = {};
     if (dmRaw !== undefined && dmRaw !== '') {
       const v = Number(dmRaw);
       if (Number.isFinite(v) && v >= 0 && v <= 1000) {
-        try {
-          await api('/api/tracks/settings', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ decimate_meters: v }),
-          });
-          tracksState.decimateMeters = v; // すぐ map にも反映
-        } catch (e) {
-          alert(`間引き距離保存失敗: ${e.message}`);
-          return;
+        tracksPatch.decimate_meters = v;
+      }
+    }
+    if ($('tracksShowPolyline')) {
+      tracksPatch.show_polyline = showPolyline;
+    }
+    if (Object.keys(tracksPatch).length > 0) {
+      try {
+        await api('/api/tracks/settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tracksPatch),
+        });
+        if (tracksPatch.decimate_meters !== undefined) {
+          tracksState.decimateMeters = tracksPatch.decimate_meters; // 即時反映
         }
+        if (tracksPatch.show_polyline !== undefined) {
+          tracksState.showPolyline = tracksPatch.show_polyline;
+        }
+      } catch (e) {
+        alert(`Tracks 設定保存失敗: ${e.message}`);
+        return;
       }
     }
     alert('保存しました。次回のジョブから反映されます。');
@@ -4882,10 +4903,11 @@ async function loadTracks() {
     const [{ apiKey, hasKey }, { days }, ts] = await Promise.all([
       api('/api/maps/config'),
       api('/api/locations/days?limit=180'),
-      api('/api/tracks/settings').catch(() => ({ decimate_meters: 2 })),
+      api('/api/tracks/settings').catch(() => ({ decimate_meters: 0, show_polyline: false })),
     ]);
     tracksState.apiKey = apiKey;
-    tracksState.decimateMeters = Number(ts.decimate_meters ?? 2);
+    tracksState.decimateMeters = Number(ts.decimate_meters ?? 0);
+    tracksState.showPolyline = !!ts.show_polyline;
     $('tracksMissingKey').classList.toggle('hidden', !!hasKey);
     renderTracksDaysList(days);
     if (hasKey) {
@@ -5028,8 +5050,9 @@ function handleLivePoint(point) {
         zIndex: 5,
       }));
     }
-    // 直前との区間に専用色 polyline を追加 (drawTracks で全描き直しせず差分のみ)
-    if (window.google?.maps && tracksState.polylines) {
+    // 直前との区間に専用色 polyline を追加 (drawTracks で全描き直しせず差分のみ).
+    // 既定 (点のみ表示) では skip.
+    if (tracksState.showPolyline && window.google?.maps && tracksState.polylines) {
       const cat = seg.category;
       tracksState.polylines.push(new google.maps.Polyline({
         path: [{ lat: prev.lat, lng: prev.lon }, { lat: cur.lat, lng: cur.lon }],
@@ -5384,8 +5407,9 @@ function drawTracks(points) {
   const { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec } = classifyAll(points);
 
   // 区間ごとに polyline を 1 本ずつ描画 (cats[i] = points[i-1] → points[i] の category).
-  // 64 点でも polyline 63 本程度なので Maps の負荷的には許容.
-  if (points.length >= 2) {
+  // 既定では「点のみ表示」 (tracksState.showPolyline=false) で線を描かない.
+  // 設定 UI の "ポリライン表示" を ON にすると区間色分けが復活する.
+  if (tracksState.showPolyline && points.length >= 2) {
     for (let i = 1; i < points.length; i++) {
       const cat = cats[i] || 'still';
       tracksState.polylines.push(new google.maps.Polyline({

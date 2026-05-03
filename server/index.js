@@ -3429,14 +3429,20 @@ app.post('/api/locations/ingest', async (c) => {
 });
 
 /**
- * Tracks タブ全般の設定 (現状は ノイズ間引き距離).
- *   GET  /api/tracks/settings → { decimate_meters: number }
- *   PATCH /api/tracks/settings { decimate_meters?: number }
+ * Tracks タブ全般の設定.
+ *   GET  /api/tracks/settings → { decimate_meters, show_polyline }
+ *   PATCH /api/tracks/settings { decimate_meters?, show_polyline? }
+ *
+ * - decimate_meters: 0 = 全点描画 (既定). >0 で連続点を間引く.
+ * - show_polyline:   false = 点マーカーのみ (既定). true で区間色分け線も描く.
  */
 app.get('/api/tracks/settings', (c) => {
   const s = getAppSettings(db);
-  const v = Number(s['tracks.decimate_meters'] ?? '2');
-  return c.json({ decimate_meters: Number.isFinite(v) ? v : 2 });
+  const v = Number(s['tracks.decimate_meters'] ?? '0');
+  return c.json({
+    decimate_meters: Number.isFinite(v) ? v : 0,
+    show_polyline: (s['tracks.show_polyline'] ?? 'false') === 'true',
+  });
 });
 app.patch('/api/tracks/settings', async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -3448,9 +3454,15 @@ app.patch('/api/tracks/settings', async (c) => {
     }
     patch['tracks.decimate_meters'] = String(v);
   }
+  if (body.show_polyline !== undefined) {
+    patch['tracks.show_polyline'] = body.show_polyline ? 'true' : 'false';
+  }
   if (Object.keys(patch).length > 0) setAppSettings(db, patch);
   const s = getAppSettings(db);
-  return c.json({ decimate_meters: Number(s['tracks.decimate_meters'] ?? '2') });
+  return c.json({
+    decimate_meters: Number(s['tracks.decimate_meters'] ?? '0'),
+    show_polyline: (s['tracks.show_polyline'] ?? 'false') === 'true',
+  });
 });
 
 /**
@@ -3467,7 +3479,7 @@ app.patch('/api/tracks/settings', async (c) => {
  */
 app.get('/api/locations/recent', (c) => {
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? '50')));
-  const settingsDecimate = Number(getAppSettings(db)['tracks.decimate_meters'] ?? '2');
+  const settingsDecimate = Number(getAppSettings(db)['tracks.decimate_meters'] ?? '0');
   const decimateM = Math.max(0, Number(c.req.query('decimate') ?? settingsDecimate));
   const device = c.req.query('device') || null;
   const params = [];
