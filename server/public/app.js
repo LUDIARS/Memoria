@@ -447,6 +447,7 @@ async function refreshVisitsBadge() {
   try {
     const r = await api('/api/visits/unsaved/count');
     const badge = $('tabVisitsCount');
+    if (!badge) return;
     if (r.count > 0) {
       badge.classList.remove('hidden');
       badge.textContent = r.count;
@@ -606,27 +607,25 @@ function switchTab(tab) {
   if (layout) layout.dataset.activeTab = tab;
   $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
-  $('visitsView').classList.toggle('hidden', tab !== 'visits');
+  $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('dictView').classList.toggle('hidden', tab !== 'dict');
   $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
-  $('eventsView').classList.toggle('hidden', tab !== 'events');
   $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
-  if (tab === 'visits') loadVisits();
+  if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'dict') loadDictionary();
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
-  if (tab === 'events') loadEvents();
   if (tab === 'tracks') loadTracks();
   if (tab === 'meals') loadMeals();
   if (tab === 'external') loadExternalConfig();
@@ -4637,6 +4636,356 @@ function renderEvents(items) {
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
+
+// ── Worklog tab (作業ログ) ─────────────────────────────────────────────
+//
+// Sub-tabs: schedule / github / claude / gemini / codex / browsing / dig.
+// All views share `state.worklog.date` (YYYY-MM-DD, local). The day navigator
+// shifts ±1 day; the date input lets users jump to any day.
+
+state.worklog = { date: localDateStr(new Date()), sub: 'schedule' };
+
+function localDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function shiftWorklogDate(deltaDays) {
+  const [y, m, d] = state.worklog.date.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + deltaDays);
+  state.worklog.date = localDateStr(dt);
+  syncWorklogDateInput();
+  loadWorklog();
+}
+function syncWorklogDateInput() {
+  const input = $('wlDate');
+  if (input) input.value = state.worklog.date;
+}
+
+const WL_SUB_VIEWS = {
+  schedule: 'wlScheduleView',
+  github: 'wlGithubView',
+  claude: 'wlClaudeView',
+  gemini: 'wlGeminiView',
+  codex: 'wlCodexView',
+  browsing: 'wlBrowsingView',
+  dig: 'wlDigView',
+};
+
+const WL_KIND_BY_SUB = {
+  github: 'git_commit',
+  claude: 'claude_code_prompt',
+  gemini: 'gemini_prompt',
+  codex: 'codex_prompt',
+};
+
+function switchWorklogSub(sub) {
+  if (!WL_SUB_VIEWS[sub]) return;
+  state.worklog.sub = sub;
+  document.querySelectorAll('.wl-subtab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.sub === sub);
+  });
+  for (const [key, viewId] of Object.entries(WL_SUB_VIEWS)) {
+    const view = $(viewId);
+    if (view) view.classList.toggle('hidden', key !== sub);
+  }
+  loadWorklog();
+}
+
+async function loadWorklog() {
+  syncWorklogDateInput();
+  const date = state.worklog.date;
+  const sub = state.worklog.sub;
+  if (sub === 'schedule') return loadWorklogSchedule(date);
+  if (sub === 'browsing') return loadWorklogBrowsing(date);
+  if (sub === 'dig') return loadWorklogDig(date);
+  if (WL_KIND_BY_SUB[sub]) return loadWorklogActivity(date, sub);
+}
+
+async function loadWorklogSchedule(date) {
+  try {
+    const [evs, ut] = await Promise.all([
+      api(`/api/worklog/server-events?date=${encodeURIComponent(date)}`),
+      api('/api/uptime'),
+    ]);
+    renderWorklogUptime(ut);
+    renderWorklogSchedule(evs.items || []);
+  } catch (e) { console.error(e); }
+}
+
+function renderWorklogUptime(u) {
+  const el = $('wlUptimeStatus');
+  if (!el) return;
+  if (!u?.heartbeat) { el.innerHTML = '<span style="color:var(--muted)">heartbeat 情報なし</span>'; return; }
+  const h = u.heartbeat;
+  const startedAt = h.server_started_at ? new Date(h.server_started_at) : null;
+  const lastHb = h.last_heartbeat_at ? new Date(h.last_heartbeat_at) : null;
+  const upMs = startedAt ? Date.now() - startedAt.getTime() : 0;
+  el.innerHTML = `
+    <span><b>稼働中</b> · 起動 ${startedAt ? startedAt.toLocaleString() : '?'} (${fmtElapsed(upMs)})</span>
+    <span style="margin-left:12px;color:var(--muted)">last heartbeat ${lastHb ? lastHb.toLocaleTimeString() : '?'}</span>
+  `;
+}
+
+function renderWorklogSchedule(items) {
+  const list = $('wlScheduleList');
+  const empty = $('wlScheduleEmpty');
+  if (!list || !empty) return;
+  if (!items.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    setWorklogSummary('この日のサーバ稼働イベントなし');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = items.map(e => {
+    const label = EVENT_LABELS[e.type] || e.type;
+    const occ = (e.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const dur = e.duration_ms ? ` · ${Math.round(e.duration_ms / 1000)}秒` : '';
+    const ended = e.ended_at ? ` → ${e.ended_at.replace('T',' ').slice(0,19)}` : '';
+    const det = e.details ? `<div class="ev-det">${escapeHtml(JSON.stringify(e.details))}</div>` : '';
+    return `<li class="ev-row ev-${e.type}">
+      <span class="ev-tag">${label}</span>
+      <span class="ev-time">${escapeHtml(occ)}${ended}${dur}</span>
+      ${det}
+    </li>`;
+  }).join('');
+  const counts = items.reduce((acc, e) => {
+    acc[e.type] = (acc[e.type] || 0) + 1;
+    return acc;
+  }, {});
+  const summary = Object.entries(counts).map(([k, v]) => `${EVENT_LABELS[k] || k} ${v}`).join(' / ');
+  setWorklogSummary(`${items.length} 件 · ${summary}`);
+}
+
+async function loadWorklogActivity(date, sub) {
+  const kind = WL_KIND_BY_SUB[sub];
+  const view = WL_SUB_VIEWS[sub];
+  const summaryEl = $(`${view}`)?.querySelector('.wl-summary-row');
+  const listEl = view === 'wlGithubView' ? $('wlGithubList')
+    : view === 'wlClaudeView' ? $('wlClaudeList')
+    : view === 'wlGeminiView' ? $('wlGeminiList')
+    : $('wlCodexList');
+  const emptyEl = view === 'wlGithubView' ? $('wlGithubEmpty')
+    : view === 'wlClaudeView' ? $('wlClaudeEmpty')
+    : view === 'wlGeminiView' ? $('wlGeminiEmpty')
+    : $('wlCodexEmpty');
+  if (!listEl || !emptyEl) return;
+  try {
+    const r = await api(`/api/activity/events?date=${encodeURIComponent(date)}&kind=${encodeURIComponent(kind)}&limit=500`);
+    const items = r.items || [];
+    if (!items.length) {
+      listEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      if (summaryEl) summaryEl.innerHTML = '';
+      setWorklogSummary(`${labelForSub(sub)}: 0 件`);
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    if (sub === 'github') renderWorklogGithub(items, listEl, summaryEl);
+    else renderWorklogPrompts(items, listEl, summaryEl, sub);
+    setWorklogSummary(`${labelForSub(sub)}: ${r.total} 件`);
+  } catch (e) { console.error(e); }
+}
+
+function labelForSub(sub) {
+  return ({ schedule: '予定', github: 'GitHub', claude: 'Claude Code', gemini: 'Gemini', codex: 'Codex', browsing: 'ブラウジング', dig: 'ディグ' })[sub] || sub;
+}
+
+function renderWorklogGithub(items, listEl, summaryEl) {
+  // Group by repo (= source field) with a header summary row.
+  const byRepo = new Map();
+  for (const it of items) {
+    const repo = it.source || '(unknown)';
+    if (!byRepo.has(repo)) byRepo.set(repo, []);
+    byRepo.get(repo).push(it);
+  }
+  const sortedRepos = [...byRepo.entries()].sort((a, b) => b[1].length - a[1].length);
+  if (summaryEl) {
+    summaryEl.innerHTML = sortedRepos.map(([repo, list]) =>
+      `<strong>${escapeHtml(repo)}</strong>${list.length}`
+    ).join(' / ');
+  }
+  listEl.innerHTML = sortedRepos.map(([repo, list]) => {
+    const rows = list.map(it => {
+      const t = (it.occurred_at || '').replace('T', ' ').slice(0, 19);
+      const sha = (it.ref_id || '').slice(0, 7);
+      const meta = it.metadata || {};
+      const branch = meta.branch ? ` [${escapeHtml(meta.branch)}]` : '';
+      const author = meta.author ? ` · ${escapeHtml(meta.author)}` : '';
+      const content = it.content || '';
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>
+          <span class="wl-source">${escapeHtml(sha)}${branch}</span>
+          <span class="wl-meta">${author}</span>
+        </div>
+        <div class="wl-content">${escapeHtml(content)}</div>
+      </li>`;
+    }).join('');
+    return `<li class="wl-repo-group" style="background:transparent;border:none;padding:0;gap:4px">
+      <div class="wl-row1"><strong>${escapeHtml(repo)}</strong> <span class="wl-meta">${list.length} commits</span></div>
+      <ul class="wl-list" style="margin-left:8px">${rows}</ul>
+    </li>`;
+  }).join('');
+}
+
+function renderWorklogPrompts(items, listEl, summaryEl, sub) {
+  if (summaryEl) {
+    summaryEl.innerHTML = `<strong>${escapeHtml(labelForSub(sub))}</strong>${items.length} prompts`;
+  }
+  listEl.innerHTML = items.map(it => {
+    const t = (it.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const meta = it.metadata || {};
+    const cwd = meta.cwd ? `${escapeHtml(meta.cwd)}` : '';
+    const branch = meta.branch ? ` · ${escapeHtml(meta.branch)}` : '';
+    const source = it.source ? `<span class="wl-source">${escapeHtml(it.source)}</span>` : '';
+    const content = (it.content || '').trim();
+    return `<li>
+      <div class="wl-row1">
+        <span class="wl-time">${escapeHtml(t)}</span>
+        ${source}
+        <span class="wl-meta">${cwd}${branch}</span>
+      </div>
+      ${content ? `<div class="wl-content truncate" title="${escapeHtml(content)}">${escapeHtml(content)}</div>` : ''}
+    </li>`;
+  }).join('');
+}
+
+async function loadWorklogBrowsing(date) {
+  try {
+    const r = await api(`/api/worklog/browsing?date=${encodeURIComponent(date)}`);
+    renderWorklogBrowsing(r);
+  } catch (e) { console.error(e); }
+}
+
+function renderWorklogBrowsing(r) {
+  const visits = r.visits || [];
+  const revisits = r.revisits || [];
+  const domains = r.top_domains || [];
+  $('wlVisitsCount').textContent = visits.length;
+  $('wlRevisitsCount').textContent = revisits.length;
+  $('wlDomainsCount').textContent = domains.length;
+
+  const summaryEl = $('wlBrowsingSummary');
+  summaryEl.innerHTML = `<strong>ページ閲覧</strong>${r.total_pages || 0} ページ / ${r.total_visits || 0} 回 · <strong>再訪 BM</strong>${revisits.length} · <strong>ドメイン</strong>${domains.length}`;
+  setWorklogSummary(`${r.total_pages || 0} ページ / ${r.total_visits || 0} 回 · 再訪 ${revisits.length} · ドメイン ${domains.length}`);
+
+  // Visits list (chronological, 最新が先頭)
+  const visitsList = $('wlVisitsList');
+  const visitsEmpty = $('wlVisitsEmpty');
+  if (!visits.length) {
+    visitsList.innerHTML = '';
+    visitsEmpty.classList.remove('hidden');
+  } else {
+    visitsEmpty.classList.add('hidden');
+    visitsList.innerHTML = visits.map(v => {
+      const t = (v.last_seen_at || '').slice(11, 19);
+      const bm = v.is_bookmarked ? '<span class="wl-source">★ BM</span>' : '';
+      const dom = v.domain ? `<span class="wl-meta">${escapeHtml(v.domain)}</span>` : '';
+      const cnt = v.visit_count > 1 ? `<span class="wl-meta">×${v.visit_count}</span>` : '';
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>
+          ${bm}${dom}${cnt}
+        </div>
+        <div class="wl-content"><a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">${escapeHtml(v.title || v.url)}</a></div>
+      </li>`;
+    }).join('');
+  }
+
+  // Revisits list
+  const reList = $('wlRevisitsList');
+  const reEmpty = $('wlRevisitsEmpty');
+  if (!revisits.length) {
+    reList.innerHTML = '';
+    reEmpty.classList.remove('hidden');
+  } else {
+    reEmpty.classList.add('hidden');
+    reList.innerHTML = revisits.map(b => {
+      const cnt = `<span class="wl-meta">×${b.visit_count}</span>`;
+      const t = (b.last_seen_at || '').slice(11, 19);
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>${cnt}
+        </div>
+        <div class="wl-content"><a href="${escapeHtml(b.url)}" target="_blank" rel="noopener">${escapeHtml(b.title || b.url)}</a></div>
+      </li>`;
+    }).join('');
+  }
+
+  // Top domains
+  const domList = $('wlDomainsList');
+  domList.innerHTML = domains.map(d => `
+    <li>
+      <span class="wl-dom-name">${escapeHtml(d.domain)}</span>
+      <span class="wl-dom-count">${d.pages} ページ / ${d.visits} 回</span>
+    </li>
+  `).join('');
+}
+
+async function loadWorklogDig(date) {
+  try {
+    const r = await api(`/api/diary/${encodeURIComponent(date)}/digs?limit=200`);
+    renderWorklogDig(r);
+  } catch (e) { console.error(e); }
+}
+
+function renderWorklogDig(r) {
+  const items = r.items || [];
+  const list = $('wlDigList');
+  const empty = $('wlDigEmpty');
+  const summaryEl = $('wlDigSummary');
+  if (summaryEl) summaryEl.innerHTML = `<strong>ディグ</strong>${r.total || items.length} セッション`;
+  setWorklogSummary(`ディグ ${r.total || items.length} 件`);
+  if (!items.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = items.map(d => {
+    const t = (d.created_at || '').replace('T', ' ').slice(0, 19);
+    const status = d.status ? `<span class="wl-source">${escapeHtml(d.status)}</span>` : '';
+    const summary = d.summary ? `<div class="wl-content truncate">${escapeHtml(d.summary)}</div>` : '';
+    const sources = d.source_count ? `<span class="wl-meta">${d.source_count} sources</span>` : '';
+    return `<li>
+      <div class="wl-row1">
+        <span class="wl-time">${escapeHtml(t)}</span>
+        ${status}${sources}
+      </div>
+      <div class="wl-content"><strong>${escapeHtml(d.query || '')}</strong></div>
+      ${summary}
+    </li>`;
+  }).join('');
+}
+
+function setWorklogSummary(text) {
+  const el = $('wlSummary');
+  if (el) el.textContent = `${state.worklog.date} · ${text}`;
+}
+
+// Worklog event listeners
+document.querySelectorAll('.wl-subtab').forEach(btn => {
+  btn.addEventListener('click', () => switchWorklogSub(btn.dataset.sub));
+});
+$('wlPrevDay')?.addEventListener('click', () => shiftWorklogDate(-1));
+$('wlNextDay')?.addEventListener('click', () => shiftWorklogDate(1));
+$('wlToday')?.addEventListener('click', () => {
+  state.worklog.date = localDateStr(new Date());
+  syncWorklogDateInput();
+  loadWorklog();
+});
+$('wlDate')?.addEventListener('change', (e) => {
+  const v = e.target.value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    state.worklog.date = v;
+    loadWorklog();
+  }
+});
+$('wlRefresh')?.addEventListener('click', () => loadWorklog());
 
 // ── 🌐 Multi (Memoria Hub) browse ─────────────────────────────────────────
 state.multiSubtab = 'bookmarks';

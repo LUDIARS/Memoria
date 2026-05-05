@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export function openDb(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -824,6 +824,71 @@ export function digSessionsForDate(db, dateStr) {
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
+// ── worklog browsing aggregations (per-date) ─────────────────────────────
+//
+// 「作業ログ」 タブの「ブラウジング」 サブビューが叩く集計群。 page_visits は
+// last_seen_at しか持たないため、 同じ URL を別日に複数回開いた場合は最後の日付
+// にしか紐付かない (visit_events は per-event で残るが、 そちらは Legatus / SNI
+// 由来のものが混じるので、 ブクマ/履歴判定としては page_visits を主軸にする)。
+
+/** 当日 last_seen_at の page_visits、 ブックマーク済みかどうかも返す */
+export function pageVisitsForDate(db, dateStr, { limit = 200 } = {}) {
+  const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 200));
+  return db.prepare(`
+    SELECT v.url, v.title, v.first_seen_at, v.last_seen_at, v.visit_count,
+           CASE WHEN b.id IS NULL THEN 0 ELSE 1 END AS is_bookmarked,
+           b.id AS bookmark_id, b.title AS bookmark_title
+    FROM page_visits v
+    LEFT JOIN bookmarks b ON b.url = v.url
+    WHERE date(v.last_seen_at, 'localtime') = ?
+    ORDER BY v.last_seen_at DESC
+    LIMIT ?
+  `).all(dateStr, safeLimit);
+}
+
+/** 当日に再訪が記録されたブックマーク (page_visits とブクマ url を JOIN) */
+export function revisitedBookmarksForDate(db, dateStr, { limit = 100 } = {}) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  return db.prepare(`
+    SELECT b.id, b.url, b.title, b.summary, v.visit_count, v.last_seen_at, v.first_seen_at
+    FROM bookmarks b
+    INNER JOIN page_visits v ON v.url = b.url
+    WHERE date(v.last_seen_at, 'localtime') = ?
+    ORDER BY v.visit_count DESC, v.last_seen_at DESC
+    LIMIT ?
+  `).all(dateStr, safeLimit);
+}
+
+/** 当日のドメイン別 visit_count 合計 + ページ閲覧総数 */
+export function browsingDomainStatsForDate(db, dateStr, { limit = 30 } = {}) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 30));
+  const rows = db.prepare(`
+    SELECT LOWER(SUBSTR(SUBSTR(url, INSTR(url, '://') + 3), 1,
+                        CASE WHEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') > 0
+                             THEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') - 1
+                             ELSE LENGTH(SUBSTR(url, INSTR(url, '://') + 3)) END
+                       )) AS domain,
+           COUNT(*) AS pages,
+           SUM(visit_count) AS visits
+      FROM page_visits
+     WHERE date(last_seen_at, 'localtime') = ?
+       AND domain != ''
+     GROUP BY domain
+     ORDER BY visits DESC, pages DESC
+     LIMIT ?
+  `).all(dateStr, safeLimit);
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS pages, COALESCE(SUM(visit_count), 0) AS visits
+      FROM page_visits
+     WHERE date(last_seen_at, 'localtime') = ?
+  `).get(dateStr);
+  return {
+    top_domains: rows,
+    total_pages: totals.pages,
+    total_visits: totals.visits,
+  };
+}
+
 // ── share metadata --------------------------------------------------------
 //
 // Mark a local row as having been forwarded to a multi server. owner_user_id
@@ -1272,7 +1337,12 @@ export function listServerEventsForDate(db, dateStr) {
 
 // ── activity events (git commit / claude code prompt 等) ─────────────────
 
-const ACTIVITY_KINDS = new Set(['git_commit', 'claude_code_prompt']);
+const ACTIVITY_KINDS = new Set([
+  'git_commit',
+  'claude_code_prompt',
+  'gemini_prompt',
+  'codex_prompt',
+]);
 
 /**
  * 活動イベントを 1 件記録する。
@@ -1323,20 +1393,22 @@ export function activityEventsForDate(db, dateStr) {
  *   items   — 取得した行 (DESC、 最新が先頭)
  *   total   — 当日の全件数 (offset/limit 無関係)
  */
-export function activityEventsPage(db, dateStr, { limit = 100, offset = 0 } = {}) {
+export function activityEventsPage(db, dateStr, { limit = 100, offset = 0, kind = null } = {}) {
   const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 100));
   const safeOffset = Math.max(0, Number(offset) || 0);
+  const kindClause = kind && ACTIVITY_KINDS.has(kind) ? 'AND kind = ?' : '';
+  const kindArgs = kindClause ? [kind] : [];
   const total = db.prepare(`
     SELECT COUNT(*) AS n FROM activity_events
-    WHERE date(occurred_at, 'localtime') = ?
-  `).get(dateStr).n;
+    WHERE date(occurred_at, 'localtime') = ? ${kindClause}
+  `).get(dateStr, ...kindArgs).n;
   const items = db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
     FROM activity_events
-    WHERE date(occurred_at, 'localtime') = ?
+    WHERE date(occurred_at, 'localtime') = ? ${kindClause}
     ORDER BY occurred_at DESC
     LIMIT ? OFFSET ?
-  `).all(dateStr, safeLimit, safeOffset).map((r) => ({
+  `).all(dateStr, ...kindArgs, safeLimit, safeOffset).map((r) => ({
     ...r,
     metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
@@ -1403,13 +1475,87 @@ export function visitEventsForDate(db, dateStr) {
   `).all(dateStr);
 }
 
+// ── Diary sidecar (太い JSON 列をファイル外出し) ────────────────────────
+//
+// `metrics_json` と `github_commits_json` は 1 行 80KB に膨らむ太さなので、
+// `<dataDir>/diary/<date>.json` に逃がして DB はサマリだけ保持する。
+// データフロー:
+//   write: upsertDiary が metrics / githubCommits を受け取ったら sidecar に
+//          書き出し、 DB の `*_json` 列は NULL のままにする。
+//   read:  getDiary は DB 行を取り、 sidecar があればそこから metrics /
+//          github_commits を埋める。 sidecar が無ければ DB 列を fallback。
+//   delete: deleteDiary が sidecar も unlink する。
+// マイグレーション (migrateDiariesToSidecar) は起動時 1 回で旧データを
+// sidecar に移し、 DB 列を NULL 化する。
+//
+// dataDir は index.js から setDiaryDataDir で注入する (db.js を fs から
+// 切り離さないために、 dir 未設定時は sidecar を no-op にして DB 列のみで動く)。
+
+let DIARY_DATA_DIR = null;
+
+export function setDiaryDataDir(dir) {
+  DIARY_DATA_DIR = dir || null;
+}
+
+function diarySidecarPath(dateStr) {
+  if (!DIARY_DATA_DIR) return null;
+  return join(DIARY_DATA_DIR, 'diary', `${dateStr}.json`);
+}
+
+function readDiarySidecar(dateStr) {
+  const file = diarySidecarPath(dateStr);
+  if (!file) return null;
+  try {
+    if (!existsSync(file)) return null;
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch { return null; }
+}
+
+function writeDiarySidecar(dateStr, partial) {
+  const file = diarySidecarPath(dateStr);
+  if (!file) return false;
+  const dir = dirname(file);
+  mkdirSync(dir, { recursive: true });
+  // Merge with any existing sidecar so partial writes don't drop other keys.
+  let cur = {};
+  if (existsSync(file)) {
+    try { cur = JSON.parse(readFileSync(file, 'utf8')) || {}; } catch {}
+  }
+  const next = { ...cur };
+  if ('metrics' in partial) next.metrics = partial.metrics;
+  if ('github_commits' in partial) next.github_commits = partial.github_commits;
+  // Atomic-ish write: tmp + rename.
+  const tmp = file + '.tmp';
+  writeFileSync(tmp, JSON.stringify(next));
+  renameSync(tmp, file);
+  return true;
+}
+
+function deleteDiarySidecar(dateStr) {
+  const file = diarySidecarPath(dateStr);
+  if (!file) return;
+  try {
+    if (existsSync(file)) unlinkSync(file);
+  } catch {}
+}
+
 export function getDiary(db, dateStr) {
   const row = db.prepare(`SELECT * FROM diary_entries WHERE date = ?`).get(dateStr);
   if (!row) return null;
+  const side = readDiarySidecar(dateStr);
+  // Sidecar wins; DB columns are kept as fallback for un-migrated rows.
+  const metrics = side && 'metrics' in side
+    ? side.metrics
+    : (row.metrics_json ? safeParse(row.metrics_json) : null);
+  const githubCommits = side && 'github_commits' in side
+    ? side.github_commits
+    : (row.github_commits_json ? safeParse(row.github_commits_json) : null);
   return {
     ...row,
-    metrics: row.metrics_json ? safeParse(row.metrics_json) : null,
-    github_commits: row.github_commits_json ? safeParse(row.github_commits_json) : null,
+    metrics_json: null,         // hide raw blob from API consumers
+    github_commits_json: null,
+    metrics,
+    github_commits: githubCommits,
   };
 }
 
@@ -1423,6 +1569,16 @@ export function listDiariesInRange(db, { start, end }) {
 }
 
 export function upsertDiary(db, { date, summary, workContent, workMinutes, highlights, notes, metrics, githubCommits, status, error }) {
+  // Persist heavy JSON to sidecar; DB columns are kept NULL going forward.
+  // (Existing rows that still have *_json values continue to be served via
+  // the fallback path in getDiary until migrateDiariesToSidecar runs.)
+  const sidecarPatch = {};
+  if (metrics !== undefined) sidecarPatch.metrics = metrics ?? null;
+  if (githubCommits !== undefined) sidecarPatch.github_commits = githubCommits ?? null;
+  if (Object.keys(sidecarPatch).length > 0) {
+    writeDiarySidecar(date, sidecarPatch);
+  }
+
   const tx = db.transaction(() => {
     const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date);
     if (exists) {
@@ -1433,8 +1589,6 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
                work_minutes = COALESCE(?, work_minutes),
                highlights = COALESCE(?, highlights),
                notes = COALESCE(?, notes),
-               metrics_json = COALESCE(?, metrics_json),
-               github_commits_json = COALESCE(?, github_commits_json),
                status = COALESCE(?, status),
                error = ?,
                updated_at = datetime('now')
@@ -1445,8 +1599,6 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
         Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
         highlights ?? null,
         notes ?? null,
-        metrics ? JSON.stringify(metrics) : null,
-        githubCommits ? JSON.stringify(githubCommits) : null,
         status ?? null,
         error ?? null,
         date,
@@ -1454,8 +1606,8 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
     } else {
       db.prepare(`
         INSERT INTO diary_entries
-          (date, summary, work_content, work_minutes, highlights, notes, metrics_json, github_commits_json, status, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (date, summary, work_content, work_minutes, highlights, notes, status, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         date,
         summary ?? null,
@@ -1463,8 +1615,6 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
         Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
         highlights ?? null,
         notes ?? null,
-        metrics ? JSON.stringify(metrics) : null,
-        githubCommits ? JSON.stringify(githubCommits) : null,
         status ?? 'pending',
         error ?? null,
       );
@@ -1545,6 +1695,37 @@ export function updateDiaryNotes(db, dateStr, notes) {
 
 export function deleteDiary(db, dateStr) {
   db.prepare(`DELETE FROM diary_entries WHERE date = ?`).run(dateStr);
+  deleteDiarySidecar(dateStr);
+}
+
+/**
+ * 起動時に 1 回呼ぶマイグレーション。 旧スキーマで `metrics_json` /
+ * `github_commits_json` に値があった行を sidecar ファイルに移し、 DB の
+ * 列を NULL 化する。 idempotent。
+ */
+export function migrateDiariesToSidecar(db) {
+  if (!DIARY_DATA_DIR) return { moved: 0, reason: 'no data dir' };
+  const rows = db.prepare(`
+    SELECT date, metrics_json, github_commits_json
+    FROM diary_entries
+    WHERE metrics_json IS NOT NULL OR github_commits_json IS NOT NULL
+  `).all();
+  if (!rows.length) return { moved: 0 };
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      const patch = {};
+      if (r.metrics_json) patch.metrics = safeParse(r.metrics_json);
+      if (r.github_commits_json) patch.github_commits = safeParse(r.github_commits_json);
+      writeDiarySidecar(r.date, patch);
+      db.prepare(`
+        UPDATE diary_entries
+           SET metrics_json = NULL, github_commits_json = NULL
+         WHERE date = ?
+      `).run(r.date);
+    }
+  });
+  tx();
+  return { moved: rows.length };
 }
 
 export function getDiarySettings(db) {

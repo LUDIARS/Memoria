@@ -48,6 +48,7 @@ import {
   addDictionaryLink, removeDictionaryLink,
   insertVisitEvent, insertExternalVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
   deleteDiary, getDiarySettings, setDiarySettings,
+  setDiaryDataDir, migrateDiariesToSidecar,
   getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
   getDomainCatalog, listDomainCatalog, listDomainCatalogWithCounts, getDomainCatalogMap,
   insertDomainPending, setDomainCatalog, deleteDomainCatalog,
@@ -61,6 +62,7 @@ import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './local/uptime.js';
 import { listServerEvents, listServerEventsForDate } from './db.js';
 import { recordActivityEvent, activityEventsForDate, listActivityEvents, activityEventsPage } from './db.js';
+import { pageVisitsForDate, revisitedBookmarksForDate, browsingDomainStatsForDate } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
   generateDiary, generateWorkContent, generateHighlights,
@@ -114,6 +116,14 @@ mkdirSync(HTML_DIR, { recursive: true });
 mkdirSync(MEAL_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 ensureUserStopwordsTable(db);
+// Diary 本文の太い JSON 列 (metrics_json / github_commits_json) は
+// `<DATA_DIR>/diary/<date>.json` に切り出す。 既存行は起動時に 1 回だけ
+// 移行する (idempotent、 行数 0 なら no-op)。
+setDiaryDataDir(DATA_DIR);
+const _diaryMig = migrateDiariesToSidecar(db);
+if (_diaryMig.moved > 0) {
+  console.log(`[diary] migrated ${_diaryMig.moved} row(s) to sidecar JSON`);
+}
 loadLlmConfigFromSettings(getAppSettings(db));
 initWebPush(DATA_DIR);
 const HEARTBEAT_FILE = join(DATA_DIR, 'heartbeat.json');
@@ -2879,7 +2889,8 @@ app.post('/api/activity/event', async (c) => {
   }
   const kind = String(body.kind || '');
   if (!kind) return c.json({ error: 'kind required' }, 400);
-  if (kind !== 'git_commit' && kind !== 'claude_code_prompt') {
+  const ALLOWED_KINDS = new Set(['git_commit', 'claude_code_prompt', 'gemini_prompt', 'codex_prompt']);
+  if (!ALLOWED_KINDS.has(kind)) {
     return c.json({ error: `unknown kind: ${kind}` }, 400);
   }
   try {
@@ -2906,16 +2917,67 @@ app.post('/api/activity/event', async (c) => {
 //   total は当日全件数。 limit は 1-1000、 offset は >= 0。
 app.get('/api/activity/events', (c) => {
   const date = c.req.query('date');
+  const kind = c.req.query('kind') || null;
   if (date) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
     const limit = Number(c.req.query('limit')) || 100;
     const offset = Number(c.req.query('offset')) || 0;
-    const page = activityEventsPage(db, date, { limit, offset });
-    return c.json({ date, ...page });
+    const page = activityEventsPage(db, date, { limit, offset, kind });
+    return c.json({ date, kind, ...page });
   }
   const limit = Math.min(Number(c.req.query('limit')) || 200, 1000);
-  const kind = c.req.query('kind') || null;
   return c.json({ items: listActivityEvents(db, { limit, kind }) });
+});
+
+// ── 作業ログ (worklog) 用 集計 -------------------------------------------
+// /api/worklog/server-events?date=YYYY-MM-DD  当日のサーバ稼働イベント
+// /api/worklog/browsing?date=YYYY-MM-DD       当日のページ訪問 / 再訪 BM / ドメイン Top
+// dig は既存 /api/diary/:date/digs を再利用 (作業ログ・日記で共有)。
+
+app.get('/api/worklog/server-events', (c) => {
+  const date = c.req.query('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'invalid date' }, 400);
+  }
+  return c.json({ date, items: listServerEventsForDate(db, date) });
+});
+
+app.get('/api/worklog/browsing', (c) => {
+  const date = c.req.query('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'invalid date' }, 400);
+  }
+  const visitLimit = Math.min(Number(c.req.query('visit_limit')) || 200, 2000);
+  const revisitLimit = Math.min(Number(c.req.query('revisit_limit')) || 100, 500);
+  const domainLimit = Math.min(Number(c.req.query('domain_limit')) || 30, 200);
+
+  const visits = pageVisitsForDate(db, date, { limit: visitLimit });
+  const revisits = revisitedBookmarksForDate(db, date, { limit: revisitLimit });
+  const stats = browsingDomainStatsForDate(db, date, { limit: domainLimit });
+
+  // Enrich visits with domain catalog so the UI can show site_name / kind
+  const domains = [...new Set(visits.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
+  const catalog = getDomainCatalogMap(db, domains);
+  const enrichedVisits = visits.map(v => {
+    const dom = extractDomainFromUrl(v.url);
+    const cat = dom ? catalog.get(dom) : null;
+    return {
+      ...v,
+      domain: dom,
+      catalog: cat ? {
+        site_name: cat.site_name, kind: cat.kind, description: cat.description,
+      } : null,
+    };
+  });
+
+  return c.json({
+    date,
+    visits: enrichedVisits,
+    revisits,
+    top_domains: stats.top_domains,
+    total_pages: stats.total_pages,
+    total_visits: stats.total_visits,
+  });
 });
 
 // Paginated dig list for the diary panel.
