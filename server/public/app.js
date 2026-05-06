@@ -3479,19 +3479,34 @@ function renderTrendKeywords(items) {
 function renderTrendWorkHours(items) {
   const el = $('trendWorkHours');
   if (!el) return;
-  // items: [{date: 'YYYY-MM-DD', minutes: number|null}]
-  // null = no diary generated for that day → drop from the line, don't draw 0.
   const present = (items || []).filter(d => Number.isFinite(d.minutes));
   if (!present.length) {
     el.innerHTML = '<div class="queue-empty">作業時間が記録された日記がまだありません</div>';
     return;
   }
-  const data = present.map(d => ({ date: d.date, value: d.minutes / 60, raw: d.minutes }));
-  el.innerHTML = renderLineChartSvg(data, {
-    yLabel: (v) => `${v.toFixed(1)}h`,
-    pointLabel: (d) => `${d.date} : ${(d.value).toFixed(1)} 時間 (${d.raw} 分)`,
+  el.innerHTML = svgHorizontalBar(
+    present,
+    (d) => String(d.date || '').slice(5),
+    (d) => Number(d.minutes || 0),
+    '',
+    {
+      valueLabel: (v) => `${(v / 60).toFixed(1)}h`,
+    }
+  );
+}
+
+function applyTaskDueShortcutToEditor(kind) {
+  const due = $('taskEditorDue');
+  if (!due) return;
+  if (kind === 'weekend') kind = 'saturday';
+  due.value = dueShortcutValue(kind);
+  $('taskEditorDetails')?.focus();
+}
+
+function wireTaskEditorDueShortcuts() {
+  document.querySelectorAll('[data-task-editor-due-shortcut]').forEach((btn) => {
+    btn.addEventListener('click', () => applyTaskDueShortcutToEditor(btn.dataset.taskEditorDueShortcut));
   });
-  attachLineChartTooltip(el);
 }
 
 function renderTrendGpsWalking(items) {
@@ -4106,13 +4121,18 @@ function hideModal(panelId) {
   // If neither panel is open after this hide, drop the backdrop too.
   const dictOpen = !$('dictDetail').classList.contains('hidden');
   const domOpen  = !$('domainDetail').classList.contains('hidden');
-  $('modalBackdrop').hidden = !(dictOpen || domOpen);
+  const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
+  const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
   state.domainDetail = null;
+  state.taskDetail = null;
   hideModal('dictDetail');
   hideModal('domainDetail');
+  hideModal('taskEditorModal');
+  hideModal('implEditorModal');
 }
 $('dictDetailClose')?.addEventListener('click', () => {
   state.dictDetail = null;
@@ -5295,7 +5315,7 @@ loadImplementationNotes = async function () {
     return;
   }
   list.innerHTML = items.map(n => `
-    <div class="simple-item" data-id="${n.id}">
+    <div class="simple-item" data-id="${n.id}" data-impl-open="${n.id}">
       <div class="simple-item-head"><strong>${escapeHtml(n.title)}</strong></div>
       <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
       <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
@@ -5307,7 +5327,8 @@ loadImplementationNotes = async function () {
       </div>
     </div>`).join('');
   list.querySelectorAll('[data-impl-share]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
       try {
         await api('/api/multi/share', {
           method: 'POST',
@@ -5321,34 +5342,48 @@ loadImplementationNotes = async function () {
     });
   });
   list.querySelectorAll('[data-impl-delete]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
       await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
       loadImplementationNotes();
+    });
+  });
+  list.querySelectorAll('[data-impl-open]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('button,a,input,select,textarea')) return;
+      const id = Number(el.dataset.implOpen || 0);
+      const note = items.find((n) => n.id === id);
+      if (note) openImplEditor(note);
     });
   });
 };
 
 addImplementationNoteFromForm = async function () {
-  const title = $('implTitle')?.value.trim();
+  const title = $('implEditorTitle')?.value.trim();
   if (!title) return;
-  await api('/api/implementation-notes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      title,
-      good_points: $('implGood')?.value.trim() || '',
-      bad_points: $('implBad')?.value.trim() || '',
-      attachment_type: $('implAttachmentType')?.value || '',
-      attachment_value: $('implAttachmentValue')?.value.trim() || '',
-      shareable: !!$('implShareable')?.checked,
-    }),
-  });
-  for (const id of ['implTitle', 'implGood', 'implBad', 'implAttachmentType', 'implAttachmentValue']) {
-    const el = $(id);
-    if (el) el.value = '';
+  const noteId = Number($('implEditorNoteId')?.value || 0);
+  const payload = {
+    title,
+    good_points: $('implEditorGood')?.value.trim() || '',
+    bad_points: $('implEditorBad')?.value.trim() || '',
+    attachment_type: $('implEditorAttachmentType')?.value || '',
+    attachment_value: $('implEditorAttachmentValue')?.value.trim() || '',
+    shareable: !!$('implEditorShareable')?.checked,
+  };
+  if (noteId) {
+    await api(`/api/implementation-notes/${noteId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } else {
+    await api('/api/implementation-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
   }
-  $('implShareable').checked = false;
-  $('implForm')?.classList.add('hidden');
+  closeImplEditor();
   loadImplementationNotes();
 };
 
@@ -5448,7 +5483,7 @@ function taskCardHtml(t) {
     ? '<button class="ghost" disabled>Done</button>'
     : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
   return `
-    <article class="task-card" data-task-open="${t.id}">
+    <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
         <strong>${escapeHtml(t.title)}</strong>
         ${aiBadge}
@@ -5464,64 +5499,44 @@ function taskCardHtml(t) {
 }
 
 function renderTaskDetail() {
-  const panel = $('taskDetailPanel');
-  if (!panel) return;
-  const t = state.taskDetail;
-  if (!t) {
-    panel.classList.add('hidden');
-    panel.innerHTML = '';
-    return;
-  }
-  panel.classList.remove('hidden');
-  panel.innerHTML = `
-    <div class="task-detail-head">
-      <h3>タスク詳細</h3>
-      <span class="task-origin ${t.creator_type === 'ai' ? 'ai' : 'human'}">${t.creator_type === 'ai' ? 'AI作成' : '人間作成'}</span>
-    </div>
-    <label class="simple-field">
-      <span>タスク内容</span>
-      <input id="taskDetailTitle" type="text" value="${escapeHtml(t.title || '')}" />
-    </label>
-    <label class="simple-field">
-      <span>期日</span>
-      <input id="taskDetailDue" type="datetime-local" value="${escapeHtml((t.due_at || '').slice(0, 16))}" />
-    </label>
-    <label class="simple-field">
-      <span>ステータス</span>
-      <select id="taskDetailStatus">
-        ${['todo', 'doing', 'done'].map((s) => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${s.toUpperCase()}</option>`).join('')}
-      </select>
-    </label>
-    <label class="simple-field">
-      <span>メモ</span>
-      <textarea id="taskDetailMemo" rows="5">${escapeHtml(t.details || '')}</textarea>
-    </label>
-    <div class="simple-actions">
-      <button id="taskDetailSaveBtn">保存</button>
-      <button id="taskDetailCloseBtn" class="ghost" type="button">閉じる</button>
-    </div>
-  `;
-  $('taskDetailCloseBtn').onclick = () => {
-    state.taskDetail = null;
-    renderTaskDetail();
-  };
-  $('taskDetailSaveBtn').onclick = async () => {
-    try {
-      await api(`/api/tasks/${t.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: $('taskDetailTitle').value.trim(),
-          due_at: $('taskDetailDue').value || null,
-          status: $('taskDetailStatus').value,
-          details: $('taskDetailMemo').value.trim(),
-        }),
-      });
-      await loadTasks();
-    } catch (e) {
-      alert(e.message);
-    }
-  };
+  // Task detail is edited in a modal dialog.
+}
+
+function openTaskEditor(task = null) {
+  const isEdit = !!task;
+  if (!$('taskEditorModal')) return;
+  $('taskEditorHeading').textContent = isEdit ? 'タスクを変更' : 'タスクを追加';
+  $('taskEditorTitle').value = task?.title || '';
+  $('taskEditorDue').value = task?.due_at ? String(task.due_at).slice(0, 16) : '';
+  $('taskEditorStatus').value = task?.status || 'todo';
+  $('taskEditorDetails').value = task?.details || '';
+  $('taskEditorShareActio').checked = !!task?.share_actio;
+  $('taskEditorTaskId').value = task?.id ? String(task.id) : '';
+  showModal('taskEditorModal');
+  $('taskEditorTitle').focus();
+}
+
+function closeTaskEditor() {
+  hideModal('taskEditorModal');
+}
+
+function openImplEditor(note = null) {
+  const isEdit = !!note;
+  if (!$('implEditorModal')) return;
+  $('implEditorHeading').textContent = isEdit ? '実装自慢を変更' : '実装自慢を追加';
+  $('implEditorNoteId').value = note?.id ? String(note.id) : '';
+  $('implEditorTitle').value = note?.title || '';
+  $('implEditorGood').value = note?.good_points || '';
+  $('implEditorBad').value = note?.bad_points || '';
+  $('implEditorAttachmentType').value = note?.attachment_type || '';
+  $('implEditorAttachmentValue').value = note?.attachment_value || '';
+  $('implEditorShareable').checked = !!note?.shareable;
+  showModal('implEditorModal');
+  $('implEditorTitle').focus();
+}
+
+function closeImplEditor() {
+  hideModal('implEditorModal');
 }
 
 function renderTaskBoard() {
@@ -5545,7 +5560,7 @@ function renderTaskBoard() {
       const id = Number(el.dataset.taskOpen);
       if (ev.target.closest('button')) return;
       state.taskDetail = state.taskItems.find((t) => t.id === id) || null;
-      renderTaskDetail();
+      openTaskEditor(state.taskDetail);
     });
   });
   document.querySelectorAll('[data-task-done]').forEach((btn) => {
@@ -5579,6 +5594,39 @@ function renderTaskBoard() {
       await loadTasks();
     });
   });
+  document.querySelectorAll('[data-task-drag]').forEach((el) => {
+    el.addEventListener('dragstart', (ev) => {
+      const id = el.dataset.taskDrag;
+      if (!id) return;
+      ev.dataTransfer?.setData('text/plain', id);
+      ev.dataTransfer.effectAllowed = 'move';
+      document.body.classList.add('task-dragging');
+    });
+    el.addEventListener('dragend', () => {
+      document.body.classList.remove('task-dragging');
+    });
+  });
+  const doneDrop = $('taskDoneDrop');
+  if (doneDrop) {
+    doneDrop.ondragover = (ev) => {
+      ev.preventDefault();
+      doneDrop.classList.add('drag-over');
+    };
+    doneDrop.ondragleave = () => doneDrop.classList.remove('drag-over');
+    doneDrop.ondrop = async (ev) => {
+      ev.preventDefault();
+      doneDrop.classList.remove('drag-over');
+      document.body.classList.remove('task-dragging');
+      const id = Number(ev.dataTransfer?.getData('text/plain') || 0);
+      if (!id) return;
+      await api(`/api/tasks/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' }),
+      });
+      await loadTasks();
+    };
+  }
 }
 
 function decorateTaskAndImplTabs() {
@@ -5623,6 +5671,9 @@ ensureMemoriaFeatureViews = function () {
           <aside id="tasksMenu" class="tasks-menu">
             <button type="button" data-task-menu="todo" class="active">TODO</button>
             <button type="button" data-task-menu="done">完了済み</button>
+            <div id="taskDoneDrop" class="task-done-drop" title="タスクをここにドロップで完了">
+              完了
+            </div>
           </aside>
           <section class="tasks-pane">
             <h3>今日が期限 / 期限切れ</h3>
@@ -5633,8 +5684,92 @@ ensureMemoriaFeatureViews = function () {
             <div id="tasksFuture" class="simple-list"></div>
           </section>
         </div>
-        <section id="taskDetailPanel" class="task-detail-panel hidden"></section>
+        <section id="taskEditorModal" class="dict-detail modal-panel hidden foundation-form">
+          <button type="button" class="modal-close" id="taskEditorClose" aria-label="close">×</button>
+          <h3 id="taskEditorHeading">タスクを追加</h3>
+          <input type="hidden" id="taskEditorTaskId" />
+          <label class="simple-field">
+            <span>タスク内容</span>
+            <input id="taskEditorTitle" type="text" />
+          </label>
+          <label class="simple-field">
+            <span>期日</span>
+            <input id="taskEditorDue" type="datetime-local" />
+          </label>
+          <div class="task-due-shortcuts" aria-label="期日のショートカット">
+            <button type="button" class="ghost" data-task-editor-due-shortcut="today">今日</button>
+            <button type="button" class="ghost" data-task-editor-due-shortcut="tomorrow">明日</button>
+            <button type="button" class="ghost" data-task-editor-due-shortcut="weekend">今週末</button>
+          </div>
+          <label class="simple-field">
+            <span>ステータス</span>
+            <select id="taskEditorStatus">
+              <option value="todo">TODO</option>
+              <option value="doing">DOING</option>
+              <option value="done">DONE</option>
+            </select>
+          </label>
+          <label class="simple-check-row">
+            <input id="taskEditorShareActio" type="checkbox" />
+            <span>Actio にシェアする</span>
+          </label>
+          <label class="simple-field">
+            <span>メモ</span>
+            <textarea id="taskEditorDetails" rows="6"></textarea>
+          </label>
+          <div class="simple-actions">
+            <button id="taskEditorSaveBtn">保存</button>
+            <button id="taskEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
+        </section>
       </div>`;
+  }
+  const implView = $('implView');
+  if (implView && !$('implEditorModal')) {
+    const panel = implView.querySelector('.simple-panel') || implView;
+    const modal = document.createElement('section');
+    modal.id = 'implEditorModal';
+    modal.className = 'dict-detail modal-panel hidden foundation-form';
+    modal.innerHTML = `
+      <button type="button" class="modal-close" id="implEditorClose" aria-label="close">×</button>
+      <h3 id="implEditorHeading">実装自慢を追加</h3>
+      <input type="hidden" id="implEditorNoteId" />
+      <label class="simple-field">
+        <span>ドヤポイント</span>
+        <input id="implEditorTitle" type="text" />
+      </label>
+      <label class="simple-field">
+        <span>良かった点</span>
+        <textarea id="implEditorGood" rows="5"></textarea>
+      </label>
+      <label class="simple-field">
+        <span>悪かった点 / トレードオフ</span>
+        <textarea id="implEditorBad" rows="4"></textarea>
+      </label>
+      <label class="simple-field">
+        <span>添付するもの</span>
+        <select id="implEditorAttachmentType">
+          <option value="">なし</option>
+          <option value="github">GitHub のプロダクト</option>
+          <option value="screenshot">スクリーンキャプチャ</option>
+          <option value="video">動画</option>
+          <option value="code">コードスニペット</option>
+          <option value="other">その他</option>
+        </select>
+      </label>
+      <label class="simple-field">
+        <span>添付内容</span>
+        <textarea id="implEditorAttachmentValue" rows="4"></textarea>
+      </label>
+      <label class="simple-check-row">
+        <input id="implEditorShareable" type="checkbox" />
+        <span>シェア可能にする</span>
+      </label>
+      <div class="simple-actions">
+        <button id="implEditorSaveBtn">保存</button>
+        <button id="implEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+      </div>`;
+    panel.appendChild(modal);
   }
   decorateTaskAndImplTabs();
   upgradeTaskFormMarkup();
@@ -5642,17 +5777,18 @@ ensureMemoriaFeatureViews = function () {
   setupTaskFormKeyboard();
   setupImplementationFormKeyboard();
   if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
-    $('taskForm')?.classList.remove('hidden');
-    $('taskTitle')?.focus();
+    openTaskEditor(null);
   };
-  if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
-  if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
+  if ($('taskEditorClose')) $('taskEditorClose').onclick = closeTaskEditor;
+  if ($('taskEditorCancelBtn')) $('taskEditorCancelBtn').onclick = closeTaskEditor;
+  if ($('taskEditorSaveBtn')) $('taskEditorSaveBtn').onclick = addTaskFromForm;
+  wireTaskEditorDueShortcuts();
   if ($('implNewBtn')) $('implNewBtn').onclick = () => {
-    $('implForm')?.classList.remove('hidden');
-    $('implTitle')?.focus();
+    openImplEditor(null);
   };
-  if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
-  if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
+  if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
+  if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
+  if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
   document.querySelectorAll('#tasksMenu [data-task-menu]').forEach((btn) => {
     btn.onclick = () => {
       state.taskMenu = btn.dataset.taskMenu;
@@ -5673,22 +5809,36 @@ loadTasks = async function () {
 };
 
 addTaskFromForm = async function () {
-  const title = $('taskTitle')?.value.trim();
+  const title = $('taskEditorTitle')?.value.trim();
   if (!title) return;
-  await api('/api/tasks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      title,
-      details: $('taskDetails')?.value.trim() || '',
-      due_at: $('taskDue')?.value || null,
-      share_actio: !!$('taskShareActio')?.checked,
-      creator_type: 'human',
-    }),
-  });
-  $('taskTitle').value = '';
-  $('taskDetails').value = '';
-  $('taskForm')?.classList.add('hidden');
+  const editId = Number($('taskEditorTaskId')?.value || 0);
+  if (editId) {
+    await api(`/api/tasks/${editId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        details: $('taskEditorDetails')?.value.trim() || '',
+        due_at: $('taskEditorDue')?.value || null,
+        status: $('taskEditorStatus')?.value || 'todo',
+        share_actio: !!$('taskEditorShareActio')?.checked,
+      }),
+    });
+  } else {
+    await api('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        details: $('taskEditorDetails')?.value.trim() || '',
+        due_at: $('taskEditorDue')?.value || null,
+        status: $('taskEditorStatus')?.value || 'todo',
+        share_actio: !!$('taskEditorShareActio')?.checked,
+        creator_type: 'human',
+      }),
+    });
+  }
+  closeTaskEditor();
   await loadTasks();
 };
 

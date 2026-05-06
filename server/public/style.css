@@ -1396,8 +1396,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.55);
   z-index: 90;
+  backdrop-filter: blur(1px);
 }
 .modal-backdrop[hidden] { display: none; }
 .modal-panel {
@@ -1419,6 +1420,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   box-shadow: 0 12px 48px rgba(0,0,0,0.2);
 }
 .modal-panel.ext-setup { background: var(--panel) !important; }
+.modal-panel#taskEditorModal { z-index: 110; }
 .modal-close {
   /* 右上ピン留めの×。 スマホでも押しやすいよう 44x44 を確保。 */
   position: absolute;
@@ -3941,6 +3943,48 @@ dialog.meal-modal[open] {
 .simple-field > span {
   font-weight: 600;
 }
+.foundation-form {
+  display: grid;
+  gap: 10px;
+}
+.foundation-form .simple-field {
+  gap: 6px;
+}
+.foundation-form .simple-field > span {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.foundation-form input[type="text"],
+.foundation-form input[type="datetime-local"],
+.foundation-form textarea,
+.foundation-form select {
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--text);
+}
+.foundation-form textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+.foundation-form input:focus,
+.foundation-form textarea:focus,
+.foundation-form select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.foundation-form .simple-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 .simple-check-row {
   display: grid;
   grid-template-columns: 18px 1fr;
@@ -3975,14 +4019,16 @@ dialog.meal-modal[open] {
 }
 .tasks-three-pane {
   display: grid;
-  grid-template-columns: 180px 1fr 1fr;
+  grid-template-columns: 20% 40% 40%;
   gap: 12px;
   align-items: start;
   margin-bottom: 12px;
+  width: 100%;
 }
 .tasks-menu {
   display: grid;
   gap: 8px;
+  margin-right: 8px;
 }
 .tasks-menu button {
   text-align: left;
@@ -3991,6 +4037,7 @@ dialog.meal-modal[open] {
   border-radius: 8px;
   background: var(--panel);
   cursor: pointer;
+  color: var(--text);
 }
 .tasks-menu button.active {
   background: var(--accent-bg);
@@ -3998,15 +4045,53 @@ dialog.meal-modal[open] {
   color: var(--accent);
   font-weight: 600;
 }
+.tasks-menu button:not(.active) {
+  color: var(--text);
+  background: #fff;
+}
+.task-done-drop {
+  display: none;
+  margin-top: 4px;
+  padding: 14px 10px;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: #fff;
+  text-align: center;
+  font-weight: 600;
+}
+.task-done-drop.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+@media (min-width: 761px) {
+  body.task-dragging .task-done-drop {
+    display: block;
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+}
 .tasks-pane h3 {
   margin: 0 0 8px;
   font-size: 13px;
 }
+.tasks-pane:first-of-type {
+  margin-left: 8px;
+}
 .task-card {
+  background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
-  background: var(--surface);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+  transition: border-color 80ms, transform 80ms, box-shadow 80ms;
+}
+.task-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
 }
 .task-card-head {
   display: flex;
