@@ -446,6 +446,7 @@ export function openDb(dbPath) {
   if (!dcCols.includes('can_do'))      db.exec(`ALTER TABLE domain_catalog ADD COLUMN can_do TEXT`);
   if (!dcCols.includes('notes'))       db.exec(`ALTER TABLE domain_catalog ADD COLUMN notes TEXT`);
   if (!dcCols.includes('user_edited')) db.exec(`ALTER TABLE domain_catalog ADD COLUMN user_edited INTEGER NOT NULL DEFAULT 0`);
+  if (!dcCols.includes('domain_private')) db.exec(`ALTER TABLE domain_catalog ADD COLUMN domain_private INTEGER NOT NULL DEFAULT 0`);
 
   // Phase 1 (multi-server): ownership / share metadata on the three shareable
   // resources. NULL owner_user_id = "this is mine" on a local server.
@@ -1297,6 +1298,10 @@ export function updateDomainCatalogUser(db, domain, patch) {
       fields.push(`${k} = ?`);
       args.push(patch[k] ?? null);
     }
+  }
+  if (typeof patch.domain_private === 'boolean' || patch.domain_private === 0 || patch.domain_private === 1) {
+    fields.push(`domain_private = ?`);
+    args.push(patch.domain_private ? 1 : 0);
   }
   if (fields.length === 0) return;
   fields.push(`user_edited = 1`);

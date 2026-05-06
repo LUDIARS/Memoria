@@ -2234,10 +2234,36 @@ function renderDomainList() {
         <span>${escapeHtml(e.domain)}</span>
         <span>本日 ${e.visits_today} / 週 ${e.visits_week}</span>
       </div>
+      <label class="domain-private-toggle" title="ON にすると日記のドメイン欄には表示しません。アクセス履歴や傾向には残ります。">
+        <input type="checkbox" data-domain-private="${escapeHtml(e.domain)}" ${e.domain_private ? 'checked' : ''} />
+        private
+      </label>
     </li>`;
   }).join('');
   ul.querySelectorAll('.dict-item').forEach(li => {
     li.addEventListener('click', () => loadDomainEntry(li.dataset.domain));
+  });
+  ul.querySelectorAll('input[data-domain-private]').forEach(cb => {
+    cb.addEventListener('click', (ev) => ev.stopPropagation());
+    cb.addEventListener('change', async (ev) => {
+      ev.stopPropagation();
+      const domain = cb.dataset.domainPrivate;
+      const checked = cb.checked;
+      try {
+        await api(`/api/domains/${encodeURIComponent(domain)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain_private: checked }),
+        });
+        const row = state.domainEntries.find(x => x.domain === domain);
+        if (row) row.domain_private = checked ? 1 : 0;
+        if (state.domainDetail?.domain === domain) state.domainDetail.domain_private = checked ? 1 : 0;
+        flashToast(checked ? '日記では非表示にしました' : '日記に表示するようにしました');
+      } catch (e) {
+        cb.checked = !checked;
+        alert(`private 更新失敗: ${e.message}`);
+      }
+    });
   });
 }
 
