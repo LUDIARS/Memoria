@@ -1682,20 +1682,20 @@ app.post('/api/dictionary/upsert-from-source', async (c) => {
 
 const SETUP_DOCS = {
   tailscale: {
-    title: 'Tailscale VPN setup',
-    body: '# Tailscale VPN setup\n\n1. Install Tailscale on the Memoria host and client devices.\n2. Sign in to the same tailnet.\n3. On the host, run `tailscale ip -4`.\n4. Open Memoria from clients with `http://<tailscale-ip>:5180`.\n5. For OwnTracks or Legatus, point clients at the host Tailscale IP.\n6. Keep public internet exposure off unless a protected tunnel is configured.',
+    title: 'Tailscale を使用した VPN 構築方法',
+    body: '# Tailscale を使用した VPN 構築方法\n\n1. Memoria を動かす PC と、接続したい端末に Tailscale をインストールします。\n2. すべて同じ tailnet にログインします。\n3. Memoria 側の PC で `tailscale ip -4` を実行し、Tailscale IP を確認します。\n4. 端末側から `http://<tailscale-ip>:5180` を開きます。\n5. OwnTracks や Legatus を使う場合も、接続先はこの Tailscale IP にします。\n6. 外部公開が必要ない場合は、インターネットへ直接公開しないでください。',
   },
   cloudflare: {
-    title: 'Cloudflare Tunnel public setup',
-    body: '# Cloudflare Tunnel public setup\n\n1. Install `cloudflared` on the Memoria host.\n2. Run `cloudflared tunnel login` and create a tunnel.\n3. Route the hostname to `http://localhost:5180`.\n4. Protect the hostname with Cloudflare Access.\n5. Confirm the web UI and `/share` from outside the tailnet.\n6. Do not expose Memoria directly without authentication.',
+    title: 'Cloudflare Tunnel を使用した公開方法',
+    body: '# Cloudflare Tunnel を使用した公開方法\n\n1. Memoria を動かす PC に `cloudflared` をインストールします。\n2. `cloudflared tunnel login` を実行し、Tunnel を作成します。\n3. 公開ホスト名の転送先を `http://localhost:5180` に設定します。\n4. 個人データを扱うため、Cloudflare Access などで認証を必ず設定します。\n5. tailnet 外のネットワークから Web UI と `/share` が動くことを確認します。\n6. 認証なしで Memoria を直接公開しないでください。',
   },
   legatus: {
-    title: 'Legatus startup',
-    body: '# Legatus startup\n\n1. Open the Legatus project next to Memoria.\n2. Enable only the ingestion modules you need.\n3. Set forward URLs such as `http://localhost:5180/api/locations/ingest` and `http://localhost:5180/api/visits/external`.\n4. Start Legatus with its documented dev or service command.\n5. Check Memoria Settings -> Integration / API key for Legatus status.',
+    title: 'Legatus の起動方法',
+    body: '# Legatus の起動方法\n\n1. Memoria と同じ PC、または到達可能な PC で Legatus プロジェクトを開きます。\n2. 必要な取込モジュールだけを有効にします。GPS / DNS / SNI などは明示的に ON にしてください。\n3. 転送先 URL に `http://localhost:5180/api/locations/ingest` や `http://localhost:5180/api/visits/external` を設定します。\n4. Legatus 側の README に従って dev 起動またはサービス起動します。\n5. Memoria の 設定 -> 連携 / API key で Legatus の接続状態を確認します。',
   },
   sharing: {
-    title: 'Sharing settings',
-    body: '# Sharing settings\n\n1. Open Settings -> Data / Hub.\n2. Add a Memoria Hub URL and connect with Cernere.\n3. Enable only the servers you want to publish to.\n4. Share individual records from their own screens.\n5. Tasks can be shared to Actio when Settings -> Privacy enables Actio sharing and `actio.share_url` is set.\n6. Review content before sharing. Do not include secrets or private data.',
+    title: 'シェアするための設定',
+    body: '# シェアするための設定\n\n1. 設定 -> データ / Hub を開きます。\n2. Memoria Hub の URL を追加し、Cernere で接続します。\n3. 公開したい Hub だけを有効にします。\n4. ブックマーク、ディグ、辞書、実装自慢は各画面のシェア操作から共有します。\n5. タスクを Actio にシェアする場合は、設定 -> プライバシー / 表示 で Actio シェアを許可し、Actio シェア URL を設定します。\n6. シェア前に内容を確認し、秘密情報や個人情報を含めないでください。',
   },
 };
 

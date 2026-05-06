@@ -4650,8 +4650,8 @@ function ensureMemoriaFeatureViews() {
   const tabs = document.querySelector('.tabs-scroll');
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
     for (const spec of [
-      ['tasks', 'Tasks'],
-      ['impl', 'Implementation Notes'],
+      ['tasks', 'タスク'],
+      ['impl', '実装自慢'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -4668,13 +4668,19 @@ function ensureMemoriaFeatureViews() {
     div.className = 'hidden';
     div.innerHTML = `
       <div class="simple-panel">
-        <h2>Tasks</h2>
-        <div class="simple-form">
-          <input id="taskTitle" type="text" placeholder="Next task" />
+        <div class="simple-panel-head">
+          <h2>タスク</h2>
+          <button id="taskNewBtn" type="button">+ タスクを追加</button>
+        </div>
+        <div id="taskForm" class="simple-form hidden">
+          <input id="taskTitle" type="text" placeholder="直近やること" />
           <input id="taskDue" type="datetime-local" />
-          <label class="check-inline"><input id="taskShareActio" type="checkbox" /> Share to Actio</label>
-          <textarea id="taskDetails" rows="3" placeholder="Details"></textarea>
-          <button id="taskAddBtn">Add task</button>
+          <label class="check-inline"><input id="taskShareActio" type="checkbox" /> Actio にシェアする</label>
+          <textarea id="taskDetails" rows="3" placeholder="詳細メモ"></textarea>
+          <div class="simple-actions">
+            <button id="taskAddBtn">追加</button>
+            <button id="taskCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
         </div>
         <div id="tasksList" class="simple-list"></div>
       </div>`;
@@ -4686,14 +4692,20 @@ function ensureMemoriaFeatureViews() {
     div.className = 'hidden';
     div.innerHTML = `
       <div class="simple-panel">
-        <h2>Implementation Notes</h2>
-        <div class="simple-form">
-          <input id="implProduct" type="text" placeholder="Product name" />
-          <input id="implTitle" type="text" placeholder="Short title" />
-          <textarea id="implGood" rows="4" placeholder="Good points"></textarea>
-          <textarea id="implBad" rows="3" placeholder="Bad points / tradeoffs"></textarea>
-          <label class="check-inline"><input id="implShareable" type="checkbox" /> Shareable</label>
-          <button id="implAddBtn">Add note</button>
+        <div class="simple-panel-head">
+          <h2>実装自慢</h2>
+          <button id="implNewBtn" type="button">+ ノートを追加</button>
+        </div>
+        <div id="implForm" class="simple-form hidden">
+          <input id="implProduct" type="text" placeholder="プロダクト名" />
+          <input id="implTitle" type="text" placeholder="短いタイトル" />
+          <textarea id="implGood" rows="4" placeholder="良かった点"></textarea>
+          <textarea id="implBad" rows="3" placeholder="悪かった点 / トレードオフ"></textarea>
+          <label class="check-inline"><input id="implShareable" type="checkbox" /> シェア可能にする</label>
+          <div class="simple-actions">
+            <button id="implAddBtn">追加</button>
+            <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
         </div>
         <div id="implList" class="simple-list"></div>
       </div>`;
@@ -4704,8 +4716,8 @@ function ensureMemoriaFeatureViews() {
   const footer = document.querySelector('.settings-footer');
   if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
     for (const spec of [
-      ['privacy', 'Privacy / visibility'],
-      ['setup', 'Setup docs'],
+      ['privacy', 'プライバシー / 表示'],
+      ['setup', 'セットアップ手順'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -4722,13 +4734,13 @@ function ensureMemoriaFeatureViews() {
     sec.className = 'settings-tab-body hidden';
     sec.dataset.stab = 'privacy';
     sec.innerHTML = `
-      <h4>Privacy / visibility</h4>
-      <label class="check-inline"><input id="tracksEnabled" type="checkbox" /> Collect tracks</label>
-      <label class="check-inline"><input id="tracksVisible" type="checkbox" /> Show tracks tab and data</label>
-      <label class="check-inline"><input id="mealsEnabled" type="checkbox" /> Collect meals</label>
-      <label class="check-inline"><input id="mealsVisible" type="checkbox" /> Show meals tab and data</label>
-      <label class="check-inline"><input id="tasksActioShareEnabled" type="checkbox" /> Allow task sharing to Actio</label>
-      <label>Actio share URL: <input id="actioShareUrl" type="text" placeholder="http://localhost:.../api/tasks/import" /></label>`;
+      <h4>プライバシー / 表示</h4>
+      <label class="check-inline"><input id="tracksEnabled" type="checkbox" /> 軌跡を記録する</label>
+      <label class="check-inline"><input id="tracksVisible" type="checkbox" /> 軌跡タブとデータを表示する</label>
+      <label class="check-inline"><input id="mealsEnabled" type="checkbox" /> 食事を記録する</label>
+      <label class="check-inline"><input id="mealsVisible" type="checkbox" /> 食事タブとデータを表示する</label>
+      <label class="check-inline"><input id="tasksActioShareEnabled" type="checkbox" /> タスクの Actio シェアを許可する</label>
+      <label>Actio シェア URL: <input id="actioShareUrl" type="text" placeholder="http://localhost:.../api/tasks/import" /></label>`;
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer && !$('setupDocsBody')) {
@@ -4737,13 +4749,17 @@ function ensureMemoriaFeatureViews() {
     sec.className = 'settings-tab-body hidden';
     sec.dataset.stab = 'setup';
     sec.innerHTML = `
-      <h4>Setup docs</h4>
+      <h4>セットアップ手順</h4>
       <div id="setupDocsList" class="setup-docs-list"></div>
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
     footer.parentNode.insertBefore(sec, footer);
   }
 
+  if ($('taskNewBtn')) $('taskNewBtn').onclick = () => $('taskForm')?.classList.remove('hidden');
+  if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
   if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
+  if ($('implNewBtn')) $('implNewBtn').onclick = () => $('implForm')?.classList.remove('hidden');
+  if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
   if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
 }
 
@@ -4809,7 +4825,7 @@ async function loadTasks() {
   const list = $('tasksList');
   if (!list) return;
   if (!items.length) {
-    list.innerHTML = '<div class="queue-empty">No tasks.</div>';
+    list.innerHTML = '<div class="queue-empty">タスクはまだありません。</div>';
     return;
   }
   list.innerHTML = items.map(t => `
@@ -4823,8 +4839,8 @@ async function loadTasks() {
       <div class="muted">${escapeHtml(t.due_at || '')}</div>
       <p>${escapeHtml(t.details || '')}</p>
       <div class="simple-actions">
-        <button class="ghost" data-task-share="${t.id}">Share Actio</button>
-        <button class="danger" data-task-delete="${t.id}">Delete</button>
+        <button class="ghost" data-task-share="${t.id}">Actio にシェア</button>
+        <button class="danger" data-task-delete="${t.id}">削除</button>
       </div>
     </div>`).join('');
   list.querySelectorAll('[data-task-status]').forEach(sel => {
@@ -4838,7 +4854,7 @@ async function loadTasks() {
   });
   list.querySelectorAll('[data-task-share]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      try { await api(`/api/tasks/${btn.dataset.taskShare}/share/actio`, { method: 'POST' }); showShareToast('Shared to Actio'); }
+      try { await api(`/api/tasks/${btn.dataset.taskShare}/share/actio`, { method: 'POST' }); showShareToast('Actio にシェアしました'); }
       catch (e) { alert(e.message); }
       loadTasks();
     });
@@ -4866,6 +4882,7 @@ async function addTaskFromForm() {
   });
   $('taskTitle').value = '';
   $('taskDetails').value = '';
+  $('taskForm')?.classList.add('hidden');
   loadTasks();
 }
 
@@ -4876,18 +4893,18 @@ async function loadImplementationNotes() {
   const items = r.items || [];
   if (!list) return;
   if (!items.length) {
-    list.innerHTML = '<div class="queue-empty">No implementation notes.</div>';
+    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
     return;
   }
   list.innerHTML = items.map(n => `
     <div class="simple-item" data-id="${n.id}">
       <div class="simple-item-head"><strong>${escapeHtml(n.product)}: ${escapeHtml(n.title)}</strong></div>
-      <h4>Good</h4><p>${escapeHtml(n.good_points || '')}</p>
-      <h4>Bad / tradeoffs</h4><p>${escapeHtml(n.bad_points || '')}</p>
+      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
+      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
       <div class="simple-actions">
-        <span class="muted">${n.shareable ? 'Shareable' : 'Private'}</span>
-        <button class="ghost" data-impl-share="${n.id}">Share</button>
-        <button class="danger" data-impl-delete="${n.id}">Delete</button>
+        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
+        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
+        <button class="danger" data-impl-delete="${n.id}">削除</button>
       </div>
     </div>`).join('');
   list.querySelectorAll('[data-impl-share]').forEach(btn => {
@@ -4898,7 +4915,7 @@ async function loadImplementationNotes() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
         });
-        showShareToast('Shared implementation note');
+        showShareToast('実装自慢をシェアしました');
       }
       catch (e) { alert(e.message); }
       loadImplementationNotes();
@@ -4928,6 +4945,7 @@ async function addImplementationNoteFromForm() {
     }),
   });
   for (const id of ['implProduct', 'implTitle', 'implGood', 'implBad']) $(id).value = '';
+  $('implForm')?.classList.add('hidden');
   loadImplementationNotes();
 }
 

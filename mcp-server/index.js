@@ -177,7 +177,7 @@ server.registerTool(
       title: z.string().min(1).describe('Task title'),
       details: z.string().optional().describe('Optional details'),
       due_at: z.string().optional().describe('Optional ISO8601 due date/time'),
-      share_actio: z.boolean().optional().describe('Whether Memoria should mark this task for Actio sharing'),
+      share_actio: z.boolean().optional().describe('Actio へシェアする対象として扱うか'),
     },
   },
   async ({ title, details, due_at, share_actio }) => {
@@ -235,8 +235,8 @@ server.registerTool(
 server.registerTool(
   'add_implementation_note',
   {
-    title: 'Add an implementation note',
-    description: 'Record good points and tradeoffs for a development product.',
+    title: '実装自慢を追加する',
+    description: '自分の開発プロダクトについて、良かった点や悪かった点を Memoria に記録します。',
     inputSchema: {
       product: z.string().min(1),
       title: z.string().min(1),

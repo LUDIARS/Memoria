@@ -3912,6 +3912,16 @@ dialog.meal-modal[open] {
   margin: 0 0 12px;
   font-size: 20px;
 }
+.simple-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.simple-panel-head h2 {
+  margin: 0;
+}
 .simple-form {
   display: grid;
   gap: 8px;

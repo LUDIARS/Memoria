@@ -1,25 +1,24 @@
 ---
 name: memoria-worklog
-description: Record concise worklogs, tasks, chat excerpts, and implementation notes into the local Memoria instance.
+description: Memoria に作業ログ、タスク、チャット抜粋、実装自慢を記録する。
 ---
 
 # Memoria Worklog
 
-Use this skill when the user asks Codex to record progress in Memoria, add a task, save a chat excerpt, or leave an implementation note.
+ユーザーが Memoria への記録、タスク追加、チャット内容の保存、実装自慢の作成を依頼したときに使う。
 
-## Endpoint
+## 接続先
 
-Use `MEMORIA_URL` when set. Otherwise use `http://localhost:5180`.
+`MEMORIA_URL` が設定されていればそれを使う。未設定なら `http://localhost:5180` を使う。
 
-## Actions
+## 操作
 
-- Worklog: send activity or chat notes to Memoria as factual summaries.
-- Task: call `POST /api/tasks` with `title`, optional `details`, optional `due_at`, and optional `share_actio`.
-- External chat: call `POST /api/external-chat/messages` with `source`, `content`, optional `role`, optional `conversation_id`, and optional `metadata`.
-- Implementation note: call `POST /api/implementation-notes` with `product`, `title`, `good_points`, `bad_points`, and `shareable`.
+- タスク: `POST /api/tasks` に `title`、任意の `details`、任意の `due_at`、任意の `share_actio` を送る。
+- 外部チャット: `POST /api/external-chat/messages` に `source`、`content`、任意の `role`、任意の `conversation_id`、任意の `metadata` を送る。
+- 実装自慢: `POST /api/implementation-notes` に `product`、`title`、`good_points`、`bad_points`、`shareable` を送る。
 
-## Rules
+## ルール
 
-- Keep entries concise and fact-based.
-- Do not include secrets, tokens, passwords, or private personal information.
-- Ask before marking a note or task as shareable when the user has not explicitly said to share it.
+- 記録は短く、事実ベースにする。
+- 秘密情報、トークン、パスワード、個人情報は含めない。
+- ユーザーが明示していない限り、勝手に `shareable` や `share_actio` を有効にしない。
