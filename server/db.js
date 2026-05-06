@@ -255,8 +255,17 @@ export function openDb(dbPath) {
       -- samples_count: この行が代表する raw 発行数 (通常は 1、 圧縮後の終点行は 2+)
       -- samples_first_at: 圧縮窓の開始時刻 (NULL = recorded_at と同じ = 未圧縮)
       samples_count    INTEGER NOT NULL DEFAULT 1,
-      samples_first_at TEXT
+      samples_first_at TEXT,
+      -- 位置照合 (Google Geocoding/Places で取得した日本語の場所説明)
+      -- place_resolved_at が NULL なら未解決 / バックフィル対象
+      place_name       TEXT,
+      place_address    TEXT,
+      place_source     TEXT,                       -- 'places' | 'geocode' | 'cached' | 'failed'
+      place_resolved_at INTEGER
     );
+    -- 注: idx_gps_locations_unresolved は ALTER TABLE で place_resolved_at を
+    -- 後付けしてから作るため、 ここでは作らない (旧 DB に対する CREATE INDEX で
+    -- "no such column" になるのを避ける).
     CREATE INDEX IF NOT EXISTS idx_gps_locations_at
       ON gps_locations(recorded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_gps_locations_user_at
@@ -351,6 +360,21 @@ export function openDb(dbPath) {
   if (gpsCols.length > 0 && !gpsCols.includes('samples_first_at')) {
     db.exec(`ALTER TABLE gps_locations ADD COLUMN samples_first_at TEXT`);
   }
+  // 位置照合 (Google Geocoding/Places で日本語の場所説明を付ける) 用 4 列
+  if (gpsCols.length > 0 && !gpsCols.includes('place_name')) {
+    db.exec(`ALTER TABLE gps_locations ADD COLUMN place_name TEXT`);
+  }
+  if (gpsCols.length > 0 && !gpsCols.includes('place_address')) {
+    db.exec(`ALTER TABLE gps_locations ADD COLUMN place_address TEXT`);
+  }
+  if (gpsCols.length > 0 && !gpsCols.includes('place_source')) {
+    db.exec(`ALTER TABLE gps_locations ADD COLUMN place_source TEXT`);
+  }
+  if (gpsCols.length > 0 && !gpsCols.includes('place_resolved_at')) {
+    db.exec(`ALTER TABLE gps_locations ADD COLUMN place_resolved_at INTEGER`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_locations_unresolved
+           ON gps_locations(place_resolved_at) WHERE place_resolved_at IS NULL`);
 
   const dcCols = db.prepare(`PRAGMA table_info(domain_catalog)`).all().map(c => c.name);
   if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);
@@ -2046,6 +2070,58 @@ export function insertGpsLocation(db, loc) {
   return { inserted: true, id: info.lastInsertRowid };
 }
 
+// ── 位置照合 (place name/address) 関連 helpers ──────────────────────────────
+
+/**
+ * 近接 (約 gridM 以内) で既に place_name が解決済の点を 1 件返す.
+ * 数百件規模の DB なら full scan で十分速い (lat/lon 範囲条件で枝刈り).
+ */
+export function findNearbyResolvedPlace(db, lat, lon, gridM = 10) {
+  // 1 度 ≈ 111,320m → 10m なら 0.00009 度. 緯度方向は固定、 経度は cos 補正.
+  const dLat = gridM / 111_320;
+  const dLon = gridM / (111_320 * Math.max(0.1, Math.cos((lat * Math.PI) / 180)));
+  const row = db.prepare(`
+    SELECT place_name, place_address, place_source
+      FROM gps_locations
+     WHERE place_resolved_at IS NOT NULL
+       AND place_source IN ('places', 'geocode', 'cached')
+       AND lat BETWEEN ? AND ?
+       AND lon BETWEEN ? AND ?
+     ORDER BY place_resolved_at DESC
+     LIMIT 1
+  `).get(lat - dLat, lat + dLat, lon - dLon, lon + dLon);
+  return row ?? null;
+}
+
+/** id の行に place 結果を書き込む. resolved_at は now (unix sec). */
+export function setGpsPlace(db, id, { name, address, source }) {
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(`
+    UPDATE gps_locations
+       SET place_name = ?, place_address = ?, place_source = ?, place_resolved_at = ?
+     WHERE id = ?
+  `).run(name ?? null, address ?? null, source ?? 'failed', now, id);
+}
+
+/**
+ * 未解決の点 (place_resolved_at IS NULL) を新しい順に N 件返す.
+ * バックフィルジョブ用.
+ */
+export function listUnresolvedGpsLocations(db, limit = 50) {
+  return db.prepare(`
+    SELECT id, lat, lon, recorded_at, device_id
+      FROM gps_locations
+     WHERE place_resolved_at IS NULL
+     ORDER BY id DESC
+     LIMIT ?
+  `).all(limit);
+}
+
+/** 1 行を id 指定で読む (resolver の race 防止用). */
+export function findGpsLocationById(db, id) {
+  return db.prepare(`SELECT id, lat, lon, place_resolved_at FROM gps_locations WHERE id = ?`).get(id) ?? null;
+}
+
 /**
  * 既存 GPS データに対して圧縮を遡及適用する (backfill)。
  *
@@ -2200,7 +2276,8 @@ export function listGpsLocationsForDate(db, dateStr, { userId = 'me' } = {}) {
   return db.prepare(`
     SELECT id, device_id, recorded_at, lat, lon,
            accuracy_m, altitude_m, velocity_kmh, course_deg,
-           samples_count, samples_first_at
+           samples_count, samples_first_at,
+           place_name, place_address, place_source
     FROM gps_locations
     WHERE user_id = ? AND date(recorded_at, 'localtime') = ?
     ORDER BY recorded_at ASC
