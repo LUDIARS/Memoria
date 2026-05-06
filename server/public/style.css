@@ -1929,6 +1929,92 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .ai-settings-head #aiSettingsClose:hover { background: #f0f2f7; color: var(--text); }
 .ai-settings-help { font-size: 11px; color: var(--muted); margin: 8px 0 16px; line-height: 1.5; }
+
+/* ── settings tabs (内部タブ) ─────────────────────── */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: 12px 0 14px;
+  padding-bottom: 0;
+}
+.settings-tab {
+  padding: 6px 10px;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0;
+  white-space: nowrap;
+  transform: translateY(1px);
+}
+.settings-tab:hover { color: var(--text); background: rgba(0,0,0,0.03); }
+.settings-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+  background: transparent;
+}
+.settings-tab-body { animation: settingsTabFade .12s ease-out; }
+.settings-tab-body.hidden { display: none; }
+@keyframes settingsTabFade {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.settings-footer {
+  position: sticky;
+  bottom: -18px;
+  margin: 18px -22px -18px;
+  padding: 12px 22px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  z-index: 1;
+}
+
+/* ── Legatus 接続バッジ (topbar) ─────────────────────── */
+.topbar-legatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.legatus-dot {
+  font-size: 10px;
+  line-height: 1;
+}
+.legatus-dot[data-state="connected"]   { color: #16a34a; }
+.legatus-dot[data-state="stale"]       { color: #f59e0b; }
+.legatus-dot[data-state="disconnected"]{ color: #dc2626; }
+.legatus-dot[data-state="unknown"]     { color: var(--muted); }
+.legatus-label { color: var(--muted); }
+
+/* ── Legatus 詳細 status box (設定モーダル内) ─────────── */
+.legatus-status-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 8px 12px;
+  margin: 6px 0 14px;
+  font-size: 12px;
+}
+.legatus-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+.legatus-row:last-child { border-bottom: none; }
+.legatus-key { color: var(--muted); font-size: 11px; }
+.legatus-val { color: var(--text); font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+.legatus-val.legatus-tail { color: var(--muted); white-space: pre-wrap; }
 .ai-settings h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ai-task-row {
   display: grid;
@@ -2951,6 +3037,89 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   border-radius: 6px;
   background: var(--bg);
 }
+/* ── tracks 最新 GPS ログ ─────────────────────── */
+.tracks-recent {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 10px 12px;
+}
+.tracks-recent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.tracks-recent-head h4 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.tracks-recent-head .muted {
+  font-size: 11px;
+}
+.tracks-recent-head button {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.tracks-recent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.tracks-recent-row {
+  padding: 5px 4px;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+  cursor: pointer;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.tracks-recent-row:last-child { border-bottom: none; }
+.tracks-recent-row:hover { background: rgba(59,130,246,0.06); }
+.tracks-recent-time {
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+  font-size: 11px;
+}
+.tracks-recent-place {
+  font-size: 12px;
+  line-height: 1.3;
+  margin: 2px 0;
+}
+.tracks-recent-place strong {
+  color: var(--fg, #1f2937);
+  font-weight: 600;
+}
+.tracks-recent-place--pending {
+  font-style: italic;
+  font-size: 11px;
+}
+.tracks-recent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.tracks-recent-dev {
+  background: rgba(59,130,246,0.12);
+  color: #1e40af;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.tracks-recent-coord code {
+  font-size: 11px;
+  color: var(--text);
+}
+
 .tracks-days {
   margin-top: 16px;
 }
@@ -4202,3 +4371,175 @@ dialog.meal-modal[open] {
 .ext-cfg-howto-dns { border-left: 3px solid #2a6df4; }
 
 .ext-cfg-step h5 { margin: 4px 0; font-size: 12px; color: var(--text-muted); }
+
+/* ── 場所編集ダイアログ (軌跡 / 食事 / その他共通) ─────────────── */
+dialog.loc-edit-modal {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+}
+dialog.loc-edit-modal::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+dialog.loc-edit-modal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loc-edit-card {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  background: var(--bg-surface, #fff);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.loc-edit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.loc-edit-head h3 { margin: 0; font-size: 15px; }
+.loc-edit-subtitle { font-size: 12px; color: var(--text-muted); }
+.loc-edit-x {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.loc-edit-x:hover { color: var(--text); background: transparent; }
+
+.loc-edit-search {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px 4px;
+}
+.loc-edit-search input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.loc-edit-search button { padding: 4px 10px; font-size: 13px; }
+.loc-edit-search-results {
+  list-style: none;
+  margin: 0 14px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 12px;
+  background: var(--bg-surface, #fff);
+}
+.loc-edit-search-results li {
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.loc-edit-search-results li:last-child { border-bottom: none; }
+.loc-edit-search-results li:hover { background: var(--bg); }
+.loc-edit-search-result-name { font-weight: 500; }
+.loc-edit-search-result-addr { color: var(--text-muted); font-size: 11px; }
+
+.loc-edit-map {
+  width: 100%;
+  height: 320px;
+  margin: 8px 0 0;
+  background: #f4f4f4;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.loc-edit-map-missing {
+  margin: 8px 14px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff7d6;
+  color: #6a4a00;
+  font-size: 12px;
+}
+
+.loc-edit-pin { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.loc-edit-pin-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.loc-edit-pin-coord {
+  flex: 1 1 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.loc-edit-pin-coord input {
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.loc-edit-pin-name {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.loc-edit-pin-name input {
+  padding: 4px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.loc-edit-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+.loc-edit-suggest-label { color: var(--text-muted); }
+.loc-edit-suggest button {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--accent, #2a6df4);
+  background: var(--bg);
+  color: var(--accent, #2a6df4);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.loc-edit-suggest button:hover { background: var(--accent, #2a6df4); color: #fff; }
+.loc-edit-hint { font-size: 11px; }
+
+.loc-edit-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.loc-edit-actions .grow { flex: 1; }
+.loc-edit-actions button { font-size: 13px; padding: 6px 14px; }
+
+@media (max-width: 600px) {
+  .loc-edit-card { width: calc(100vw - 12px); max-height: calc(100vh - 12px); }
+  .loc-edit-map { height: 260px; }
+  .loc-edit-head h3 { font-size: 14px; }
+}
