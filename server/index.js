@@ -1839,6 +1839,11 @@ app.post('/api/tasks', async (c) => {
   });
   const created = getTask(db, id);
   appendTaskDiaryLog(`タスク発行: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
+  recordActivityEvent(db, {
+    kind: 'task_created',
+    content: created.title,
+    metadata: created.due_at ? { due_at: created.due_at } : undefined,
+  });
   return c.json({ task: created }, 201);
 });
 
@@ -1861,11 +1866,17 @@ app.patch('/api/tasks/:id', async (c) => {
   const completedNow = before.status !== 'done' && after.status === 'done';
   if (completedNow) {
     appendTaskDiaryLog(`タスク完了: ${after.title}`);
+    recordActivityEvent(db, { kind: 'task_done', content: after.title });
   } else {
     const changed = ['title', 'details', 'status', 'due_at', 'share_actio'].some((k) => Object.hasOwn(patch, k));
     const isHumanChange = before.creator_type === 'human' || (before.creator_type === 'ai' && after.creator_type === 'human');
     if (changed && isHumanChange) {
       appendTaskDiaryLog(`タスク更新: ${after.title}${after.due_at ? ` (期日: ${after.due_at})` : ''}`);
+      recordActivityEvent(db, {
+        kind: 'task_updated',
+        content: after.title,
+        metadata: patch.status ? { status: after.status } : undefined,
+      });
     }
   }
   return c.json({ task: after });

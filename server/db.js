@@ -331,6 +331,7 @@ export function openDb(dbPath) {
       title         TEXT NOT NULL,
       details       TEXT,
       status        TEXT NOT NULL DEFAULT 'todo',
+      creator_type  TEXT NOT NULL DEFAULT 'human',
       due_at        TEXT,
       share_actio   INTEGER NOT NULL DEFAULT 0,
       shared_at     TEXT,
@@ -373,10 +374,17 @@ export function openDb(dbPath) {
       db.exec(`ALTER TABLE implementation_notes ADD COLUMN ${col} TEXT`);
     }
   }
+  if (implCols.length > 0 && !implCols.includes('attachment_type')) {
+    db.exec(`ALTER TABLE implementation_notes ADD COLUMN attachment_type TEXT`);
+  }
+  if (implCols.length > 0 && !implCols.includes('attachment_value')) {
+    db.exec(`ALTER TABLE implementation_notes ADD COLUMN attachment_value TEXT`);
+  }
 
   const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all().map(c => c.name);
   for (const [col, ddl] of [
     ['due_at', 'TEXT'],
+    ['creator_type', `TEXT NOT NULL DEFAULT 'human'`],
     ['share_actio', 'INTEGER NOT NULL DEFAULT 0'],
     ['shared_at', 'TEXT'],
     ['shared_origin', 'TEXT'],
@@ -1412,6 +1420,9 @@ const ACTIVITY_KINDS = new Set([
   'claude_code_prompt',
   'gemini_prompt',
   'codex_prompt',
+  'task_created',
+  'task_done',
+  'task_updated',
 ]);
 
 /**
@@ -2683,20 +2694,27 @@ export function getImplementationNote(db, id) {
 
 export function insertImplementationNote(db, note) {
   const info = db.prepare(`
-    INSERT INTO implementation_notes (product, title, good_points, bad_points, shareable)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO implementation_notes
+      (product, title, good_points, bad_points, attachment_type, attachment_value, shareable)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
-    note.product,
+    note.product ?? '',
     note.title,
     note.good_points ?? null,
     note.bad_points ?? null,
+    note.attachment_type ?? null,
+    note.attachment_value ?? null,
     note.shareable ? 1 : 0,
   );
   return Number(info.lastInsertRowid);
 }
 
 export function updateImplementationNote(db, id, patch) {
-  const allowed = new Set(['product', 'title', 'good_points', 'bad_points', 'shareable', 'shared_at', 'shared_origin']);
+  const allowed = new Set([
+    'product', 'title', 'good_points', 'bad_points',
+    'attachment_type', 'attachment_value',
+    'shareable', 'shared_at', 'shared_origin',
+  ]);
   const cols = [];
   const args = [];
   for (const [k, v] of Object.entries(patch)) {
@@ -2741,12 +2759,13 @@ export function getTask(db, id) {
 
 export function insertTask(db, task) {
   const info = db.prepare(`
-    INSERT INTO tasks (title, details, status, due_at, share_actio)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio)
+    VALUES (?, ?, ?, ?, ?, ?)
   `).run(
     task.title,
     task.details ?? null,
     task.status || 'todo',
+    task.creator_type === 'ai' ? 'ai' : 'human',
     task.due_at ?? null,
     task.share_actio ? 1 : 0,
   );
@@ -2754,7 +2773,7 @@ export function insertTask(db, task) {
 }
 
 export function updateTask(db, id, patch) {
-  const allowed = new Set(['title', 'details', 'status', 'due_at', 'share_actio', 'shared_at', 'shared_origin']);
+  const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin']);
   const cols = [];
   const args = [];
   for (const [k, v] of Object.entries(patch)) {
