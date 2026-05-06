@@ -616,6 +616,8 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
+  $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
+  $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
@@ -628,6 +630,8 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'tracks') loadTracks();
   if (tab === 'meals') loadMeals();
+  if (tab === 'tasks') loadTasks();
+  if (tab === 'impl') loadImplementationNotes();
   if (tab === 'external') loadExternalConfig();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
@@ -4548,6 +4552,7 @@ async function saveAiSettings() {
         return;
       }
     }
+    await savePrivacySettings();
     alert('保存しました。次回のジョブから反映されます。');
     $('aiSettingsPanel').classList.add('hidden');
   } catch (e) {
@@ -4569,6 +4574,8 @@ document.addEventListener('click', (ev) => {
     sec.classList.toggle('hidden', sec.dataset.stab !== stab);
   });
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
+  if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
+  if (stab === 'setup') loadSetupDocs().catch(console.warn);
   panel.scrollTop = 0;
 });
 
@@ -4636,6 +4643,296 @@ function renderEvents(items) {
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
+
+// ---- Tasks / implementation notes / setup docs / privacy ------------------
+
+function ensureMemoriaFeatureViews() {
+  const tabs = document.querySelector('.tabs-scroll');
+  if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
+    for (const spec of [
+      ['tasks', 'Tasks'],
+      ['impl', 'Implementation Notes'],
+    ]) {
+      const b = document.createElement('button');
+      b.className = 'tab';
+      b.dataset.tab = spec[0];
+      b.innerHTML = `<span class="tab-label" data-full="${spec[1]}" data-short="${spec[1]}">${spec[1]}</span>`;
+      b.addEventListener('click', () => switchTab(spec[0]));
+      tabs.appendChild(b);
+    }
+  }
+  const content = document.querySelector('.content');
+  if (content && !$('tasksView')) {
+    const div = document.createElement('div');
+    div.id = 'tasksView';
+    div.className = 'hidden';
+    div.innerHTML = `
+      <div class="simple-panel">
+        <h2>Tasks</h2>
+        <div class="simple-form">
+          <input id="taskTitle" type="text" placeholder="Next task" />
+          <input id="taskDue" type="datetime-local" />
+          <label class="check-inline"><input id="taskShareActio" type="checkbox" /> Share to Actio</label>
+          <textarea id="taskDetails" rows="3" placeholder="Details"></textarea>
+          <button id="taskAddBtn">Add task</button>
+        </div>
+        <div id="tasksList" class="simple-list"></div>
+      </div>`;
+    content.appendChild(div);
+  }
+  if (content && !$('implView')) {
+    const div = document.createElement('div');
+    div.id = 'implView';
+    div.className = 'hidden';
+    div.innerHTML = `
+      <div class="simple-panel">
+        <h2>Implementation Notes</h2>
+        <div class="simple-form">
+          <input id="implProduct" type="text" placeholder="Product name" />
+          <input id="implTitle" type="text" placeholder="Short title" />
+          <textarea id="implGood" rows="4" placeholder="Good points"></textarea>
+          <textarea id="implBad" rows="3" placeholder="Bad points / tradeoffs"></textarea>
+          <label class="check-inline"><input id="implShareable" type="checkbox" /> Shareable</label>
+          <button id="implAddBtn">Add note</button>
+        </div>
+        <div id="implList" class="simple-list"></div>
+      </div>`;
+    content.appendChild(div);
+  }
+
+  const settingsTabs = document.querySelector('.settings-tabs');
+  const footer = document.querySelector('.settings-footer');
+  if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
+    for (const spec of [
+      ['privacy', 'Privacy / visibility'],
+      ['setup', 'Setup docs'],
+    ]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'settings-tab';
+      b.dataset.stab = spec[0];
+      b.setAttribute('role', 'tab');
+      b.textContent = spec[1];
+      settingsTabs.appendChild(b);
+    }
+  }
+  if (footer && !$('privacySettingsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'privacySettingsBody';
+    sec.className = 'settings-tab-body hidden';
+    sec.dataset.stab = 'privacy';
+    sec.innerHTML = `
+      <h4>Privacy / visibility</h4>
+      <label class="check-inline"><input id="tracksEnabled" type="checkbox" /> Collect tracks</label>
+      <label class="check-inline"><input id="tracksVisible" type="checkbox" /> Show tracks tab and data</label>
+      <label class="check-inline"><input id="mealsEnabled" type="checkbox" /> Collect meals</label>
+      <label class="check-inline"><input id="mealsVisible" type="checkbox" /> Show meals tab and data</label>
+      <label class="check-inline"><input id="tasksActioShareEnabled" type="checkbox" /> Allow task sharing to Actio</label>
+      <label>Actio share URL: <input id="actioShareUrl" type="text" placeholder="http://localhost:.../api/tasks/import" /></label>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+  if (footer && !$('setupDocsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'setupDocsBody';
+    sec.className = 'settings-tab-body hidden';
+    sec.dataset.stab = 'setup';
+    sec.innerHTML = `
+      <h4>Setup docs</h4>
+      <div id="setupDocsList" class="setup-docs-list"></div>
+      <pre id="setupDocBody" class="setup-doc-body"></pre>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+
+  if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
+  if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
+}
+
+async function loadPrivacySettings() {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/privacy/settings');
+  const s = r.settings || {};
+  if ($('tracksEnabled')) $('tracksEnabled').checked = !!s.tracks_enabled;
+  if ($('tracksVisible')) $('tracksVisible').checked = !!s.tracks_visible;
+  if ($('mealsEnabled')) $('mealsEnabled').checked = !!s.meals_enabled;
+  if ($('mealsVisible')) $('mealsVisible').checked = !!s.meals_visible;
+  if ($('tasksActioShareEnabled')) $('tasksActioShareEnabled').checked = !!s.tasks_actio_share_enabled;
+  if ($('actioShareUrl')) $('actioShareUrl').value = s.actio_share_url || '';
+  applyFeatureVisibility(s);
+}
+
+async function savePrivacySettings() {
+  if (!$('tracksEnabled')) return;
+  const r = await api('/api/privacy/settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tracks_enabled: $('tracksEnabled').checked,
+      tracks_visible: $('tracksVisible').checked,
+      meals_enabled: $('mealsEnabled').checked,
+      meals_visible: $('mealsVisible').checked,
+      tasks_actio_share_enabled: $('tasksActioShareEnabled').checked,
+      actio_share_url: $('actioShareUrl').value.trim(),
+    }),
+  });
+  applyFeatureVisibility(r.settings || {});
+}
+
+function applyFeatureVisibility(s) {
+  const tracksTab = document.querySelector('.tab[data-tab="tracks"]');
+  const mealsTab = document.querySelector('.tab[data-tab="meals"]');
+  if (tracksTab) tracksTab.hidden = s.tracks_visible === false;
+  if (mealsTab) mealsTab.hidden = s.meals_visible === false;
+  if (state.tab === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
+  if (state.tab === 'meals' && s.meals_visible === false) switchTab('bookmarks');
+  reflowTabsForViewport();
+}
+
+async function loadSetupDocs() {
+  ensureMemoriaFeatureViews();
+  const root = $('setupDocsList');
+  if (!root) return;
+  const r = await api('/api/setup-docs');
+  root.innerHTML = (r.docs || []).map(d => `<button class="ghost" data-doc="${escapeHtml(d.key)}">${escapeHtml(d.title)}</button>`).join('');
+  root.querySelectorAll('button[data-doc]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const doc = await api(`/api/setup-docs/${encodeURIComponent(btn.dataset.doc)}`);
+      $('setupDocBody').textContent = doc.body || '';
+    });
+  });
+  if ((r.docs || [])[0]) root.querySelector('button[data-doc]')?.click();
+}
+
+async function loadTasks() {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/tasks');
+  const items = r.items || [];
+  const list = $('tasksList');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty">No tasks.</div>';
+    return;
+  }
+  list.innerHTML = items.map(t => `
+    <div class="simple-item" data-id="${t.id}">
+      <div class="simple-item-head">
+        <strong>${escapeHtml(t.title)}</strong>
+        <select data-task-status="${t.id}">
+          ${['todo','doing','done'].map(s => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="muted">${escapeHtml(t.due_at || '')}</div>
+      <p>${escapeHtml(t.details || '')}</p>
+      <div class="simple-actions">
+        <button class="ghost" data-task-share="${t.id}">Share Actio</button>
+        <button class="danger" data-task-delete="${t.id}">Delete</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-task-status]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      await api(`/api/tasks/${sel.dataset.taskStatus}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: sel.value }),
+      });
+      loadTasks();
+    });
+  });
+  list.querySelectorAll('[data-task-share]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try { await api(`/api/tasks/${btn.dataset.taskShare}/share/actio`, { method: 'POST' }); showShareToast('Shared to Actio'); }
+      catch (e) { alert(e.message); }
+      loadTasks();
+    });
+  });
+  list.querySelectorAll('[data-task-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/tasks/${btn.dataset.taskDelete}`, { method: 'DELETE' });
+      loadTasks();
+    });
+  });
+}
+
+async function addTaskFromForm() {
+  const title = $('taskTitle')?.value.trim();
+  if (!title) return;
+  await api('/api/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title,
+      details: $('taskDetails')?.value.trim() || '',
+      due_at: $('taskDue')?.value || null,
+      share_actio: !!$('taskShareActio')?.checked,
+    }),
+  });
+  $('taskTitle').value = '';
+  $('taskDetails').value = '';
+  loadTasks();
+}
+
+async function loadImplementationNotes() {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/implementation-notes');
+  const list = $('implList');
+  const items = r.items || [];
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty">No implementation notes.</div>';
+    return;
+  }
+  list.innerHTML = items.map(n => `
+    <div class="simple-item" data-id="${n.id}">
+      <div class="simple-item-head"><strong>${escapeHtml(n.product)}: ${escapeHtml(n.title)}</strong></div>
+      <h4>Good</h4><p>${escapeHtml(n.good_points || '')}</p>
+      <h4>Bad / tradeoffs</h4><p>${escapeHtml(n.bad_points || '')}</p>
+      <div class="simple-actions">
+        <span class="muted">${n.shareable ? 'Shareable' : 'Private'}</span>
+        <button class="ghost" data-impl-share="${n.id}">Share</button>
+        <button class="danger" data-impl-delete="${n.id}">Delete</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-impl-share]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/api/multi/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
+        });
+        showShareToast('Shared implementation note');
+      }
+      catch (e) { alert(e.message); }
+      loadImplementationNotes();
+    });
+  });
+  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
+      loadImplementationNotes();
+    });
+  });
+}
+
+async function addImplementationNoteFromForm() {
+  const product = $('implProduct')?.value.trim();
+  const title = $('implTitle')?.value.trim();
+  if (!product || !title) return;
+  await api('/api/implementation-notes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      product,
+      title,
+      good_points: $('implGood')?.value.trim() || '',
+      bad_points: $('implBad')?.value.trim() || '',
+      shareable: !!$('implShareable')?.checked,
+    }),
+  });
+  for (const id of ['implProduct', 'implTitle', 'implGood', 'implBad']) $(id).value = '';
+  loadImplementationNotes();
+}
+
+ensureMemoriaFeatureViews();
+loadPrivacySettings().catch(console.warn);
 
 // ── Worklog tab (作業ログ) ─────────────────────────────────────────────
 //

@@ -90,6 +90,12 @@ import {
   insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
 } from './db.js';
 import {
+  listImplementationNotes, getImplementationNote, insertImplementationNote,
+  updateImplementationNote, deleteImplementationNote,
+  listTasks, getTask, insertTask, updateTask, deleteTask,
+  insertExternalChatMessage, listExternalChatMessages,
+} from './db.js';
+import {
   ensureUserStopwordsTable, listUserStopwords, addUserStopword, removeUserStopword,
 } from './db.js';
 import { initWebPush, getVapidPublicKey, saveSubscription, sendPushToAll } from './push.js';
@@ -101,6 +107,7 @@ import {
   readMultiServers, persistServers, upsertServer, removeServer,
   saveServerSession, clearServerSession, setActive, listConnectedActive,
   fetchMe, shareBookmark, shareDig, shareDictionary,
+  shareImplementationNote,
   multiFetch,
 } from './local/multi-client.js';
 
@@ -128,6 +135,28 @@ loadLlmConfigFromSettings(getAppSettings(db));
 initWebPush(DATA_DIR);
 const HEARTBEAT_FILE = join(DATA_DIR, 'heartbeat.json');
 startUptimeTracking({ db, dataDir: DATA_DIR, heartbeatFile: HEARTBEAT_FILE });
+
+function settingBool(settings, key, fallback = true) {
+  const v = settings[key];
+  if (v == null || v === '') return fallback;
+  return !['0', 'false', 'off', 'no'].includes(String(v).toLowerCase());
+}
+
+function privacySettings() {
+  const s = getAppSettings(db);
+  return {
+    tracks_enabled: settingBool(s, 'features.tracks.enabled', true),
+    tracks_visible: settingBool(s, 'features.tracks.visible', true),
+    meals_enabled: settingBool(s, 'features.meals.enabled', true),
+    meals_visible: settingBool(s, 'features.meals.visible', true),
+    tasks_actio_share_enabled: settingBool(s, 'features.tasks.actio_share.enabled', true),
+    actio_share_url: s['actio.share_url'] || '',
+  };
+}
+
+function featureEnabled(key) {
+  return privacySettings()[key] !== false;
+}
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
 const domainCatalogQueue = new FifoQueue();
@@ -721,6 +750,7 @@ function parseMealAdditionsJson(json) {
 //   eaten_at:   ISO8601 string (optional, 手動上書き)
 //   lat / lon:  number (optional, 手動上書き)
 app.post('/api/meals', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const form = await c.req.formData().catch(() => null);
   if (!form) return c.json({ error: 'multipart/form-data required' }, 400);
   const photo = form.get('photo');
@@ -821,6 +851,7 @@ app.post('/api/meals', async (c) => {
 //   lat / lon:    number (任意、 未指定なら GPS 軌跡から推定)
 //   user_note:    string (任意)
 app.post('/api/meals/manual', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') return c.json({ error: 'json body required' }, 400);
   const description = typeof body.description === 'string' ? body.description.trim() : '';
@@ -886,6 +917,7 @@ app.post('/api/meals/manual', async (c) => {
 });
 
 app.get('/api/meals', (c) => {
+  if (!featureEnabled('meals_visible')) return c.json({ meals: [], total: 0 });
   const from = c.req.query('from') || undefined;
   const to = c.req.query('to') || undefined;
   const limit = Math.min(Number(c.req.query('limit') || 100), 500);
@@ -896,6 +928,7 @@ app.get('/api/meals', (c) => {
 });
 
 app.get('/api/meals/:id', (c) => {
+  if (!featureEnabled('meals_visible')) return c.json({ error: 'meals are hidden' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -903,6 +936,7 @@ app.get('/api/meals/:id', (c) => {
 });
 
 app.get('/api/meals/:id/photo', (c) => {
+  if (!featureEnabled('meals_visible')) return c.json({ error: 'meals are hidden' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -921,6 +955,7 @@ app.get('/api/meals/:id/photo', (c) => {
 });
 
 app.patch('/api/meals/:id', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -975,6 +1010,7 @@ app.patch('/api/meals/:id', async (c) => {
 });
 
 app.delete('/api/meals/:id', (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -991,6 +1027,7 @@ app.delete('/api/meals/:id', (c) => {
 });
 
 app.post('/api/meals/:id/reanalyze', (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -1021,6 +1058,7 @@ function parseAdditions(json) {
 }
 
 app.post('/api/meals/:id/additions', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -1057,6 +1095,7 @@ app.post('/api/meals/:id/additions', async (c) => {
 });
 
 app.patch('/api/meals/:id/additions/:idx', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const idx = Number(c.req.param('idx'));
   const meal = getMeal(db, id);
@@ -1089,6 +1128,7 @@ app.patch('/api/meals/:id/additions/:idx', async (c) => {
 });
 
 app.delete('/api/meals/:id/additions/:idx', (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const idx = Number(c.req.param('idx'));
   const meal = getMeal(db, id);
@@ -1638,6 +1678,214 @@ app.post('/api/dictionary/upsert-from-source', async (c) => {
   return c.json({ id: entryId, existed });
 });
 
+// ---- setup docs / privacy / notes / tasks / external chat -----------------
+
+const SETUP_DOCS = {
+  tailscale: {
+    title: 'Tailscale VPN setup',
+    body: '# Tailscale VPN setup\n\n1. Install Tailscale on the Memoria host and client devices.\n2. Sign in to the same tailnet.\n3. On the host, run `tailscale ip -4`.\n4. Open Memoria from clients with `http://<tailscale-ip>:5180`.\n5. For OwnTracks or Legatus, point clients at the host Tailscale IP.\n6. Keep public internet exposure off unless a protected tunnel is configured.',
+  },
+  cloudflare: {
+    title: 'Cloudflare Tunnel public setup',
+    body: '# Cloudflare Tunnel public setup\n\n1. Install `cloudflared` on the Memoria host.\n2. Run `cloudflared tunnel login` and create a tunnel.\n3. Route the hostname to `http://localhost:5180`.\n4. Protect the hostname with Cloudflare Access.\n5. Confirm the web UI and `/share` from outside the tailnet.\n6. Do not expose Memoria directly without authentication.',
+  },
+  legatus: {
+    title: 'Legatus startup',
+    body: '# Legatus startup\n\n1. Open the Legatus project next to Memoria.\n2. Enable only the ingestion modules you need.\n3. Set forward URLs such as `http://localhost:5180/api/locations/ingest` and `http://localhost:5180/api/visits/external`.\n4. Start Legatus with its documented dev or service command.\n5. Check Memoria Settings -> Integration / API key for Legatus status.',
+  },
+  sharing: {
+    title: 'Sharing settings',
+    body: '# Sharing settings\n\n1. Open Settings -> Data / Hub.\n2. Add a Memoria Hub URL and connect with Cernere.\n3. Enable only the servers you want to publish to.\n4. Share individual records from their own screens.\n5. Tasks can be shared to Actio when Settings -> Privacy enables Actio sharing and `actio.share_url` is set.\n6. Review content before sharing. Do not include secrets or private data.',
+  },
+};
+
+app.get('/api/setup-docs', (c) => {
+  return c.json({ docs: Object.entries(SETUP_DOCS).map(([key, v]) => ({ key, title: v.title })) });
+});
+
+app.get('/api/setup-docs/:key', (c) => {
+  const doc = SETUP_DOCS[c.req.param('key')];
+  if (!doc) return c.json({ error: 'not found' }, 404);
+  return c.json({ key: c.req.param('key'), ...doc });
+});
+
+app.get('/api/privacy/settings', (c) => c.json({ settings: privacySettings() }));
+
+app.patch('/api/privacy/settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  for (const [bodyKey, settingKey] of [
+    ['tracks_enabled', 'features.tracks.enabled'],
+    ['tracks_visible', 'features.tracks.visible'],
+    ['meals_enabled', 'features.meals.enabled'],
+    ['meals_visible', 'features.meals.visible'],
+    ['tasks_actio_share_enabled', 'features.tasks.actio_share.enabled'],
+  ]) {
+    if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
+  }
+  if (typeof body.actio_share_url === 'string') patch['actio.share_url'] = body.actio_share_url.trim();
+  if (Object.keys(patch).length) setAppSettings(db, patch);
+  return c.json({ settings: privacySettings() });
+});
+
+app.get('/api/implementation-notes', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  const shareable = c.req.query('shareable');
+  const items = listImplementationNotes(db, {
+    limit,
+    offset,
+    shareable: shareable == null ? null : shareable === '1' || shareable === 'true',
+  });
+  return c.json({ items });
+});
+
+app.post('/api/implementation-notes', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const product = String(body.product || '').trim();
+  const title = String(body.title || '').trim();
+  if (!product || !title) return c.json({ error: 'product and title required' }, 400);
+  const id = insertImplementationNote(db, {
+    product,
+    title,
+    good_points: String(body.good_points || '').trim(),
+    bad_points: String(body.bad_points || '').trim(),
+    shareable: !!body.shareable,
+  });
+  return c.json({ note: getImplementationNote(db, id) }, 201);
+});
+
+app.patch('/api/implementation-notes/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getImplementationNote(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  for (const k of ['product', 'title', 'good_points', 'bad_points']) {
+    if (typeof body[k] === 'string') patch[k] = body[k].trim();
+  }
+  if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
+  updateImplementationNote(db, id, patch);
+  return c.json({ note: getImplementationNote(db, id) });
+});
+
+app.delete('/api/implementation-notes/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getImplementationNote(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteImplementationNote(db, id);
+  return c.json({ ok: true });
+});
+
+app.post('/api/implementation-notes/:id/share', async (c) => {
+  const id = Number(c.req.param('id'));
+  const note = getImplementationNote(db, id);
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (!note.shareable) return c.json({ error: 'note is not marked shareable' }, 409);
+  updateImplementationNote(db, id, { shared_at: new Date().toISOString(), shared_origin: 'local' });
+  return c.json({ ok: true, note: getImplementationNote(db, id) });
+});
+
+app.get('/api/tasks', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  const status = c.req.query('status') || null;
+  return c.json({ items: listTasks(db, { status, limit, offset }) });
+});
+
+app.post('/api/tasks', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const title = String(body.title || '').trim();
+  if (!title) return c.json({ error: 'title required' }, 400);
+  const status = ['todo', 'doing', 'done'].includes(body.status) ? body.status : 'todo';
+  const id = insertTask(db, {
+    title,
+    details: String(body.details || '').trim(),
+    status,
+    due_at: body.due_at || null,
+    share_actio: !!body.share_actio,
+  });
+  return c.json({ task: getTask(db, id) }, 201);
+});
+
+app.patch('/api/tasks/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.title === 'string') patch.title = body.title.trim();
+  if (typeof body.details === 'string') patch.details = body.details.trim();
+  if (['todo', 'doing', 'done'].includes(body.status)) patch.status = body.status;
+  if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
+  if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
+  updateTask(db, id, patch);
+  return c.json({ task: getTask(db, id) });
+});
+
+app.delete('/api/tasks/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteTask(db, id);
+  return c.json({ ok: true });
+});
+
+async function shareTaskToActio(task) {
+  const settings = privacySettings();
+  if (!settings.tasks_actio_share_enabled) throw new Error('Actio task sharing is disabled');
+  if (!settings.actio_share_url) throw new Error('actio_share_url is not configured');
+  const res = await fetch(settings.actio_share_url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source: 'memoria',
+      external_id: `memoria-task-${task.id}`,
+      title: task.title,
+      details: task.details || '',
+      status: task.status,
+      due_at: task.due_at || null,
+    }),
+  });
+  if (!res.ok) throw new Error(`Actio ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.json().catch(() => ({}));
+}
+
+app.post('/api/tasks/:id/share/actio', async (c) => {
+  const id = Number(c.req.param('id'));
+  const task = getTask(db, id);
+  if (!task) return c.json({ error: 'not found' }, 404);
+  try {
+    const result = await shareTaskToActio(task);
+    updateTask(db, id, {
+      share_actio: 1,
+      shared_at: new Date().toISOString(),
+      shared_origin: privacySettings().actio_share_url || 'actio',
+    });
+    return c.json({ ok: true, result, task: getTask(db, id) });
+  } catch (e) {
+    return c.json({ error: e.message }, 502);
+  }
+});
+
+app.post('/api/external-chat/messages', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const source = String(body.source || '').trim() || 'unknown';
+  const content = String(body.content || '').trim();
+  if (!content) return c.json({ error: 'content required' }, 400);
+  const id = insertExternalChatMessage(db, {
+    source,
+    conversation_id: body.conversation_id || null,
+    role: body.role || null,
+    content,
+    metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : null,
+  });
+  return c.json({ id }, 201);
+});
+
+app.get('/api/external-chat/messages', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  const source = c.req.query('source') || null;
+  return c.json({ items: listExternalChatMessages(db, { source, limit, offset }) });
+});
+
 // ---- llm config -----------------------------------------------------------
 
 app.get('/api/llm/config', (c) => {
@@ -1855,7 +2103,7 @@ async function proxyMulti(c, method) {
 app.get('/api/multi/proxy/*', (c) => proxyMulti(c, 'GET'));
 app.post('/api/multi/proxy/*', (c) => proxyMulti(c, 'POST'));
 
-// Body: { kind: 'bookmark' | 'dig' | 'dict', id }
+// Body: { kind: 'bookmark' | 'dig' | 'dict' | 'implementation_note', id }
 app.post('/api/multi/share', async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body?.kind || body.id == null) return c.json({ error: 'kind+id required' }, 400);
@@ -1884,6 +2132,14 @@ app.post('/api/multi/share', async (c) => {
       if (!e) return c.json({ error: 'not_found' }, 404);
       const r = await shareDictionary(state, e);
       markDictionaryShared(db, body.id, { sharedAt: r.shared_at, sharedOrigin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
+    if (body.kind === 'implementation_note') {
+      const n = getImplementationNote(db, body.id);
+      if (!n) return c.json({ error: 'not_found' }, 404);
+      if (!n.shareable) return c.json({ error: 'note is not marked shareable' }, 409);
+      const r = await shareImplementationNote(state, n);
+      updateImplementationNote(db, body.id, { shared_at: r.shared_at, shared_origin: state.url });
       return c.json({ ok: true, remote: r });
     }
     return c.json({ error: 'unknown kind' }, 400);
@@ -3359,6 +3615,7 @@ app.delete('/api/locations/settings/key', (c) => {
  *     deviceIds[], source: { via, tool, requestId } }
  */
 app.post('/api/legatus/location-summary', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return c.json({ error: 'json body required' }, 400);
@@ -3432,6 +3689,7 @@ app.post('/api/legatus/location-summary', async (c) => {
  *   - 簡易形式:       { lat, lon, recorded_at?, device_id?, accuracy_m?, ... }
  */
 app.post('/api/locations/ingest', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   const denied = checkIngestKey(c);
   if (denied) return denied;
 
@@ -3544,6 +3802,7 @@ app.patch('/api/tracks/settings', async (c) => {
  * 多くても OK.
  */
 app.get('/api/locations/recent', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ points: [], decimated: 0, pool: 0 });
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? '50')));
   const settingsDecimate = Number(getAppSettings(db)['tracks.decimate_meters'] ?? '0');
   const decimateM = Math.max(0, Number(c.req.query('decimate') ?? settingsDecimate));
@@ -3592,6 +3851,7 @@ app.get('/api/locations/recent', (c) => {
  * 何も無ければ { point: null } を返す。
  */
 app.get('/api/locations/latest', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ point: null });
   const row = db.prepare(
     `SELECT id, user_id, device_id, recorded_at, lat, lon,
             accuracy_m, altitude_m, velocity_kmh, course_deg,
@@ -3607,6 +3867,7 @@ app.get('/api/locations/latest', (c) => {
  *   GET /api/locations?date=YYYY-MM-DD              (local TZ)
  */
 app.get('/api/locations', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ points: [] });
   const url = new URL(c.req.url);
   const date = url.searchParams.get('date');
   if (date) {
@@ -3627,6 +3888,7 @@ app.get('/api/locations', (c) => {
  * 位置情報を持っている日と件数。 UI の date picker 用。
  */
 app.get('/api/locations/days', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ days: [] });
   const limit = Math.min(Number(c.req.query('limit') ?? 365) || 365, 3650);
   const days = listGpsLocationDays(db, { limit });
   return c.json({ days });
@@ -3637,6 +3899,7 @@ app.get('/api/locations/days', (c) => {
  *   DELETE /api/locations?older_than=ISO
  */
 app.delete('/api/locations', (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   const denied = checkIngestKey(c);
   if (denied) return denied;
   const olderThan = c.req.query('older_than');
@@ -3657,6 +3920,7 @@ app.delete('/api/locations', (c) => {
 app.get('/api/locations/resolve-debug', (c) => c.json(getResolverDebug()));
 
 app.post('/api/locations/resolve-all', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   let body = {};
   try { body = await c.req.json(); } catch {}
   const limit = Math.min(500, Math.max(1, Number(body.limit ?? 100)));
@@ -3684,6 +3948,7 @@ app.post('/api/locations/resolve-all', async (c) => {
  *   body: { device_id?, threshold? }   — 省略可、 全デバイス + default 50m
  */
 app.post('/api/locations/compress', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   let body = {};
   try { body = await c.req.json(); } catch {}
   const deviceId = typeof body.device_id === 'string' && body.device_id.length > 0 ? body.device_id : null;

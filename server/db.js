@@ -310,6 +310,52 @@ export function openDb(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_meals_eaten_at ON meals(eaten_at DESC);
     CREATE INDEX IF NOT EXISTS idx_meals_ai_status ON meals(ai_status);
+
+    CREATE TABLE IF NOT EXISTS implementation_notes (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      product       TEXT NOT NULL,
+      title         TEXT NOT NULL,
+      good_points   TEXT,
+      bad_points    TEXT,
+      shareable     INTEGER NOT NULL DEFAULT 0,
+      shared_at     TEXT,
+      shared_origin TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_implementation_notes_created
+      ON implementation_notes(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      title         TEXT NOT NULL,
+      details       TEXT,
+      status        TEXT NOT NULL DEFAULT 'todo',
+      due_at        TEXT,
+      share_actio   INTEGER NOT NULL DEFAULT 0,
+      shared_at     TEXT,
+      shared_origin TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status_created
+      ON tasks(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_due
+      ON tasks(due_at);
+
+    CREATE TABLE IF NOT EXISTS external_chat_messages (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      source         TEXT NOT NULL,
+      conversation_id TEXT,
+      role           TEXT,
+      content        TEXT NOT NULL,
+      metadata_json  TEXT,
+      received_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_external_chat_received
+      ON external_chat_messages(received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_chat_source
+      ON external_chat_messages(source, received_at DESC);
   `);
 
   // Forward-compat: 既存 DB に列を ALTER で追加
@@ -319,6 +365,25 @@ export function openDb(dbPath) {
   }
   if (mealsCols.length > 0 && !mealsCols.includes('nutrients_json')) {
     db.exec(`ALTER TABLE meals ADD COLUMN nutrients_json TEXT`);
+  }
+
+  const implCols = db.prepare(`PRAGMA table_info(implementation_notes)`).all().map(c => c.name);
+  for (const col of ['shared_at', 'shared_origin']) {
+    if (implCols.length > 0 && !implCols.includes(col)) {
+      db.exec(`ALTER TABLE implementation_notes ADD COLUMN ${col} TEXT`);
+    }
+  }
+
+  const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all().map(c => c.name);
+  for (const [col, ddl] of [
+    ['due_at', 'TEXT'],
+    ['share_actio', 'INTEGER NOT NULL DEFAULT 0'],
+    ['shared_at', 'TEXT'],
+    ['shared_origin', 'TEXT'],
+  ]) {
+    if (taskCols.length > 0 && !taskCols.includes(col)) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
+    }
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
@@ -2588,6 +2653,151 @@ export function listMealsForDate(db, dateStr) {
 // dig graph / wordcloud などで「もう出さなくていい」 単語を蓄積する。
 // 表示側 (app.js) で随時 filter するのと、 サーバ抽出側で除外するのと
 // 両方で参照する想定 (今は表示側 filter のみで運用)。
+
+// ---- implementation notes -------------------------------------------------
+
+export function listImplementationNotes(db, { limit = 100, offset = 0, shareable = null } = {}) {
+  const where = [];
+  const args = [];
+  if (shareable != null) {
+    where.push('shareable = ?');
+    args.push(shareable ? 1 : 0);
+  }
+  args.push(limit, offset);
+  return db.prepare(`
+    SELECT * FROM implementation_notes
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
+
+export function getImplementationNote(db, id) {
+  return db.prepare(`SELECT * FROM implementation_notes WHERE id = ?`).get(id);
+}
+
+export function insertImplementationNote(db, note) {
+  const info = db.prepare(`
+    INSERT INTO implementation_notes (product, title, good_points, bad_points, shareable)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    note.product,
+    note.title,
+    note.good_points ?? null,
+    note.bad_points ?? null,
+    note.shareable ? 1 : 0,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateImplementationNote(db, id, patch) {
+  const allowed = new Set(['product', 'title', 'good_points', 'bad_points', 'shareable', 'shared_at', 'shared_origin']);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    args.push(k === 'shareable' ? (v ? 1 : 0) : v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE implementation_notes SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteImplementationNote(db, id) {
+  db.prepare(`DELETE FROM implementation_notes WHERE id = ?`).run(id);
+}
+
+// ---- tasks ----------------------------------------------------------------
+
+export function listTasks(db, { status = null, limit = 100, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (status) {
+    where.push('status = ?');
+    args.push(status);
+  }
+  args.push(limit, offset);
+  return db.prepare(`
+    SELECT * FROM tasks
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY
+      CASE status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
+      COALESCE(due_at, '9999-12-31') ASC,
+      created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
+
+export function getTask(db, id) {
+  return db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
+}
+
+export function insertTask(db, task) {
+  const info = db.prepare(`
+    INSERT INTO tasks (title, details, status, due_at, share_actio)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    task.title,
+    task.details ?? null,
+    task.status || 'todo',
+    task.due_at ?? null,
+    task.share_actio ? 1 : 0,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateTask(db, id, patch) {
+  const allowed = new Set(['title', 'details', 'status', 'due_at', 'share_actio', 'shared_at', 'shared_origin']);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    args.push(k === 'share_actio' ? (v ? 1 : 0) : v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE tasks SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteTask(db, id) {
+  db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+}
+
+// ---- external chat messages ----------------------------------------------
+
+export function insertExternalChatMessage(db, msg) {
+  const info = db.prepare(`
+    INSERT INTO external_chat_messages (source, conversation_id, role, content, metadata_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    msg.source,
+    msg.conversation_id ?? null,
+    msg.role ?? null,
+    msg.content,
+    msg.metadata ? JSON.stringify(msg.metadata) : null,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function listExternalChatMessages(db, { source = null, limit = 100, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (source) {
+    where.push('source = ?');
+    args.push(source);
+  }
+  args.push(limit, offset);
+  return db.prepare(`
+    SELECT * FROM external_chat_messages
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY received_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
 
 export function ensureUserStopwordsTable(db) {
   db.exec(`

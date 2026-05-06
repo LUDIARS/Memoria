@@ -168,6 +168,93 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  'add_task',
+  {
+    title: 'Add a Memoria task',
+    description: 'Create a short todo item in Memoria. Use this when the user asks to remember a next action or task.',
+    inputSchema: {
+      title: z.string().min(1).describe('Task title'),
+      details: z.string().optional().describe('Optional details'),
+      due_at: z.string().optional().describe('Optional ISO8601 due date/time'),
+      share_actio: z.boolean().optional().describe('Whether Memoria should mark this task for Actio sharing'),
+    },
+  },
+  async ({ title, details, due_at, share_actio }) => {
+    const res = await call('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, details, due_at: due_at || null, share_actio: !!share_actio }),
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(res.task ?? res, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  'list_tasks',
+  {
+    title: 'List Memoria tasks',
+    description: 'Return recent Memoria tasks, optionally filtered by status.',
+    inputSchema: {
+      status: z.enum(['todo', 'doing', 'done']).optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    },
+  },
+  async ({ status, limit }) => {
+    const qs = new URLSearchParams();
+    if (status) qs.set('status', status);
+    if (limit) qs.set('limit', String(limit));
+    const res = await call(`/api/tasks?${qs.toString()}`);
+    return { content: [{ type: 'text', text: JSON.stringify(res.items ?? [], null, 2) }] };
+  }
+);
+
+server.registerTool(
+  'record_chat_message',
+  {
+    title: 'Record an external chat message',
+    description: 'Store a message from web Claude, web Gemini, or another chat client into Memoria.',
+    inputSchema: {
+      source: z.string().min(1).describe('Source name, e.g. claude-web or gemini-web'),
+      content: z.string().min(1).describe('Message text'),
+      role: z.string().optional().describe('Optional role such as user or assistant'),
+      conversation_id: z.string().optional().describe('Optional external conversation id'),
+      metadata: z.record(z.unknown()).optional().describe('Optional metadata object'),
+    },
+  },
+  async ({ source, content, role, conversation_id, metadata }) => {
+    const res = await call('/api/external-chat/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, content, role, conversation_id, metadata }),
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  'add_implementation_note',
+  {
+    title: 'Add an implementation note',
+    description: 'Record good points and tradeoffs for a development product.',
+    inputSchema: {
+      product: z.string().min(1),
+      title: z.string().min(1),
+      good_points: z.string().optional(),
+      bad_points: z.string().optional(),
+      shareable: z.boolean().optional(),
+    },
+  },
+  async ({ product, title, good_points, bad_points, shareable }) => {
+    const res = await call('/api/implementation-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product, title, good_points, bad_points, shareable: !!shareable }),
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(res.note ?? res, null, 2) }] };
+  }
+);
+
 // ── resources ────────────────────────────────────────────────────────────
 
 server.registerResource(

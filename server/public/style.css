@@ -3902,6 +3902,61 @@ dialog.meal-modal[open] {
 }
 .meal-loc-map-link:hover { text-decoration: underline; }
 
+/* Simple feature panes injected by app.js for tasks / implementation notes. */
+.simple-panel {
+  padding: 16px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+.simple-panel h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+.simple-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.simple-form input,
+.simple-form textarea,
+.setup-doc-body {
+  width: 100%;
+  box-sizing: border-box;
+}
+.simple-list {
+  display: grid;
+  gap: 10px;
+}
+.simple-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+}
+.simple-item-head,
+.simple-actions,
+.setup-docs-list {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.simple-item-head {
+  justify-content: space-between;
+}
+.simple-item p {
+  white-space: pre-wrap;
+}
+.setup-doc-body {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 48vh;
+}
+
 @media (max-width: 480px) {
   .meal-modal-map {
     height: 200px;

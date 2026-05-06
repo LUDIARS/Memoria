@@ -88,6 +88,17 @@ export async function getSharedDictionary(id) {
   return r.rows[0] || null;
 }
 
+export async function getSharedImplementationNote(id) {
+  const r = await query(
+    `SELECT id, product, title, good_points, bad_points,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM implementation_notes
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rows[0] || null;
+}
+
 export async function insertSharedBookmark({ url, title, summary, memo, categories, ownerUserId, ownerUserName, sharedOrigin }) {
   const r = await query(
     `INSERT INTO bookmarks (url, title, summary, memo, owner_user_id, owner_user_name, shared_origin)
@@ -217,12 +228,57 @@ export async function deleteSharedDictionary(id, { actingUserId, role }) {
   return { ok: true };
 }
 
+export async function listSharedImplementationNotes({ limit = 50, before = null } = {}) {
+  const args = [];
+  let where = 'WHERE hidden_at IS NULL';
+  if (before) { args.push(before); where += ` AND shared_at < $${args.length}`; }
+  args.push(limit);
+  const r = await query(
+    `SELECT id, product, title, good_points, bad_points,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM implementation_notes
+       ${where}
+       ORDER BY shared_at DESC
+       LIMIT $${args.length}`,
+    args,
+  );
+  return r.rows;
+}
+
+export async function insertSharedImplementationNote({ product, title, goodPoints, badPoints, ownerUserId, ownerUserName, sharedOrigin }) {
+  const r = await query(
+    `INSERT INTO implementation_notes
+       (product, title, good_points, bad_points, owner_user_id, owner_user_name, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, shared_at`,
+    [product, title, goodPoints ?? null, badPoints ?? null, ownerUserId, ownerUserName, sharedOrigin ?? null],
+  );
+  return { id: r.rows[0].id, shared_at: r.rows[0].shared_at };
+}
+
+export async function deleteSharedImplementationNote(id, { actingUserId, role }) {
+  const r = await query('SELECT owner_user_id FROM implementation_notes WHERE id = $1', [id]);
+  if (!r.rowCount) return { ok: false, error: 'not_found' };
+  const owner = r.rows[0].owner_user_id;
+  if (owner !== actingUserId && role !== 'admin' && role !== 'moderator') {
+    return { ok: false, error: 'forbidden' };
+  }
+  await query('DELETE FROM implementation_notes WHERE id = $1', [id]);
+  await query(
+    `INSERT INTO share_log (resource_kind, resource_id, action, acting_user_id)
+       VALUES ('implementation_note', $1, 'delete', $2)`,
+    [id, actingUserId],
+  );
+  return { ok: true };
+}
+
 // ── moderation ─────────────────────────────────────────────────────────────
 
 const TABLE_BY_KIND = {
   bookmark: 'bookmarks',
   dig: 'dig_sessions',
   dict: 'dictionary_entries',
+  implementation_note: 'implementation_notes',
 };
 
 function tableForKind(kind) {
@@ -282,6 +338,8 @@ export async function listHidden({ limit = 100 } = {}) {
      ${sql('dig', 'dig_sessions', 'query')}
      UNION ALL
      ${sql('dict', 'dictionary_entries', 'term')}
+     UNION ALL
+     ${sql('implementation_note', 'implementation_notes', 'title')}
      ORDER BY hidden_at DESC
      LIMIT $1`,
     [limit],

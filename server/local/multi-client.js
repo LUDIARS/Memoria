@@ -211,6 +211,18 @@ export async function shareDictionary(state, e) {
   });
 }
 
+export async function shareImplementationNote(state, n) {
+  return multiFetch(state, '/api/shared/implementation-notes', {
+    method: 'POST',
+    body: JSON.stringify({
+      product: n.product,
+      title: n.title,
+      good_points: n.good_points || null,
+      bad_points: n.bad_points || null,
+    }),
+  });
+}
+
 export async function fetchMe(state) {
   return multiFetch(state, '/api/me');
 }

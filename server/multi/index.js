@@ -31,7 +31,9 @@ import {
   listSharedBookmarks, insertSharedBookmark, deleteSharedBookmark,
   listSharedDigs, insertSharedDig, deleteSharedDig,
   listSharedDictionary, insertSharedDictionary, deleteSharedDictionary,
+  listSharedImplementationNotes, insertSharedImplementationNote, deleteSharedImplementationNote,
   getSharedBookmark, getSharedDig, getSharedDictionary,
+  getSharedImplementationNote,
   hideShared, unhideShared, listHidden, listShareLog,
   recordShareEvent,
 } from './db.js';
@@ -261,6 +263,51 @@ app.delete('/api/shared/dictionary/:id', async (c) => {
   if (!u) return c.json({ error: 'unauthorized' }, 401);
   const id = Number(c.req.param('id'));
   const r = await deleteSharedDictionary(id, { actingUserId: u.userId, role: u.role });
+  if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
+  return c.json({ ok: true });
+});
+
+// ── /api/shared/implementation-notes ───────────────────────────────────────
+
+app.get('/api/shared/implementation-notes', async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 50), 200);
+  const before = c.req.query('before') || null;
+  const items = await listSharedImplementationNotes({ limit, before });
+  return c.json({ items });
+});
+
+app.post('/api/shared/implementation-notes', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  if (!body?.product || !body?.title) return c.json({ error: 'product+title required' }, 400);
+  const r = await insertSharedImplementationNote({
+    product: body.product,
+    title: body.title,
+    goodPoints: body.good_points,
+    badPoints: body.bad_points,
+    ownerUserId: u.userId,
+    ownerUserName: u.displayName,
+    sharedOrigin: c.req.header('x-memoria-origin') || null,
+  });
+  await recordShareEvent({
+    kind: 'implementation_note', id: r.id, action: 'share',
+    actingUserId: u.userId, details: { product: body.product, title: body.title },
+  });
+  return c.json(r, 201);
+});
+
+app.get('/api/shared/implementation-notes/:id', async (c) => {
+  const r = await getSharedImplementationNote(Number(c.req.param('id')));
+  if (!r) return c.json({ error: 'not_found' }, 404);
+  return c.json(r);
+});
+
+app.delete('/api/shared/implementation-notes/:id', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const id = Number(c.req.param('id'));
+  const r = await deleteSharedImplementationNote(id, { actingUserId: u.userId, role: u.role });
   if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
   return c.json({ ok: true });
 });
