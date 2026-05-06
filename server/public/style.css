@@ -1408,6 +1408,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   width: min(680px, 92vw);
   max-height: 88vh;
   overflow-y: auto;
+  resize: none;
   z-index: 100;
   /* 説明テキストが白背景で読める。 後ろのバックドロップ (alpha 0.4) を
    * 透かさないよう !important で確実に opaque にする。 */
@@ -1867,6 +1868,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   padding: 16px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.15);
   width: 380px;
+  max-height: 80vh;
+  overflow-y: auto;
+  resize: none;
   z-index: 50;
 }
 .diary-settings h4 { margin: 0 0 8px; }
@@ -1900,6 +1904,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   width: 560px;
   max-height: 80vh;
   overflow-y: auto;
+  resize: none;
   z-index: 100;
 }
 .ai-settings-head {
@@ -3968,6 +3973,83 @@ dialog.meal-modal[open] {
   display: grid;
   gap: 10px;
 }
+.tasks-three-pane {
+  display: grid;
+  grid-template-columns: 180px 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+.tasks-menu {
+  display: grid;
+  gap: 8px;
+}
+.tasks-menu button {
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+}
+.tasks-menu button.active {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.tasks-pane h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.task-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface);
+}
+.task-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.task-origin {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.task-origin.ai {
+  border-color: #c37a00;
+  color: #9a6000;
+  background: #fff3df;
+}
+.task-origin.human {
+  border-color: #1f56c0;
+  color: #1f56c0;
+  background: #eaf1ff;
+}
+.task-detail-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 12px;
+}
+.task-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.task-detail-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
 .simple-item {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4005,8 +4087,43 @@ dialog.meal-modal[open] {
   font-size: 12px;
   color: var(--muted);
 }
+.domain-private-detail {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.domain-private-detail input {
+  margin: 0;
+}
+.impl-attachment {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.impl-attachment pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.impl-attachment p {
+  margin: 0;
+}
 
 @media (max-width: 480px) {
+  .tasks-three-pane {
+    grid-template-columns: 1fr;
+  }
   .meal-modal-map {
     height: 200px;
   }
@@ -4811,6 +4928,21 @@ dialog.loc-edit-modal[open] {
   font-size: 11px;
   font-family: ui-monospace, monospace;
   white-space: nowrap;
+}
+.wl-reg-btn {
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.wl-reg-btn:hover {
+  background: var(--accent);
+  color: #fff;
 }
 
 @media (max-width: 760px) {

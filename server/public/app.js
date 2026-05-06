@@ -4766,7 +4766,18 @@ function ensureMemoriaFeatureViews() {
       <label class="check-inline"><input id="mealsEnabled" type="checkbox" /> 食事を記録する</label>
       <label class="check-inline"><input id="mealsVisible" type="checkbox" /> 食事タブとデータを表示する</label>
       <label class="check-inline"><input id="tasksActioShareEnabled" type="checkbox" /> タスクの Actio シェアを許可する</label>
-      <label>Actio シェア URL: <input id="actioShareUrl" type="text" placeholder="http://localhost:.../api/tasks/import" /></label>`;
+      <label>Actio シェア URL: <input id="actioShareUrl" type="text" placeholder="http://localhost:.../api/tasks/import" /></label>
+      <h4 style="margin-top:12px">タスクリマインド</h4>
+      <label class="check-inline"><input id="taskReminderEnabled" type="checkbox" /> 毎朝タスクリマインドを送る</label>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">リマインド時刻:
+        <input id="taskReminderHour" type="number" min="0" max="23" style="width:52px" />
+        時
+        <input id="taskReminderMinute" type="number" min="0" max="59" style="width:52px" />
+        分
+      </label>
+      <label class="check-inline"><input id="taskReminderNuntiusEnabled" type="checkbox" /> Nuntius にも送る</label>
+      <label>Nuntius URL: <input id="taskReminderNuntiusUrl" type="text" placeholder="https://nuntius.example.com/notify" /></label>
+      <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer && !$('setupDocsBody')) {
@@ -4880,7 +4891,7 @@ function setupTaskFormKeyboard() {
   };
 }
 
-function upgradeImplementationFormMarkup() {
+upgradeImplementationFormMarkup = function () {
   const form = $('implForm');
   if (!form || form.dataset.upgraded === '1') return;
   form.dataset.upgraded = '1';
@@ -4909,9 +4920,9 @@ function upgradeImplementationFormMarkup() {
       <button id="implAddBtn">追加</button>
       <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
     </div>`;
-}
+};
 
-function setupImplementationFormKeyboard() {
+setupImplementationFormKeyboard = function () {
   const product = $('implProduct');
   const title = $('implTitle');
   const good = $('implGood');
@@ -4943,6 +4954,28 @@ function setupImplementationFormKeyboard() {
   };
 }
 
+let _localReminderTimer = null;
+function scheduleLocalTaskReminder(hour, minute) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (_localReminderTimer) { clearTimeout(_localReminderTimer); _localReminderTimer = null; }
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(hour, minute, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  _localReminderTimer = setTimeout(async () => {
+    _localReminderTimer = null;
+    try {
+      const { items = [] } = await api('/api/tasks');
+      const pending = items.filter(t => t.status === 'todo' || t.status === 'doing');
+      if (pending.length) {
+        const body = pending.slice(0, 3).map(t => `・${t.title}`).join('\n');
+        new Notification('📋 本日のタスクリマインド', { body, icon: '/icon-192.png' });
+      }
+    } catch {}
+    scheduleLocalTaskReminder(hour, minute);
+  }, next.getTime() - now.getTime());
+}
+
 async function loadPrivacySettings() {
   ensureMemoriaFeatureViews();
   const r = await api('/api/privacy/settings');
@@ -4953,6 +4986,14 @@ async function loadPrivacySettings() {
   if ($('mealsVisible')) $('mealsVisible').checked = !!s.meals_visible;
   if ($('tasksActioShareEnabled')) $('tasksActioShareEnabled').checked = !!s.tasks_actio_share_enabled;
   if ($('actioShareUrl')) $('actioShareUrl').value = s.actio_share_url || '';
+  if ($('taskReminderEnabled')) $('taskReminderEnabled').checked = !!s.tasks_reminder_enabled;
+  if ($('taskReminderHour')) $('taskReminderHour').value = s.tasks_reminder_hour ?? 6;
+  if ($('taskReminderMinute')) $('taskReminderMinute').value = s.tasks_reminder_minute ?? 0;
+  if ($('taskReminderNuntiusEnabled')) $('taskReminderNuntiusEnabled').checked = !!s.tasks_reminder_nuntius_enabled;
+  if ($('taskReminderNuntiusUrl')) $('taskReminderNuntiusUrl').value = s.tasks_reminder_nuntius_url || '';
+  if (s.tasks_reminder_enabled) {
+    scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
+  }
   applyFeatureVisibility(s);
 }
 
@@ -4968,9 +5009,18 @@ async function savePrivacySettings() {
       meals_visible: $('mealsVisible').checked,
       tasks_actio_share_enabled: $('tasksActioShareEnabled').checked,
       actio_share_url: $('actioShareUrl').value.trim(),
+      tasks_reminder_enabled: !!($('taskReminderEnabled')?.checked),
+      tasks_reminder_hour: Number($('taskReminderHour')?.value ?? 6),
+      tasks_reminder_minute: Number($('taskReminderMinute')?.value ?? 0),
+      tasks_reminder_nuntius_enabled: !!($('taskReminderNuntiusEnabled')?.checked),
+      tasks_reminder_nuntius_url: $('taskReminderNuntiusUrl')?.value.trim() || '',
     }),
   });
-  applyFeatureVisibility(r.settings || {});
+  const s = r.settings || {};
+  if (s.tasks_reminder_enabled) {
+    scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
+  }
+  applyFeatureVisibility(s);
 }
 
 function applyFeatureVisibility(s) {
@@ -5129,6 +5179,521 @@ async function addImplementationNoteFromForm() {
   loadImplementationNotes();
 }
 
+function implementationAttachmentLabel(type) {
+  return ({
+    github: 'GitHub のプロダクト',
+    screenshot: 'スクリーンキャプチャ',
+    video: '動画',
+    code: 'コードスニペット',
+    other: 'その他',
+  })[type] || '';
+}
+
+function renderImplementationAttachment(note) {
+  const type = note.attachment_type || '';
+  const value = note.attachment_value || '';
+  if (!type || !value) return '';
+  const label = implementationAttachmentLabel(type) || '添付';
+  if (type === 'code') {
+    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><pre><code>${escapeHtml(value)}</code></pre></div>`;
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><a href="${escapeHtml(value)}" target="_blank" rel="noopener">${escapeHtml(value)}</a></div>`;
+  }
+  return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><p>${escapeHtml(value)}</p></div>`;
+}
+
+upgradeImplementationFormMarkup = function () {
+  const form = $('implForm');
+  if (!form || form.dataset.upgraded === '2') return;
+  form.dataset.upgraded = '2';
+  form.innerHTML = `
+    <label class="simple-field">
+      <span>ドヤポイント</span>
+      <input id="implTitle" type="text" placeholder="ここを作り込んだ、ここが気持ちいい" />
+    </label>
+    <label class="simple-field">
+      <span>良かった点</span>
+      <textarea id="implGood" rows="5" placeholder="設計、実装、体験で良かった点"></textarea>
+    </label>
+    <label class="simple-field">
+      <span>悪かった点 / トレードオフ</span>
+      <textarea id="implBad" rows="4" placeholder="迷った点、直したい点、次に改善する点"></textarea>
+    </label>
+    <label class="simple-field">
+      <span>添付するもの</span>
+      <select id="implAttachmentType">
+        <option value="">なし</option>
+        <option value="github">GitHub のプロダクト</option>
+        <option value="screenshot">スクリーンキャプチャ</option>
+        <option value="video">動画</option>
+        <option value="code">コードスニペット</option>
+        <option value="other">その他</option>
+      </select>
+    </label>
+    <label class="simple-field">
+      <span>添付内容</span>
+      <textarea id="implAttachmentValue" rows="4" placeholder="URL、画像や動画のパス、コードなどを 1 つだけ記入"></textarea>
+    </label>
+    <label class="simple-check-row">
+      <input id="implShareable" type="checkbox" tabindex="-1" />
+      <span>シェア可能にする</span>
+    </label>
+    <div class="simple-actions">
+      <button id="implAddBtn">追加</button>
+      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>`;
+};
+
+setupImplementationFormKeyboard = function () {
+  const title = $('implTitle');
+  const good = $('implGood');
+  const bad = $('implBad');
+  const attachmentType = $('implAttachmentType');
+  const attachmentValue = $('implAttachmentValue');
+  const add = $('implAddBtn');
+  if (title) title.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      good?.focus();
+    }
+  };
+  if (good) good.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      bad?.focus();
+    }
+  };
+  if (bad) bad.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      attachmentType?.focus();
+    }
+  };
+  if (attachmentType) attachmentType.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      attachmentValue?.focus();
+    }
+  };
+  if (attachmentValue) attachmentValue.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      add?.focus();
+    }
+  };
+};
+
+loadImplementationNotes = async function () {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/implementation-notes');
+  const list = $('implList');
+  const items = r.items || [];
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
+    return;
+  }
+  list.innerHTML = items.map(n => `
+    <div class="simple-item" data-id="${n.id}">
+      <div class="simple-item-head"><strong>${escapeHtml(n.title)}</strong></div>
+      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
+      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
+      ${renderImplementationAttachment(n)}
+      <div class="simple-actions">
+        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
+        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
+        <button class="danger" data-impl-delete="${n.id}">削除</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-impl-share]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/api/multi/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
+        });
+        showShareToast('実装自慢をシェアしました');
+      }
+      catch (e) { alert(e.message); }
+      loadImplementationNotes();
+    });
+  });
+  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
+      loadImplementationNotes();
+    });
+  });
+};
+
+addImplementationNoteFromForm = async function () {
+  const title = $('implTitle')?.value.trim();
+  if (!title) return;
+  await api('/api/implementation-notes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title,
+      good_points: $('implGood')?.value.trim() || '',
+      bad_points: $('implBad')?.value.trim() || '',
+      attachment_type: $('implAttachmentType')?.value || '',
+      attachment_value: $('implAttachmentValue')?.value.trim() || '',
+      shareable: !!$('implShareable')?.checked,
+    }),
+  });
+  for (const id of ['implTitle', 'implGood', 'implBad', 'implAttachmentType', 'implAttachmentValue']) {
+    const el = $(id);
+    if (el) el.value = '';
+  }
+  $('implShareable').checked = false;
+  $('implForm')?.classList.add('hidden');
+  loadImplementationNotes();
+};
+
+renderDomainList = function () {
+  const ul = $('domainList');
+  if (!state.domainEntries.length) {
+    ul.innerHTML = '<li class="dict-empty">ドメイン辞書はまだ空です。アクセス履歴の生成によって自動で追加されます。</li>';
+    return;
+  }
+  ul.innerHTML = state.domainEntries.map(e => {
+    const desc = (e.description || '').trim();
+    const can = (e.can_do || '').trim();
+    const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
+    return `
+    <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
+      <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
+      <div class="dict-meta">
+        <span>${escapeHtml(e.domain)}</span>
+        <span>本日 ${e.visits_today} / 週 ${e.visits_week}</span>
+      </div>
+    </li>`;
+  }).join('');
+  ul.querySelectorAll('.dict-item').forEach(li => {
+    li.addEventListener('click', () => loadDomainEntry(li.dataset.domain));
+  });
+};
+
+renderDomainDetail = function () {
+  const e = state.domainDetail;
+  const panel = $('domainDetail');
+  if (!e) { hideModal('domainDetail'); return; }
+  showModal('domainDetail');
+  $('domainKey').value = e.domain;
+  $('domainSiteName').value = e.site_name || '';
+  $('domainDesc').value = e.description || '';
+  $('domainCanDo').value = e.can_do || '';
+  $('domainKind').value = e.kind || '';
+  $('domainNotes').value = e.notes || '';
+  $('domainStats').innerHTML = `
+    <span class="domain-stat"><b>${e.visits_today ?? 0}</b><br>本日</span>
+    <span class="domain-stat"><b>${e.visits_week ?? 0}</b><br>過去7日</span>
+    <span class="domain-stat"><b>${e.visits_total ?? 0}</b><br>累計</span>
+    <span class="domain-stat"><b>${e.user_edited ? '✓' : '-'}</b><br>編集済み</span>
+    <span class="domain-stat"><b>${escapeHtml(e.status || '')}</b><br>状態</span>
+    <label class="domain-private-detail">
+      <input id="domainPrivateCheck" type="checkbox" ${e.domain_private ? 'checked' : ''} />
+      <span>日記では非表示</span>
+    </label>
+  `;
+  const privateCheck = $('domainPrivateCheck');
+  if (privateCheck) {
+    privateCheck.onchange = async () => {
+      const checked = privateCheck.checked;
+      try {
+        await api(`/api/domains/${encodeURIComponent(e.domain)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain_private: checked }),
+        });
+        e.domain_private = checked ? 1 : 0;
+        const row = state.domainEntries.find(x => x.domain === e.domain);
+        if (row) row.domain_private = e.domain_private;
+        flashToast(checked ? '日記では非表示にしました' : '日記に表示するようにしました');
+      } catch (err) {
+        privateCheck.checked = !checked;
+        alert(`private 更新失敗: ${err.message}`);
+      }
+    };
+  }
+};
+
+state.taskMenu = 'todo';
+state.taskItems = [];
+state.taskDetail = null;
+
+function taskDatePartition(task) {
+  if (!task.due_at) return 'middle';
+  const due = new Date(task.due_at);
+  if (Number.isNaN(due.getTime())) return 'middle';
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  return due.getTime() > today.getTime() ? 'right' : 'middle';
+}
+
+function formatTaskDue(dueAt) {
+  if (!dueAt) return '期日未設定';
+  const d = new Date(dueAt);
+  if (Number.isNaN(d.getTime())) return dueAt;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function taskCardHtml(t) {
+  const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
+  const doneBtn = t.status === 'done'
+    ? '<button class="ghost" disabled>Done</button>'
+    : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
+  return `
+    <article class="task-card" data-task-open="${t.id}">
+      <div class="task-card-head">
+        <strong>${escapeHtml(t.title)}</strong>
+        ${aiBadge}
+      </div>
+      <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
+      <p>${escapeHtml(t.details || '')}</p>
+      <div class="simple-actions">
+        ${doneBtn}
+        <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
+        <button class="danger" data-task-delete="${t.id}">削除</button>
+      </div>
+    </article>`;
+}
+
+function renderTaskDetail() {
+  const panel = $('taskDetailPanel');
+  if (!panel) return;
+  const t = state.taskDetail;
+  if (!t) {
+    panel.classList.add('hidden');
+    panel.innerHTML = '';
+    return;
+  }
+  panel.classList.remove('hidden');
+  panel.innerHTML = `
+    <div class="task-detail-head">
+      <h3>タスク詳細</h3>
+      <span class="task-origin ${t.creator_type === 'ai' ? 'ai' : 'human'}">${t.creator_type === 'ai' ? 'AI作成' : '人間作成'}</span>
+    </div>
+    <label class="simple-field">
+      <span>タスク内容</span>
+      <input id="taskDetailTitle" type="text" value="${escapeHtml(t.title || '')}" />
+    </label>
+    <label class="simple-field">
+      <span>期日</span>
+      <input id="taskDetailDue" type="datetime-local" value="${escapeHtml((t.due_at || '').slice(0, 16))}" />
+    </label>
+    <label class="simple-field">
+      <span>ステータス</span>
+      <select id="taskDetailStatus">
+        ${['todo', 'doing', 'done'].map((s) => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${s.toUpperCase()}</option>`).join('')}
+      </select>
+    </label>
+    <label class="simple-field">
+      <span>メモ</span>
+      <textarea id="taskDetailMemo" rows="5">${escapeHtml(t.details || '')}</textarea>
+    </label>
+    <div class="simple-actions">
+      <button id="taskDetailSaveBtn">保存</button>
+      <button id="taskDetailCloseBtn" class="ghost" type="button">閉じる</button>
+    </div>
+  `;
+  $('taskDetailCloseBtn').onclick = () => {
+    state.taskDetail = null;
+    renderTaskDetail();
+  };
+  $('taskDetailSaveBtn').onclick = async () => {
+    try {
+      await api(`/api/tasks/${t.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: $('taskDetailTitle').value.trim(),
+          due_at: $('taskDetailDue').value || null,
+          status: $('taskDetailStatus').value,
+          details: $('taskDetailMemo').value.trim(),
+        }),
+      });
+      await loadTasks();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+}
+
+function renderTaskBoard() {
+  const menu = $('tasksMenu');
+  const middle = $('tasksDueNow');
+  const right = $('tasksFuture');
+  if (!menu || !middle || !right) return;
+  menu.querySelectorAll('[data-task-menu]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.taskMenu === state.taskMenu);
+  });
+  const base = state.taskMenu === 'done'
+    ? state.taskItems.filter((t) => t.status === 'done')
+    : state.taskItems.filter((t) => t.status !== 'done');
+  const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
+  const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
+  middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
+  right.innerHTML = rightItems.length ? rightItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
+
+  document.querySelectorAll('[data-task-open]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      const id = Number(el.dataset.taskOpen);
+      if (ev.target.closest('button')) return;
+      state.taskDetail = state.taskItems.find((t) => t.id === id) || null;
+      renderTaskDetail();
+    });
+  });
+  document.querySelectorAll('[data-task-done]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/tasks/${btn.dataset.taskDone}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' }),
+      });
+      await loadTasks();
+    });
+  });
+  document.querySelectorAll('[data-task-share]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await api(`/api/tasks/${btn.dataset.taskShare}/share/actio`, { method: 'POST' });
+        showShareToast('Actio にシェアしました');
+      } catch (e) {
+        alert(e.message);
+      }
+      await loadTasks();
+    });
+  });
+  document.querySelectorAll('[data-task-delete]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/tasks/${btn.dataset.taskDelete}`, { method: 'DELETE' });
+      if (state.taskDetail?.id === Number(btn.dataset.taskDelete)) state.taskDetail = null;
+      await loadTasks();
+    });
+  });
+}
+
+function decorateTaskAndImplTabs() {
+  const taskTab = document.querySelector('.tab[data-tab="tasks"]');
+  const implTab = document.querySelector('.tab[data-tab="impl"]');
+  if (taskTab) {
+    const label = taskTab.querySelector('.tab-label');
+    if (label) {
+      label.textContent = '📝 タスク';
+      label.dataset.full = '📝 タスク';
+      label.dataset.short = '📝 タスク';
+    }
+    if (!isNarrowViewport()) taskTab.style.order = '-20';
+    else taskTab.style.order = '';
+  }
+  if (implTab) {
+    const label = implTab.querySelector('.tab-label');
+    if (label) {
+      label.textContent = '✨ 実装自慢';
+      label.dataset.full = '✨ 実装自慢';
+      label.dataset.short = '✨ 実装自慢';
+    }
+    if (!isNarrowViewport()) implTab.style.order = '-19';
+    else implTab.style.order = '';
+  }
+}
+
+const baseEnsureMemoriaFeatureViews = ensureMemoriaFeatureViews;
+ensureMemoriaFeatureViews = function () {
+  baseEnsureMemoriaFeatureViews();
+  const tasksView = $('tasksView');
+  if (tasksView && tasksView.dataset.v2 !== '1') {
+    tasksView.dataset.v2 = '1';
+    tasksView.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-panel-head">
+          <h2>📝 タスク</h2>
+          <button id="taskNewBtn" type="button">+ 追加</button>
+        </div>
+        <div id="taskForm" class="simple-form hidden"></div>
+        <div class="tasks-three-pane">
+          <aside id="tasksMenu" class="tasks-menu">
+            <button type="button" data-task-menu="todo" class="active">TODO</button>
+            <button type="button" data-task-menu="done">完了済み</button>
+          </aside>
+          <section class="tasks-pane">
+            <h3>今日が期限 / 期限切れ</h3>
+            <div id="tasksDueNow" class="simple-list"></div>
+          </section>
+          <section class="tasks-pane">
+            <h3>未来のタスク</h3>
+            <div id="tasksFuture" class="simple-list"></div>
+          </section>
+        </div>
+        <section id="taskDetailPanel" class="task-detail-panel hidden"></section>
+      </div>`;
+  }
+  decorateTaskAndImplTabs();
+  upgradeTaskFormMarkup();
+  upgradeImplementationFormMarkup();
+  setupTaskFormKeyboard();
+  setupImplementationFormKeyboard();
+  if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
+    $('taskForm')?.classList.remove('hidden');
+    $('taskTitle')?.focus();
+  };
+  if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
+  if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
+  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
+    $('implForm')?.classList.remove('hidden');
+    $('implTitle')?.focus();
+  };
+  if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
+  if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
+  document.querySelectorAll('#tasksMenu [data-task-menu]').forEach((btn) => {
+    btn.onclick = () => {
+      state.taskMenu = btn.dataset.taskMenu;
+      renderTaskBoard();
+    };
+  });
+};
+
+loadTasks = async function () {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/tasks');
+  state.taskItems = r.items || [];
+  if (state.taskDetail?.id) {
+    state.taskDetail = state.taskItems.find((t) => t.id === state.taskDetail.id) || null;
+  }
+  renderTaskBoard();
+  renderTaskDetail();
+};
+
+addTaskFromForm = async function () {
+  const title = $('taskTitle')?.value.trim();
+  if (!title) return;
+  await api('/api/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title,
+      details: $('taskDetails')?.value.trim() || '',
+      due_at: $('taskDue')?.value || null,
+      share_actio: !!$('taskShareActio')?.checked,
+      creator_type: 'human',
+    }),
+  });
+  $('taskTitle').value = '';
+  $('taskDetails').value = '';
+  $('taskForm')?.classList.add('hidden');
+  await loadTasks();
+};
+
+window.addEventListener('resize', decorateTaskAndImplTabs);
+
 ensureMemoriaFeatureViews();
 loadPrivacySettings().catch(console.warn);
 
@@ -5145,7 +5710,7 @@ function localDateStr(d) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
+};
 function shiftWorklogDate(deltaDays) {
   const [y, m, d] = state.worklog.date.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
@@ -5381,14 +5946,36 @@ function renderWorklogBrowsing(r) {
       const bm = v.is_bookmarked ? '<span class="wl-source">★ BM</span>' : '';
       const dom = v.domain ? `<span class="wl-meta">${escapeHtml(v.domain)}</span>` : '';
       const cnt = v.visit_count > 1 ? `<span class="wl-meta">×${v.visit_count}</span>` : '';
+      const unregistered = v.domain && !v.catalog
+        ? `<button class="wl-reg-btn" data-domain="${escapeHtml(v.domain)}">登録</button>`
+        : '';
       return `<li>
         <div class="wl-row1">
           <span class="wl-time">${escapeHtml(t)}</span>
-          ${bm}${dom}${cnt}
+          ${bm}${dom}${cnt}${unregistered}
         </div>
         <div class="wl-content"><a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">${escapeHtml(v.title || v.url)}</a></div>
       </li>`;
     }).join('');
+    visitsList.querySelectorAll('.wl-reg-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const domain = btn.dataset.domain;
+        if (!domain) return;
+        const origText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '登録中…';
+        try {
+          await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
+          switchTab('domain');
+          await new Promise(r => setTimeout(r, 0));
+          loadDomainEntry(domain).catch(() => {});
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = origText;
+          alert(`登録に失敗しました: ${err.message}`);
+        }
+      });
+    });
   }
 
   // Revisits list
@@ -5413,12 +6000,35 @@ function renderWorklogBrowsing(r) {
 
   // Top domains
   const domList = $('wlDomainsList');
-  domList.innerHTML = domains.map(d => `
-    <li>
+  domList.innerHTML = domains.map(d => {
+    const unreg = d.catalog_status == null
+      ? `<button class="wl-reg-btn" data-domain="${escapeHtml(d.domain)}">未登録</button>`
+      : '';
+    return `<li>
       <span class="wl-dom-name">${escapeHtml(d.domain)}</span>
       <span class="wl-dom-count">${d.pages} ページ / ${d.visits} 回</span>
-    </li>
-  `).join('');
+      ${unreg}
+    </li>`;
+  }).join('');
+  domList.querySelectorAll('.wl-reg-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const domain = btn.dataset.domain;
+      if (!domain) return;
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '登録中…';
+      try {
+        await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
+        switchTab('domain');
+        await new Promise(r => setTimeout(r, 0));
+        loadDomainEntry(domain).catch(() => {});
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = origText;
+        alert(`登録に失敗しました: ${err.message}`);
+      }
+    });
+  });
 }
 
 async function loadWorklogDig(date) {

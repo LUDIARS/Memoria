@@ -151,6 +151,11 @@ function privacySettings() {
     meals_visible: settingBool(s, 'features.meals.visible', true),
     tasks_actio_share_enabled: settingBool(s, 'features.tasks.actio_share.enabled', true),
     actio_share_url: s['actio.share_url'] || '',
+    tasks_reminder_enabled: settingBool(s, 'features.tasks.reminder.enabled', true),
+    tasks_reminder_hour: Number(s['features.tasks.reminder.hour'] ?? 6),
+    tasks_reminder_minute: Number(s['features.tasks.reminder.minute'] ?? 0),
+    tasks_reminder_nuntius_enabled: settingBool(s, 'features.tasks.reminder.nuntius_enabled', false),
+    tasks_reminder_nuntius_url: s['features.tasks.reminder.nuntius_url'] || '',
   };
 }
 
@@ -231,9 +236,14 @@ function maybeQueueDomain(url) {
       return;
     }
     if (result.dropRow) {
-      // 404 / DNS error / non-2xx → drop the row entirely so it can be retried later.
-      deleteDomainCatalog(db, domain);
-      console.log(`[domain-catalog] dropped ${domain}: ${result.error}`);
+      // 404 / DNS error / non-2xx → keep the row as error (registered but unclassified).
+      setDomainCatalog(db, domain, {
+        title: null,
+        description: null,
+        status: 'error',
+        error: result.error ?? 'fetch failed',
+      });
+      console.log(`[domain-catalog] fetch failed ${domain}: ${result.error}`);
       return;
     }
     if (!result.ok) {
@@ -1697,6 +1707,10 @@ const SETUP_DOCS = {
     title: 'シェアするための設定',
     body: '# シェアするための設定\n\n1. 設定 -> データ / Hub を開きます。\n2. Memoria Hub の URL を追加し、Cernere で接続します。\n3. 公開したい Hub だけを有効にします。\n4. ブックマーク、ディグ、辞書、実装自慢は各画面のシェア操作から共有します。\n5. タスクを Actio にシェアする場合は、設定 -> プライバシー / 表示 で Actio シェアを許可し、Actio シェア URL を設定します。\n6. シェア前に内容を確認し、秘密情報や個人情報を含めないでください。',
   },
+  mcp: {
+    title: 'MCPサーバの設定方法',
+    body: '# MCPサーバの設定方法\n\n## 概要\nMemoria MCP サーバ (mcp-server/index.js) を使うと、Claude Desktop や Claude Code からブックマーク検索・タスク操作・辞書参照などを直接呼び出せます。\n\n## 依存インストール\n```\ncd mcp-server && npm install\n```\n\n## MEMORIA_URL の設定\n環境変数 MEMORIA_URL で Memoria サーバの URL を指定します。\n- デフォルト: http://localhost:5180\n- Tailscale 経由の場合: http://<tailscale-ip>:5180\n- Cloudflare Tunnel 経由の場合: https://<your-tunnel-host>\n\n## Claude Desktop の設定\n%APPDATA%\\Claude\\claude_desktop_config.json (Windows) または\n~/Library/Application Support/Claude/claude_desktop_config.json (Mac) に以下を追加:\n\n{\n  "mcpServers": {\n    "memoria": {\n      "command": "node",\n      "args": ["C:/path/to/Memoria/mcp-server/index.js"],\n      "env": { "MEMORIA_URL": "http://localhost:5180" }\n    }\n  }\n}\n\n## Claude Code の設定\n.claude/settings.json または ~/.claude/settings.json に以下を追加:\n\n{\n  "mcpServers": {\n    "memoria": {\n      "command": "node",\n      "args": ["/path/to/Memoria/mcp-server/index.js"],\n      "env": { "MEMORIA_URL": "http://localhost:5180" }\n    }\n  }\n}\n\n## 動作確認\nClaude に以下を試してください:\n- add_task でタスクを追加\n- list_tasks でタスク一覧を取得\n- search_bookmarks でブックマーク検索\n- list_diary_entries で日記一覧を取得',
+  },
 };
 
 app.get('/api/setup-docs', (c) => {
@@ -1720,10 +1734,15 @@ app.patch('/api/privacy/settings', async (c) => {
     ['meals_enabled', 'features.meals.enabled'],
     ['meals_visible', 'features.meals.visible'],
     ['tasks_actio_share_enabled', 'features.tasks.actio_share.enabled'],
+    ['tasks_reminder_enabled', 'features.tasks.reminder.enabled'],
+    ['tasks_reminder_nuntius_enabled', 'features.tasks.reminder.nuntius_enabled'],
   ]) {
     if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
   }
   if (typeof body.actio_share_url === 'string') patch['actio.share_url'] = body.actio_share_url.trim();
+  if (typeof body.tasks_reminder_hour === 'number') patch['features.tasks.reminder.hour'] = String(Math.max(0, Math.min(23, Math.floor(body.tasks_reminder_hour))));
+  if (typeof body.tasks_reminder_minute === 'number') patch['features.tasks.reminder.minute'] = String(Math.max(0, Math.min(59, Math.floor(body.tasks_reminder_minute))));
+  if (typeof body.tasks_reminder_nuntius_url === 'string') patch['features.tasks.reminder.nuntius_url'] = body.tasks_reminder_nuntius_url.trim();
   if (Object.keys(patch).length) setAppSettings(db, patch);
   return c.json({ settings: privacySettings() });
 });
@@ -1742,14 +1761,17 @@ app.get('/api/implementation-notes', (c) => {
 
 app.post('/api/implementation-notes', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const product = String(body.product || '').trim();
   const title = String(body.title || '').trim();
-  if (!product || !title) return c.json({ error: 'product and title required' }, 400);
+  if (!title) return c.json({ error: 'title required' }, 400);
+  const attachmentType = String(body.attachment_type || '').trim();
+  const attachmentValue = String(body.attachment_value || '').trim();
   const id = insertImplementationNote(db, {
-    product,
+    product: String(body.product || '').trim(),
     title,
     good_points: String(body.good_points || '').trim(),
     bad_points: String(body.bad_points || '').trim(),
+    attachment_type: attachmentType || null,
+    attachment_value: attachmentValue || null,
     shareable: !!body.shareable,
   });
   return c.json({ note: getImplementationNote(db, id) }, 201);
@@ -1760,7 +1782,7 @@ app.patch('/api/implementation-notes/:id', async (c) => {
   if (!getImplementationNote(db, id)) return c.json({ error: 'not found' }, 404);
   const body = await c.req.json().catch(() => ({}));
   const patch = {};
-  for (const k of ['product', 'title', 'good_points', 'bad_points']) {
+  for (const k of ['product', 'title', 'good_points', 'bad_points', 'attachment_type', 'attachment_value']) {
     if (typeof body[k] === 'string') patch[k] = body[k].trim();
   }
   if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
@@ -1791,6 +1813,17 @@ app.get('/api/tasks', (c) => {
   return c.json({ items: listTasks(db, { status, limit, offset }) });
 });
 
+function appendTaskDiaryLog(line) {
+  const date = formatLocalDate(new Date());
+  const row = getDiary(db, date);
+  const prev = String(row?.notes || '').trimEnd();
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const next = prev ? `${prev}\n${hh}:${mm} ${line}` : `${hh}:${mm} ${line}`;
+  upsertDiary(db, { date, notes: next, status: row?.status || 'pending' });
+}
+
 app.post('/api/tasks', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const title = String(body.title || '').trim();
@@ -1800,15 +1833,19 @@ app.post('/api/tasks', async (c) => {
     title,
     details: String(body.details || '').trim(),
     status,
+    creator_type: body.creator_type === 'ai' ? 'ai' : 'human',
     due_at: body.due_at || null,
     share_actio: !!body.share_actio,
   });
-  return c.json({ task: getTask(db, id) }, 201);
+  const created = getTask(db, id);
+  appendTaskDiaryLog(`タスク発行: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
+  return c.json({ task: created }, 201);
 });
 
 app.patch('/api/tasks/:id', async (c) => {
   const id = Number(c.req.param('id'));
-  if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
+  const before = getTask(db, id);
+  if (!before) return c.json({ error: 'not found' }, 404);
   const body = await c.req.json().catch(() => ({}));
   const patch = {};
   if (typeof body.title === 'string') patch.title = body.title.trim();
@@ -1816,8 +1853,22 @@ app.patch('/api/tasks/:id', async (c) => {
   if (['todo', 'doing', 'done'].includes(body.status)) patch.status = body.status;
   if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
   if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
+  if (before.creator_type === 'ai' && Object.hasOwn(patch, 'due_at') && patch.due_at !== before.due_at) {
+    patch.creator_type = 'human';
+  }
   updateTask(db, id, patch);
-  return c.json({ task: getTask(db, id) });
+  const after = getTask(db, id);
+  const completedNow = before.status !== 'done' && after.status === 'done';
+  if (completedNow) {
+    appendTaskDiaryLog(`タスク完了: ${after.title}`);
+  } else {
+    const changed = ['title', 'details', 'status', 'due_at', 'share_actio'].some((k) => Object.hasOwn(patch, k));
+    const isHumanChange = before.creator_type === 'human' || (before.creator_type === 'ai' && after.creator_type === 'human');
+    if (changed && isHumanChange) {
+      appendTaskDiaryLog(`タスク更新: ${after.title}${after.due_at ? ` (期日: ${after.due_at})` : ''}`);
+    }
+  }
+  return c.json({ task: after });
 });
 
 app.delete('/api/tasks/:id', (c) => {
@@ -2417,8 +2468,12 @@ app.post('/api/domains/:domain/regenerate', (c) => {
   insertDomainPending(db, d);
   domainCatalogQueue.enqueue(async () => {
     const result = await classifyDomain({ domain: d });
-    if (result.skip || result.dropRow) {
+    if (result.skip) {
       deleteDomainCatalog(db, d);
+      return;
+    }
+    if (result.dropRow) {
+      setDomainCatalog(db, d, { title: null, description: null, status: 'error', error: result.error ?? 'fetch failed' });
       return;
     }
     if (!result.ok) {
@@ -2484,8 +2539,12 @@ app.post('/api/domains/recatalog-all', async (c) => {
       insertDomainPending(db, domain);
       domainCatalogQueue.enqueue(async () => {
         const result = await classifyDomain({ domain });
-        if (result.skip || result.dropRow) {
+        if (result.skip) {
           deleteDomainCatalog(db, domain);
+          return;
+        }
+        if (result.dropRow) {
+          setDomainCatalog(db, domain, { title: null, description: null, status: 'error', error: result.error ?? 'fetch failed' });
           return;
         }
         if (!result.ok) {
@@ -3211,9 +3270,11 @@ app.get('/api/worklog/browsing', (c) => {
   const revisits = revisitedBookmarksForDate(db, date, { limit: revisitLimit });
   const stats = browsingDomainStatsForDate(db, date, { limit: domainLimit });
 
-  // Enrich visits with domain catalog so the UI can show site_name / kind
-  const domains = [...new Set(visits.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
-  const catalog = getDomainCatalogMap(db, domains);
+  // Enrich visits with domain catalog so the UI can show site_name / kind / status
+  const visitDomains = [...new Set(visits.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
+  const topDomainNames = (stats.top_domains || []).map(d => d.domain).filter(Boolean);
+  const allDomains = [...new Set([...visitDomains, ...topDomainNames])];
+  const catalog = getDomainCatalogMap(db, allDomains);
   const enrichedVisits = visits.map(v => {
     const dom = extractDomainFromUrl(v.url);
     const cat = dom ? catalog.get(dom) : null;
@@ -3222,15 +3283,20 @@ app.get('/api/worklog/browsing', (c) => {
       domain: dom,
       catalog: cat ? {
         site_name: cat.site_name, kind: cat.kind, description: cat.description,
+        status: cat.status,
       } : null,
     };
   });
+  const enrichedTopDomains = (stats.top_domains || []).map(d => ({
+    ...d,
+    catalog_status: catalog.get(d.domain)?.status ?? null,
+  }));
 
   return c.json({
     date,
     visits: enrichedVisits,
     revisits,
-    top_domains: stats.top_domains,
+    top_domains: enrichedTopDomains,
     total_pages: stats.total_pages,
     total_visits: stats.total_visits,
   });
@@ -4066,6 +4132,51 @@ wss.on('connection', (ws) => {
   // 接続直後の hello (UI 側で接続成立を確認しやすくする)
   try { ws.send(JSON.stringify({ type: 'hello', ts: Date.now() })); } catch {}
 });
+
+// Task reminder: 1分ごとに時刻チェック、当日初回のみ送信
+setInterval(async () => {
+  try {
+    const s = privacySettings();
+    if (!s.tasks_reminder_enabled) return;
+    const now = new Date();
+    if (now.getHours() !== s.tasks_reminder_hour || now.getMinutes() !== s.tasks_reminder_minute) return;
+    const today = now.toISOString().slice(0, 10);
+    const appS = getAppSettings(db);
+    if (appS['tasks.reminder.last_sent_date'] === today) return;
+
+    const tasks = [
+      ...listTasks(db, { status: 'todo', limit: 20 }),
+      ...listTasks(db, { status: 'doing', limit: 20 }),
+    ];
+    if (!tasks.length) {
+      setAppSettings(db, { 'tasks.reminder.last_sent_date': today });
+      return;
+    }
+
+    const todoCount = tasks.filter(t => t.status === 'todo').length;
+    const doingCount = tasks.filter(t => t.status === 'doing').length;
+    const preview = tasks.slice(0, 5).map(t => `・${t.title.slice(0, 50)}`).join('\n');
+    const more = tasks.length > 5 ? `\n…他 ${tasks.length - 5} 件` : '';
+    const pushBody = `todo: ${todoCount} 件, 進行中: ${doingCount} 件\n${preview}${more}`;
+
+    await sendPushToAll(db, { title: '📋 本日のタスクリマインド', body: pushBody })
+      .catch(e => console.error('[reminder] push failed:', e?.message));
+
+    if (s.tasks_reminder_nuntius_enabled && s.tasks_reminder_nuntius_url) {
+      await fetch(s.tasks_reminder_nuntius_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '📋 本日のタスクリマインド', body: pushBody }),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(e => console.error('[reminder] nuntius failed:', e?.message));
+    }
+
+    setAppSettings(db, { 'tasks.reminder.last_sent_date': today });
+    console.log(`[reminder] sent for ${today}: ${tasks.length} task(s)`);
+  } catch (e) {
+    console.error('[reminder] unexpected error:', e?.message);
+  }
+}, 60_000).unref?.();
 
 // keep-alive: 30s ごとに ping。 Cloudflare の idle timeout (100s 程度) を超えない。
 setInterval(() => {
