@@ -3927,11 +3927,42 @@ dialog.meal-modal[open] {
   gap: 8px;
   margin-bottom: 14px;
 }
+.simple-field {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.simple-field > span {
+  font-weight: 600;
+}
+.simple-check-row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  align-items: center;
+  width: fit-content;
+  font-size: 13px;
+}
+.simple-check-row input {
+  margin: 0;
+}
+.task-due-shortcuts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .simple-form input,
 .simple-form textarea,
 .setup-doc-body {
   width: 100%;
   box-sizing: border-box;
+}
+.simple-form textarea {
+  min-height: 120px;
+}
+#taskDetails {
+  min-height: 160px;
 }
 .simple-list {
   display: grid;

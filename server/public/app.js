@@ -4781,12 +4781,166 @@ function ensureMemoriaFeatureViews() {
     footer.parentNode.insertBefore(sec, footer);
   }
 
-  if ($('taskNewBtn')) $('taskNewBtn').onclick = () => $('taskForm')?.classList.remove('hidden');
+  upgradeTaskFormMarkup();
+  upgradeImplementationFormMarkup();
+  setupTaskFormKeyboard();
+  setupImplementationFormKeyboard();
+
+  if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
+    $('taskForm')?.classList.remove('hidden');
+    $('taskTitle')?.focus();
+  };
   if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
   if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
-  if ($('implNewBtn')) $('implNewBtn').onclick = () => $('implForm')?.classList.remove('hidden');
+  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
+    $('implForm')?.classList.remove('hidden');
+    $('implProduct')?.focus();
+  };
   if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
   if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
+}
+
+function localDatetimeValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function dueShortcutValue(kind) {
+  const d = new Date();
+  if (kind === 'tomorrow') d.setDate(d.getDate() + 1);
+  if (kind === 'saturday') {
+    const day = d.getDay();
+    const delta = day <= 6 ? 6 - day : 6;
+    d.setDate(d.getDate() + delta);
+  }
+  d.setHours(23, 59, 0, 0);
+  return localDatetimeValue(d);
+}
+
+function upgradeTaskFormMarkup() {
+  const form = $('taskForm');
+  if (!form || form.dataset.upgraded === '1') return;
+  form.dataset.upgraded = '1';
+  form.innerHTML = `
+    <label class="simple-field">
+      <span>タスク名</span>
+      <input id="taskTitle" type="text" placeholder="直近やること" />
+    </label>
+    <label class="simple-field">
+      <span>期日</span>
+      <input id="taskDue" type="datetime-local" />
+    </label>
+    <div class="task-due-shortcuts" aria-label="期日のショートカット">
+      <button type="button" class="ghost" data-task-due-shortcut="today">今日</button>
+      <button type="button" class="ghost" data-task-due-shortcut="tomorrow">明日</button>
+      <button type="button" class="ghost" data-task-due-shortcut="saturday">今週中(土曜締め)</button>
+    </div>
+    <label class="simple-check-row">
+      <input id="taskShareActio" type="checkbox" tabindex="-1" />
+      <span>Actio にシェアする</span>
+    </label>
+    <label class="simple-field">
+      <span>メモ</span>
+      <textarea id="taskDetails" rows="6" placeholder="タスク内容のメモ"></textarea>
+    </label>
+    <div class="simple-actions">
+      <button id="taskAddBtn">追加</button>
+      <button id="taskCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>`;
+  form.querySelectorAll('[data-task-due-shortcut]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $('taskDue').value = dueShortcutValue(btn.dataset.taskDueShortcut);
+      $('taskDetails')?.focus();
+    });
+  });
+}
+
+function setupTaskFormKeyboard() {
+  const title = $('taskTitle');
+  const due = $('taskDue');
+  const details = $('taskDetails');
+  const add = $('taskAddBtn');
+  if (title) title.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      due?.focus();
+    }
+  };
+  if (due) due.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      details?.focus();
+    }
+  };
+  if (details) details.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      add?.focus();
+    }
+  };
+}
+
+function upgradeImplementationFormMarkup() {
+  const form = $('implForm');
+  if (!form || form.dataset.upgraded === '1') return;
+  form.dataset.upgraded = '1';
+  form.innerHTML = `
+    <label class="simple-field">
+      <span>プロダクト名</span>
+      <input id="implProduct" type="text" placeholder="Memoria" />
+    </label>
+    <label class="simple-field">
+      <span>タイトル</span>
+      <input id="implTitle" type="text" placeholder="短いタイトル" />
+    </label>
+    <label class="simple-field">
+      <span>良かった点</span>
+      <textarea id="implGood" rows="5" placeholder="実装して良かった点"></textarea>
+    </label>
+    <label class="simple-field">
+      <span>悪かった点 / トレードオフ</span>
+      <textarea id="implBad" rows="4" placeholder="悪かった点、迷った点、次に直したい点"></textarea>
+    </label>
+    <label class="simple-check-row">
+      <input id="implShareable" type="checkbox" tabindex="-1" />
+      <span>シェア可能にする</span>
+    </label>
+    <div class="simple-actions">
+      <button id="implAddBtn">追加</button>
+      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>`;
+}
+
+function setupImplementationFormKeyboard() {
+  const product = $('implProduct');
+  const title = $('implTitle');
+  const good = $('implGood');
+  const bad = $('implBad');
+  const add = $('implAddBtn');
+  if (product) product.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      title?.focus();
+    }
+  };
+  if (title) title.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      good?.focus();
+    }
+  };
+  if (good) good.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      bad?.focus();
+    }
+  };
+  if (bad) bad.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      add?.focus();
+    }
+  };
 }
 
 async function loadPrivacySettings() {
