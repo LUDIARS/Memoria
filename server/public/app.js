@@ -4185,18 +4185,40 @@ async function openAiSettings() {
     const cfg = r.config;
     const tasks = r.tasks;
     const providers = r.providers;
+    const providerModels = r.provider_models || {};
+    const providerDefaults = r.provider_default_model || {};
     const optionsHtml = providers.map(p => `<option value="${p.key}">${escapeHtml(p.label)}</option>`).join('');
+    function modelOptionsFor(provider, current) {
+      const list = providerModels[provider] || [];
+      if (!list.length) return '<option value="">(なし)</option>';
+      const opts = [
+        `<option value="">(default: ${escapeHtml(providerDefaults[provider] || '')})</option>`,
+        ...list.map(m => `<option value="${escapeHtml(m.id)}" ${m.id === current ? 'selected' : ''}>${escapeHtml(m.label)}</option>`),
+      ];
+      return opts.join('');
+    }
     $('aiTaskRows').innerHTML = tasks.map(t => `
       <div class="ai-task-row">
         <label>${escapeHtml(t)}</label>
         <select data-task="${t}" class="ai-task-provider">${optionsHtml}</select>
-        <input data-task="${t}" class="ai-task-model" type="text" placeholder="モデル名 (任意)" />
+        <select data-task="${t}" class="ai-task-model"></select>
       </div>
     `).join('');
     for (const t of tasks) {
       const tCfg = cfg.tasks?.[t] || {};
-      $('aiTaskRows').querySelector(`select[data-task="${t}"]`).value = tCfg.provider || 'claude';
-      $('aiTaskRows').querySelector(`input[data-task="${t}"]`).value = tCfg.model || '';
+      const prov = tCfg.provider || 'claude';
+      const sel = $('aiTaskRows').querySelector(`select.ai-task-provider[data-task="${t}"]`);
+      const mSel = $('aiTaskRows').querySelector(`select.ai-task-model[data-task="${t}"]`);
+      sel.value = prov;
+      mSel.innerHTML = modelOptionsFor(prov, tCfg.model || '');
+      mSel.value = tCfg.model || '';
+      // provider 変更時に model dropdown を再構築
+      sel.addEventListener('change', () => {
+        const cur = mSel.value;
+        mSel.innerHTML = modelOptionsFor(sel.value, cur);
+        // 新しい provider に同じ model が無ければ default に
+        if (![...mSel.options].some(o => o.value === cur)) mSel.value = '';
+      });
     }
     $('aiBinClaude').value = cfg.bins?.claude || '';
     $('aiBinGemini').value = cfg.bins?.gemini || '';
@@ -4531,9 +4553,10 @@ async function saveAiSettings() {
   const tasks = {};
   document.querySelectorAll('.ai-task-row').forEach(row => {
     const sel = row.querySelector('.ai-task-provider');
-    const inp = row.querySelector('.ai-task-model');
+    const mSel = row.querySelector('.ai-task-model');
     const t = sel.dataset.task;
-    tasks[t] = { provider: sel.value, model: inp.value.trim() };
+    const modelVal = mSel.tagName === 'SELECT' ? mSel.value : (mSel.value || '').trim();
+    tasks[t] = { provider: sel.value, model: modelVal };
   });
   const body = {
     tasks,

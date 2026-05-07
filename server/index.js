@@ -73,6 +73,7 @@ import {
 } from './diary.js';
 import {
   TASKS as LLM_TASKS, PROVIDERS as LLM_PROVIDERS,
+  PROVIDER_MODELS as LLM_PROVIDER_MODELS, PROVIDER_DEFAULT_MODEL as LLM_PROVIDER_DEFAULT_MODEL,
   getLlmConfig, loadLlmConfigFromSettings, settingsPatchFromConfig,
 } from './llm.js';
 import { getAppSettings, setAppSettings } from './db.js';
@@ -2332,7 +2333,10 @@ app.get('/api/llm/config', (c) => {
       label: v.label,
       kind: v.kind,
       supportsTools: v.supportsTools,
+      supportsModel: v.supportsModel,
     })),
+    provider_models: LLM_PROVIDER_MODELS,
+    provider_default_model: LLM_PROVIDER_DEFAULT_MODEL,
     runtime: {
       // Read-only — these are fixed for the process lifetime. Exposing them
       // so the AI / Settings panel can show "Memoria is running on port X
