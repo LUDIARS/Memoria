@@ -10,7 +10,7 @@ const state = {
   search: '',
   searchDebounce: null,
   sort: 'created_desc',
-  tab: 'bookmarks',
+  tab: 'database',
   queue: { items: [], history: [] },
   visits: [],
   visitsSelected: new Set(),
@@ -471,16 +471,20 @@ async function refreshQueue() {
     if (totalDepth === 0) totalDepth = snap.depth || 0;
     const badge = $('queueBadge');
     const tabCount = $('tabQueueCount');
+    const wlBadge = $('wlQueueBadge');
     if (totalDepth > 0) {
       badge.classList.remove('hidden');
-      tabCount.classList.remove('hidden');
+      tabCount?.classList.remove('hidden');
+      wlBadge?.classList.remove('hidden');
       $('queueCount').textContent = totalDepth;
-      tabCount.textContent = totalDepth;
+      if (tabCount) tabCount.textContent = totalDepth;
+      if (wlBadge) wlBadge.textContent = totalDepth;
     } else {
       badge.classList.add('hidden');
-      tabCount.classList.add('hidden');
+      tabCount?.classList.add('hidden');
+      wlBadge?.classList.add('hidden');
     }
-    if (state.tab === 'queue') renderQueue();
+    if (state.tab === 'worklog' && state.worklog?.sub === 'queue') renderQueue();
     return totalDepth;
   } catch { return 0; }
 }
@@ -598,43 +602,56 @@ function jobLabel(item) {
   return kindHint + `seq #${item.seq}`;
 }
 
+// queue / tracks / external は worklog の sub-tab として畳み込む。
+// bookmarks / dict / domain / workplace は database タブの sub-tab として畳み込む。
+const WORKLOG_REDIRECT_TABS = new Set(['queue', 'tracks', 'external']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace']);
+
 function switchTab(tab) {
+  if (WORKLOG_REDIRECT_TABS.has(tab)) {
+    const sub = tab;
+    if (state.worklog) state.worklog.sub = sub;
+    switchTab('worklog');
+    switchWorklogSub(sub);
+    return;
+  }
+  if (DATABASE_REDIRECT_TABS.has(tab)) {
+    const sub = tab;
+    state.database = state.database || {};
+    state.database.sub = sub;
+    switchTab('database');
+    switchDatabaseSub(sub);
+    return;
+  }
   state.tab = tab;
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
   });
   const layout = document.querySelector('.layout');
   if (layout) layout.dataset.activeTab = tab;
-  $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
-  $('queueView').classList.toggle('hidden', tab !== 'queue');
+  $('databaseView')?.classList.toggle('hidden', tab !== 'database');
   $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
-  $('dictView').classList.toggle('hidden', tab !== 'dict');
-  $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
-  $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
-  $('workplaceView')?.classList.toggle('hidden', tab !== 'workplace');
-  if (tab === 'workplace') loadWorkLocations().catch(console.warn);
-  $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
-  if (tab === 'queue') renderQueue();
+  if (tab === 'database') {
+    // Re-show whichever DB sub was last picked.
+    const sub = state.database?.sub || 'bookmarks';
+    switchDatabaseSub(sub);
+  }
   if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
-  if (tab === 'dict') loadDictionary();
-  if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
-  if (tab === 'tracks') loadTracks();
   if (tab === 'meals') loadMeals();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
-  if (tab === 'external') loadExternalConfig();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   closeTabMoreMenu();
@@ -2673,6 +2690,11 @@ function renderDiaryDetail() {
     $('diaryHighlights').textContent = d.highlights || '(なし)';
   }
 
+  // GPS から推定した「仕事中」セッションを上に表示
+  renderDiaryWorkSessions(d.date).catch(e => console.error('[diary] work sessions render', e));
+  // 移動 / 滞在時間サマリ
+  renderDiaryGpsSummary(d.date).catch(e => console.error('[diary] gps summary render', e));
+
   // Hourly chart: live_metrics is computed fresh on every request and includes
   // page_visits as a fallback for events captured before visit_events existed,
   // so it's preferred over the snapshot stored at generation time.
@@ -4130,7 +4152,9 @@ function hideModal(panelId) {
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen);
+  const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
+  const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -4141,6 +4165,8 @@ function closeAllModals() {
   hideModal('taskEditorModal');
   hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
+  if ($('agentProjectEditor')) hideModal('agentProjectEditor');
+  if ($('agentRunModal')) hideModal('agentRunModal');
 }
 $('dictDetailClose')?.addEventListener('click', () => {
   state.dictDetail = null;
@@ -4168,7 +4194,7 @@ setInterval(async () => {
   const depth = await refreshQueue();
   await refreshVisitsBadge();
   if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
-  if (state.tab === 'queue') renderQueue();
+  if (state.tab === 'worklog' && state.worklog?.sub === 'queue') renderQueue();
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
@@ -4180,19 +4206,52 @@ async function openAiSettings() {
     const r = await api('/api/llm/config');
     const cfg = r.config;
     const tasks = r.tasks;
-    const providers = r.providers;
+    let providers = r.providers || [];
+    const providerModelsRaw = r.provider_models || {};
+    const providerModels = {};
+    for (const k of Object.keys(PROVIDER_MODELS_FALLBACK)) {
+      providerModels[k] = (providerModelsRaw[k] && providerModelsRaw[k].length) ? providerModelsRaw[k] : PROVIDER_MODELS_FALLBACK[k];
+    }
+    const providerDefaults = r.provider_default_model || {};
+    // サーバが旧版で 'algorithm' を providers に含めない場合は前置きで補完
+    if (!providers.find(p => p.key === 'algorithm')) {
+      providers = [{ key: 'algorithm', label: 'アルゴリズム (AI なし)', kind: 'none' }, ...providers];
+    }
+    // 同じ /api/llm/config をタスク AI 依頼モーダルでも引くので、共有キャッシュにも入れておく
+    _providerModelsCache = providerModels;
+    _providerDefaultsCache = providerDefaults;
     const optionsHtml = providers.map(p => `<option value="${p.key}">${escapeHtml(p.label)}</option>`).join('');
+    function modelOptionsFor(provider, current) {
+      const list = providerModels[provider] || [];
+      if (!list.length) return '<option value="">(なし)</option>';
+      const opts = [
+        `<option value="">(default: ${escapeHtml(providerDefaults[provider] || '')})</option>`,
+        ...list.map(m => `<option value="${escapeHtml(m.id)}" ${m.id === current ? 'selected' : ''}>${escapeHtml(m.label)}</option>`),
+      ];
+      return opts.join('');
+    }
     $('aiTaskRows').innerHTML = tasks.map(t => `
       <div class="ai-task-row">
         <label>${escapeHtml(t)}</label>
         <select data-task="${t}" class="ai-task-provider">${optionsHtml}</select>
-        <input data-task="${t}" class="ai-task-model" type="text" placeholder="モデル名 (任意)" />
+        <select data-task="${t}" class="ai-task-model"></select>
       </div>
     `).join('');
     for (const t of tasks) {
       const tCfg = cfg.tasks?.[t] || {};
-      $('aiTaskRows').querySelector(`select[data-task="${t}"]`).value = tCfg.provider || 'claude';
-      $('aiTaskRows').querySelector(`input[data-task="${t}"]`).value = tCfg.model || '';
+      const prov = tCfg.provider || 'claude';
+      const sel = $('aiTaskRows').querySelector(`select.ai-task-provider[data-task="${t}"]`);
+      const mSel = $('aiTaskRows').querySelector(`select.ai-task-model[data-task="${t}"]`);
+      sel.value = prov;
+      mSel.innerHTML = modelOptionsFor(prov, tCfg.model || '');
+      mSel.value = tCfg.model || '';
+      // provider 変更時に model dropdown を再構築
+      sel.addEventListener('change', () => {
+        const cur = mSel.value;
+        mSel.innerHTML = modelOptionsFor(sel.value, cur);
+        // 新しい provider に同じ model が無ければ default に
+        if (![...mSel.options].some(o => o.value === cur)) mSel.value = '';
+      });
     }
     $('aiBinClaude').value = cfg.bins?.claude || '';
     $('aiBinGemini').value = cfg.bins?.gemini || '';
@@ -4527,9 +4586,10 @@ async function saveAiSettings() {
   const tasks = {};
   document.querySelectorAll('.ai-task-row').forEach(row => {
     const sel = row.querySelector('.ai-task-provider');
-    const inp = row.querySelector('.ai-task-model');
+    const mSel = row.querySelector('.ai-task-model');
     const t = sel.dataset.task;
-    tasks[t] = { provider: sel.value, model: inp.value.trim() };
+    const modelVal = mSel.tagName === 'SELECT' ? mSel.value : (mSel.value || '').trim();
+    tasks[t] = { provider: sel.value, model: modelVal };
   });
   const body = {
     tasks,
@@ -4630,6 +4690,7 @@ document.addEventListener('click', (ev) => {
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
+  if (stab === 'agent-projects') loadAgentProjects().catch(console.warn);
   panel.scrollTop = 0;
 });
 
@@ -4704,9 +4765,8 @@ function ensureMemoriaFeatureViews() {
   const tabs = document.querySelector('.tabs-scroll');
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
     for (const spec of [
-      ['tasks', 'タスク'],
-      ['impl', '実装自慢'],
-      ['workplace', '作業場所'],
+      ['tasks', '📝 タスク'],
+      ['impl', '✨ 実装自慢'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -4840,6 +4900,7 @@ function ensureMemoriaFeatureViews() {
     for (const spec of [
       ['privacy', 'プライバシー / 表示'],
       ['setup', 'セットアップ手順'],
+      ['agent-projects', 'AI 実装プロジェクト'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -4878,10 +4939,16 @@ function ensureMemoriaFeatureViews() {
       <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
       <label class="check-inline"><input id="workplaceGeoEnabled" type="checkbox" /> GPS で現在地を取得して作業場所をマッチする</label>
       <label class="check-inline"><input id="workplaceAutoShareEnabled" type="checkbox" /> 作業場所が切り替わったとき Hub に共有する (オプトイン)</label>
-      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径:
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径 (作業場所判定 / 1 日の作業セッション検出):
         <input id="workplaceMatchRadiusM" type="number" min="20" max="2000" step="10" style="width:80px" />
         m
       </label>
+      <p class="diary-settings-help" style="margin-top:6px">
+        OwnTracks の locator displacement (移動 N m ごとに送信) と GPS の精度を考慮した距離。
+        既定 50m。 OwnTracks 側を 50m に設定しているならここも 50-100m が目安。
+        屋内ビル (室内 GPS オフセット) で取りこぼす場合は 100-200m に上げてください。
+        この半径を超えた点で「離脱」と判定し、 セッションがそこで終了します。
+      </p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
@@ -4894,6 +4961,47 @@ function ensureMemoriaFeatureViews() {
       <h4>セットアップ手順</h4>
       <div id="setupDocsList" class="setup-docs-list"></div>
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+  if (footer && !$('agentProjectsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'agentProjectsBody';
+    sec.className = 'settings-tab-body hidden';
+    sec.dataset.stab = 'agent-projects';
+    sec.innerHTML = `
+      <h4>AI 実装プロジェクト</h4>
+      <p class="diary-settings-help">タスクに「🤖 AI実装」を依頼するときに使うプロジェクト一覧です。プロジェクトごとにルール・パス・既定エージェントを登録します。</p>
+      <div id="agentProjectsList" class="simple-list"></div>
+      <div class="simple-actions"><button id="agentProjectAddBtn" type="button">+ プロジェクト追加</button></div>
+      <section id="agentProjectEditor" class="dict-detail modal-panel hidden foundation-form">
+        <button type="button" class="modal-close" id="agentProjectEditorClose" aria-label="close">×</button>
+        <h3 id="agentProjectEditorHeading">プロジェクトを追加</h3>
+        <input type="hidden" id="agentProjectEditorId" />
+        <label class="simple-field">
+          <span>名前</span>
+          <input id="agentProjectEditorName" type="text" placeholder="例: Memoria" />
+        </label>
+        <label class="simple-field">
+          <span>パス (絶対パス)</span>
+          <input id="agentProjectEditorPath" type="text" placeholder="例: E:\\Document\\Ars\\Memoria" />
+        </label>
+        <label class="simple-field">
+          <span>既定エージェント</span>
+          <select id="agentProjectEditorAgent">
+            <option value="claude_code">Claude Code</option>
+            <option value="codex">Codex CLI</option>
+            <option value="gemini">Gemini CLI</option>
+          </select>
+        </label>
+        <label class="simple-field">
+          <span>ルール (Markdown)</span>
+          <textarea id="agentProjectEditorRules" rows="14" placeholder="技術スタック・規約・Do/Don't・完了条件 など。AI 実装時にプロンプトの先頭に貼られます。"></textarea>
+        </label>
+        <div class="simple-actions">
+          <button id="agentProjectEditorSaveBtn">保存</button>
+          <button id="agentProjectEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+        </div>
+      </section>`;
     footer.parentNode.insertBefore(sec, footer);
   }
 
@@ -5099,7 +5207,7 @@ async function loadPrivacySettings() {
   if ($('mcpAutostartEnabled')) $('mcpAutostartEnabled').checked = !!s.mcp_autostart_enabled;
   if ($('workplaceGeoEnabled')) $('workplaceGeoEnabled').checked = !!s.workplace_geo_enabled;
   if ($('workplaceAutoShareEnabled')) $('workplaceAutoShareEnabled').checked = !!s.workplace_auto_share_enabled;
-  if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 150;
+  if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 50;
   configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
@@ -5143,7 +5251,7 @@ function applyFeatureVisibility(s) {
   const mealsTab = document.querySelector('.tab[data-tab="meals"]');
   if (tracksTab) tracksTab.hidden = s.tracks_visible === false;
   if (mealsTab) mealsTab.hidden = s.meals_visible === false;
-  if (state.tab === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
+  if (state.tab === 'worklog' && state.worklog?.sub === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
   if (state.tab === 'meals' && s.meals_visible === false) switchTab('bookmarks');
   reflowTabsForViewport();
 }
@@ -5553,6 +5661,7 @@ renderDomainDetail = function () {
 
 state.taskMenu = 'todo';
 state.taskItems = [];
+state.taskCategoryFilter = null;
 state.taskDetail = null;
 
 function taskDatePartition(task) {
@@ -5572,8 +5681,17 @@ function formatTaskDue(dueAt) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 1 タスク複数カテゴリ: tasks.category は "tag1, tag2" のような文字列。
+// 空白を trim、 重複排除、 空文字を除く。
+function parseTaskCategories(s) {
+  if (!s) return [];
+  return [...new Set(String(s).split(',').map(x => x.trim()).filter(Boolean))];
+}
+
 function taskCardHtml(t) {
   const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
+  const cats = parseTaskCategories(t.category);
+  const catBadges = cats.map(c => `<span class="task-category">${escapeHtml(c)}</span>`).join('');
   const doneBtn = t.status === 'done'
     ? '<button class="ghost" disabled>Done</button>'
     : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
@@ -5581,12 +5699,13 @@ function taskCardHtml(t) {
     <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
         <strong>${escapeHtml(t.title)}</strong>
-        ${aiBadge}
+        ${aiBadge}${catBadges}
       </div>
       <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
       <p>${escapeHtml(t.details || '')}</p>
       <div class="simple-actions">
         ${doneBtn}
+        <button class="ghost" data-task-agent="${t.id}">🤖 AI実装</button>
         <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
         <button class="danger" data-task-delete="${t.id}">削除</button>
       </div>
@@ -5696,6 +5815,345 @@ function openWorkplaceEditor(w = null) {
 
 function closeWorkplaceEditor() {
   hideModal('workplaceEditorModal');
+}
+
+// ── Agent projects (AI 実装プロジェクト) ───────────────────────────────────
+
+let _agentProjectsCache = [];
+
+async function loadAgentProjects() {
+  const list = $('agentProjectsList');
+  if (!list) return;
+  try {
+    const r = await api('/api/agent-projects');
+    _agentProjectsCache = r.items || [];
+  } catch (e) {
+    list.innerHTML = `<div class="queue-empty">読み込み失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!_agentProjectsCache.length) {
+    list.innerHTML = '<div class="queue-empty">プロジェクトがまだ登録されていません。「+ プロジェクト追加」から登録してください。</div>';
+  } else {
+    list.innerHTML = _agentProjectsCache.map(p => `
+      <div class="simple-item" data-id="${p.id}" data-agent-project-open="${p.id}">
+        <div class="simple-item-head">
+          <strong>${escapeHtml(p.name)}</strong>
+          <span class="muted">${escapeHtml(p.default_agent || 'claude_code')}</span>
+        </div>
+        <div class="muted" style="font-family:ui-monospace,monospace;font-size:11px">${escapeHtml(p.path)}</div>
+        <div class="simple-actions">
+          <button class="ghost" data-agent-project-edit="${p.id}">編集</button>
+          <button class="danger" data-agent-project-delete="${p.id}">削除</button>
+        </div>
+      </div>`).join('');
+  }
+  list.querySelectorAll('[data-agent-project-edit]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const p = _agentProjectsCache.find(x => x.id === Number(btn.dataset.agentProjectEdit));
+      if (p) openAgentProjectEditor(p);
+    });
+  });
+  list.querySelectorAll('[data-agent-project-delete]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('このプロジェクトを削除しますか?')) return;
+      await api(`/api/agent-projects/${btn.dataset.agentProjectDelete}`, { method: 'DELETE' });
+      loadAgentProjects();
+    });
+  });
+}
+
+function openAgentProjectEditor(p = null) {
+  const isEdit = !!p;
+  if (!$('agentProjectEditor')) return;
+  $('agentProjectEditorHeading').textContent = isEdit ? 'プロジェクトを変更' : 'プロジェクトを追加';
+  $('agentProjectEditorId').value = p?.id ? String(p.id) : '';
+  $('agentProjectEditorName').value = p?.name || '';
+  $('agentProjectEditorPath').value = p?.path || '';
+  $('agentProjectEditorAgent').value = p?.default_agent || 'claude_code';
+  $('agentProjectEditorRules').value = p?.rules || '';
+  showModal('agentProjectEditor');
+  $('agentProjectEditorName').focus();
+}
+
+function closeAgentProjectEditor() { hideModal('agentProjectEditor'); }
+
+async function saveAgentProjectFromForm() {
+  const name = $('agentProjectEditorName')?.value.trim();
+  const path = $('agentProjectEditorPath')?.value.trim();
+  if (!name) return alert('名前を入力してください');
+  if (!path) return alert('パスを入力してください');
+  const editId = Number($('agentProjectEditorId')?.value || 0);
+  const payload = {
+    name, path,
+    default_agent: $('agentProjectEditorAgent')?.value || 'claude_code',
+    rules: $('agentProjectEditorRules')?.value || '',
+  };
+  try {
+    if (editId) {
+      await api(`/api/agent-projects/${editId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api('/api/agent-projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    closeAgentProjectEditor();
+    loadAgentProjects();
+  } catch (e) {
+    alert(`保存失敗: ${e.message}`);
+  }
+}
+
+// ── Agent run modal (AI 実装依頼) ──────────────────────────────────────────
+
+let _agentRunCurrentTask = null;
+let _agentRunPollTimer = null;
+
+function ensureAgentRunModal() {
+  if ($('agentRunModal')) return;
+  const modal = document.createElement('section');
+  modal.id = 'agentRunModal';
+  modal.className = 'dict-detail modal-panel hidden foundation-form';
+  modal.innerHTML = `
+    <button type="button" class="modal-close" id="agentRunClose" aria-label="close">×</button>
+    <h3 id="agentRunHeading">🤖 AI に実装を依頼</h3>
+    <div id="agentRunTaskInfo" class="muted" style="margin-bottom:8px"></div>
+    <label class="simple-field">
+      <span>エージェント</span>
+      <select id="agentRunAgent">
+        <option value="claude_code">Claude Code</option>
+        <option value="codex">Codex CLI</option>
+        <option value="gemini">Gemini CLI</option>
+      </select>
+    </label>
+    <label class="simple-field">
+      <span>モデル</span>
+      <select id="agentRunModel"></select>
+    </label>
+    <div id="agentRunProjectInfo" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
+    <div class="simple-actions">
+      <button id="agentRunStartBtn">▶ 実装を開始</button>
+      <button id="agentRunCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>
+    <h4 style="margin-top:16px">実行履歴</h4>
+    <div id="agentRunHistory" class="simple-list" style="max-height:180px;overflow-y:auto"></div>
+    <h4 style="margin-top:16px">ログ</h4>
+    <div id="agentRunLogStatus" class="muted" style="font-size:11px"></div>
+    <pre id="agentRunLog" class="setup-doc-body" style="max-height:280px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre>
+    <div class="simple-actions">
+      <button id="agentRunRefreshBtn" type="button" class="ghost">ログ更新</button>
+      <button id="agentRunCancelRunBtn" type="button" class="danger" hidden>実行をキャンセル</button>
+    </div>`;
+  document.body.appendChild(modal);
+  $('agentRunClose').onclick = closeAgentRunModal;
+  $('agentRunCancelBtn').onclick = closeAgentRunModal;
+  $('agentRunStartBtn').onclick = startAgentRunFromModal;
+  $('agentRunRefreshBtn').onclick = () => {
+    const id = Number($('agentRunLog').dataset.runId || 0);
+    if (id) refreshAgentRunLog(id);
+  };
+  $('agentRunCancelRunBtn').onclick = async () => {
+    const id = Number($('agentRunLog').dataset.runId || 0);
+    if (!id) return;
+    if (!confirm('実行中のエージェントを停止しますか?')) return;
+    try { await api(`/api/agent-runs/${id}/cancel`, { method: 'POST' }); }
+    catch (e) { alert(e.message); }
+    refreshAgentRunLog(id);
+  };
+}
+
+// 設定画面とタスク AI 依頼でモデル一覧を共有するためのキャッシュ。
+// サーバの `/api/llm/config` (server/llm.js の PROVIDER_MODELS / PROVIDER_DEFAULT_MODEL)
+// が単一の出所。サーバが旧バージョンで provider_models を返さない場合のフォールバックも保持。
+const PROVIDER_MODELS_FALLBACK = {
+  algorithm: [],
+  claude: [
+    { id: 'sonnet', label: 'Sonnet 4.6 (default)' },
+    { id: 'haiku',  label: 'Haiku 4.5 (fast)' },
+    { id: 'opus',   label: 'Opus 4.7' },
+    { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)' },
+  ],
+  codex: [
+    { id: '5.3-codex',   label: '5.3-codex (default)' },
+    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
+    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
+  ],
+  openai: [
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini (default)' },
+    { id: 'gpt-4o',      label: 'GPT-4o' },
+  ],
+};
+let _providerModelsCache = null;
+let _providerDefaultsCache = null;
+async function ensureProviderModels() {
+  if (_providerModelsCache) return _providerModelsCache;
+  try {
+    const r = await api('/api/llm/config');
+    const fromServer = r.provider_models || {};
+    // サーバが provider_models を返さない (旧版) 場合は fallback を使用。
+    const merged = {};
+    for (const k of Object.keys(PROVIDER_MODELS_FALLBACK)) {
+      merged[k] = (fromServer[k] && fromServer[k].length) ? fromServer[k] : PROVIDER_MODELS_FALLBACK[k];
+    }
+    _providerModelsCache = merged;
+    _providerDefaultsCache = r.provider_default_model || {};
+  } catch {
+    _providerModelsCache = { ...PROVIDER_MODELS_FALLBACK };
+    _providerDefaultsCache = {};
+  }
+  return _providerModelsCache;
+}
+function invalidateProviderModelsCache() {
+  _providerModelsCache = null;
+  _providerDefaultsCache = null;
+}
+
+// 実装エージェント名 → llm provider key のマッピング。
+// 設定画面と AI 依頼モーダルで同じモデルリストを引けるようにする。
+const AGENT_TO_PROVIDER = {
+  claude_code: 'claude',
+  codex:       'codex',
+  gemini:      'gemini',
+};
+
+async function refreshAgentModelDropdown() {
+  const agent = $('agentRunAgent')?.value || 'claude_code';
+  const sel = $('agentRunModel');
+  if (!sel) return;
+  await ensureProviderModels();
+  const provider = AGENT_TO_PROVIDER[agent] || 'claude';
+  const models = (_providerModelsCache && _providerModelsCache[provider]) || [];
+  const cur = sel.value;
+  sel.innerHTML = models.map(m =>
+    `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label)}</option>`
+  ).join('');
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+
+// 単一プロジェクト前提: 登録された最初のプロジェクト (created_at ASC) を自動選択。
+// 編集は設定 → AI 実装プロジェクト から。
+let _agentRunDefaultProject = null;
+async function openAgentRunModal(task) {
+  ensureAgentRunModal();
+  _agentRunCurrentTask = task;
+  $('agentRunTaskInfo').textContent = `タスク: ${task.title}`;
+  // load default project (silently)
+  try {
+    const r = await api('/api/agent-projects');
+    const items = r.items || [];
+    if (!items.length) {
+      _agentRunDefaultProject = null;
+      $('agentRunProjectInfo').textContent = '⚠ プロジェクト未登録 — 設定 → AI 実装プロジェクトから登録してください';
+      $('agentRunStartBtn').disabled = true;
+    } else {
+      _agentRunDefaultProject = items[0];
+      $('agentRunProjectInfo').textContent = `実行ディレクトリ: ${_agentRunDefaultProject.name} (${_agentRunDefaultProject.path})`;
+      $('agentRunStartBtn').disabled = false;
+      if (_agentRunDefaultProject.default_agent) {
+        $('agentRunAgent').value = _agentRunDefaultProject.default_agent;
+      }
+    }
+  } catch (e) {
+    $('agentRunProjectInfo').textContent = `プロジェクト取得失敗: ${e.message}`;
+  }
+  await refreshAgentModelDropdown();
+  $('agentRunAgent').onchange = () => { refreshAgentModelDropdown().catch(() => {}); };
+  // Load run history.
+  await refreshAgentRunHistory(task.id);
+  $('agentRunLog').textContent = '';
+  $('agentRunLog').dataset.runId = '';
+  $('agentRunLogStatus').textContent = '';
+  $('agentRunCancelRunBtn').hidden = true;
+  showModal('agentRunModal');
+}
+
+function closeAgentRunModal() {
+  hideModal('agentRunModal');
+  if (_agentRunPollTimer) { clearInterval(_agentRunPollTimer); _agentRunPollTimer = null; }
+}
+
+async function refreshAgentRunHistory(taskId) {
+  try {
+    const r = await api(`/api/agent-runs?task_id=${encodeURIComponent(taskId)}&limit=20`);
+    const items = r.items || [];
+    const el = $('agentRunHistory');
+    if (!items.length) { el.innerHTML = '<div class="queue-empty">履歴なし</div>'; return; }
+    el.innerHTML = items.map(run => {
+      const at = (run.started_at || '').replace('T', ' ').slice(0, 19);
+      const status = escapeHtml(run.status);
+      const exit = run.exit_code != null ? ` (exit ${run.exit_code})` : '';
+      const model = run.model ? `:${escapeHtml(run.model)}` : '';
+      return `<div class="simple-item" data-agent-run-open="${run.id}">
+        <div class="simple-item-head">
+          <strong>#${run.id} ${escapeHtml(run.agent)}${model}</strong>
+          <span class="muted">${at}</span>
+        </div>
+        <div class="muted">${status}${exit}</div>
+        ${run.summary ? `<div style="font-size:11px">${escapeHtml(run.summary).slice(0, 200)}</div>` : ''}
+      </div>`;
+    }).join('');
+    el.querySelectorAll('[data-agent-run-open]').forEach(it => {
+      it.addEventListener('click', () => refreshAgentRunLog(Number(it.dataset.agentRunOpen)));
+    });
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+async function refreshAgentRunLog(runId) {
+  try {
+    const r = await api(`/api/agent-runs/${runId}/log?tail=131072`);
+    $('agentRunLog').textContent = r.log || '(ログなし)';
+    $('agentRunLog').dataset.runId = String(runId);
+    const status = r.run?.status || 'unknown';
+    const at = (r.run?.started_at || '').replace('T', ' ').slice(0, 19);
+    const exit = r.run?.exit_code != null ? ` (exit ${r.run.exit_code})` : '';
+    $('agentRunLogStatus').textContent = `#${runId} · ${status}${exit} · started ${at} · ${r.running ? '実行中' : '停止'}`;
+    $('agentRunCancelRunBtn').hidden = !r.running;
+    if (_agentRunPollTimer) { clearInterval(_agentRunPollTimer); _agentRunPollTimer = null; }
+    if (r.running) {
+      _agentRunPollTimer = setInterval(() => refreshAgentRunLog(runId), 3000);
+    }
+    // tail-like behaviour: scroll to bottom
+    const pre = $('agentRunLog');
+    pre.scrollTop = pre.scrollHeight;
+  } catch (e) {
+    $('agentRunLogStatus').textContent = `ログ取得失敗: ${e.message}`;
+  }
+}
+
+async function startAgentRunFromModal() {
+  if (!_agentRunCurrentTask) return;
+  const projectId = Number(_agentRunDefaultProject?.id || 0);
+  const agent = $('agentRunAgent')?.value || 'claude_code';
+  const model = $('agentRunModel')?.value || '';
+  if (!projectId) return alert('プロジェクトが未登録です。設定 → AI 実装プロジェクトから登録してください');
+  $('agentRunStartBtn').disabled = true;
+  $('agentRunStartBtn').textContent = '起動中…';
+  try {
+    const r = await api(`/api/tasks/${_agentRunCurrentTask.id}/agent-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, agent, model }),
+    });
+    await refreshAgentRunHistory(_agentRunCurrentTask.id);
+    if (r.run?.id) refreshAgentRunLog(r.run.id);
+  } catch (e) {
+    alert(`起動失敗: ${e.message}`);
+  } finally {
+    $('agentRunStartBtn').disabled = false;
+    $('agentRunStartBtn').textContent = '▶ 実装を開始';
+  }
 }
 
 // ── GPS / Place API helpers ────────────────────────────────────────────────
@@ -5863,7 +6321,13 @@ function openTaskEditor(task = null) {
   $('taskEditorStatus').value = task?.status || 'todo';
   $('taskEditorDetails').value = task?.details || '';
   $('taskEditorShareActio').checked = !!task?.share_actio;
+  $('taskEditorCategory').value = task?.category || '';
   $('taskEditorTaskId').value = task?.id ? String(task.id) : '';
+  // populate category autocomplete
+  api('/api/tasks/categories').then(r => {
+    const dl = $('taskCategoryOptions');
+    if (dl) dl.innerHTML = (r.items || []).map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  }).catch(() => {});
   showModal('taskEditorModal');
   $('taskEditorTitle').focus();
 }
@@ -5891,6 +6355,83 @@ function closeImplEditor() {
   hideModal('implEditorModal');
 }
 
+function renderTaskCategoryMenu() {
+  const list = $('tasksCategoryList');
+  if (!list) return;
+  // Distinct categories from currently loaded tasks (each task may have many) + pre-fetched cache
+  const fromTasks = new Set();
+  for (const t of state.taskItems) {
+    for (const c of parseTaskCategories(t.category)) fromTasks.add(c);
+  }
+  const merged = new Set([...(_taskCategoriesCache || []), ...fromTasks]);
+  const cats = [...merged].sort((a, b) => a.localeCompare(b));
+  const counts = { __none__: 0 };
+  for (const t of state.taskItems) {
+    const cs = parseTaskCategories(t.category);
+    if (!cs.length) counts.__none__ += 1;
+    for (const c of cs) counts[c] = (counts[c] || 0) + 1;
+  }
+  const buttons = [
+    `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${state.taskItems.length}</span></button>`,
+    `<button type="button" data-task-cat="__none__" class="${state.taskCategoryFilter === '__none__' ? 'active' : ''}">未分類 <span class="muted">${counts['__none__'] || 0}</span></button>`,
+  ];
+  for (const c of cats) {
+    buttons.push(
+      `<button type="button" data-task-cat="${escapeHtml(c)}" class="${state.taskCategoryFilter === c ? 'active' : ''}" title="${escapeHtml(c)}">
+        ${escapeHtml(c)} <span class="muted">${counts[c] || 0}</span>
+        <span class="task-cat-del" data-task-cat-del="${escapeHtml(c)}" title="登録から外す">✕</span>
+      </button>`
+    );
+  }
+  list.innerHTML = buttons.join('');
+  list.querySelectorAll('[data-task-cat]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-task-cat-del]')) return;
+      const v = btn.dataset.taskCat;
+      state.taskCategoryFilter = v === '' ? null : v;
+      renderTaskBoard();
+    });
+  });
+  list.querySelectorAll('[data-task-cat-del]').forEach(el => {
+    el.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const name = el.dataset.taskCatDel;
+      if (!confirm(`カテゴリ "${name}" を一覧から外しますか? (既存タスクの category 値は残ります)`)) return;
+      try {
+        await api(`/api/tasks/categories/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        await reloadTaskCategoriesCache();
+        if (state.taskCategoryFilter === name) state.taskCategoryFilter = null;
+        renderTaskBoard();
+      } catch (e) { alert(e.message); }
+    });
+  });
+}
+
+let _taskCategoriesCache = [];
+async function reloadTaskCategoriesCache() {
+  try {
+    const r = await api('/api/tasks/categories');
+    _taskCategoriesCache = r.items || [];
+  } catch { _taskCategoriesCache = []; }
+}
+
+async function addNewTaskCategoryFromMenu() {
+  const inp = $('tasksNewCatInput');
+  const name = (inp?.value || '').trim();
+  if (!name) return;
+  try {
+    await api('/api/tasks/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    inp.value = '';
+    await reloadTaskCategoriesCache();
+    state.taskCategoryFilter = name;
+    renderTaskBoard();
+  } catch (e) { alert(e.message); }
+}
+
 function renderTaskBoard() {
   const menu = $('tasksMenu');
   const middle = $('tasksDueNow');
@@ -5899,9 +6440,15 @@ function renderTaskBoard() {
   menu.querySelectorAll('[data-task-menu]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.taskMenu === state.taskMenu);
   });
-  const base = state.taskMenu === 'done'
+  renderTaskCategoryMenu();
+  const statusFiltered = state.taskMenu === 'done'
     ? state.taskItems.filter((t) => t.status === 'done')
     : state.taskItems.filter((t) => t.status !== 'done');
+  const base = state.taskCategoryFilter == null
+    ? statusFiltered
+    : (state.taskCategoryFilter === '__none__'
+        ? statusFiltered.filter((t) => parseTaskCategories(t.category).length === 0)
+        : statusFiltered.filter((t) => parseTaskCategories(t.category).includes(state.taskCategoryFilter)));
   const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
   const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
   middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
@@ -5936,6 +6483,14 @@ function renderTaskBoard() {
         alert(e.message);
       }
       await loadTasks();
+    });
+  });
+  document.querySelectorAll('[data-task-agent]').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const id = Number(btn.dataset.taskAgent);
+      const task = state.taskItems.find((t) => t.id === id);
+      if (task) openAgentRunModal(task);
     });
   });
   document.querySelectorAll('[data-task-delete]').forEach((btn) => {
@@ -5984,6 +6539,7 @@ function renderTaskBoard() {
 function decorateTaskAndImplTabs() {
   const taskTab = document.querySelector('.tab[data-tab="tasks"]');
   const implTab = document.querySelector('.tab[data-tab="impl"]');
+  const workplaceTab = document.querySelector('.tab[data-tab="workplace"]');
   if (taskTab) {
     const label = taskTab.querySelector('.tab-label');
     if (label) {
@@ -6004,6 +6560,7 @@ function decorateTaskAndImplTabs() {
     if (!isNarrowViewport()) implTab.style.order = '-19';
     else implTab.style.order = '';
   }
+  if (workplaceTab) workplaceTab.remove(); // workplace は database のサブタブに移行
 }
 
 const baseEnsureMemoriaFeatureViews = ensureMemoriaFeatureViews;
@@ -6021,8 +6578,18 @@ ensureMemoriaFeatureViews = function () {
         <div id="taskForm" class="simple-form hidden"></div>
         <div class="tasks-three-pane">
           <aside id="tasksMenu" class="tasks-menu">
-            <button type="button" data-task-menu="todo" class="active">TODO</button>
-            <button type="button" data-task-menu="done">完了済み</button>
+            <div class="tasks-menu-section">
+              <button type="button" data-task-menu="todo" class="active">TODO</button>
+              <button type="button" data-task-menu="done">完了済み</button>
+            </div>
+            <div class="tasks-menu-section">
+              <h4 class="tasks-menu-h">カテゴリ</h4>
+              <div id="tasksCategoryList"></div>
+              <div class="tasks-cat-add">
+                <input id="tasksNewCatInput" type="text" placeholder="新しいカテゴリ" />
+                <button type="button" id="tasksNewCatBtn">+ 追加</button>
+              </div>
+            </div>
             <div id="taskDoneDrop" class="task-done-drop" title="タスクをここにドロップで完了">
               完了
             </div>
@@ -6060,6 +6627,11 @@ ensureMemoriaFeatureViews = function () {
               <option value="doing">DOING</option>
               <option value="done">DONE</option>
             </select>
+          </label>
+          <label class="simple-field">
+            <span>カテゴリ (カンマ区切りで複数指定可)</span>
+            <input id="taskEditorCategory" type="text" list="taskCategoryOptions" placeholder="例: 開発, 学習" />
+            <datalist id="taskCategoryOptions"></datalist>
           </label>
           <label class="simple-check-row">
             <input id="taskEditorShareActio" type="checkbox" />
@@ -6141,6 +6713,10 @@ ensureMemoriaFeatureViews = function () {
   if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
   if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
   if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
+  if ($('agentProjectAddBtn')) $('agentProjectAddBtn').onclick = () => openAgentProjectEditor(null);
+  if ($('agentProjectEditorClose')) $('agentProjectEditorClose').onclick = closeAgentProjectEditor;
+  if ($('agentProjectEditorCancelBtn')) $('agentProjectEditorCancelBtn').onclick = closeAgentProjectEditor;
+  if ($('agentProjectEditorSaveBtn')) $('agentProjectEditorSaveBtn').onclick = saveAgentProjectFromForm;
   if ($('workplaceNewBtn')) $('workplaceNewBtn').onclick = () => openWorkplaceEditor(null);
   if ($('workplaceEditorClose')) $('workplaceEditorClose').onclick = closeWorkplaceEditor;
   if ($('workplaceEditorCancelBtn')) $('workplaceEditorCancelBtn').onclick = closeWorkplaceEditor;
@@ -6154,11 +6730,20 @@ ensureMemoriaFeatureViews = function () {
       renderTaskBoard();
     };
   });
+  if ($('tasksNewCatBtn')) $('tasksNewCatBtn').onclick = addNewTaskCategoryFromMenu;
+  if ($('tasksNewCatInput')) {
+    $('tasksNewCatInput').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); addNewTaskCategoryFromMenu(); }
+    });
+  }
 };
 
 loadTasks = async function () {
   ensureMemoriaFeatureViews();
-  const r = await api('/api/tasks');
+  const [r] = await Promise.all([
+    api('/api/tasks'),
+    reloadTaskCategoriesCache(),
+  ]);
   state.taskItems = r.items || [];
   if (state.taskDetail?.id) {
     state.taskDetail = state.taskItems.find((t) => t.id === state.taskDetail.id) || null;
@@ -6171,6 +6756,7 @@ addTaskFromForm = async function () {
   const title = $('taskEditorTitle')?.value.trim();
   if (!title) return;
   const editId = Number($('taskEditorTaskId')?.value || 0);
+  const category = $('taskEditorCategory')?.value.trim() || null;
   if (editId) {
     await api(`/api/tasks/${editId}`, {
       method: 'PATCH',
@@ -6181,6 +6767,7 @@ addTaskFromForm = async function () {
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
         share_actio: !!$('taskEditorShareActio')?.checked,
+        category,
       }),
     });
   } else {
@@ -6193,6 +6780,7 @@ addTaskFromForm = async function () {
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
         share_actio: !!$('taskEditorShareActio')?.checked,
+        category,
         creator_type: 'human',
       }),
     });
@@ -6241,7 +6829,54 @@ const WL_SUB_VIEWS = {
   codex: 'wlCodexView',
   browsing: 'wlBrowsingView',
   dig: 'wlDigView',
+  // 旧トップタブから移植してきた sub
+  queue: 'queueView',
+  tracks: 'tracksView',
+  external: 'externalView',
 };
+
+// データベースタブのサブビュー一覧
+const DB_SUB_VIEWS = {
+  bookmarks: 'bookmarksView',
+  dict: 'dictView',
+  domain: 'domainView',
+  workplace: 'workplaceView',
+};
+
+state.database = state.database || { sub: 'bookmarks' };
+
+function migrateDatabaseSubViews() {
+  const db = $('databaseView');
+  if (!db) return;
+  for (const id of Object.values(DB_SUB_VIEWS)) {
+    const v = $(id);
+    if (v && v.parentNode !== db) {
+      v.classList.add('hidden');
+      v.classList.add('wl-sub');
+      db.appendChild(v);
+    }
+  }
+}
+
+function switchDatabaseSub(sub) {
+  if (!DB_SUB_VIEWS[sub]) return;
+  state.database = state.database || {};
+  state.database.sub = sub;
+  document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.dbSub === sub);
+  });
+  for (const [key, viewId] of Object.entries(DB_SUB_VIEWS)) {
+    const view = $(viewId);
+    if (view) view.classList.toggle('hidden', key !== sub);
+  }
+  if (sub === 'bookmarks') load();
+  if (sub === 'dict') loadDictionary();
+  if (sub === 'domain') loadDomainCatalog();
+  if (sub === 'workplace') loadWorkLocations().catch(console.warn);
+}
+
+// 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -6249,6 +6884,25 @@ const WL_KIND_BY_SUB = {
   gemini: 'gemini_prompt',
   codex: 'codex_prompt',
 };
+
+// 起動時に top-level だった 4 view を worklogView に取り込む。
+function migrateWorklogSubViews() {
+  const wl = $('worklogView');
+  if (!wl) return;
+  for (const id of ['queueView', 'domainView', 'tracksView', 'externalView']) {
+    const v = $(id);
+    if (v && v.parentNode !== wl) {
+      v.classList.add('hidden');
+      v.classList.add('wl-sub');
+      wl.appendChild(v);
+    }
+  }
+}
+migrateWorklogSubViews();
+migrateDatabaseSubViews();
+document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
+  btn.addEventListener('click', () => switchDatabaseSub(btn.dataset.dbSub));
+});
 
 function switchWorklogSub(sub) {
   if (!WL_SUB_VIEWS[sub]) return;
@@ -6260,6 +6914,9 @@ function switchWorklogSub(sub) {
     const view = $(viewId);
     if (view) view.classList.toggle('hidden', key !== sub);
   }
+  // date-based でない sub のときは date toolbar / summary を隠す
+  const dateBar = document.querySelector('#worklogView .worklog-daynav');
+  if (dateBar) dateBar.classList.toggle('hidden', !WL_DATE_BASED.has(sub));
   loadWorklog();
 }
 
@@ -6270,6 +6927,10 @@ async function loadWorklog() {
   if (sub === 'schedule') return loadWorklogSchedule(date);
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
+  if (sub === 'queue') return renderQueue();
+  if (sub === 'domain') return loadDomainCatalog();
+  if (sub === 'tracks') return loadTracks();
+  if (sub === 'external') return loadExternalConfig();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
@@ -6938,7 +7599,7 @@ async function loadTracks() {
     });
     document.addEventListener('visibilitychange', () => {
       // タブに戻ってきたら最新の状態に再同期 + WS 再接続
-      if (document.visibilityState === 'visible' && state.tab === 'tracks') {
+      if (document.visibilityState === 'visible' && (state.tab === 'worklog' && state.worklog?.sub === 'tracks')) {
         renderTracksForCurrentDate();
         ensureLiveSocket();
       }
@@ -7037,7 +7698,7 @@ function scheduleLiveReconnect() {
   if (document.visibilityState !== 'visible') return;
   tracksState.wsReconnectTimer = setTimeout(() => {
     tracksState.wsReconnectTimer = null;
-    if (state.tab === 'tracks') ensureLiveSocket();
+    if ((state.tab === 'worklog' && state.worklog?.sub === 'tracks')) ensureLiveSocket();
   }, 3000);
 }
 
@@ -7385,29 +8046,198 @@ async function renderTracksForCurrentDate() {
     // live append のキャッシュ。 表示中の日付が「今日 (local)」なら使われる。
     tracksState.todayPoints = (date === todayLocalIso()) ? pts.slice() : [];
     updateTracksStatsLine(pts);
+    renderWorkSessions(date).catch(() => {});
   } catch (e) {
     console.error('[tracks] render failed', e);
     $('tracksStats').textContent = '取得失敗';
   }
 }
 
+function fmtHm(totalMin) {
+  if (!Number.isFinite(totalMin) || totalMin <= 0) return '0分';
+  const h = Math.floor(totalMin / 60);
+  const m = Math.round(totalMin - h * 60);
+  if (h === 0) return `${m}分`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+async function renderDiaryGpsSummary(date) {
+  const el = $('diaryGpsSummary');
+  if (!el) return;
+  let points = [];
+  let sessions = [];
+  let tallies = { home_minutes: 0, workplace_minutes: 0, by_workplace: {} };
+  try {
+    const [pr, sr] = await Promise.all([
+      api(`/api/locations?date=${encodeURIComponent(date)}`),
+      api(`/api/work-sessions?date=${encodeURIComponent(date)}`),
+    ]);
+    points = pr.points || [];
+    sessions = sr.items || [];
+    if (sr.tallies) tallies = sr.tallies;
+  } catch (err) {
+    console.error('[diary gps summary] fetch failed', err);
+    el.innerHTML = `<div class="muted" style="font-size:12px">GPS 情報の取得に失敗しました — 判断不能 (${escapeHtml(err.message || '')})</div>`;
+    return;
+  }
+  if (!points.length) {
+    el.innerHTML = '<div class="muted" style="font-size:12px">この日は GPS の記録がありません — 移動・滞在時間は判断不能</div>';
+    return;
+  }
+  // 区分別時間 (walk / transit / still)
+  const stats = classifyAll(points);
+  const walkMin = (stats.walkSec || 0) / 60;
+  const transitMin = (stats.transitSec || 0) / 60;
+  const stillMin = (stats.stillSec || 0) / 60;
+  const totalMoveMin = walkMin + transitMin;
+  const homeMin = tallies.home_minutes || 0;
+  const workMin = tallies.workplace_minutes || 0;
+  // 不明または停止: 全停止時間から自宅 + 作業場所の滞在時間を引いた残り
+  const unknownStillMin = Math.max(0, stillMin - homeMin - workMin);
+
+  // 作業場所別 (自宅以外) 内訳
+  const workPlaces = Object.entries(tallies.by_workplace || {})
+    .filter(([name]) => !(name && (name.includes('自宅') || /home/i.test(name))));
+  const workplaceDetail = workPlaces.length
+    ? workPlaces.sort((a, b) => b[1] - a[1])
+        .map(([name, min]) => `${escapeHtml(name)} ${fmtHm(min)}`).join(' / ')
+    : '';
+
+  // 移動手段の内訳
+  const moveDetail = (walkMin > 0 || transitMin > 0)
+    ? `🚶 ${fmtHm(walkMin)} / 🚃 ${fmtHm(transitMin)}`
+    : '';
+
+  el.innerHTML = `
+    <ul class="diary-gps-stats">
+      <li>
+        <span class="diary-gps-label">🚆 移動手段</span>
+        <strong>${fmtHm(totalMoveMin)}</strong>
+        ${moveDetail ? `<span class="muted diary-gps-detail">${moveDetail}</span>` : ''}
+      </li>
+      <li>
+        <span class="diary-gps-label">🏠 自宅滞在</span>
+        <strong>${fmtHm(homeMin)}</strong>
+      </li>
+      <li>
+        <span class="diary-gps-label">🏢 作業場所滞在</span>
+        <strong>${fmtHm(workMin)}</strong>
+        ${workplaceDetail ? `<span class="muted diary-gps-detail">${workplaceDetail}</span>` : ''}
+      </li>
+      <li>
+        <span class="diary-gps-label">⏸ 不明または停止</span>
+        <strong>${fmtHm(unknownStillMin)}</strong>
+      </li>
+    </ul>
+  `;
+}
+
+async function renderDiaryWorkSessions(date) {
+  const el = $('diaryWorkSessions');
+  if (!el) return;
+  let items = [];
+  try {
+    const r = await api(`/api/work-sessions?date=${encodeURIComponent(date)}`);
+    items = r.items || [];
+  } catch {
+    el.innerHTML = '<div class="muted" style="font-size:12px">作業セッションを取得できませんでした。</div>';
+    return;
+  }
+  if (!items.length) {
+    el.innerHTML = '<div class="muted" style="font-size:12px">この日は登録した作業場所での 1 時間以上の滞在が検出されませんでした。</div>';
+    return;
+  }
+  const totalWorkMin = items
+    .filter(s => s.is_working)
+    .reduce((acc, s) => acc + (s.duration_min || 0), 0);
+  const head = totalWorkMin > 0
+    ? `合計仕事中: ${(totalWorkMin / 60).toFixed(1)}h`
+    : 'GPS 上は作業場所滞在ありだが、 自宅 + 開発活動なしのため「仕事中」とは判定されず';
+  el.innerHTML = `
+    <div class="muted" style="font-size:12px;margin-bottom:6px">${head}</div>
+    <ul class="ws-list">${items.map(s => {
+      const start = (s.started_at || '').replace('T', ' ').slice(11, 16);
+      const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
+      const dur = s.duration_min >= 60 ? `${(s.duration_min / 60).toFixed(1)}h` : `${s.duration_min}分`;
+      const icon = s.is_home ? '🏠' : '🏢';
+      const placeLabel = s.is_home ? '自宅' : (s.workplace_name || '?');
+      const statusBadge = s.is_working
+        ? '<span class="ws-badge ws-working">仕事中</span>'
+        : '<span class="ws-badge ws-idle">休息</span>';
+      const acts = s.activity_counts || {};
+      const actSummary = Object.entries(acts).map(([k, n]) => `${k}:${n}`).join(' / ');
+      const actNote = s.is_home && actSummary
+        ? `<span class="muted" style="font-size:11px"> · ${escapeHtml(actSummary)}</span>` : '';
+      return `<li class="ws-item">
+        <span class="ws-time">${start}-${end} (${dur})</span>
+        <span class="ws-place">${icon} ${escapeHtml(placeLabel)}</span>
+        ${statusBadge}${actNote}
+      </li>`;
+    }).join('')}</ul>`;
+}
+
+async function renderWorkSessions(date) {
+  const el = $('tracksWorkSessions');
+  if (!el) return;
+  let items = [];
+  try {
+    const r = await api(`/api/work-sessions?date=${encodeURIComponent(date)}`);
+    items = r.items || [];
+  } catch (e) {
+    el.innerHTML = `<div class="muted" style="font-size:12px">作業セッション取得失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!items.length) {
+    el.innerHTML = '<div class="muted" style="font-size:12px">この日は登録した作業場所での 1 時間以上の滞在が検出されませんでした。</div>';
+    return;
+  }
+  el.innerHTML = `
+    <h4 style="margin:8px 0 4px">🛠 作業セッション (${items.length} 件)</h4>
+    <ul class="ws-list">${items.map(s => {
+      const start = (s.started_at || '').replace('T', ' ').slice(11, 16);
+      const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
+      const dur = s.duration_min >= 60
+        ? `${(s.duration_min / 60).toFixed(1)}h`
+        : `${s.duration_min}分`;
+      const icon = s.is_home ? '🏠' : '🏢';
+      const statusBadge = s.is_working
+        ? '<span class="ws-badge ws-working">仕事中</span>'
+        : '<span class="ws-badge ws-idle">休息</span>';
+      const acts = s.activity_counts || {};
+      const actSummary = Object.entries(acts)
+        .map(([k, n]) => `${k}:${n}`).join(' / ');
+      const actNote = s.is_home && actSummary
+        ? `<span class="muted" style="font-size:11px"> · ${escapeHtml(actSummary)}</span>` : '';
+      return `<li class="ws-item">
+        <span class="ws-time">${start}-${end} (${dur})</span>
+        <span class="ws-place">${icon} ${escapeHtml(s.workplace_name || '?')}</span>
+        ${statusBadge}${actNote}
+      </li>`;
+    }).join('')}</ul>`;
+}
+
 function updateTracksStatsLine(pts, { live = false } = {}) {
   const el = $('tracksStats');
   if (!el) return;
   if (!pts.length) { el.textContent = '点なし'; return; }
-  const w = tracksState.walkingStats || { walkMeters: 0, walkSec: 0, transitMeters: 0, transitSec: 0 };
+  const w = tracksState.walkingStats || { walkMeters: 0, walkSec: 0, transitMeters: 0, transitSec: 0, walkCapped: false };
   const walkKm = w.walkMeters / 1000;
   const walkMin = w.walkSec / 60;
   const transitKm = (w.transitMeters || 0) / 1000;
   const liveTag = live ? ' (live)' : '';
+  const cappedTag = w.walkCapped ? ' (20km上限)' : '';
   // 運動 = 徒歩のみ. 交通機関 (>5 km/h) は移動量として別立てで表示するが運動換算しない.
   el.textContent =
-    `${pts.length} 点 · 🚶 徒歩 ${walkKm.toFixed(2)} km / ${walkMin.toFixed(0)} 分 (運動) · 🚃 交通機関 ${transitKm.toFixed(2)} km${liveTag}`;
+    `${pts.length} 点 · 🚶 徒歩 ${walkKm.toFixed(2)} km${cappedTag} / ${walkMin.toFixed(0)} 分 (運動) · 🚃 交通機関 ${transitKm.toFixed(2)} km${liveTag}`;
 }
 
 // 徒歩判定 — 連続 2 点の速度が 1〜5 km/h なら walk と分類.
 const WALK_MIN_KMH = 1.0;
 const WALK_MAX_KMH = 5.0;
+// 1 日の徒歩(運動)累計上限. これ以上は GPS ジッタ / 誤検知の可能性が高いので
+// 累計を打ち切る (距離は cap、 区分は walk のまま色付けは維持).
+const WALK_DAILY_CAP_M = 20_000;
 
 /**
  * 連続点を tracksState.decimateMeters (default 2m) で間引く.
@@ -7456,12 +8286,25 @@ function classifyAll(points) {
   let walkMeters = 0, walkSec = 0;
   let transitMeters = 0, transitSec = 0;
   let stillMeters = 0, stillSec = 0;
+  let walkCapped = false;
   for (let i = 1; i < points.length; i++) {
     const seg = classifySegment(points[i-1], points[i]);
     cats[i] = seg.category;
     if (seg.category === 'walk') {
-      walkMeters += seg.meters;
-      walkSec += seg.dt;
+      // 1 日 20 km を超えた walk 区間は運動換算しない (transit に振り替え).
+      if (walkMeters + seg.meters > WALK_DAILY_CAP_M) {
+        const remain = Math.max(0, WALK_DAILY_CAP_M - walkMeters);
+        walkMeters += remain;
+        walkSec += seg.dt * (seg.meters > 0 ? remain / seg.meters : 0);
+        const overMeters = seg.meters - remain;
+        const overSec = seg.dt - seg.dt * (seg.meters > 0 ? remain / seg.meters : 0);
+        transitMeters += overMeters;
+        transitSec += overSec;
+        walkCapped = true;
+      } else {
+        walkMeters += seg.meters;
+        walkSec += seg.dt;
+      }
     } else if (seg.category === 'fast') {
       // 5 km/h 超 = 交通機関想定. 軌跡には出すが運動換算しない.
       transitMeters += seg.meters;
@@ -7471,7 +8314,7 @@ function classifyAll(points) {
       stillSec += seg.dt;
     }
   }
-  return { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec };
+  return { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec, walkCapped };
 }
 
 const CAT_COLORS = {
@@ -7502,7 +8345,7 @@ function drawTracks(points) {
   tracksState.lastDrawnKeptCount = points.length;
 
   // 徒歩判定 → 各点を色分けで打つ
-  const { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec } = classifyAll(points);
+  const { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec, walkCapped } = classifyAll(points);
 
   // 区間ごとに polyline を 1 本ずつ描画 (cats[i] = points[i-1] → points[i] の category).
   // 既定では「点のみ表示」 (tracksState.showPolyline=false) で線を描かない.
@@ -7556,6 +8399,7 @@ function drawTracks(points) {
   }
 
   // 始点 / 終点に大きい marker
+  const path = points.map(p => ({ lat: p.lat, lng: p.lon }));
   const start = path[0];
   const end = path[path.length - 1];
   tracksState.dotMarkers.push(new google.maps.Marker({
@@ -7578,7 +8422,7 @@ function drawTracks(points) {
   }
 
   // 区分別 stats を保持. 表示は renderTracksForCurrentDate / handleLivePoint が更新.
-  tracksState.walkingStats = { walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec };
+  tracksState.walkingStats = { walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec, walkCapped };
 
   if (path.length >= 2) {
     const b = new google.maps.LatLngBounds();

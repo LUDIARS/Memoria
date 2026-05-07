@@ -32,18 +32,17 @@ const TASK_DEFAULT_MODELS = {
 };
 
 export const PROVIDERS = {
+  algorithm: {
+    label: 'アルゴリズム (AI なし)',
+    kind: 'none',
+    supportsTools: false,
+    supportsModel: false,
+  },
   claude: {
     label: 'Claude CLI',
     kind: 'cli',
     defaultBin: 'claude',
     supportsTools: true,
-    supportsModel: true,
-  },
-  gemini: {
-    label: 'Gemini CLI',
-    kind: 'cli',
-    defaultBin: 'gemini',
-    supportsTools: false,
     supportsModel: true,
   },
   codex: {
@@ -54,12 +53,55 @@ export const PROVIDERS = {
     supportsModel: true,
     jsonOutput: true,
   },
+  gemini: {
+    label: 'Gemini CLI',
+    kind: 'cli',
+    defaultBin: 'gemini',
+    supportsTools: false,
+    supportsModel: true,
+  },
   openai: {
     label: 'OpenAI API',
     kind: 'api',
     supportsTools: false,
     supportsModel: true,
   },
+};
+
+// 各 provider で選べる主要モデル一覧。空文字 id = provider のデフォルトを使う。
+// 現行モデル (2026-05 時点) を網羅。新しいモデルが出たらここに追加すれば
+// UI のドロップダウンが自動で更新される。
+export const PROVIDER_MODELS = {
+  algorithm: [],
+  claude: [
+    { id: 'sonnet',                 label: 'Sonnet 4.6 (default)' },
+    { id: 'haiku',                  label: 'Haiku 4.5 (fast)' },
+    { id: 'opus',                   label: 'Opus 4.7' },
+    { id: 'claude-opus-4-7[1m]',    label: 'Opus 4.7 (1M context)' },
+    { id: 'claude-sonnet-4-6',      label: 'Sonnet 4.6 (full id)' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (full id)' },
+  ],
+  codex: [
+    { id: '5.3-codex',  label: '5.3-codex (default)' },
+    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
+    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
+  ],
+  openai: [
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini (default)' },
+    { id: 'gpt-4o',      label: 'GPT-4o' },
+    { id: 'gpt-5-mini',  label: 'GPT-5 mini' },
+  ],
+};
+
+// 各 provider の既定モデル ID (model 未指定時に runCli で渡す値)。
+export const PROVIDER_DEFAULT_MODEL = {
+  claude: 'sonnet',
+  codex:  '5.3-codex',
+  gemini: 'gemini-2.5-flash',
+  openai: 'gpt-4o-mini',
 };
 
 let cfg = {
@@ -136,16 +178,19 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }) {
   if (provider === 'openai' && !cfg.openai_api_key) provider = 'claude';
   const p = PROVIDERS[provider];
   if (!p) throw new Error(`unknown provider: ${provider}`);
+  // 'algorithm' provider = "AI なし" 指定。タスクごとに deterministic な
+  // 代替を持たせる責務は呼び出し側にあるので、ここでは空文字を返す。
+  if (p.kind === 'none') return '';
   if (p.kind === 'api') {
     return runOpenAi({
       apiKey: cfg.openai_api_key,
-      model: taskCfg.model || cfg.openai_model || 'gpt-4o-mini',
+      model: taskCfg.model || cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai,
       prompt, timeoutMs,
     });
   }
   // CLI providers
   const bin = cfg.bins[provider] || p.defaultBin;
-  const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || '';
+  const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || PROVIDER_DEFAULT_MODEL[provider] || '';
   const args = buildCliArgs({
     provider,
     model: modelToUse,
