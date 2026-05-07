@@ -4184,9 +4184,17 @@ async function openAiSettings() {
     const r = await api('/api/llm/config');
     const cfg = r.config;
     const tasks = r.tasks;
-    const providers = r.providers;
-    const providerModels = r.provider_models || {};
+    let providers = r.providers || [];
+    const providerModelsRaw = r.provider_models || {};
+    const providerModels = {};
+    for (const k of Object.keys(PROVIDER_MODELS_FALLBACK)) {
+      providerModels[k] = (providerModelsRaw[k] && providerModelsRaw[k].length) ? providerModelsRaw[k] : PROVIDER_MODELS_FALLBACK[k];
+    }
     const providerDefaults = r.provider_default_model || {};
+    // サーバが旧版で 'algorithm' を providers に含めない場合は前置きで補完
+    if (!providers.find(p => p.key === 'algorithm')) {
+      providers = [{ key: 'algorithm', label: 'アルゴリズム (AI なし)', kind: 'none' }, ...providers];
+    }
     // 同じ /api/llm/config をタスク AI 依頼モーダルでも引くので、共有キャッシュにも入れておく
     _providerModelsCache = providerModels;
     _providerDefaultsCache = providerDefaults;
@@ -5883,10 +5891,6 @@ function ensureAgentRunModal() {
     <h3 id="agentRunHeading">🤖 AI に実装を依頼</h3>
     <div id="agentRunTaskInfo" class="muted" style="margin-bottom:8px"></div>
     <label class="simple-field">
-      <span>プロジェクト</span>
-      <select id="agentRunProject"></select>
-    </label>
-    <label class="simple-field">
       <span>エージェント</span>
       <select id="agentRunAgent">
         <option value="claude_code">Claude Code</option>
@@ -5898,6 +5902,7 @@ function ensureAgentRunModal() {
       <span>モデル</span>
       <select id="agentRunModel"></select>
     </label>
+    <div id="agentRunProjectInfo" class="muted" style="font-size:11px;margin:-4px 0 8px"></div>
     <div class="simple-actions">
       <button id="agentRunStartBtn">▶ 実装を開始</button>
       <button id="agentRunCancelBtn" type="button" class="ghost">キャンセル</button>
@@ -5931,17 +5936,44 @@ function ensureAgentRunModal() {
 
 // 設定画面とタスク AI 依頼でモデル一覧を共有するためのキャッシュ。
 // サーバの `/api/llm/config` (server/llm.js の PROVIDER_MODELS / PROVIDER_DEFAULT_MODEL)
-// が単一の出所。
+// が単一の出所。サーバが旧バージョンで provider_models を返さない場合のフォールバックも保持。
+const PROVIDER_MODELS_FALLBACK = {
+  algorithm: [],
+  claude: [
+    { id: 'sonnet', label: 'Sonnet 4.6 (default)' },
+    { id: 'haiku',  label: 'Haiku 4.5 (fast)' },
+    { id: 'opus',   label: 'Opus 4.7' },
+    { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)' },
+  ],
+  codex: [
+    { id: '5.3-codex',   label: '5.3-codex (default)' },
+    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
+    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
+  ],
+  openai: [
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini (default)' },
+    { id: 'gpt-4o',      label: 'GPT-4o' },
+  ],
+};
 let _providerModelsCache = null;
 let _providerDefaultsCache = null;
 async function ensureProviderModels() {
   if (_providerModelsCache) return _providerModelsCache;
   try {
     const r = await api('/api/llm/config');
-    _providerModelsCache = r.provider_models || {};
+    const fromServer = r.provider_models || {};
+    // サーバが provider_models を返さない (旧版) 場合は fallback を使用。
+    const merged = {};
+    for (const k of Object.keys(PROVIDER_MODELS_FALLBACK)) {
+      merged[k] = (fromServer[k] && fromServer[k].length) ? fromServer[k] : PROVIDER_MODELS_FALLBACK[k];
+    }
+    _providerModelsCache = merged;
     _providerDefaultsCache = r.provider_default_model || {};
   } catch {
-    _providerModelsCache = {};
+    _providerModelsCache = { ...PROVIDER_MODELS_FALLBACK };
     _providerDefaultsCache = {};
   }
   return _providerModelsCache;
@@ -5973,34 +6005,31 @@ async function refreshAgentModelDropdown() {
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
 }
 
+// 単一プロジェクト前提: 登録された最初のプロジェクト (created_at ASC) を自動選択。
+// 編集は設定 → AI 実装プロジェクト から。
+let _agentRunDefaultProject = null;
 async function openAgentRunModal(task) {
   ensureAgentRunModal();
   _agentRunCurrentTask = task;
   $('agentRunTaskInfo').textContent = `タスク: ${task.title}`;
-  // load projects
+  // load default project (silently)
   try {
     const r = await api('/api/agent-projects');
     const items = r.items || [];
     if (!items.length) {
-      $('agentRunProject').innerHTML = '<option value="">（プロジェクト未登録 — 設定→AI 実装プロジェクトから登録してください）</option>';
+      _agentRunDefaultProject = null;
+      $('agentRunProjectInfo').textContent = '⚠ プロジェクト未登録 — 設定 → AI 実装プロジェクトから登録してください';
       $('agentRunStartBtn').disabled = true;
     } else {
-      $('agentRunProject').innerHTML = items.map(p =>
-        `<option value="${p.id}" data-default-agent="${escapeHtml(p.default_agent)}">${escapeHtml(p.name)}</option>`
-      ).join('');
+      _agentRunDefaultProject = items[0];
+      $('agentRunProjectInfo').textContent = `実行ディレクトリ: ${_agentRunDefaultProject.name} (${_agentRunDefaultProject.path})`;
       $('agentRunStartBtn').disabled = false;
-      const selOpt = $('agentRunProject').selectedOptions[0];
-      if (selOpt?.dataset.defaultAgent) $('agentRunAgent').value = selOpt.dataset.defaultAgent;
-      $('agentRunProject').onchange = () => {
-        const o = $('agentRunProject').selectedOptions[0];
-        if (o?.dataset.defaultAgent) {
-          $('agentRunAgent').value = o.dataset.defaultAgent;
-          refreshAgentModelDropdown().catch(() => {});
-        }
-      };
+      if (_agentRunDefaultProject.default_agent) {
+        $('agentRunAgent').value = _agentRunDefaultProject.default_agent;
+      }
     }
   } catch (e) {
-    alert(`プロジェクト取得失敗: ${e.message}`);
+    $('agentRunProjectInfo').textContent = `プロジェクト取得失敗: ${e.message}`;
   }
   await refreshAgentModelDropdown();
   $('agentRunAgent').onchange = () => { refreshAgentModelDropdown().catch(() => {}); };
@@ -6070,10 +6099,10 @@ async function refreshAgentRunLog(runId) {
 
 async function startAgentRunFromModal() {
   if (!_agentRunCurrentTask) return;
-  const projectId = Number($('agentRunProject')?.value || 0);
+  const projectId = Number(_agentRunDefaultProject?.id || 0);
   const agent = $('agentRunAgent')?.value || 'claude_code';
   const model = $('agentRunModel')?.value || '';
-  if (!projectId) return alert('プロジェクトを選択してください');
+  if (!projectId) return alert('プロジェクトが未登録です。設定 → AI 実装プロジェクトから登録してください');
   $('agentRunStartBtn').disabled = true;
   $('agentRunStartBtn').textContent = '起動中…';
   try {
