@@ -8189,6 +8189,14 @@ async function renderTracksForCurrentDate() {
   }
 }
 
+// ISO 文字列 (UTC または +09:00) を JST (= ブラウザのローカル) で HH:MM 形式に整形
+function fmtLocalHm(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function fmtHm(totalMin) {
   if (!Number.isFinite(totalMin) || totalMin <= 0) return '0分';
   const h = Math.floor(totalMin / 60);
@@ -8293,8 +8301,8 @@ async function renderDiaryWorkSessions(date) {
   el.innerHTML = `
     <div class="muted" style="font-size:12px;margin-bottom:6px">${head}</div>
     <ul class="ws-list">${items.map(s => {
-      const start = (s.started_at || '').replace('T', ' ').slice(11, 16);
-      const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
+      const start = fmtLocalHm(s.started_at);
+      const end = fmtLocalHm(s.ended_at);
       const dur = s.duration_min >= 60 ? `${(s.duration_min / 60).toFixed(1)}h` : `${s.duration_min}分`;
       const icon = s.is_home ? '🏠' : '🏢';
       const placeLabel = s.is_home ? '自宅' : (s.workplace_name || '?');
@@ -8331,8 +8339,8 @@ async function renderWorkSessions(date) {
   el.innerHTML = `
     <h4 style="margin:8px 0 4px">🛠 作業セッション (${items.length} 件)</h4>
     <ul class="ws-list">${items.map(s => {
-      const start = (s.started_at || '').replace('T', ' ').slice(11, 16);
-      const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
+      const start = fmtLocalHm(s.started_at);
+      const end = fmtLocalHm(s.ended_at);
       const dur = s.duration_min >= 60
         ? `${(s.duration_min / 60).toFixed(1)}h`
         : `${s.duration_min}分`;
