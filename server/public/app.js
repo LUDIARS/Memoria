@@ -5644,6 +5644,7 @@ function formatTaskDue(dueAt) {
 
 function taskCardHtml(t) {
   const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
+  const catBadge = t.category ? `<span class="task-category">${escapeHtml(t.category)}</span>` : '';
   const doneBtn = t.status === 'done'
     ? '<button class="ghost" disabled>Done</button>'
     : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
@@ -5651,7 +5652,7 @@ function taskCardHtml(t) {
     <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
         <strong>${escapeHtml(t.title)}</strong>
-        ${aiBadge}
+        ${aiBadge}${catBadge}
       </div>
       <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
       <p>${escapeHtml(t.details || '')}</p>
@@ -5889,6 +5890,10 @@ function ensureAgentRunModal() {
         <option value="gemini">Gemini CLI</option>
       </select>
     </label>
+    <label class="simple-field">
+      <span>モデル</span>
+      <select id="agentRunModel"></select>
+    </label>
     <div class="simple-actions">
       <button id="agentRunStartBtn">▶ 実装を開始</button>
       <button id="agentRunCancelBtn" type="button" class="ghost">キャンセル</button>
@@ -5920,6 +5925,36 @@ function ensureAgentRunModal() {
   };
 }
 
+// agent ↔ model のマッピング (UI 側)。サーバ側の AGENT_DEFAULT_MODEL とほぼ同期。
+const AGENT_MODELS = {
+  claude_code: [
+    { id: 'sonnet', label: 'Sonnet 4.6 (default)' },
+    { id: 'haiku', label: 'Haiku 4.5 (fast)' },
+    { id: 'opus', label: 'Opus 4.7' },
+    { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)' },
+  ],
+  codex: [
+    { id: '5.3-codex', label: '5.3-codex (default)' },
+    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  ],
+};
+
+function refreshAgentModelDropdown() {
+  const agent = $('agentRunAgent')?.value || 'claude_code';
+  const models = AGENT_MODELS[agent] || [];
+  const sel = $('agentRunModel');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = models.map(m =>
+    `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label)}</option>`
+  ).join('');
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+
 async function openAgentRunModal(task) {
   ensureAgentRunModal();
   _agentRunCurrentTask = task;
@@ -5936,18 +5971,21 @@ async function openAgentRunModal(task) {
         `<option value="${p.id}" data-default-agent="${escapeHtml(p.default_agent)}">${escapeHtml(p.name)}</option>`
       ).join('');
       $('agentRunStartBtn').disabled = false;
-      // Pre-select task.project_id if any
-      if (task.project_id) $('agentRunProject').value = String(task.project_id);
       const selOpt = $('agentRunProject').selectedOptions[0];
       if (selOpt?.dataset.defaultAgent) $('agentRunAgent').value = selOpt.dataset.defaultAgent;
       $('agentRunProject').onchange = () => {
         const o = $('agentRunProject').selectedOptions[0];
-        if (o?.dataset.defaultAgent) $('agentRunAgent').value = o.dataset.defaultAgent;
+        if (o?.dataset.defaultAgent) {
+          $('agentRunAgent').value = o.dataset.defaultAgent;
+          refreshAgentModelDropdown();
+        }
       };
     }
   } catch (e) {
     alert(`プロジェクト取得失敗: ${e.message}`);
   }
+  refreshAgentModelDropdown();
+  $('agentRunAgent').onchange = refreshAgentModelDropdown;
   // Load run history.
   await refreshAgentRunHistory(task.id);
   $('agentRunLog').textContent = '';
@@ -5972,9 +6010,10 @@ async function refreshAgentRunHistory(taskId) {
       const at = (run.started_at || '').replace('T', ' ').slice(0, 19);
       const status = escapeHtml(run.status);
       const exit = run.exit_code != null ? ` (exit ${run.exit_code})` : '';
+      const model = run.model ? `:${escapeHtml(run.model)}` : '';
       return `<div class="simple-item" data-agent-run-open="${run.id}">
         <div class="simple-item-head">
-          <strong>#${run.id} ${escapeHtml(run.agent)}</strong>
+          <strong>#${run.id} ${escapeHtml(run.agent)}${model}</strong>
           <span class="muted">${at}</span>
         </div>
         <div class="muted">${status}${exit}</div>
@@ -6015,6 +6054,7 @@ async function startAgentRunFromModal() {
   if (!_agentRunCurrentTask) return;
   const projectId = Number($('agentRunProject')?.value || 0);
   const agent = $('agentRunAgent')?.value || 'claude_code';
+  const model = $('agentRunModel')?.value || '';
   if (!projectId) return alert('プロジェクトを選択してください');
   $('agentRunStartBtn').disabled = true;
   $('agentRunStartBtn').textContent = '起動中…';
@@ -6022,7 +6062,7 @@ async function startAgentRunFromModal() {
     const r = await api(`/api/tasks/${_agentRunCurrentTask.id}/agent-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, agent }),
+      body: JSON.stringify({ project_id: projectId, agent, model }),
     });
     await refreshAgentRunHistory(_agentRunCurrentTask.id);
     if (r.run?.id) refreshAgentRunLog(r.run.id);
@@ -6199,7 +6239,13 @@ function openTaskEditor(task = null) {
   $('taskEditorStatus').value = task?.status || 'todo';
   $('taskEditorDetails').value = task?.details || '';
   $('taskEditorShareActio').checked = !!task?.share_actio;
+  $('taskEditorCategory').value = task?.category || '';
   $('taskEditorTaskId').value = task?.id ? String(task.id) : '';
+  // populate category autocomplete
+  api('/api/tasks/categories').then(r => {
+    const dl = $('taskCategoryOptions');
+    if (dl) dl.innerHTML = (r.items || []).map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  }).catch(() => {});
   showModal('taskEditorModal');
   $('taskEditorTitle').focus();
 }
@@ -6405,6 +6451,11 @@ ensureMemoriaFeatureViews = function () {
               <option value="done">DONE</option>
             </select>
           </label>
+          <label class="simple-field">
+            <span>カテゴリ</span>
+            <input id="taskEditorCategory" type="text" list="taskCategoryOptions" placeholder="例: 開発 / 雑務 / 学習" />
+            <datalist id="taskCategoryOptions"></datalist>
+          </label>
           <label class="simple-check-row">
             <input id="taskEditorShareActio" type="checkbox" />
             <span>Actio にシェアする</span>
@@ -6519,6 +6570,7 @@ addTaskFromForm = async function () {
   const title = $('taskEditorTitle')?.value.trim();
   if (!title) return;
   const editId = Number($('taskEditorTaskId')?.value || 0);
+  const category = $('taskEditorCategory')?.value.trim() || null;
   if (editId) {
     await api(`/api/tasks/${editId}`, {
       method: 'PATCH',
@@ -6529,6 +6581,7 @@ addTaskFromForm = async function () {
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
         share_actio: !!$('taskEditorShareActio')?.checked,
+        category,
       }),
     });
   } else {
@@ -6541,6 +6594,7 @@ addTaskFromForm = async function () {
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
         share_actio: !!$('taskEditorShareActio')?.checked,
+        category,
         creator_type: 'human',
       }),
     });

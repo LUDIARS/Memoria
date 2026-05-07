@@ -4127,6 +4127,18 @@ dialog.meal-modal[open] {
   color: #1f56c0;
   background: #eaf1ff;
 }
+.task-category {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid #6b7080;
+  color: #4a4f5e;
+  background: #f3f4f8;
+  margin-left: 4px;
+}
 .task-detail-panel {
   border: 1px solid var(--border);
   border-radius: 8px;

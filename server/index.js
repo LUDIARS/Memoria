@@ -94,7 +94,7 @@ import {
 import {
   listImplementationNotes, getImplementationNote, insertImplementationNote,
   updateImplementationNote, deleteImplementationNote,
-  listTasks, getTask, insertTask, updateTask, deleteTask,
+  listTasks, listTaskCategories, getTask, insertTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
   listWorkLocations, getWorkLocation, insertWorkLocation,
   updateWorkLocation, deleteWorkLocation, setWorkLocationOwner,
@@ -1866,6 +1866,10 @@ app.get('/api/tasks', (c) => {
   return c.json({ items: listTasks(db, { status, limit, offset }) });
 });
 
+app.get('/api/tasks/categories', (c) => {
+  return c.json({ items: listTaskCategories(db) });
+});
+
 function appendTaskDiaryLog(line) {
   const date = formatLocalDate(new Date());
   const row = getDiary(db, date);
@@ -1889,6 +1893,7 @@ app.post('/api/tasks', async (c) => {
     creator_type: body.creator_type === 'ai' ? 'ai' : 'human',
     due_at: body.due_at || null,
     share_actio: !!body.share_actio,
+    category: typeof body.category === 'string' ? body.category.trim() : null,
   });
   const created = getTask(db, id);
   appendTaskDiaryLog(`タスク発行: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
@@ -1911,6 +1916,7 @@ app.patch('/api/tasks/:id', async (c) => {
   if (['todo', 'doing', 'done'].includes(body.status)) patch.status = body.status;
   if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
   if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
+  if (typeof body.category === 'string' || body.category === null) patch.category = body.category;
   if (before.creator_type === 'ai' && Object.hasOwn(patch, 'due_at') && patch.due_at !== before.due_at) {
     patch.creator_type = 'human';
   }
@@ -1984,17 +1990,18 @@ app.delete('/api/agent-projects/:id', (c) => {
 });
 
 // Spawn an agent run for a task.
-// Body: { project_id, agent? }
+// Body: { project_id, agent?, model? }
 app.post('/api/tasks/:id/agent-run', async (c) => {
   const taskId = Number(c.req.param('id'));
   const task = getTask(db, taskId);
   if (!task) return c.json({ error: 'task not found' }, 404);
   const body = await c.req.json().catch(() => ({}));
-  const projectId = Number(body.project_id || task.project_id);
+  const projectId = Number(body.project_id);
   if (!projectId) return c.json({ error: 'project_id required' }, 400);
   const project = getAgentProject(db, projectId);
   if (!project) return c.json({ error: 'project not found' }, 404);
   const agent = body.agent || project.default_agent || 'claude_code';
+  const model = typeof body.model === 'string' ? body.model.trim() : '';
   try {
     const settings = getAppSettings(db);
     const runId = startAgentRun(db, {
@@ -2003,15 +2010,9 @@ app.post('/api/tasks/:id/agent-run', async (c) => {
       task,
       project,
       agent,
+      model: model || null,
       gitBashPath: settings['runtime.git_bash_path'] || null,
     });
-    // Persist project_id on the task so re-runs have a default.
-    if (task.project_id !== projectId) {
-      updateTask(db, taskId, { /* not allowed via patch list */ });
-      // direct write since updateTask doesn't allow project_id
-      db.prepare(`UPDATE tasks SET project_id = ?, updated_at = datetime('now') WHERE id = ?`)
-        .run(projectId, taskId);
-    }
     return c.json({ run: getAgentRun(db, runId) }, 201);
   } catch (e) {
     return c.json({ error: e.message }, 400);

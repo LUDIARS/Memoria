@@ -336,7 +336,7 @@ export function openDb(dbPath) {
       share_actio   INTEGER NOT NULL DEFAULT 0,
       shared_at     TEXT,
       shared_origin TEXT,
-      project_id    INTEGER,
+      category      TEXT,
       created_at    TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -360,6 +360,7 @@ export function openDb(dbPath) {
       task_id        INTEGER,
       project_id     INTEGER,
       agent          TEXT NOT NULL,
+      model          TEXT,
       prompt         TEXT,
       status         TEXT NOT NULL DEFAULT 'pending',
       exit_code      INTEGER,
@@ -438,11 +439,16 @@ export function openDb(dbPath) {
     ['share_actio', 'INTEGER NOT NULL DEFAULT 0'],
     ['shared_at', 'TEXT'],
     ['shared_origin', 'TEXT'],
-    ['project_id', 'INTEGER'],
+    ['category', 'TEXT'],
   ]) {
     if (taskCols.length > 0 && !taskCols.includes(col)) {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
     }
+  }
+  // agent_runs.model — add if missing on existing DBs.
+  const arCols = db.prepare(`PRAGMA table_info(agent_runs)`).all().map(c => c.name);
+  if (arCols.length > 0 && !arCols.includes('model')) {
+    db.exec(`ALTER TABLE agent_runs ADD COLUMN model TEXT`);
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
@@ -2845,12 +2851,13 @@ export function getAgentRun(db, id) {
 
 export function insertAgentRun(db, r) {
   const info = db.prepare(`
-    INSERT INTO agent_runs (task_id, project_id, agent, prompt, status, log_path)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO agent_runs (task_id, project_id, agent, model, prompt, status, log_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     r.task_id ?? null,
     r.project_id ?? null,
     r.agent,
+    r.model ?? null,
     r.prompt ?? null,
     r.status || 'pending',
     r.log_path ?? null,
@@ -2859,7 +2866,7 @@ export function insertAgentRun(db, r) {
 }
 
 export function updateAgentRun(db, id, patch) {
-  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at']);
+  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at', 'model']);
   const cols = [];
   const args = [];
   for (const [k, v] of Object.entries(patch)) {
@@ -2965,8 +2972,8 @@ export function getTask(db, id) {
 
 export function insertTask(db, task) {
   const info = db.prepare(`
-    INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio, category)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.title,
     task.details ?? null,
@@ -2974,12 +2981,22 @@ export function insertTask(db, task) {
     task.creator_type === 'ai' ? 'ai' : 'human',
     task.due_at ?? null,
     task.share_actio ? 1 : 0,
+    task.category ?? null,
   );
   return Number(info.lastInsertRowid);
 }
 
+export function listTaskCategories(db) {
+  return db.prepare(`
+    SELECT DISTINCT category
+    FROM tasks
+    WHERE category IS NOT NULL AND category != ''
+    ORDER BY category ASC
+  `).all().map(r => r.category);
+}
+
 export function updateTask(db, id, patch) {
-  const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin']);
+  const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin', 'category']);
   const cols = [];
   const args = [];
   for (const [k, v] of Object.entries(patch)) {

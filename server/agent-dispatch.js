@@ -59,22 +59,37 @@ function buildPrompt({ task, project }) {
   return lines.join('\n');
 }
 
-function buildArgs(agent) {
+// 各エージェントのデフォルトモデル (model 未指定時に使う)
+const AGENT_DEFAULT_MODEL = {
+  claude_code: 'sonnet',
+  codex:       '5.3-codex',
+  gemini:      'gemini-2.5-flash',
+};
+
+function buildArgs(agent, model) {
+  const m = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[agent] || '';
   if (agent === 'codex') {
-    return [
+    const args = [
       'exec',
       '--json',
       '--color', 'never',
       '--ask-for-approval', 'never',
       '--sandbox', 'workspace-write',
-      '-',
     ];
+    if (m) args.push('--model', m);
+    args.push('-');
+    return args;
   }
   if (agent === 'gemini') {
-    return ['-p'];
+    const args = [];
+    if (m) args.push('-m', m);
+    args.push('-p');
+    return args;
   }
   // claude_code (default)
-  return ['-p', '--dangerously-skip-permissions'];
+  const args = ['-p', '--dangerously-skip-permissions'];
+  if (m) args.push('--model', m);
+  return args;
 }
 
 function binaryFor(agent, settings) {
@@ -97,7 +112,7 @@ function binaryFor(agent, settings) {
  *   gitBashPath — optional CLAUDE_CODE_GIT_BASH_PATH override
  *   timeoutMs   — kill the child after this many ms (default 30 min)
  */
-export function startAgentRun(db, { dataDir, settings, task, project, agent, gitBashPath, timeoutMs = 30 * 60 * 1000 }) {
+export function startAgentRun(db, { dataDir, settings, task, project, agent, model, gitBashPath, timeoutMs = 30 * 60 * 1000 }) {
   if (!task) throw new Error('task required');
   if (!project) throw new Error('project required');
   const a = agent || project.default_agent || 'claude_code';
@@ -112,11 +127,13 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, git
   const logFile = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.log`;
   const logPath = join(logDir, logFile);
   const prompt = buildPrompt({ task, project });
+  const effectiveModel = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[a] || '';
 
   const runId = insertAgentRun(db, {
     task_id: task.id,
     project_id: project.id,
     agent: a,
+    model: effectiveModel || null,
     prompt,
     status: 'pending',
     log_path: logFile,
@@ -125,13 +142,13 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, git
   // Spawn after row exists so we always have a record even if spawn fails.
   let child;
   const bin = binaryFor(a, settings || {});
-  const args = buildArgs(a);
+  const args = buildArgs(a, effectiveModel);
   const env = { ...process.env };
   if (a === 'claude_code' && (gitBashPath || settings?.['runtime.git_bash_path'])) {
     env.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath || settings['runtime.git_bash_path'];
   }
   const stream = createWriteStream(logPath, { flags: 'a' });
-  stream.write(`# agent: ${a}\n# bin: ${bin}\n# args: ${JSON.stringify(args)}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n# task: ${task.title}\n\n----- prompt -----\n${prompt}\n----- output -----\n`);
+  stream.write(`# agent: ${a}\n# model: ${effectiveModel || '(default)'}\n# bin: ${bin}\n# args: ${JSON.stringify(args)}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n# task: ${task.title}\n\n----- prompt -----\n${prompt}\n----- output -----\n`);
 
   try {
     child = spawn(bin, args, {
@@ -156,8 +173,8 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, git
 
   recordActivityEvent(db, {
     kind: 'task_updated',
-    content: `[AI実装開始] ${task.title} (${a})`,
-    metadata: { agent_run_id: runId, agent: a, project: project.name },
+    content: `[AI実装開始] ${task.title} (${a}${effectiveModel ? `:${effectiveModel}` : ''})`,
+    metadata: { agent_run_id: runId, agent: a, model: effectiveModel || null, project: project.name },
   });
 
   let timer = setTimeout(() => {
