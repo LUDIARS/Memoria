@@ -31,7 +31,11 @@ import {
   listSharedBookmarks, insertSharedBookmark, deleteSharedBookmark,
   listSharedDigs, insertSharedDig, deleteSharedDig,
   listSharedDictionary, insertSharedDictionary, deleteSharedDictionary,
+  listSharedImplementationNotes, insertSharedImplementationNote, deleteSharedImplementationNote,
+  listSharedWorkLocations, insertSharedWorkLocation, deleteSharedWorkLocation,
   getSharedBookmark, getSharedDig, getSharedDictionary,
+  getSharedImplementationNote, getSharedWorkLocation,
+  insertWorkplacePresence, listRecentWorkplacePresence, listCurrentWorkplacePresence,
   hideShared, unhideShared, listHidden, listShareLog,
   recordShareEvent,
 } from './db.js';
@@ -263,6 +267,145 @@ app.delete('/api/shared/dictionary/:id', async (c) => {
   const r = await deleteSharedDictionary(id, { actingUserId: u.userId, role: u.role });
   if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
   return c.json({ ok: true });
+});
+
+// ── /api/shared/implementation-notes ───────────────────────────────────────
+
+app.get('/api/shared/implementation-notes', async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 50), 200);
+  const before = c.req.query('before') || null;
+  const items = await listSharedImplementationNotes({ limit, before });
+  return c.json({ items });
+});
+
+app.post('/api/shared/implementation-notes', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  if (!body?.product || !body?.title) return c.json({ error: 'product+title required' }, 400);
+  const r = await insertSharedImplementationNote({
+    product: body.product,
+    title: body.title,
+    goodPoints: body.good_points,
+    badPoints: body.bad_points,
+    attachmentType: body.attachment_type,
+    attachmentValue: body.attachment_value,
+    ownerUserId: u.userId,
+    ownerUserName: u.displayName,
+    sharedOrigin: c.req.header('x-memoria-origin') || null,
+  });
+  await recordShareEvent({
+    kind: 'implementation_note', id: r.id, action: 'share',
+    actingUserId: u.userId, details: { product: body.product, title: body.title },
+  });
+  return c.json(r, 201);
+});
+
+app.get('/api/shared/implementation-notes/:id', async (c) => {
+  const r = await getSharedImplementationNote(Number(c.req.param('id')));
+  if (!r) return c.json({ error: 'not_found' }, 404);
+  return c.json(r);
+});
+
+app.delete('/api/shared/implementation-notes/:id', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const id = Number(c.req.param('id'));
+  const r = await deleteSharedImplementationNote(id, { actingUserId: u.userId, role: u.role });
+  if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
+  return c.json({ ok: true });
+});
+
+// ── /api/shared/work-locations ─────────────────────────────────────────────
+
+app.get('/api/shared/work-locations', async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  const before = c.req.query('before') || null;
+  const items = await listSharedWorkLocations({ limit, before });
+  return c.json({ items });
+});
+
+app.post('/api/shared/work-locations', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  if (!body?.name) return c.json({ error: 'name required' }, 400);
+  const r = await insertSharedWorkLocation({
+    name: body.name,
+    address: body.address,
+    latitude: body.latitude == null ? null : Number(body.latitude),
+    longitude: body.longitude == null ? null : Number(body.longitude),
+    description: body.description,
+    url: body.url,
+    tags: body.tags,
+    ownerUserId: u.userId,
+    ownerUserName: u.displayName,
+    sharedOrigin: c.req.header('x-memoria-origin') || null,
+  });
+  await recordShareEvent({
+    kind: 'work_location', id: r.id, action: 'share',
+    actingUserId: u.userId, details: { name: body.name },
+  });
+  return c.json(r, 201);
+});
+
+app.get('/api/shared/work-locations/:id', async (c) => {
+  const r = await getSharedWorkLocation(Number(c.req.param('id')));
+  if (!r) return c.json({ error: 'not_found' }, 404);
+  return c.json(r);
+});
+
+app.delete('/api/shared/work-locations/:id', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const id = Number(c.req.param('id'));
+  const r = await deleteSharedWorkLocation(id, { actingUserId: u.userId, role: u.role });
+  if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
+  return c.json({ ok: true });
+});
+
+// ── /api/shared/workplace-presence ─────────────────────────────────────────
+//
+// Ephemeral "I am at <place>" stream for the team. POST when a user enters
+// or leaves a workplace; GET to see the current state of the team.
+
+app.post('/api/shared/workplace-presence', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  if (!body?.workplace_name) return c.json({ error: 'workplace_name required' }, 400);
+  const r = await insertWorkplacePresence({
+    userId: u.userId,
+    userName: u.displayName,
+    workplaceName: body.workplace_name,
+    address: body.address ?? null,
+    latitude: body.latitude == null ? null : Number(body.latitude),
+    longitude: body.longitude == null ? null : Number(body.longitude),
+    kind: body.kind === 'leave' ? 'leave' : 'enter',
+    sharedOrigin: c.req.header('x-memoria-origin') || null,
+  });
+  await recordShareEvent({
+    kind: 'workplace_presence', id: r.id, action: 'share',
+    actingUserId: u.userId, details: { workplace_name: body.workplace_name, kind: body.kind || 'enter' },
+  });
+  return c.json(r, 201);
+});
+
+app.get('/api/shared/workplace-presence', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const limit = Math.min(Number(c.req.query('limit') || 50), 500);
+  const sinceHours = Math.min(Number(c.req.query('since_hours') || 24), 24 * 30);
+  const items = await listRecentWorkplacePresence({ limit, sinceHours });
+  return c.json({ items });
+});
+
+app.get('/api/shared/workplace-presence/current', async (c) => {
+  const u = await authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  const items = await listCurrentWorkplacePresence({ limit });
+  return c.json({ items });
 });
 
 // ── /api/shared/moderation/* (admin / moderator only) ──────────────────────

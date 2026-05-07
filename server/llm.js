@@ -52,6 +52,7 @@ export const PROVIDERS = {
     defaultBin: 'codex',
     supportsTools: false,
     supportsModel: true,
+    jsonOutput: true,
   },
   openai: {
     label: 'OpenAI API',
@@ -144,20 +145,44 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }) {
   }
   // CLI providers
   const bin = cfg.bins[provider] || p.defaultBin;
-  const args = ['-p'];
   const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || '';
-  if (modelToUse && p.supportsModel) args.push('--model', modelToUse);
-  if (tools && p.supportsTools) args.push('--allowedTools', tools.join(','));
+  const args = buildCliArgs({
+    provider,
+    model: modelToUse,
+    tools,
+    supportsModel: p.supportsModel,
+    supportsTools: p.supportsTools,
+  });
   // Pass CLAUDE_CODE_GIT_BASH_PATH to the Claude CLI on Windows. Configured
   // via settings → runtime.git_bash_path; falls back to the parent env.
   const env = { ...process.env };
   if (provider === 'claude' && cfg.git_bash_path) {
     env.CLAUDE_CODE_GIT_BASH_PATH = cfg.git_bash_path;
   }
-  return runCli({ bin, args, prompt, timeoutMs, env, label: provider });
+  return runCli({ bin, args, prompt, timeoutMs, env, label: provider, jsonOutput: !!p.jsonOutput });
 }
 
-function runCli({ bin, args, prompt, timeoutMs, env, label }) {
+function buildCliArgs({ provider, model, tools, supportsModel, supportsTools }) {
+  if (provider === 'codex') {
+    const args = [
+      'exec',
+      '--json',
+      '--color', 'never',
+      '--ask-for-approval', 'never',
+      '--sandbox', 'workspace-write',
+    ];
+    if (model && supportsModel) args.push('--model', model);
+    args.push('-');
+    return args;
+  }
+
+  const args = ['-p'];
+  if (model && supportsModel) args.push('--model', model);
+  if (tools && supportsTools) args.push('--allowedTools', tools.join(','));
+  return args;
+}
+
+function runCli({ bin, args, prompt, timeoutMs, env, label, jsonOutput = false }) {
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -177,10 +202,52 @@ function runCli({ bin, args, prompt, timeoutMs, env, label }) {
     child.on('close', code => {
       clearTimeout(timer);
       if (code !== 0) reject(new Error(`${label} CLI exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(stdout);
+      else resolve(jsonOutput ? extractCodexLastMessage(stdout) : stdout);
     });
     child.stdin.end(prompt, 'utf8');
   });
+}
+
+function extractCodexLastMessage(raw) {
+  let lastText = '';
+  const lines = raw.split(/\r?\n/).filter(l => l.trim());
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    const text = extractTextFromCodexEvent(obj);
+    if (text) lastText = text;
+  }
+  return lastText || raw;
+}
+
+function extractTextFromCodexEvent(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  const candidates = [
+    obj.message,
+    obj.text,
+    obj.delta,
+    obj.payload?.message,
+    obj.payload?.text,
+    obj.payload?.delta,
+    obj.payload,
+  ];
+  for (const candidate of candidates) {
+    const text = extractContentText(candidate);
+    if (text) return text;
+  }
+  return '';
+}
+
+function extractContentText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(extractContentText).filter(Boolean).join('\n');
+  if (typeof value !== 'object') return '';
+  if (value.role && value.role !== 'assistant') return '';
+  if (typeof value.content === 'string') return value.content;
+  if (Array.isArray(value.content)) return extractContentText(value.content);
+  if (typeof value.text === 'string') return value.text;
+  return '';
 }
 
 async function runOpenAi({ apiKey, model, prompt, timeoutMs }) {

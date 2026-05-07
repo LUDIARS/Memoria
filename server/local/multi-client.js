@@ -211,6 +211,48 @@ export async function shareDictionary(state, e) {
   });
 }
 
+export async function shareImplementationNote(state, n) {
+  return multiFetch(state, '/api/shared/implementation-notes', {
+    method: 'POST',
+    body: JSON.stringify({
+      product: n.product || '',
+      title: n.title,
+      good_points: n.good_points || null,
+      bad_points: n.bad_points || null,
+      attachment_type: n.attachment_type || null,
+      attachment_value: n.attachment_value || null,
+    }),
+  });
+}
+
+export async function shareWorkLocation(state, w) {
+  return multiFetch(state, '/api/shared/work-locations', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: w.name,
+      address: w.address || null,
+      latitude: w.latitude == null ? null : Number(w.latitude),
+      longitude: w.longitude == null ? null : Number(w.longitude),
+      description: w.description || null,
+      url: w.url || null,
+      tags: w.tags || null,
+    }),
+  });
+}
+
+export async function shareWorkplacePresence(state, presence) {
+  return multiFetch(state, '/api/shared/workplace-presence', {
+    method: 'POST',
+    body: JSON.stringify({
+      workplace_name: presence.workplace_name,
+      address: presence.address || null,
+      latitude: presence.latitude == null ? null : Number(presence.latitude),
+      longitude: presence.longitude == null ? null : Number(presence.longitude),
+      kind: presence.kind === 'leave' ? 'leave' : 'enter',
+    }),
+  });
+}
+
 export async function fetchMe(state) {
   return multiFetch(state, '/api/me');
 }

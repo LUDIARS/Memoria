@@ -447,6 +447,7 @@ async function refreshVisitsBadge() {
   try {
     const r = await api('/api/visits/unsaved/count');
     const badge = $('tabVisitsCount');
+    if (!badge) return;
     if (r.count > 0) {
       badge.classList.remove('hidden');
       badge.textContent = r.count;
@@ -606,29 +607,33 @@ function switchTab(tab) {
   if (layout) layout.dataset.activeTab = tab;
   $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
   $('queueView').classList.toggle('hidden', tab !== 'queue');
-  $('visitsView').classList.toggle('hidden', tab !== 'visits');
+  $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('dictView').classList.toggle('hidden', tab !== 'dict');
   $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
-  $('eventsView').classList.toggle('hidden', tab !== 'events');
   $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
+  $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
+  $('implView')?.classList.toggle('hidden', tab !== 'impl');
+  $('workplaceView')?.classList.toggle('hidden', tab !== 'workplace');
+  if (tab === 'workplace') loadWorkLocations().catch(console.warn);
   $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
-  if (tab === 'visits') loadVisits();
+  if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'dict') loadDictionary();
   if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
-  if (tab === 'events') loadEvents();
   if (tab === 'tracks') loadTracks();
   if (tab === 'meals') loadMeals();
+  if (tab === 'tasks') loadTasks();
+  if (tab === 'impl') loadImplementationNotes();
   if (tab === 'external') loadExternalConfig();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
@@ -2231,10 +2236,36 @@ function renderDomainList() {
         <span>${escapeHtml(e.domain)}</span>
         <span>本日 ${e.visits_today} / 週 ${e.visits_week}</span>
       </div>
+      <label class="domain-private-toggle" title="ON にすると日記のドメイン欄には表示しません。アクセス履歴や傾向には残ります。">
+        <input type="checkbox" data-domain-private="${escapeHtml(e.domain)}" ${e.domain_private ? 'checked' : ''} />
+        private
+      </label>
     </li>`;
   }).join('');
   ul.querySelectorAll('.dict-item').forEach(li => {
     li.addEventListener('click', () => loadDomainEntry(li.dataset.domain));
+  });
+  ul.querySelectorAll('input[data-domain-private]').forEach(cb => {
+    cb.addEventListener('click', (ev) => ev.stopPropagation());
+    cb.addEventListener('change', async (ev) => {
+      ev.stopPropagation();
+      const domain = cb.dataset.domainPrivate;
+      const checked = cb.checked;
+      try {
+        await api(`/api/domains/${encodeURIComponent(domain)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain_private: checked }),
+        });
+        const row = state.domainEntries.find(x => x.domain === domain);
+        if (row) row.domain_private = checked ? 1 : 0;
+        if (state.domainDetail?.domain === domain) state.domainDetail.domain_private = checked ? 1 : 0;
+        flashToast(checked ? '日記では非表示にしました' : '日記に表示するようにしました');
+      } catch (e) {
+        cb.checked = !checked;
+        alert(`private 更新失敗: ${e.message}`);
+      }
+    });
   });
 }
 
@@ -3450,19 +3481,38 @@ function renderTrendKeywords(items) {
 function renderTrendWorkHours(items) {
   const el = $('trendWorkHours');
   if (!el) return;
-  // items: [{date: 'YYYY-MM-DD', minutes: number|null}]
-  // null = no diary generated for that day → drop from the line, don't draw 0.
   const present = (items || []).filter(d => Number.isFinite(d.minutes));
   if (!present.length) {
     el.innerHTML = '<div class="queue-empty">作業時間が記録された日記がまだありません</div>';
     return;
   }
-  const data = present.map(d => ({ date: d.date, value: d.minutes / 60, raw: d.minutes }));
-  el.innerHTML = renderLineChartSvg(data, {
-    yLabel: (v) => `${v.toFixed(1)}h`,
-    pointLabel: (d) => `${d.date} : ${(d.value).toFixed(1)} 時間 (${d.raw} 分)`,
+  const presentHours = present.map((d) => ({
+    ...d,
+    hours: Number(d.minutes || 0) / 60,
+  }));
+  el.innerHTML = svgHorizontalBar(
+    presentHours,
+    (d) => String(d.date || '').slice(5),
+    (d) => Number(d.hours || 0),
+    '時間',
+    {
+      valueLabel: (v) => `${v.toFixed(1)} 時間`,
+    }
+  );
+}
+
+function applyTaskDueShortcutToEditor(kind) {
+  const due = $('taskEditorDue');
+  if (!due) return;
+  if (kind === 'weekend') kind = 'saturday';
+  due.value = dueShortcutValue(kind);
+  $('taskEditorDetails')?.focus();
+}
+
+function wireTaskEditorDueShortcuts() {
+  document.querySelectorAll('[data-task-editor-due-shortcut]').forEach((btn) => {
+    btn.addEventListener('click', () => applyTaskDueShortcutToEditor(btn.dataset.taskEditorDueShortcut));
   });
-  attachLineChartTooltip(el);
 }
 
 function renderTrendGpsWalking(items) {
@@ -4077,13 +4127,20 @@ function hideModal(panelId) {
   // If neither panel is open after this hide, drop the backdrop too.
   const dictOpen = !$('dictDetail').classList.contains('hidden');
   const domOpen  = !$('domainDetail').classList.contains('hidden');
-  $('modalBackdrop').hidden = !(dictOpen || domOpen);
+  const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
+  const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
+  const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
   state.domainDetail = null;
+  state.taskDetail = null;
   hideModal('dictDetail');
   hideModal('domainDetail');
+  hideModal('taskEditorModal');
+  hideModal('implEditorModal');
+  hideModal('workplaceEditorModal');
 }
 $('dictDetailClose')?.addEventListener('click', () => {
   state.dictDetail = null;
@@ -4549,6 +4606,7 @@ async function saveAiSettings() {
         return;
       }
     }
+    await savePrivacySettings();
     alert('保存しました。次回のジョブから反映されます。');
     $('aiSettingsPanel').classList.add('hidden');
   } catch (e) {
@@ -4570,6 +4628,8 @@ document.addEventListener('click', (ev) => {
     sec.classList.toggle('hidden', sec.dataset.stab !== stab);
   });
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
+  if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
+  if (stab === 'setup') loadSetupDocs().catch(console.warn);
   panel.scrollTop = 0;
 });
 
@@ -4637,6 +4697,1992 @@ function renderEvents(items) {
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
+
+// ---- Tasks / implementation notes / setup docs / privacy ------------------
+
+function ensureMemoriaFeatureViews() {
+  const tabs = document.querySelector('.tabs-scroll');
+  if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
+    for (const spec of [
+      ['tasks', 'タスク'],
+      ['impl', '実装自慢'],
+      ['workplace', '作業場所'],
+    ]) {
+      const b = document.createElement('button');
+      b.className = 'tab';
+      b.dataset.tab = spec[0];
+      b.innerHTML = `<span class="tab-label" data-full="${spec[1]}" data-short="${spec[1]}">${spec[1]}</span>`;
+      b.addEventListener('click', () => switchTab(spec[0]));
+      tabs.appendChild(b);
+    }
+  }
+  const content = document.querySelector('.content');
+  if (content && !$('tasksView')) {
+    const div = document.createElement('div');
+    div.id = 'tasksView';
+    div.className = 'hidden';
+    div.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-panel-head">
+          <h2>タスク</h2>
+          <button id="taskNewBtn" type="button">+ タスクを追加</button>
+        </div>
+        <div id="taskForm" class="simple-form hidden">
+          <input id="taskTitle" type="text" placeholder="直近やること" />
+          <input id="taskDue" type="datetime-local" />
+          <label class="check-inline"><input id="taskShareActio" type="checkbox" /> Actio にシェアする</label>
+          <textarea id="taskDetails" rows="3" placeholder="詳細メモ"></textarea>
+          <div class="simple-actions">
+            <button id="taskAddBtn">追加</button>
+            <button id="taskCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
+        </div>
+        <div id="tasksList" class="simple-list"></div>
+      </div>`;
+    content.appendChild(div);
+  }
+  if (content && !$('implView')) {
+    const div = document.createElement('div');
+    div.id = 'implView';
+    div.className = 'hidden';
+    div.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-panel-head">
+          <h2>実装自慢</h2>
+          <button id="implNewBtn" type="button">+ ノートを追加</button>
+        </div>
+        <div id="implForm" class="simple-form hidden">
+          <input id="implProduct" type="text" placeholder="プロダクト名" />
+          <input id="implTitle" type="text" placeholder="短いタイトル" />
+          <textarea id="implGood" rows="4" placeholder="良かった点"></textarea>
+          <textarea id="implBad" rows="3" placeholder="悪かった点 / トレードオフ"></textarea>
+          <label class="check-inline"><input id="implShareable" type="checkbox" /> シェア可能にする</label>
+          <div class="simple-actions">
+            <button id="implAddBtn">追加</button>
+            <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
+        </div>
+        <div id="implList" class="simple-list"></div>
+      </div>`;
+    content.appendChild(div);
+  }
+  if (content && !$('workplaceView')) {
+    const div = document.createElement('div');
+    div.id = 'workplaceView';
+    div.className = 'hidden';
+    div.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-panel-head">
+          <h2>🗺️ 作業場所</h2>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button id="workplaceCheckinBtn" type="button" class="ghost">📍 ここで作業中</button>
+            <button id="workplaceFromGpsBtn" type="button" class="ghost">📍 現在地から登録</button>
+            <button id="workplaceNewBtn" type="button">+ 場所を追加</button>
+          </div>
+        </div>
+        <p class="diary-settings-help">よく作業するカフェ・コワーキング・図書館などをまとめ、Hub にシェアしてチームでナレッジ共有できます。GPS と Place API (OpenStreetMap Nominatim) で現在地を取得して登録/チェックインできます。</p>
+        <div id="workplaceCurrentBanner" class="muted" style="margin:6px 0 10px"></div>
+        <div id="workplaceList" class="simple-list"></div>
+        <section id="workplaceEditorModal" class="dict-detail modal-panel hidden foundation-form">
+          <button type="button" class="modal-close" id="workplaceEditorClose" aria-label="close">×</button>
+          <h3 id="workplaceEditorHeading">作業場所を追加</h3>
+          <input type="hidden" id="workplaceEditorId" />
+          <div class="simple-actions" style="justify-content:flex-start">
+            <button type="button" class="ghost" id="workplaceEditorGpsBtn">📍 現在地を取得</button>
+            <span id="workplaceEditorGpsStatus" class="muted" style="font-size:11px"></span>
+          </div>
+          <label class="simple-field">
+            <span>名前</span>
+            <input id="workplaceEditorName" type="text" placeholder="例: WeWork 六本木" />
+          </label>
+          <label class="simple-field">
+            <span>住所</span>
+            <input id="workplaceEditorAddress" type="text" placeholder="例: 東京都港区六本木..." />
+          </label>
+          <div class="simple-field-row">
+            <label class="simple-field">
+              <span>緯度 (任意)</span>
+              <input id="workplaceEditorLat" type="number" step="0.000001" />
+            </label>
+            <label class="simple-field">
+              <span>経度 (任意)</span>
+              <input id="workplaceEditorLng" type="number" step="0.000001" />
+            </label>
+          </div>
+          <label class="simple-field">
+            <span>URL (任意)</span>
+            <input id="workplaceEditorUrl" type="text" placeholder="https://..." />
+          </label>
+          <label class="simple-field">
+            <span>タグ (カンマ区切り)</span>
+            <input id="workplaceEditorTags" type="text" placeholder="wifi, 電源, 静か" />
+          </label>
+          <label class="simple-field">
+            <span>説明 / メモ</span>
+            <textarea id="workplaceEditorDescription" rows="6" placeholder="営業時間・wifi・電源・席数・雰囲気など"></textarea>
+          </label>
+          <label class="simple-check-row">
+            <input id="workplaceEditorShareable" type="checkbox" />
+            <span>シェア可能にする</span>
+          </label>
+          <div class="simple-actions">
+            <button id="workplaceEditorSaveBtn">保存</button>
+            <button id="workplaceEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
+        </section>
+      </div>`;
+    content.appendChild(div);
+  }
+
+  const settingsTabs = document.querySelector('.settings-tabs');
+  const footer = document.querySelector('.settings-footer');
+  if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
+    for (const spec of [
+      ['privacy', 'プライバシー / 表示'],
+      ['setup', 'セットアップ手順'],
+    ]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'settings-tab';
+      b.dataset.stab = spec[0];
+      b.setAttribute('role', 'tab');
+      b.textContent = spec[1];
+      settingsTabs.appendChild(b);
+    }
+  }
+  if (footer && !$('privacySettingsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'privacySettingsBody';
+    sec.className = 'settings-tab-body hidden';
+    sec.dataset.stab = 'privacy';
+    sec.innerHTML = `
+      <h4>プライバシー / 表示</h4>
+      <label class="check-inline"><input id="tracksEnabled" type="checkbox" /> 軌跡を記録する</label>
+      <label class="check-inline"><input id="tracksVisible" type="checkbox" /> 軌跡タブとデータを表示する</label>
+      <label class="check-inline"><input id="mealsEnabled" type="checkbox" /> 食事を記録する</label>
+      <label class="check-inline"><input id="mealsVisible" type="checkbox" /> 食事タブとデータを表示する</label>
+      <label class="check-inline"><input id="tasksActioShareEnabled" type="checkbox" /> タスクの Actio シェアを許可する</label>
+      <label>Actio シェア URL: <input id="actioShareUrl" type="text" placeholder="http://localhost:.../api/tasks/import" /></label>
+      <h4 style="margin-top:12px">タスクリマインド</h4>
+      <label class="check-inline"><input id="taskReminderEnabled" type="checkbox" /> 毎朝タスクリマインドを送る</label>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">リマインド時刻:
+        <input id="taskReminderHour" type="number" min="0" max="23" style="width:52px" />
+        時
+        <input id="taskReminderMinute" type="number" min="0" max="59" style="width:52px" />
+        分
+      </label>
+      <label class="check-inline"><input id="taskReminderNuntiusEnabled" type="checkbox" /> Nuntius にも送る</label>
+      <label>Nuntius URL: <input id="taskReminderNuntiusUrl" type="text" placeholder="https://nuntius.example.com/notify" /></label>
+      <h4 style="margin-top:12px">MCP サーバ</h4>
+      <label class="check-inline"><input id="mcpAutostartEnabled" type="checkbox" /> Memoria 起動時に MCP サーバを同時起動する (任意)</label>
+      <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
+      <label class="check-inline"><input id="workplaceGeoEnabled" type="checkbox" /> GPS で現在地を取得して作業場所をマッチする</label>
+      <label class="check-inline"><input id="workplaceAutoShareEnabled" type="checkbox" /> 作業場所が切り替わったとき Hub に共有する (オプトイン)</label>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径:
+        <input id="workplaceMatchRadiusM" type="number" min="20" max="2000" step="10" style="width:80px" />
+        m
+      </label>
+      <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+  if (footer && !$('setupDocsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'setupDocsBody';
+    sec.className = 'settings-tab-body hidden';
+    sec.dataset.stab = 'setup';
+    sec.innerHTML = `
+      <h4>セットアップ手順</h4>
+      <div id="setupDocsList" class="setup-docs-list"></div>
+      <pre id="setupDocBody" class="setup-doc-body"></pre>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+
+  upgradeTaskFormMarkup();
+  upgradeImplementationFormMarkup();
+  setupTaskFormKeyboard();
+  setupImplementationFormKeyboard();
+
+  if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
+    $('taskForm')?.classList.remove('hidden');
+    $('taskTitle')?.focus();
+  };
+  if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
+  if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
+  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
+    $('implForm')?.classList.remove('hidden');
+    $('implProduct')?.focus();
+  };
+  if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
+  if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
+}
+
+function localDatetimeValue(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function dueShortcutValue(kind) {
+  const d = new Date();
+  if (kind === 'tomorrow') d.setDate(d.getDate() + 1);
+  if (kind === 'saturday') {
+    const day = d.getDay();
+    const delta = day <= 6 ? 6 - day : 6;
+    d.setDate(d.getDate() + delta);
+  }
+  d.setHours(23, 59, 0, 0);
+  return localDatetimeValue(d);
+}
+
+function upgradeTaskFormMarkup() {
+  const form = $('taskForm');
+  if (!form || form.dataset.upgraded === '1') return;
+  form.dataset.upgraded = '1';
+  form.innerHTML = `
+    <label class="simple-field">
+      <span>タスク名</span>
+      <input id="taskTitle" type="text" placeholder="直近やること" />
+    </label>
+    <label class="simple-field">
+      <span>期日</span>
+      <input id="taskDue" type="datetime-local" />
+    </label>
+    <div class="task-due-shortcuts" aria-label="期日のショートカット">
+      <button type="button" class="ghost" data-task-due-shortcut="today">今日</button>
+      <button type="button" class="ghost" data-task-due-shortcut="tomorrow">明日</button>
+      <button type="button" class="ghost" data-task-due-shortcut="saturday">今週中(土曜締め)</button>
+    </div>
+    <label class="simple-check-row">
+      <input id="taskShareActio" type="checkbox" tabindex="-1" />
+      <span>Actio にシェアする</span>
+    </label>
+    <label class="simple-field">
+      <span>メモ</span>
+      <textarea id="taskDetails" rows="6" placeholder="タスク内容のメモ"></textarea>
+    </label>
+    <div class="simple-actions">
+      <button id="taskAddBtn">追加</button>
+      <button id="taskCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>`;
+  form.querySelectorAll('[data-task-due-shortcut]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $('taskDue').value = dueShortcutValue(btn.dataset.taskDueShortcut);
+      $('taskDetails')?.focus();
+    });
+  });
+}
+
+function setupTaskFormKeyboard() {
+  const title = $('taskTitle');
+  const due = $('taskDue');
+  const details = $('taskDetails');
+  const add = $('taskAddBtn');
+  if (title) title.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      due?.focus();
+    }
+  };
+  if (due) due.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      details?.focus();
+    }
+  };
+  if (details) details.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      add?.focus();
+    }
+  };
+}
+
+upgradeImplementationFormMarkup = function () {
+  const form = $('implForm');
+  if (!form || form.dataset.upgraded === '1') return;
+  form.dataset.upgraded = '1';
+  form.innerHTML = `
+    <label class="simple-field">
+      <span>プロダクト名</span>
+      <input id="implProduct" type="text" placeholder="Memoria" />
+    </label>
+    <label class="simple-field">
+      <span>タイトル</span>
+      <input id="implTitle" type="text" placeholder="短いタイトル" />
+    </label>
+    <label class="simple-field">
+      <span>良かった点</span>
+      <textarea id="implGood" rows="5" placeholder="実装して良かった点"></textarea>
+    </label>
+    <label class="simple-field">
+      <span>悪かった点 / トレードオフ</span>
+      <textarea id="implBad" rows="4" placeholder="悪かった点、迷った点、次に直したい点"></textarea>
+    </label>
+    <label class="simple-check-row">
+      <input id="implShareable" type="checkbox" tabindex="-1" />
+      <span>シェア可能にする</span>
+    </label>
+    <div class="simple-actions">
+      <button id="implAddBtn">追加</button>
+      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>`;
+};
+
+setupImplementationFormKeyboard = function () {
+  const product = $('implProduct');
+  const title = $('implTitle');
+  const good = $('implGood');
+  const bad = $('implBad');
+  const add = $('implAddBtn');
+  if (product) product.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      title?.focus();
+    }
+  };
+  if (title) title.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      good?.focus();
+    }
+  };
+  if (good) good.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      bad?.focus();
+    }
+  };
+  if (bad) bad.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      add?.focus();
+    }
+  };
+}
+
+let _localReminderTimer = null;
+function scheduleLocalTaskReminder(hour, minute) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (_localReminderTimer) { clearTimeout(_localReminderTimer); _localReminderTimer = null; }
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(hour, minute, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  _localReminderTimer = setTimeout(async () => {
+    _localReminderTimer = null;
+    try {
+      const { items = [] } = await api('/api/tasks');
+      const pending = items.filter(t => t.status === 'todo' || t.status === 'doing');
+      if (pending.length) {
+        const body = pending.slice(0, 3).map(t => `・${t.title}`).join('\n');
+        new Notification('📋 本日のタスクリマインド', { body, icon: '/icon-192.png' });
+      }
+    } catch {}
+    scheduleLocalTaskReminder(hour, minute);
+  }, next.getTime() - now.getTime());
+}
+
+async function loadPrivacySettings() {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/privacy/settings');
+  const s = r.settings || {};
+  if ($('tracksEnabled')) $('tracksEnabled').checked = !!s.tracks_enabled;
+  if ($('tracksVisible')) $('tracksVisible').checked = !!s.tracks_visible;
+  if ($('mealsEnabled')) $('mealsEnabled').checked = !!s.meals_enabled;
+  if ($('mealsVisible')) $('mealsVisible').checked = !!s.meals_visible;
+  if ($('tasksActioShareEnabled')) $('tasksActioShareEnabled').checked = !!s.tasks_actio_share_enabled;
+  if ($('actioShareUrl')) $('actioShareUrl').value = s.actio_share_url || '';
+  if ($('taskReminderEnabled')) $('taskReminderEnabled').checked = !!s.tasks_reminder_enabled;
+  if ($('taskReminderHour')) $('taskReminderHour').value = s.tasks_reminder_hour ?? 6;
+  if ($('taskReminderMinute')) $('taskReminderMinute').value = s.tasks_reminder_minute ?? 0;
+  if ($('taskReminderNuntiusEnabled')) $('taskReminderNuntiusEnabled').checked = !!s.tasks_reminder_nuntius_enabled;
+  if ($('taskReminderNuntiusUrl')) $('taskReminderNuntiusUrl').value = s.tasks_reminder_nuntius_url || '';
+  if ($('mcpAutostartEnabled')) $('mcpAutostartEnabled').checked = !!s.mcp_autostart_enabled;
+  if ($('workplaceGeoEnabled')) $('workplaceGeoEnabled').checked = !!s.workplace_geo_enabled;
+  if ($('workplaceAutoShareEnabled')) $('workplaceAutoShareEnabled').checked = !!s.workplace_auto_share_enabled;
+  if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 150;
+  configureWorkplaceCheckin(!!s.workplace_geo_enabled);
+  if (s.tasks_reminder_enabled) {
+    scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
+  }
+  applyFeatureVisibility(s);
+}
+
+async function savePrivacySettings() {
+  if (!$('tracksEnabled')) return;
+  const r = await api('/api/privacy/settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tracks_enabled: $('tracksEnabled').checked,
+      tracks_visible: $('tracksVisible').checked,
+      meals_enabled: $('mealsEnabled').checked,
+      meals_visible: $('mealsVisible').checked,
+      tasks_actio_share_enabled: $('tasksActioShareEnabled').checked,
+      actio_share_url: $('actioShareUrl').value.trim(),
+      tasks_reminder_enabled: !!($('taskReminderEnabled')?.checked),
+      tasks_reminder_hour: Number($('taskReminderHour')?.value ?? 6),
+      tasks_reminder_minute: Number($('taskReminderMinute')?.value ?? 0),
+      tasks_reminder_nuntius_enabled: !!($('taskReminderNuntiusEnabled')?.checked),
+      tasks_reminder_nuntius_url: $('taskReminderNuntiusUrl')?.value.trim() || '',
+      mcp_autostart_enabled: !!($('mcpAutostartEnabled')?.checked),
+      workplace_geo_enabled: !!($('workplaceGeoEnabled')?.checked),
+      workplace_auto_share_enabled: !!($('workplaceAutoShareEnabled')?.checked),
+      workplace_match_radius_m: Number($('workplaceMatchRadiusM')?.value ?? 150),
+    }),
+  });
+  const s = r.settings || {};
+  if (s.tasks_reminder_enabled) {
+    scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
+  }
+  configureWorkplaceCheckin(!!s.workplace_geo_enabled);
+  applyFeatureVisibility(s);
+}
+
+function applyFeatureVisibility(s) {
+  const tracksTab = document.querySelector('.tab[data-tab="tracks"]');
+  const mealsTab = document.querySelector('.tab[data-tab="meals"]');
+  if (tracksTab) tracksTab.hidden = s.tracks_visible === false;
+  if (mealsTab) mealsTab.hidden = s.meals_visible === false;
+  if (state.tab === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
+  if (state.tab === 'meals' && s.meals_visible === false) switchTab('bookmarks');
+  reflowTabsForViewport();
+}
+
+async function loadSetupDocs() {
+  ensureMemoriaFeatureViews();
+  const root = $('setupDocsList');
+  if (!root) return;
+  const r = await api('/api/setup-docs');
+  root.innerHTML = (r.docs || []).map(d => `<button class="ghost" data-doc="${escapeHtml(d.key)}">${escapeHtml(d.title)}</button>`).join('');
+  root.querySelectorAll('button[data-doc]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const doc = await api(`/api/setup-docs/${encodeURIComponent(btn.dataset.doc)}`);
+      $('setupDocBody').textContent = doc.body || '';
+    });
+  });
+  if ((r.docs || [])[0]) root.querySelector('button[data-doc]')?.click();
+}
+
+async function loadTasks() {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/tasks');
+  const items = r.items || [];
+  const list = $('tasksList');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty">タスクはまだありません。</div>';
+    return;
+  }
+  list.innerHTML = items.map(t => `
+    <div class="simple-item" data-id="${t.id}">
+      <div class="simple-item-head">
+        <strong>${escapeHtml(t.title)}</strong>
+        <select data-task-status="${t.id}">
+          ${['todo','doing','done'].map(s => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="muted">${escapeHtml(t.due_at || '')}</div>
+      <p>${escapeHtml(t.details || '')}</p>
+      <div class="simple-actions">
+        <button class="ghost" data-task-share="${t.id}">Actio にシェア</button>
+        <button class="danger" data-task-delete="${t.id}">削除</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-task-status]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      await api(`/api/tasks/${sel.dataset.taskStatus}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: sel.value }),
+      });
+      loadTasks();
+    });
+  });
+  list.querySelectorAll('[data-task-share]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try { await api(`/api/tasks/${btn.dataset.taskShare}/share/actio`, { method: 'POST' }); showShareToast('Actio にシェアしました'); }
+      catch (e) { alert(e.message); }
+      loadTasks();
+    });
+  });
+  list.querySelectorAll('[data-task-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/tasks/${btn.dataset.taskDelete}`, { method: 'DELETE' });
+      loadTasks();
+    });
+  });
+}
+
+async function addTaskFromForm() {
+  const title = $('taskTitle')?.value.trim();
+  if (!title) return;
+  await api('/api/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title,
+      details: $('taskDetails')?.value.trim() || '',
+      due_at: $('taskDue')?.value || null,
+      share_actio: !!$('taskShareActio')?.checked,
+    }),
+  });
+  $('taskTitle').value = '';
+  $('taskDetails').value = '';
+  $('taskForm')?.classList.add('hidden');
+  loadTasks();
+}
+
+async function loadImplementationNotes() {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/implementation-notes');
+  const list = $('implList');
+  const items = r.items || [];
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
+    return;
+  }
+  list.innerHTML = items.map(n => `
+    <div class="simple-item" data-id="${n.id}">
+      <div class="simple-item-head"><strong>${escapeHtml(n.product)}: ${escapeHtml(n.title)}</strong></div>
+      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
+      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
+      <div class="simple-actions">
+        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
+        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
+        <button class="danger" data-impl-delete="${n.id}">削除</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-impl-share]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/api/multi/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
+        });
+        showShareToast('実装自慢をシェアしました');
+      }
+      catch (e) { alert(e.message); }
+      loadImplementationNotes();
+    });
+  });
+  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
+      loadImplementationNotes();
+    });
+  });
+}
+
+async function addImplementationNoteFromForm() {
+  const product = $('implProduct')?.value.trim();
+  const title = $('implTitle')?.value.trim();
+  if (!product || !title) return;
+  await api('/api/implementation-notes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      product,
+      title,
+      good_points: $('implGood')?.value.trim() || '',
+      bad_points: $('implBad')?.value.trim() || '',
+      shareable: !!$('implShareable')?.checked,
+    }),
+  });
+  for (const id of ['implProduct', 'implTitle', 'implGood', 'implBad']) $(id).value = '';
+  $('implForm')?.classList.add('hidden');
+  loadImplementationNotes();
+}
+
+function implementationAttachmentLabel(type) {
+  return ({
+    github: 'GitHub のプロダクト',
+    screenshot: 'スクリーンキャプチャ',
+    video: '動画',
+    code: 'コードスニペット',
+    other: 'その他',
+  })[type] || '';
+}
+
+function renderImplementationAttachment(note) {
+  const type = note.attachment_type || '';
+  const value = note.attachment_value || '';
+  if (!type || !value) return '';
+  const label = implementationAttachmentLabel(type) || '添付';
+  if (type === 'code') {
+    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><pre><code>${escapeHtml(value)}</code></pre></div>`;
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><a href="${escapeHtml(value)}" target="_blank" rel="noopener">${escapeHtml(value)}</a></div>`;
+  }
+  return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><p>${escapeHtml(value)}</p></div>`;
+}
+
+upgradeImplementationFormMarkup = function () {
+  const form = $('implForm');
+  if (!form || form.dataset.upgraded === '2') return;
+  form.dataset.upgraded = '2';
+  form.innerHTML = `
+    <label class="simple-field">
+      <span>ドヤポイント</span>
+      <input id="implTitle" type="text" placeholder="ここを作り込んだ、ここが気持ちいい" />
+    </label>
+    <label class="simple-field">
+      <span>良かった点</span>
+      <textarea id="implGood" rows="5" placeholder="設計、実装、体験で良かった点"></textarea>
+    </label>
+    <label class="simple-field">
+      <span>悪かった点 / トレードオフ</span>
+      <textarea id="implBad" rows="4" placeholder="迷った点、直したい点、次に改善する点"></textarea>
+    </label>
+    <label class="simple-field">
+      <span>添付するもの</span>
+      <select id="implAttachmentType">
+        <option value="">なし</option>
+        <option value="github">GitHub のプロダクト</option>
+        <option value="screenshot">スクリーンキャプチャ</option>
+        <option value="video">動画</option>
+        <option value="code">コードスニペット</option>
+        <option value="other">その他</option>
+      </select>
+    </label>
+    <label class="simple-field">
+      <span>添付内容</span>
+      <textarea id="implAttachmentValue" rows="4" placeholder="URL、画像や動画のパス、コードなどを 1 つだけ記入"></textarea>
+    </label>
+    <label class="simple-check-row">
+      <input id="implShareable" type="checkbox" tabindex="-1" />
+      <span>シェア可能にする</span>
+    </label>
+    <div class="simple-actions">
+      <button id="implAddBtn">追加</button>
+      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>`;
+};
+
+setupImplementationFormKeyboard = function () {
+  const title = $('implTitle');
+  const good = $('implGood');
+  const bad = $('implBad');
+  const attachmentType = $('implAttachmentType');
+  const attachmentValue = $('implAttachmentValue');
+  const add = $('implAddBtn');
+  if (title) title.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      good?.focus();
+    }
+  };
+  if (good) good.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      bad?.focus();
+    }
+  };
+  if (bad) bad.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      attachmentType?.focus();
+    }
+  };
+  if (attachmentType) attachmentType.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      attachmentValue?.focus();
+    }
+  };
+  if (attachmentValue) attachmentValue.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      add?.focus();
+    }
+  };
+};
+
+loadImplementationNotes = async function () {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/implementation-notes');
+  const list = $('implList');
+  const items = r.items || [];
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
+    return;
+  }
+  list.innerHTML = items.map(n => `
+    <div class="simple-item" data-id="${n.id}" data-impl-open="${n.id}">
+      <div class="simple-item-head"><strong>${escapeHtml(n.title)}</strong></div>
+      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
+      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
+      ${renderImplementationAttachment(n)}
+      <div class="simple-actions">
+        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
+        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
+        <button class="danger" data-impl-delete="${n.id}">削除</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('[data-impl-share]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await api('/api/multi/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
+        });
+        showShareToast('実装自慢をシェアしました');
+      }
+      catch (e) { alert(e.message); }
+      loadImplementationNotes();
+    });
+  });
+  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
+      loadImplementationNotes();
+    });
+  });
+  list.querySelectorAll('[data-impl-open]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('button,a,input,select,textarea')) return;
+      const id = Number(el.dataset.implOpen || 0);
+      const note = items.find((n) => n.id === id);
+      if (note) openImplEditor(note);
+    });
+  });
+};
+
+addImplementationNoteFromForm = async function () {
+  const title = $('implEditorTitle')?.value.trim();
+  if (!title) return;
+  const noteId = Number($('implEditorNoteId')?.value || 0);
+  const payload = {
+    title,
+    good_points: $('implEditorGood')?.value.trim() || '',
+    bad_points: $('implEditorBad')?.value.trim() || '',
+    attachment_type: $('implEditorAttachmentType')?.value || '',
+    attachment_value: $('implEditorAttachmentValue')?.value.trim() || '',
+    shareable: !!$('implEditorShareable')?.checked,
+  };
+  if (noteId) {
+    await api(`/api/implementation-notes/${noteId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } else {
+    await api('/api/implementation-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+  closeImplEditor();
+  loadImplementationNotes();
+};
+
+renderDomainList = function () {
+  const ul = $('domainList');
+  if (!state.domainEntries.length) {
+    ul.innerHTML = '<li class="dict-empty">ドメイン辞書はまだ空です。アクセス履歴の生成によって自動で追加されます。</li>';
+    return;
+  }
+  ul.innerHTML = state.domainEntries.map(e => {
+    const desc = (e.description || '').trim();
+    const can = (e.can_do || '').trim();
+    const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
+    return `
+    <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
+      <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
+      <div class="dict-meta">
+        <span>${escapeHtml(e.domain)}</span>
+        <span>本日 ${e.visits_today} / 週 ${e.visits_week}</span>
+      </div>
+    </li>`;
+  }).join('');
+  ul.querySelectorAll('.dict-item').forEach(li => {
+    li.addEventListener('click', () => loadDomainEntry(li.dataset.domain));
+  });
+};
+
+renderDomainDetail = function () {
+  const e = state.domainDetail;
+  const panel = $('domainDetail');
+  if (!e) { hideModal('domainDetail'); return; }
+  showModal('domainDetail');
+  $('domainKey').value = e.domain;
+  $('domainSiteName').value = e.site_name || '';
+  $('domainDesc').value = e.description || '';
+  $('domainCanDo').value = e.can_do || '';
+  $('domainKind').value = e.kind || '';
+  $('domainNotes').value = e.notes || '';
+  $('domainStats').innerHTML = `
+    <span class="domain-stat"><b>${e.visits_today ?? 0}</b><br>本日</span>
+    <span class="domain-stat"><b>${e.visits_week ?? 0}</b><br>過去7日</span>
+    <span class="domain-stat"><b>${e.visits_total ?? 0}</b><br>累計</span>
+    <span class="domain-stat"><b>${e.user_edited ? '✓' : '-'}</b><br>編集済み</span>
+    <span class="domain-stat"><b>${escapeHtml(e.status || '')}</b><br>状態</span>
+    <label class="domain-private-detail">
+      <input id="domainPrivateCheck" type="checkbox" ${e.domain_private ? 'checked' : ''} />
+      <span>日記では非表示</span>
+    </label>
+  `;
+  const privateCheck = $('domainPrivateCheck');
+  if (privateCheck) {
+    privateCheck.onchange = async () => {
+      const checked = privateCheck.checked;
+      try {
+        await api(`/api/domains/${encodeURIComponent(e.domain)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain_private: checked }),
+        });
+        e.domain_private = checked ? 1 : 0;
+        const row = state.domainEntries.find(x => x.domain === e.domain);
+        if (row) row.domain_private = e.domain_private;
+        flashToast(checked ? '日記では非表示にしました' : '日記に表示するようにしました');
+      } catch (err) {
+        privateCheck.checked = !checked;
+        alert(`private 更新失敗: ${err.message}`);
+      }
+    };
+  }
+};
+
+state.taskMenu = 'todo';
+state.taskItems = [];
+state.taskDetail = null;
+
+function taskDatePartition(task) {
+  if (!task.due_at) return 'middle';
+  const due = new Date(task.due_at);
+  if (Number.isNaN(due.getTime())) return 'middle';
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  return due.getTime() > today.getTime() ? 'right' : 'middle';
+}
+
+function formatTaskDue(dueAt) {
+  if (!dueAt) return '期日未設定';
+  const d = new Date(dueAt);
+  if (Number.isNaN(d.getTime())) return dueAt;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function taskCardHtml(t) {
+  const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
+  const doneBtn = t.status === 'done'
+    ? '<button class="ghost" disabled>Done</button>'
+    : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
+  return `
+    <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
+      <div class="task-card-head">
+        <strong>${escapeHtml(t.title)}</strong>
+        ${aiBadge}
+      </div>
+      <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
+      <p>${escapeHtml(t.details || '')}</p>
+      <div class="simple-actions">
+        ${doneBtn}
+        <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
+        <button class="danger" data-task-delete="${t.id}">削除</button>
+      </div>
+    </article>`;
+}
+
+function renderTaskDetail() {
+  // Task detail is edited in a modal dialog.
+}
+
+// ---- work locations -------------------------------------------------------
+
+let _workplaceItems = [];
+
+async function loadWorkLocations() {
+  ensureMemoriaFeatureViews();
+  const list = $('workplaceList');
+  if (!list) return;
+  try {
+    const r = await api('/api/work-locations');
+    _workplaceItems = r.items || [];
+  } catch (e) {
+    list.innerHTML = `<div class="queue-empty">読み込み失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!_workplaceItems.length) {
+    list.innerHTML = '<div class="queue-empty">まだ登録された場所がありません。「+ 場所を追加」から登録できます。</div>';
+    return;
+  }
+  list.innerHTML = _workplaceItems.map(w => {
+    const owner = w.owner_user_name ? `<span class="muted">by ${escapeHtml(w.owner_user_name)}</span>` : '';
+    const tags = (w.tags || '').split(',').map(s => s.trim()).filter(Boolean)
+      .map(t => `<span class="wl-meta">${escapeHtml(t)}</span>`).join(' ');
+    const link = w.url ? `<a href="${escapeHtml(w.url)}" target="_blank" rel="noopener">${escapeHtml(w.url)}</a>` : '';
+    const coord = (Number.isFinite(w.latitude) && Number.isFinite(w.longitude))
+      ? `<span class="muted">${w.latitude.toFixed(4)}, ${w.longitude.toFixed(4)}</span>` : '';
+    const sharedTag = w.shared_at
+      ? `シェア済み: ${escapeHtml(fmtDate(w.shared_at))}`
+      : (w.shareable ? 'シェア可能' : '非公開');
+    const isOwned = !w.owner_user_id;
+    return `
+      <div class="simple-item" data-id="${w.id}" data-workplace-open="${w.id}">
+        <div class="simple-item-head">
+          <strong>${escapeHtml(w.name)}</strong>
+          ${owner}
+        </div>
+        <div class="muted">${escapeHtml(w.address || '')}</div>
+        <div>${tags} ${coord}</div>
+        <p>${escapeHtml(w.description || '')}</p>
+        ${link ? `<div>${link}</div>` : ''}
+        <div class="simple-actions">
+          <span class="muted">${sharedTag}</span>
+          ${isOwned ? `<button class="ghost" data-workplace-share="${w.id}" ${w.shared_at ? 'disabled' : ''}>シェア</button>` : ''}
+          <button class="danger" data-workplace-delete="${w.id}">削除</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('[data-workplace-open]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('button,a,input,select,textarea')) return;
+      const id = Number(el.dataset.workplaceOpen || 0);
+      const w = _workplaceItems.find(x => x.id === id);
+      if (w) openWorkplaceEditor(w);
+    });
+  });
+  list.querySelectorAll('[data-workplace-share]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await api('/api/multi/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'work_location', id: Number(btn.dataset.workplaceShare) }),
+        });
+        showShareToast('作業場所をシェアしました');
+      } catch (e) { alert(e.message); }
+      loadWorkLocations();
+    });
+  });
+  list.querySelectorAll('[data-workplace-delete]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('この場所を削除しますか?')) return;
+      await api(`/api/work-locations/${btn.dataset.workplaceDelete}`, { method: 'DELETE' });
+      loadWorkLocations();
+    });
+  });
+}
+
+function openWorkplaceEditor(w = null) {
+  const isEdit = !!w;
+  if (!$('workplaceEditorModal')) return;
+  $('workplaceEditorHeading').textContent = isEdit ? '作業場所を変更' : '作業場所を追加';
+  $('workplaceEditorId').value = w?.id ? String(w.id) : '';
+  $('workplaceEditorName').value = w?.name || '';
+  $('workplaceEditorAddress').value = w?.address || '';
+  $('workplaceEditorLat').value = w?.latitude == null ? '' : w.latitude;
+  $('workplaceEditorLng').value = w?.longitude == null ? '' : w.longitude;
+  $('workplaceEditorUrl').value = w?.url || '';
+  $('workplaceEditorTags').value = w?.tags || '';
+  $('workplaceEditorDescription').value = w?.description || '';
+  $('workplaceEditorShareable').checked = !!w?.shareable;
+  showModal('workplaceEditorModal');
+  $('workplaceEditorName').focus();
+}
+
+function closeWorkplaceEditor() {
+  hideModal('workplaceEditorModal');
+}
+
+// ── GPS / Place API helpers ────────────────────────────────────────────────
+
+function getCurrentPositionPromise(opts = {}) {
+  return new Promise((resolve, reject) => {
+    if (!('geolocation' in navigator)) {
+      reject(new Error('このブラウザは Geolocation に対応していません'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos.coords),
+      (err) => reject(new Error(err.message || 'GPS 取得失敗')),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000, ...opts },
+    );
+  });
+}
+
+async function resolvePlaceForCoords(coords) {
+  return api('/api/work-locations/resolve-place', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+  });
+}
+
+async function fillEditorFromCurrentLocation() {
+  const status = $('workplaceEditorGpsStatus');
+  if (status) status.textContent = 'GPS 取得中…';
+  try {
+    const coords = await getCurrentPositionPromise();
+    if (status) status.textContent = '逆ジオコーディング中…';
+    const place = await resolvePlaceForCoords(coords).catch(() => null);
+    if ($('workplaceEditorLat')) $('workplaceEditorLat').value = coords.latitude.toFixed(6);
+    if ($('workplaceEditorLng')) $('workplaceEditorLng').value = coords.longitude.toFixed(6);
+    if (place?.name && !$('workplaceEditorName').value) {
+      $('workplaceEditorName').value = place.name;
+    }
+    if (place?.address && !$('workplaceEditorAddress').value) {
+      $('workplaceEditorAddress').value = place.address;
+    }
+    if (status) status.textContent = place?.name ? `取得: ${place.name}` : '座標のみ取得';
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${e.message}`;
+    else alert(`GPS 取得失敗: ${e.message}`);
+  }
+}
+
+async function openEditorFromCurrentGps() {
+  openWorkplaceEditor(null);
+  await fillEditorFromCurrentLocation();
+}
+
+let _workplaceCheckinTimer = null;
+let _workplaceGeoEnabled = false;
+const WORKPLACE_CHECKIN_INTERVAL_MS = 5 * 60 * 1000;
+
+async function _silentCheckin() {
+  if (!_workplaceGeoEnabled) return;
+  if (document.visibilityState !== 'visible') return;
+  try {
+    const coords = await getCurrentPositionPromise({ timeout: 8000, maximumAge: 60000 });
+    const r = await api('/api/work-locations/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+    });
+    const banner = $('workplaceCurrentBanner');
+    if (banner && r.matched) {
+      const broadcast = r.changed && r.broadcast?.ok ? ' ・ Hub に共有しました' : '';
+      banner.textContent = `📍 ${r.workplace.name}${broadcast}`;
+    }
+  } catch (e) {
+    // 静かに失敗 (バッテリ最適化で deny されるなど)。手動ボタンでは表示する。
+    console.debug('[workplace] silent checkin skipped:', e.message);
+  }
+}
+
+function configureWorkplaceCheckin(enabled) {
+  _workplaceGeoEnabled = !!enabled;
+  if (_workplaceCheckinTimer) {
+    clearInterval(_workplaceCheckinTimer);
+    _workplaceCheckinTimer = null;
+  }
+  if (_workplaceGeoEnabled) {
+    _workplaceCheckinTimer = setInterval(_silentCheckin, WORKPLACE_CHECKIN_INTERVAL_MS);
+    // visibility change で復帰時にも 1 回トリガー
+    document.addEventListener('visibilitychange', _onWorkplaceVisibility);
+  } else {
+    document.removeEventListener('visibilitychange', _onWorkplaceVisibility);
+  }
+}
+
+function _onWorkplaceVisibility() {
+  if (document.visibilityState === 'visible') _silentCheckin();
+}
+
+async function workplaceCheckinNow() {
+  const banner = $('workplaceCurrentBanner');
+  if (banner) banner.textContent = 'GPS 取得中…';
+  try {
+    const coords = await getCurrentPositionPromise();
+    const r = await api('/api/work-locations/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+    });
+    if (banner) {
+      if (r.matched) {
+        const dist = r.distance_m != null ? ` (${r.distance_m}m)` : '';
+        const broadcast = r.broadcast?.ok ? ' ・ Hub に共有済み' : (r.changed && r.broadcast?.error ? ` ・ Hub 共有失敗: ${r.broadcast.error}` : '');
+        banner.textContent = `📍 ${r.workplace.name}${dist}${broadcast}`;
+      } else {
+        banner.textContent = '近くに登録済みの作業場所がありません。「現在地から登録」で追加できます。';
+      }
+    }
+  } catch (e) {
+    if (banner) banner.textContent = `チェックイン失敗: ${e.message}`;
+  }
+}
+
+async function saveWorkLocationFromForm() {
+  const name = $('workplaceEditorName')?.value.trim();
+  if (!name) { alert('名前を入力してください'); return; }
+  const editId = Number($('workplaceEditorId')?.value || 0);
+  const latStr = $('workplaceEditorLat')?.value;
+  const lngStr = $('workplaceEditorLng')?.value;
+  const payload = {
+    name,
+    address: $('workplaceEditorAddress')?.value.trim() || null,
+    latitude: latStr === '' || latStr == null ? null : Number(latStr),
+    longitude: lngStr === '' || lngStr == null ? null : Number(lngStr),
+    url: $('workplaceEditorUrl')?.value.trim() || null,
+    tags: $('workplaceEditorTags')?.value.trim() || null,
+    description: $('workplaceEditorDescription')?.value.trim() || null,
+    shareable: !!$('workplaceEditorShareable')?.checked,
+  };
+  try {
+    if (editId) {
+      await api(`/api/work-locations/${editId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api('/api/work-locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    closeWorkplaceEditor();
+    await loadWorkLocations();
+  } catch (e) {
+    alert(`保存に失敗しました: ${e.message}`);
+  }
+}
+
+function openTaskEditor(task = null) {
+  const isEdit = !!task;
+  if (!$('taskEditorModal')) return;
+  $('taskEditorHeading').textContent = isEdit ? 'タスクを変更' : 'タスクを追加';
+  $('taskEditorTitle').value = task?.title || '';
+  $('taskEditorDue').value = task?.due_at ? String(task.due_at).slice(0, 16) : '';
+  $('taskEditorStatus').value = task?.status || 'todo';
+  $('taskEditorDetails').value = task?.details || '';
+  $('taskEditorShareActio').checked = !!task?.share_actio;
+  $('taskEditorTaskId').value = task?.id ? String(task.id) : '';
+  showModal('taskEditorModal');
+  $('taskEditorTitle').focus();
+}
+
+function closeTaskEditor() {
+  hideModal('taskEditorModal');
+}
+
+function openImplEditor(note = null) {
+  const isEdit = !!note;
+  if (!$('implEditorModal')) return;
+  $('implEditorHeading').textContent = isEdit ? '実装自慢を変更' : '実装自慢を追加';
+  $('implEditorNoteId').value = note?.id ? String(note.id) : '';
+  $('implEditorTitle').value = note?.title || '';
+  $('implEditorGood').value = note?.good_points || '';
+  $('implEditorBad').value = note?.bad_points || '';
+  $('implEditorAttachmentType').value = note?.attachment_type || '';
+  $('implEditorAttachmentValue').value = note?.attachment_value || '';
+  $('implEditorShareable').checked = !!note?.shareable;
+  showModal('implEditorModal');
+  $('implEditorTitle').focus();
+}
+
+function closeImplEditor() {
+  hideModal('implEditorModal');
+}
+
+function renderTaskBoard() {
+  const menu = $('tasksMenu');
+  const middle = $('tasksDueNow');
+  const right = $('tasksFuture');
+  if (!menu || !middle || !right) return;
+  menu.querySelectorAll('[data-task-menu]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.taskMenu === state.taskMenu);
+  });
+  const base = state.taskMenu === 'done'
+    ? state.taskItems.filter((t) => t.status === 'done')
+    : state.taskItems.filter((t) => t.status !== 'done');
+  const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
+  const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
+  middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
+  right.innerHTML = rightItems.length ? rightItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
+
+  document.querySelectorAll('[data-task-open]').forEach((el) => {
+    el.addEventListener('click', (ev) => {
+      const id = Number(el.dataset.taskOpen);
+      if (ev.target.closest('button')) return;
+      state.taskDetail = state.taskItems.find((t) => t.id === id) || null;
+      openTaskEditor(state.taskDetail);
+    });
+  });
+  document.querySelectorAll('[data-task-done]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/tasks/${btn.dataset.taskDone}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' }),
+      });
+      await loadTasks();
+    });
+  });
+  document.querySelectorAll('[data-task-share]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await api(`/api/tasks/${btn.dataset.taskShare}/share/actio`, { method: 'POST' });
+        showShareToast('Actio にシェアしました');
+      } catch (e) {
+        alert(e.message);
+      }
+      await loadTasks();
+    });
+  });
+  document.querySelectorAll('[data-task-delete]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await api(`/api/tasks/${btn.dataset.taskDelete}`, { method: 'DELETE' });
+      if (state.taskDetail?.id === Number(btn.dataset.taskDelete)) state.taskDetail = null;
+      await loadTasks();
+    });
+  });
+  document.querySelectorAll('[data-task-drag]').forEach((el) => {
+    el.addEventListener('dragstart', (ev) => {
+      const id = el.dataset.taskDrag;
+      if (!id) return;
+      ev.dataTransfer?.setData('text/plain', id);
+      ev.dataTransfer.effectAllowed = 'move';
+      document.body.classList.add('task-dragging');
+    });
+    el.addEventListener('dragend', () => {
+      document.body.classList.remove('task-dragging');
+    });
+  });
+  const doneDrop = $('taskDoneDrop');
+  if (doneDrop) {
+    doneDrop.ondragover = (ev) => {
+      ev.preventDefault();
+      doneDrop.classList.add('drag-over');
+    };
+    doneDrop.ondragleave = () => doneDrop.classList.remove('drag-over');
+    doneDrop.ondrop = async (ev) => {
+      ev.preventDefault();
+      doneDrop.classList.remove('drag-over');
+      document.body.classList.remove('task-dragging');
+      const id = Number(ev.dataTransfer?.getData('text/plain') || 0);
+      if (!id) return;
+      await api(`/api/tasks/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' }),
+      });
+      await loadTasks();
+    };
+  }
+}
+
+function decorateTaskAndImplTabs() {
+  const taskTab = document.querySelector('.tab[data-tab="tasks"]');
+  const implTab = document.querySelector('.tab[data-tab="impl"]');
+  if (taskTab) {
+    const label = taskTab.querySelector('.tab-label');
+    if (label) {
+      label.textContent = '📝 タスク';
+      label.dataset.full = '📝 タスク';
+      label.dataset.short = '📝 タスク';
+    }
+    if (!isNarrowViewport()) taskTab.style.order = '-20';
+    else taskTab.style.order = '';
+  }
+  if (implTab) {
+    const label = implTab.querySelector('.tab-label');
+    if (label) {
+      label.textContent = '✨ 実装自慢';
+      label.dataset.full = '✨ 実装自慢';
+      label.dataset.short = '✨ 実装自慢';
+    }
+    if (!isNarrowViewport()) implTab.style.order = '-19';
+    else implTab.style.order = '';
+  }
+}
+
+const baseEnsureMemoriaFeatureViews = ensureMemoriaFeatureViews;
+ensureMemoriaFeatureViews = function () {
+  baseEnsureMemoriaFeatureViews();
+  const tasksView = $('tasksView');
+  if (tasksView && tasksView.dataset.v2 !== '1') {
+    tasksView.dataset.v2 = '1';
+    tasksView.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-panel-head">
+          <h2>📝 タスク</h2>
+          <button id="taskNewBtn" type="button">+ 追加</button>
+        </div>
+        <div id="taskForm" class="simple-form hidden"></div>
+        <div class="tasks-three-pane">
+          <aside id="tasksMenu" class="tasks-menu">
+            <button type="button" data-task-menu="todo" class="active">TODO</button>
+            <button type="button" data-task-menu="done">完了済み</button>
+            <div id="taskDoneDrop" class="task-done-drop" title="タスクをここにドロップで完了">
+              完了
+            </div>
+          </aside>
+          <section class="tasks-pane">
+            <h3>今日が期限 / 期限切れ</h3>
+            <div id="tasksDueNow" class="simple-list"></div>
+          </section>
+          <section class="tasks-pane">
+            <h3>未来のタスク</h3>
+            <div id="tasksFuture" class="simple-list"></div>
+          </section>
+        </div>
+        <section id="taskEditorModal" class="dict-detail modal-panel hidden foundation-form">
+          <button type="button" class="modal-close" id="taskEditorClose" aria-label="close">×</button>
+          <h3 id="taskEditorHeading">タスクを追加</h3>
+          <input type="hidden" id="taskEditorTaskId" />
+          <label class="simple-field">
+            <span>タスク内容</span>
+            <input id="taskEditorTitle" type="text" />
+          </label>
+          <label class="simple-field">
+            <span>期日</span>
+            <input id="taskEditorDue" type="datetime-local" />
+          </label>
+          <div class="task-due-shortcuts" aria-label="期日のショートカット">
+            <button type="button" class="ghost" data-task-editor-due-shortcut="today">今日</button>
+            <button type="button" class="ghost" data-task-editor-due-shortcut="tomorrow">明日</button>
+            <button type="button" class="ghost" data-task-editor-due-shortcut="weekend">今週末</button>
+          </div>
+          <label class="simple-field">
+            <span>ステータス</span>
+            <select id="taskEditorStatus">
+              <option value="todo">TODO</option>
+              <option value="doing">DOING</option>
+              <option value="done">DONE</option>
+            </select>
+          </label>
+          <label class="simple-check-row">
+            <input id="taskEditorShareActio" type="checkbox" />
+            <span>Actio にシェアする</span>
+          </label>
+          <label class="simple-field">
+            <span>メモ</span>
+            <textarea id="taskEditorDetails" rows="6"></textarea>
+          </label>
+          <div class="simple-actions">
+            <button id="taskEditorSaveBtn">保存</button>
+            <button id="taskEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
+        </section>
+      </div>`;
+  }
+  const implView = $('implView');
+  if (implView && !$('implEditorModal')) {
+    const panel = implView.querySelector('.simple-panel') || implView;
+    const modal = document.createElement('section');
+    modal.id = 'implEditorModal';
+    modal.className = 'dict-detail modal-panel hidden foundation-form';
+    modal.innerHTML = `
+      <button type="button" class="modal-close" id="implEditorClose" aria-label="close">×</button>
+      <h3 id="implEditorHeading">実装自慢を追加</h3>
+      <input type="hidden" id="implEditorNoteId" />
+      <label class="simple-field">
+        <span>ドヤポイント</span>
+        <input id="implEditorTitle" type="text" />
+      </label>
+      <label class="simple-field">
+        <span>良かった点</span>
+        <textarea id="implEditorGood" rows="5"></textarea>
+      </label>
+      <label class="simple-field">
+        <span>悪かった点 / トレードオフ</span>
+        <textarea id="implEditorBad" rows="4"></textarea>
+      </label>
+      <label class="simple-field">
+        <span>添付するもの</span>
+        <select id="implEditorAttachmentType">
+          <option value="">なし</option>
+          <option value="github">GitHub のプロダクト</option>
+          <option value="screenshot">スクリーンキャプチャ</option>
+          <option value="video">動画</option>
+          <option value="code">コードスニペット</option>
+          <option value="other">その他</option>
+        </select>
+      </label>
+      <label class="simple-field">
+        <span>添付内容</span>
+        <textarea id="implEditorAttachmentValue" rows="4"></textarea>
+      </label>
+      <label class="simple-check-row">
+        <input id="implEditorShareable" type="checkbox" />
+        <span>シェア可能にする</span>
+      </label>
+      <div class="simple-actions">
+        <button id="implEditorSaveBtn">保存</button>
+        <button id="implEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+      </div>`;
+    panel.appendChild(modal);
+  }
+  decorateTaskAndImplTabs();
+  upgradeTaskFormMarkup();
+  upgradeImplementationFormMarkup();
+  setupTaskFormKeyboard();
+  setupImplementationFormKeyboard();
+  if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
+    openTaskEditor(null);
+  };
+  if ($('taskEditorClose')) $('taskEditorClose').onclick = closeTaskEditor;
+  if ($('taskEditorCancelBtn')) $('taskEditorCancelBtn').onclick = closeTaskEditor;
+  if ($('taskEditorSaveBtn')) $('taskEditorSaveBtn').onclick = addTaskFromForm;
+  wireTaskEditorDueShortcuts();
+  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
+    openImplEditor(null);
+  };
+  if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
+  if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
+  if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
+  if ($('workplaceNewBtn')) $('workplaceNewBtn').onclick = () => openWorkplaceEditor(null);
+  if ($('workplaceEditorClose')) $('workplaceEditorClose').onclick = closeWorkplaceEditor;
+  if ($('workplaceEditorCancelBtn')) $('workplaceEditorCancelBtn').onclick = closeWorkplaceEditor;
+  if ($('workplaceEditorSaveBtn')) $('workplaceEditorSaveBtn').onclick = saveWorkLocationFromForm;
+  if ($('workplaceEditorGpsBtn')) $('workplaceEditorGpsBtn').onclick = fillEditorFromCurrentLocation;
+  if ($('workplaceFromGpsBtn')) $('workplaceFromGpsBtn').onclick = openEditorFromCurrentGps;
+  if ($('workplaceCheckinBtn')) $('workplaceCheckinBtn').onclick = workplaceCheckinNow;
+  document.querySelectorAll('#tasksMenu [data-task-menu]').forEach((btn) => {
+    btn.onclick = () => {
+      state.taskMenu = btn.dataset.taskMenu;
+      renderTaskBoard();
+    };
+  });
+};
+
+loadTasks = async function () {
+  ensureMemoriaFeatureViews();
+  const r = await api('/api/tasks');
+  state.taskItems = r.items || [];
+  if (state.taskDetail?.id) {
+    state.taskDetail = state.taskItems.find((t) => t.id === state.taskDetail.id) || null;
+  }
+  renderTaskBoard();
+  renderTaskDetail();
+};
+
+addTaskFromForm = async function () {
+  const title = $('taskEditorTitle')?.value.trim();
+  if (!title) return;
+  const editId = Number($('taskEditorTaskId')?.value || 0);
+  if (editId) {
+    await api(`/api/tasks/${editId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        details: $('taskEditorDetails')?.value.trim() || '',
+        due_at: $('taskEditorDue')?.value || null,
+        status: $('taskEditorStatus')?.value || 'todo',
+        share_actio: !!$('taskEditorShareActio')?.checked,
+      }),
+    });
+  } else {
+    await api('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        details: $('taskEditorDetails')?.value.trim() || '',
+        due_at: $('taskEditorDue')?.value || null,
+        status: $('taskEditorStatus')?.value || 'todo',
+        share_actio: !!$('taskEditorShareActio')?.checked,
+        creator_type: 'human',
+      }),
+    });
+  }
+  closeTaskEditor();
+  await loadTasks();
+};
+
+window.addEventListener('resize', decorateTaskAndImplTabs);
+
+ensureMemoriaFeatureViews();
+loadPrivacySettings().catch(console.warn);
+
+// ── Worklog tab (作業ログ) ─────────────────────────────────────────────
+//
+// Sub-tabs: schedule / github / claude / gemini / codex / browsing / dig.
+// All views share `state.worklog.date` (YYYY-MM-DD, local). The day navigator
+// shifts ±1 day; the date input lets users jump to any day.
+
+state.worklog = { date: localDateStr(new Date()), sub: 'schedule' };
+
+function localDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+function shiftWorklogDate(deltaDays) {
+  const [y, m, d] = state.worklog.date.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + deltaDays);
+  state.worklog.date = localDateStr(dt);
+  syncWorklogDateInput();
+  loadWorklog();
+}
+function syncWorklogDateInput() {
+  const input = $('wlDate');
+  if (input) input.value = state.worklog.date;
+}
+
+const WL_SUB_VIEWS = {
+  schedule: 'wlScheduleView',
+  github: 'wlGithubView',
+  claude: 'wlClaudeView',
+  gemini: 'wlGeminiView',
+  codex: 'wlCodexView',
+  browsing: 'wlBrowsingView',
+  dig: 'wlDigView',
+};
+
+const WL_KIND_BY_SUB = {
+  github: 'git_commit',
+  claude: 'claude_code_prompt',
+  gemini: 'gemini_prompt',
+  codex: 'codex_prompt',
+};
+
+function switchWorklogSub(sub) {
+  if (!WL_SUB_VIEWS[sub]) return;
+  state.worklog.sub = sub;
+  document.querySelectorAll('.wl-subtab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.sub === sub);
+  });
+  for (const [key, viewId] of Object.entries(WL_SUB_VIEWS)) {
+    const view = $(viewId);
+    if (view) view.classList.toggle('hidden', key !== sub);
+  }
+  loadWorklog();
+}
+
+async function loadWorklog() {
+  syncWorklogDateInput();
+  const date = state.worklog.date;
+  const sub = state.worklog.sub;
+  if (sub === 'schedule') return loadWorklogSchedule(date);
+  if (sub === 'browsing') return loadWorklogBrowsing(date);
+  if (sub === 'dig') return loadWorklogDig(date);
+  if (WL_KIND_BY_SUB[sub]) {
+    await loadWorklogActivity(date, sub);
+    if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
+    return;
+  }
+}
+
+async function loadWorklogSchedule(date) {
+  try {
+    const [evs, ut] = await Promise.all([
+      api(`/api/worklog/server-events?date=${encodeURIComponent(date)}`),
+      api('/api/uptime'),
+    ]);
+    renderWorklogUptime(ut);
+    renderWorklogSchedule(evs.items || []);
+  } catch (e) { console.error(e); }
+}
+
+function renderWorklogUptime(u) {
+  const el = $('wlUptimeStatus');
+  if (!el) return;
+  if (!u?.heartbeat) { el.innerHTML = '<span style="color:var(--muted)">heartbeat 情報なし</span>'; return; }
+  const h = u.heartbeat;
+  const startedAt = h.server_started_at ? new Date(h.server_started_at) : null;
+  const lastHb = h.last_heartbeat_at ? new Date(h.last_heartbeat_at) : null;
+  const upMs = startedAt ? Date.now() - startedAt.getTime() : 0;
+  el.innerHTML = `
+    <span><b>稼働中</b> · 起動 ${startedAt ? startedAt.toLocaleString() : '?'} (${fmtElapsed(upMs)})</span>
+    <span style="margin-left:12px;color:var(--muted)">last heartbeat ${lastHb ? lastHb.toLocaleTimeString() : '?'}</span>
+  `;
+}
+
+function renderWorklogSchedule(items) {
+  const list = $('wlScheduleList');
+  const empty = $('wlScheduleEmpty');
+  if (!list || !empty) return;
+  if (!items.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    setWorklogSummary('この日のサーバ稼働イベントなし');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = items.map(e => {
+    const label = EVENT_LABELS[e.type] || e.type;
+    const occ = (e.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const dur = e.duration_ms ? ` · ${Math.round(e.duration_ms / 1000)}秒` : '';
+    const ended = e.ended_at ? ` → ${e.ended_at.replace('T',' ').slice(0,19)}` : '';
+    const det = e.details ? `<div class="ev-det">${escapeHtml(JSON.stringify(e.details))}</div>` : '';
+    return `<li class="ev-row ev-${e.type}">
+      <span class="ev-tag">${label}</span>
+      <span class="ev-time">${escapeHtml(occ)}${ended}${dur}</span>
+      ${det}
+    </li>`;
+  }).join('');
+  const counts = items.reduce((acc, e) => {
+    acc[e.type] = (acc[e.type] || 0) + 1;
+    return acc;
+  }, {});
+  const summary = Object.entries(counts).map(([k, v]) => `${EVENT_LABELS[k] || k} ${v}`).join(' / ');
+  setWorklogSummary(`${items.length} 件 · ${summary}`);
+}
+
+async function loadWorklogActivity(date, sub) {
+  const kind = WL_KIND_BY_SUB[sub];
+  const view = WL_SUB_VIEWS[sub];
+  const summaryEl = $(`${view}`)?.querySelector('.wl-summary-row');
+  const listEl = view === 'wlGithubView' ? $('wlGithubList')
+    : view === 'wlClaudeView' ? $('wlClaudeList')
+    : view === 'wlGeminiView' ? $('wlGeminiList')
+    : $('wlCodexList');
+  const emptyEl = view === 'wlGithubView' ? $('wlGithubEmpty')
+    : view === 'wlClaudeView' ? $('wlClaudeEmpty')
+    : view === 'wlGeminiView' ? $('wlGeminiEmpty')
+    : $('wlCodexEmpty');
+  if (!listEl || !emptyEl) return;
+  try {
+    const r = await api(`/api/activity/events?date=${encodeURIComponent(date)}&kind=${encodeURIComponent(kind)}&limit=500`);
+    const items = r.items || [];
+    if (!items.length) {
+      listEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      if (summaryEl) summaryEl.innerHTML = '';
+      setWorklogSummary(`${labelForSub(sub)}: 0 件`);
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    if (sub === 'github') renderWorklogGithub(items, listEl, summaryEl);
+    else renderWorklogPrompts(items, listEl, summaryEl, sub);
+    setWorklogSummary(`${labelForSub(sub)}: ${r.total} 件`);
+  } catch (e) { console.error(e); }
+}
+
+function labelForSub(sub) {
+  return ({ schedule: '予定', github: 'GitHub', claude: 'Claude Code', gemini: 'Gemini', codex: 'Codex', browsing: 'ブラウジング', dig: 'ディグ' })[sub] || sub;
+}
+
+function renderWorklogGithub(items, listEl, summaryEl) {
+  // Group by repo (= source field) with a header summary row.
+  const byRepo = new Map();
+  for (const it of items) {
+    const repo = it.source || '(unknown)';
+    if (!byRepo.has(repo)) byRepo.set(repo, []);
+    byRepo.get(repo).push(it);
+  }
+  const sortedRepos = [...byRepo.entries()].sort((a, b) => b[1].length - a[1].length);
+  if (summaryEl) {
+    summaryEl.innerHTML = sortedRepos.map(([repo, list]) =>
+      `<strong>${escapeHtml(repo)}</strong>${list.length}`
+    ).join(' / ');
+  }
+  listEl.innerHTML = sortedRepos.map(([repo, list]) => {
+    const rows = list.map(it => {
+      const t = (it.occurred_at || '').replace('T', ' ').slice(0, 19);
+      const sha = (it.ref_id || '').slice(0, 7);
+      const meta = it.metadata || {};
+      const branch = meta.branch ? ` [${escapeHtml(meta.branch)}]` : '';
+      const author = meta.author ? ` · ${escapeHtml(meta.author)}` : '';
+      const content = it.content || '';
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>
+          <span class="wl-source">${escapeHtml(sha)}${branch}</span>
+          <span class="wl-meta">${author}</span>
+        </div>
+        <div class="wl-content">${escapeHtml(content)}</div>
+      </li>`;
+    }).join('');
+    return `<li class="wl-repo-group" style="background:transparent;border:none;padding:0;gap:4px">
+      <div class="wl-row1"><strong>${escapeHtml(repo)}</strong> <span class="wl-meta">${list.length} commits</span></div>
+      <ul class="wl-list" style="margin-left:8px">${rows}</ul>
+    </li>`;
+  }).join('');
+}
+
+function renderWorklogPrompts(items, listEl, summaryEl, sub) {
+  if (summaryEl) {
+    summaryEl.innerHTML = `<strong>${escapeHtml(labelForSub(sub))}</strong>${items.length} prompts`;
+  }
+  listEl.innerHTML = items.map(it => {
+    const t = (it.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const meta = it.metadata || {};
+    const cwd = meta.cwd ? `${escapeHtml(meta.cwd)}` : '';
+    const branch = meta.branch ? ` · ${escapeHtml(meta.branch)}` : '';
+    const source = it.source ? `<span class="wl-source">${escapeHtml(it.source)}</span>` : '';
+    const content = (it.content || '').trim();
+    return `<li>
+      <div class="wl-row1">
+        <span class="wl-time">${escapeHtml(t)}</span>
+        ${source}
+        <span class="wl-meta">${cwd}${branch}</span>
+      </div>
+      ${content ? `<div class="wl-content truncate" title="${escapeHtml(content)}">${escapeHtml(content)}</div>` : ''}
+    </li>`;
+  }).join('');
+}
+
+async function loadGeminiWebResearchLogs(date) {
+  const listEl = $('wlGeminiWebList');
+  const emptyEl = $('wlGeminiWebEmpty');
+  if (!listEl || !emptyEl) return;
+  try {
+    const r = await api('/api/external-chat/messages?source=gemini-web&limit=200');
+    const items = (r.items || []).filter((it) => String(it.received_at || '').startsWith(date));
+    if (!items.length) {
+      listEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    listEl.innerHTML = items.map((it) => {
+      let meta = {};
+      try { meta = it.metadata_json ? JSON.parse(it.metadata_json) : (it.metadata || {}); } catch {}
+      const title = meta.title || '(no title)';
+      const url = meta.url || '';
+      const t = String(it.received_at || '').slice(11, 19);
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>
+          ${url ? `<a class="wl-source" href="${escapeHtml(url)}" target="_blank" rel="noopener">link</a>` : ''}
+        </div>
+        <div class="wl-content"><strong>${escapeHtml(title)}</strong></div>
+        <div class="wl-content">${escapeHtml(it.content || '')}</div>
+      </li>`;
+    }).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function saveGeminiWebResearchLog() {
+  const title = $('wlGeminiWebTitle')?.value.trim() || '';
+  const url = $('wlGeminiWebUrl')?.value.trim() || '';
+  const content = $('wlGeminiWebContent')?.value.trim() || '';
+  if (!content) return;
+  await api('/api/external-chat/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source: 'gemini-web',
+      role: 'assistant',
+      content,
+      metadata: { title, url, kind: 'research' },
+    }),
+  });
+  await api('/api/activity/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'gemini_prompt',
+      source: 'gemini-web',
+      content: title || content.slice(0, 120),
+      metadata: { via: 'manual-research-log', url },
+    }),
+  }).catch(() => {});
+  $('wlGeminiWebTitle').value = '';
+  $('wlGeminiWebUrl').value = '';
+  $('wlGeminiWebContent').value = '';
+  await loadGeminiWebResearchLogs(state.worklog.date);
+}
+
+async function loadWorklogBrowsing(date) {
+  try {
+    const r = await api(`/api/worklog/browsing?date=${encodeURIComponent(date)}`);
+    renderWorklogBrowsing(r);
+  } catch (e) { console.error(e); }
+}
+
+function renderWorklogBrowsing(r) {
+  const visits = r.visits || [];
+  const revisits = r.revisits || [];
+  const domains = r.top_domains || [];
+  $('wlVisitsCount').textContent = visits.length;
+  $('wlRevisitsCount').textContent = revisits.length;
+  $('wlDomainsCount').textContent = domains.length;
+
+  const summaryEl = $('wlBrowsingSummary');
+  summaryEl.innerHTML = `<strong>ページ閲覧</strong>${r.total_pages || 0} ページ / ${r.total_visits || 0} 回 · <strong>再訪 BM</strong>${revisits.length} · <strong>ドメイン</strong>${domains.length}`;
+  setWorklogSummary(`${r.total_pages || 0} ページ / ${r.total_visits || 0} 回 · 再訪 ${revisits.length} · ドメイン ${domains.length}`);
+
+  // Visits list (chronological, 最新が先頭)
+  const visitsList = $('wlVisitsList');
+  const visitsEmpty = $('wlVisitsEmpty');
+  if (!visits.length) {
+    visitsList.innerHTML = '';
+    visitsEmpty.classList.remove('hidden');
+  } else {
+    visitsEmpty.classList.add('hidden');
+    visitsList.innerHTML = visits.map(v => {
+      const t = (v.last_seen_at || '').slice(11, 19);
+      const bm = v.is_bookmarked ? '<span class="wl-source">★ BM</span>' : '';
+      const dom = v.domain ? `<span class="wl-meta">${escapeHtml(v.domain)}</span>` : '';
+      const cnt = v.visit_count > 1 ? `<span class="wl-meta">×${v.visit_count}</span>` : '';
+      const unregistered = v.domain && !v.catalog
+        ? `<button class="wl-reg-btn" data-domain="${escapeHtml(v.domain)}">登録</button>`
+        : '';
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>
+          ${bm}${dom}${cnt}${unregistered}
+        </div>
+        <div class="wl-content"><a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">${escapeHtml(v.title || v.url)}</a></div>
+      </li>`;
+    }).join('');
+    visitsList.querySelectorAll('.wl-reg-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const domain = btn.dataset.domain;
+        if (!domain) return;
+        const origText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '登録中…';
+        try {
+          await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
+          switchTab('domain');
+          await new Promise(r => setTimeout(r, 0));
+          loadDomainEntry(domain).catch(() => {});
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = origText;
+          alert(`登録に失敗しました: ${err.message}`);
+        }
+      });
+    });
+  }
+
+  // Revisits list
+  const reList = $('wlRevisitsList');
+  const reEmpty = $('wlRevisitsEmpty');
+  if (!revisits.length) {
+    reList.innerHTML = '';
+    reEmpty.classList.remove('hidden');
+  } else {
+    reEmpty.classList.add('hidden');
+    reList.innerHTML = revisits.map(b => {
+      const cnt = `<span class="wl-meta">×${b.visit_count}</span>`;
+      const t = (b.last_seen_at || '').slice(11, 19);
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>${cnt}
+        </div>
+        <div class="wl-content"><a href="${escapeHtml(b.url)}" target="_blank" rel="noopener">${escapeHtml(b.title || b.url)}</a></div>
+      </li>`;
+    }).join('');
+  }
+
+  // Top domains
+  const domList = $('wlDomainsList');
+  domList.innerHTML = domains.map(d => {
+    const unreg = d.catalog_status == null
+      ? `<button class="wl-reg-btn" data-domain="${escapeHtml(d.domain)}">未登録</button>`
+      : '';
+    return `<li>
+      <span class="wl-dom-name">${escapeHtml(d.domain)}</span>
+      <span class="wl-dom-count">${d.pages} ページ / ${d.visits} 回</span>
+      ${unreg}
+    </li>`;
+  }).join('');
+  domList.querySelectorAll('.wl-reg-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const domain = btn.dataset.domain;
+      if (!domain) return;
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '登録中…';
+      try {
+        await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
+        switchTab('domain');
+        await new Promise(r => setTimeout(r, 0));
+        loadDomainEntry(domain).catch(() => {});
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = origText;
+        alert(`登録に失敗しました: ${err.message}`);
+      }
+    });
+  });
+}
+
+async function loadWorklogDig(date) {
+  try {
+    const r = await api(`/api/diary/${encodeURIComponent(date)}/digs?limit=200`);
+    renderWorklogDig(r);
+  } catch (e) { console.error(e); }
+}
+
+function renderWorklogDig(r) {
+  const items = r.items || [];
+  const list = $('wlDigList');
+  const empty = $('wlDigEmpty');
+  const summaryEl = $('wlDigSummary');
+  if (summaryEl) summaryEl.innerHTML = `<strong>ディグ</strong>${r.total || items.length} セッション`;
+  setWorklogSummary(`ディグ ${r.total || items.length} 件`);
+  if (!items.length) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = items.map(d => {
+    const t = (d.created_at || '').replace('T', ' ').slice(0, 19);
+    const status = d.status ? `<span class="wl-source">${escapeHtml(d.status)}</span>` : '';
+    const summary = d.summary ? `<div class="wl-content truncate">${escapeHtml(d.summary)}</div>` : '';
+    const sources = d.source_count ? `<span class="wl-meta">${d.source_count} sources</span>` : '';
+    return `<li>
+      <div class="wl-row1">
+        <span class="wl-time">${escapeHtml(t)}</span>
+        ${status}${sources}
+      </div>
+      <div class="wl-content"><strong>${escapeHtml(d.query || '')}</strong></div>
+      ${summary}
+    </li>`;
+  }).join('');
+}
+
+function setWorklogSummary(text) {
+  const el = $('wlSummary');
+  if (el) el.textContent = `${state.worklog.date} · ${text}`;
+}
+
+// Worklog event listeners
+document.querySelectorAll('.wl-subtab').forEach(btn => {
+  btn.addEventListener('click', () => switchWorklogSub(btn.dataset.sub));
+});
+$('wlPrevDay')?.addEventListener('click', () => shiftWorklogDate(-1));
+$('wlNextDay')?.addEventListener('click', () => shiftWorklogDate(1));
+$('wlToday')?.addEventListener('click', () => {
+  state.worklog.date = localDateStr(new Date());
+  syncWorklogDateInput();
+  loadWorklog();
+});
+$('wlDate')?.addEventListener('change', (e) => {
+  const v = e.target.value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    state.worklog.date = v;
+    loadWorklog();
+  }
+});
+$('wlRefresh')?.addEventListener('click', () => loadWorklog());
+$('wlGeminiWebSaveBtn')?.addEventListener('click', () => {
+  saveGeminiWebResearchLog().catch((e) => {
+    console.error(e);
+    alert(`Gemini Web 調査ログの保存に失敗しました: ${e.message}`);
+  });
+});
+$('wlGeminiWebContent')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    saveGeminiWebResearchLog().catch((err) => {
+      console.error(err);
+      alert(`Gemini Web 調査ログの保存に失敗しました: ${err.message}`);
+    });
+  }
+});
 
 // ── 🌐 Multi (Memoria Hub) browse ─────────────────────────────────────────
 state.multiSubtab = 'bookmarks';

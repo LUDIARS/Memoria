@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export function openDb(dbPath) {
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -310,6 +310,73 @@ export function openDb(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_meals_eaten_at ON meals(eaten_at DESC);
     CREATE INDEX IF NOT EXISTS idx_meals_ai_status ON meals(ai_status);
+
+    CREATE TABLE IF NOT EXISTS implementation_notes (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      product       TEXT NOT NULL,
+      title         TEXT NOT NULL,
+      good_points   TEXT,
+      bad_points    TEXT,
+      shareable     INTEGER NOT NULL DEFAULT 0,
+      shared_at     TEXT,
+      shared_origin TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_implementation_notes_created
+      ON implementation_notes(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      title         TEXT NOT NULL,
+      details       TEXT,
+      status        TEXT NOT NULL DEFAULT 'todo',
+      creator_type  TEXT NOT NULL DEFAULT 'human',
+      due_at        TEXT,
+      share_actio   INTEGER NOT NULL DEFAULT 0,
+      shared_at     TEXT,
+      shared_origin TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status_created
+      ON tasks(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_due
+      ON tasks(due_at);
+
+    CREATE TABLE IF NOT EXISTS work_locations (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      name           TEXT NOT NULL,
+      address        TEXT,
+      latitude       REAL,
+      longitude      REAL,
+      description    TEXT,
+      url            TEXT,
+      tags           TEXT,
+      shareable      INTEGER NOT NULL DEFAULT 0,
+      shared_at      TEXT,
+      shared_origin  TEXT,
+      owner_user_id  TEXT,
+      owner_user_name TEXT,
+      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_locations_created
+      ON work_locations(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS external_chat_messages (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      source         TEXT NOT NULL,
+      conversation_id TEXT,
+      role           TEXT,
+      content        TEXT NOT NULL,
+      metadata_json  TEXT,
+      received_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_external_chat_received
+      ON external_chat_messages(received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_chat_source
+      ON external_chat_messages(source, received_at DESC);
   `);
 
   // Forward-compat: 既存 DB に列を ALTER で追加
@@ -319,6 +386,32 @@ export function openDb(dbPath) {
   }
   if (mealsCols.length > 0 && !mealsCols.includes('nutrients_json')) {
     db.exec(`ALTER TABLE meals ADD COLUMN nutrients_json TEXT`);
+  }
+
+  const implCols = db.prepare(`PRAGMA table_info(implementation_notes)`).all().map(c => c.name);
+  for (const col of ['shared_at', 'shared_origin']) {
+    if (implCols.length > 0 && !implCols.includes(col)) {
+      db.exec(`ALTER TABLE implementation_notes ADD COLUMN ${col} TEXT`);
+    }
+  }
+  if (implCols.length > 0 && !implCols.includes('attachment_type')) {
+    db.exec(`ALTER TABLE implementation_notes ADD COLUMN attachment_type TEXT`);
+  }
+  if (implCols.length > 0 && !implCols.includes('attachment_value')) {
+    db.exec(`ALTER TABLE implementation_notes ADD COLUMN attachment_value TEXT`);
+  }
+
+  const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all().map(c => c.name);
+  for (const [col, ddl] of [
+    ['due_at', 'TEXT'],
+    ['creator_type', `TEXT NOT NULL DEFAULT 'human'`],
+    ['share_actio', 'INTEGER NOT NULL DEFAULT 0'],
+    ['shared_at', 'TEXT'],
+    ['shared_origin', 'TEXT'],
+  ]) {
+    if (taskCols.length > 0 && !taskCols.includes(col)) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
+    }
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
@@ -381,6 +474,7 @@ export function openDb(dbPath) {
   if (!dcCols.includes('can_do'))      db.exec(`ALTER TABLE domain_catalog ADD COLUMN can_do TEXT`);
   if (!dcCols.includes('notes'))       db.exec(`ALTER TABLE domain_catalog ADD COLUMN notes TEXT`);
   if (!dcCols.includes('user_edited')) db.exec(`ALTER TABLE domain_catalog ADD COLUMN user_edited INTEGER NOT NULL DEFAULT 0`);
+  if (!dcCols.includes('domain_private')) db.exec(`ALTER TABLE domain_catalog ADD COLUMN domain_private INTEGER NOT NULL DEFAULT 0`);
 
   // Phase 1 (multi-server): ownership / share metadata on the three shareable
   // resources. NULL owner_user_id = "this is mine" on a local server.
@@ -824,6 +918,71 @@ export function digSessionsForDate(db, dateStr) {
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
+// ── worklog browsing aggregations (per-date) ─────────────────────────────
+//
+// 「作業ログ」 タブの「ブラウジング」 サブビューが叩く集計群。 page_visits は
+// last_seen_at しか持たないため、 同じ URL を別日に複数回開いた場合は最後の日付
+// にしか紐付かない (visit_events は per-event で残るが、 そちらは Legatus / SNI
+// 由来のものが混じるので、 ブクマ/履歴判定としては page_visits を主軸にする)。
+
+/** 当日 last_seen_at の page_visits、 ブックマーク済みかどうかも返す */
+export function pageVisitsForDate(db, dateStr, { limit = 200 } = {}) {
+  const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 200));
+  return db.prepare(`
+    SELECT v.url, v.title, v.first_seen_at, v.last_seen_at, v.visit_count,
+           CASE WHEN b.id IS NULL THEN 0 ELSE 1 END AS is_bookmarked,
+           b.id AS bookmark_id, b.title AS bookmark_title
+    FROM page_visits v
+    LEFT JOIN bookmarks b ON b.url = v.url
+    WHERE date(v.last_seen_at, 'localtime') = ?
+    ORDER BY v.last_seen_at DESC
+    LIMIT ?
+  `).all(dateStr, safeLimit);
+}
+
+/** 当日に再訪が記録されたブックマーク (page_visits とブクマ url を JOIN) */
+export function revisitedBookmarksForDate(db, dateStr, { limit = 100 } = {}) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  return db.prepare(`
+    SELECT b.id, b.url, b.title, b.summary, v.visit_count, v.last_seen_at, v.first_seen_at
+    FROM bookmarks b
+    INNER JOIN page_visits v ON v.url = b.url
+    WHERE date(v.last_seen_at, 'localtime') = ?
+    ORDER BY v.visit_count DESC, v.last_seen_at DESC
+    LIMIT ?
+  `).all(dateStr, safeLimit);
+}
+
+/** 当日のドメイン別 visit_count 合計 + ページ閲覧総数 */
+export function browsingDomainStatsForDate(db, dateStr, { limit = 30 } = {}) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 30));
+  const rows = db.prepare(`
+    SELECT LOWER(SUBSTR(SUBSTR(url, INSTR(url, '://') + 3), 1,
+                        CASE WHEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') > 0
+                             THEN INSTR(SUBSTR(url, INSTR(url, '://') + 3), '/') - 1
+                             ELSE LENGTH(SUBSTR(url, INSTR(url, '://') + 3)) END
+                       )) AS domain,
+           COUNT(*) AS pages,
+           SUM(visit_count) AS visits
+      FROM page_visits
+     WHERE date(last_seen_at, 'localtime') = ?
+       AND domain != ''
+     GROUP BY domain
+     ORDER BY visits DESC, pages DESC
+     LIMIT ?
+  `).all(dateStr, safeLimit);
+  const totals = db.prepare(`
+    SELECT COUNT(*) AS pages, COALESCE(SUM(visit_count), 0) AS visits
+      FROM page_visits
+     WHERE date(last_seen_at, 'localtime') = ?
+  `).get(dateStr);
+  return {
+    top_domains: rows,
+    total_pages: totals.pages,
+    total_visits: totals.visits,
+  };
+}
+
 // ── share metadata --------------------------------------------------------
 //
 // Mark a local row as having been forwarded to a multi server. owner_user_id
@@ -1168,6 +1327,10 @@ export function updateDomainCatalogUser(db, domain, patch) {
       args.push(patch[k] ?? null);
     }
   }
+  if (typeof patch.domain_private === 'boolean' || patch.domain_private === 0 || patch.domain_private === 1) {
+    fields.push(`domain_private = ?`);
+    args.push(patch.domain_private ? 1 : 0);
+  }
   if (fields.length === 0) return;
   fields.push(`user_edited = 1`);
   args.push(domain);
@@ -1272,7 +1435,15 @@ export function listServerEventsForDate(db, dateStr) {
 
 // ── activity events (git commit / claude code prompt 等) ─────────────────
 
-const ACTIVITY_KINDS = new Set(['git_commit', 'claude_code_prompt']);
+const ACTIVITY_KINDS = new Set([
+  'git_commit',
+  'claude_code_prompt',
+  'gemini_prompt',
+  'codex_prompt',
+  'task_created',
+  'task_done',
+  'task_updated',
+]);
 
 /**
  * 活動イベントを 1 件記録する。
@@ -1323,20 +1494,22 @@ export function activityEventsForDate(db, dateStr) {
  *   items   — 取得した行 (DESC、 最新が先頭)
  *   total   — 当日の全件数 (offset/limit 無関係)
  */
-export function activityEventsPage(db, dateStr, { limit = 100, offset = 0 } = {}) {
+export function activityEventsPage(db, dateStr, { limit = 100, offset = 0, kind = null } = {}) {
   const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 100));
   const safeOffset = Math.max(0, Number(offset) || 0);
+  const kindClause = kind && ACTIVITY_KINDS.has(kind) ? 'AND kind = ?' : '';
+  const kindArgs = kindClause ? [kind] : [];
   const total = db.prepare(`
     SELECT COUNT(*) AS n FROM activity_events
-    WHERE date(occurred_at, 'localtime') = ?
-  `).get(dateStr).n;
+    WHERE date(occurred_at, 'localtime') = ? ${kindClause}
+  `).get(dateStr, ...kindArgs).n;
   const items = db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
     FROM activity_events
-    WHERE date(occurred_at, 'localtime') = ?
+    WHERE date(occurred_at, 'localtime') = ? ${kindClause}
     ORDER BY occurred_at DESC
     LIMIT ? OFFSET ?
-  `).all(dateStr, safeLimit, safeOffset).map((r) => ({
+  `).all(dateStr, ...kindArgs, safeLimit, safeOffset).map((r) => ({
     ...r,
     metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
@@ -1403,13 +1576,87 @@ export function visitEventsForDate(db, dateStr) {
   `).all(dateStr);
 }
 
+// ── Diary sidecar (太い JSON 列をファイル外出し) ────────────────────────
+//
+// `metrics_json` と `github_commits_json` は 1 行 80KB に膨らむ太さなので、
+// `<dataDir>/diary/<date>.json` に逃がして DB はサマリだけ保持する。
+// データフロー:
+//   write: upsertDiary が metrics / githubCommits を受け取ったら sidecar に
+//          書き出し、 DB の `*_json` 列は NULL のままにする。
+//   read:  getDiary は DB 行を取り、 sidecar があればそこから metrics /
+//          github_commits を埋める。 sidecar が無ければ DB 列を fallback。
+//   delete: deleteDiary が sidecar も unlink する。
+// マイグレーション (migrateDiariesToSidecar) は起動時 1 回で旧データを
+// sidecar に移し、 DB 列を NULL 化する。
+//
+// dataDir は index.js から setDiaryDataDir で注入する (db.js を fs から
+// 切り離さないために、 dir 未設定時は sidecar を no-op にして DB 列のみで動く)。
+
+let DIARY_DATA_DIR = null;
+
+export function setDiaryDataDir(dir) {
+  DIARY_DATA_DIR = dir || null;
+}
+
+function diarySidecarPath(dateStr) {
+  if (!DIARY_DATA_DIR) return null;
+  return join(DIARY_DATA_DIR, 'diary', `${dateStr}.json`);
+}
+
+function readDiarySidecar(dateStr) {
+  const file = diarySidecarPath(dateStr);
+  if (!file) return null;
+  try {
+    if (!existsSync(file)) return null;
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch { return null; }
+}
+
+function writeDiarySidecar(dateStr, partial) {
+  const file = diarySidecarPath(dateStr);
+  if (!file) return false;
+  const dir = dirname(file);
+  mkdirSync(dir, { recursive: true });
+  // Merge with any existing sidecar so partial writes don't drop other keys.
+  let cur = {};
+  if (existsSync(file)) {
+    try { cur = JSON.parse(readFileSync(file, 'utf8')) || {}; } catch {}
+  }
+  const next = { ...cur };
+  if ('metrics' in partial) next.metrics = partial.metrics;
+  if ('github_commits' in partial) next.github_commits = partial.github_commits;
+  // Atomic-ish write: tmp + rename.
+  const tmp = file + '.tmp';
+  writeFileSync(tmp, JSON.stringify(next));
+  renameSync(tmp, file);
+  return true;
+}
+
+function deleteDiarySidecar(dateStr) {
+  const file = diarySidecarPath(dateStr);
+  if (!file) return;
+  try {
+    if (existsSync(file)) unlinkSync(file);
+  } catch {}
+}
+
 export function getDiary(db, dateStr) {
   const row = db.prepare(`SELECT * FROM diary_entries WHERE date = ?`).get(dateStr);
   if (!row) return null;
+  const side = readDiarySidecar(dateStr);
+  // Sidecar wins; DB columns are kept as fallback for un-migrated rows.
+  const metrics = side && 'metrics' in side
+    ? side.metrics
+    : (row.metrics_json ? safeParse(row.metrics_json) : null);
+  const githubCommits = side && 'github_commits' in side
+    ? side.github_commits
+    : (row.github_commits_json ? safeParse(row.github_commits_json) : null);
   return {
     ...row,
-    metrics: row.metrics_json ? safeParse(row.metrics_json) : null,
-    github_commits: row.github_commits_json ? safeParse(row.github_commits_json) : null,
+    metrics_json: null,         // hide raw blob from API consumers
+    github_commits_json: null,
+    metrics,
+    github_commits: githubCommits,
   };
 }
 
@@ -1423,6 +1670,16 @@ export function listDiariesInRange(db, { start, end }) {
 }
 
 export function upsertDiary(db, { date, summary, workContent, workMinutes, highlights, notes, metrics, githubCommits, status, error }) {
+  // Persist heavy JSON to sidecar; DB columns are kept NULL going forward.
+  // (Existing rows that still have *_json values continue to be served via
+  // the fallback path in getDiary until migrateDiariesToSidecar runs.)
+  const sidecarPatch = {};
+  if (metrics !== undefined) sidecarPatch.metrics = metrics ?? null;
+  if (githubCommits !== undefined) sidecarPatch.github_commits = githubCommits ?? null;
+  if (Object.keys(sidecarPatch).length > 0) {
+    writeDiarySidecar(date, sidecarPatch);
+  }
+
   const tx = db.transaction(() => {
     const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date);
     if (exists) {
@@ -1433,8 +1690,6 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
                work_minutes = COALESCE(?, work_minutes),
                highlights = COALESCE(?, highlights),
                notes = COALESCE(?, notes),
-               metrics_json = COALESCE(?, metrics_json),
-               github_commits_json = COALESCE(?, github_commits_json),
                status = COALESCE(?, status),
                error = ?,
                updated_at = datetime('now')
@@ -1445,8 +1700,6 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
         Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
         highlights ?? null,
         notes ?? null,
-        metrics ? JSON.stringify(metrics) : null,
-        githubCommits ? JSON.stringify(githubCommits) : null,
         status ?? null,
         error ?? null,
         date,
@@ -1454,8 +1707,8 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
     } else {
       db.prepare(`
         INSERT INTO diary_entries
-          (date, summary, work_content, work_minutes, highlights, notes, metrics_json, github_commits_json, status, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (date, summary, work_content, work_minutes, highlights, notes, status, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         date,
         summary ?? null,
@@ -1463,8 +1716,6 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
         Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
         highlights ?? null,
         notes ?? null,
-        metrics ? JSON.stringify(metrics) : null,
-        githubCommits ? JSON.stringify(githubCommits) : null,
         status ?? 'pending',
         error ?? null,
       );
@@ -1545,6 +1796,37 @@ export function updateDiaryNotes(db, dateStr, notes) {
 
 export function deleteDiary(db, dateStr) {
   db.prepare(`DELETE FROM diary_entries WHERE date = ?`).run(dateStr);
+  deleteDiarySidecar(dateStr);
+}
+
+/**
+ * 起動時に 1 回呼ぶマイグレーション。 旧スキーマで `metrics_json` /
+ * `github_commits_json` に値があった行を sidecar ファイルに移し、 DB の
+ * 列を NULL 化する。 idempotent。
+ */
+export function migrateDiariesToSidecar(db) {
+  if (!DIARY_DATA_DIR) return { moved: 0, reason: 'no data dir' };
+  const rows = db.prepare(`
+    SELECT date, metrics_json, github_commits_json
+    FROM diary_entries
+    WHERE metrics_json IS NOT NULL OR github_commits_json IS NOT NULL
+  `).all();
+  if (!rows.length) return { moved: 0 };
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      const patch = {};
+      if (r.metrics_json) patch.metrics = safeParse(r.metrics_json);
+      if (r.github_commits_json) patch.github_commits = safeParse(r.github_commits_json);
+      writeDiarySidecar(r.date, patch);
+      db.prepare(`
+        UPDATE diary_entries
+           SET metrics_json = NULL, github_commits_json = NULL
+         WHERE date = ?
+      `).run(r.date);
+    }
+  });
+  tx();
+  return { moved: rows.length };
 }
 
 export function getDiarySettings(db) {
@@ -2407,6 +2689,225 @@ export function listMealsForDate(db, dateStr) {
 // dig graph / wordcloud などで「もう出さなくていい」 単語を蓄積する。
 // 表示側 (app.js) で随時 filter するのと、 サーバ抽出側で除外するのと
 // 両方で参照する想定 (今は表示側 filter のみで運用)。
+
+// ---- implementation notes -------------------------------------------------
+
+export function listImplementationNotes(db, { limit = 100, offset = 0, shareable = null } = {}) {
+  const where = [];
+  const args = [];
+  if (shareable != null) {
+    where.push('shareable = ?');
+    args.push(shareable ? 1 : 0);
+  }
+  args.push(limit, offset);
+  return db.prepare(`
+    SELECT * FROM implementation_notes
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
+
+export function getImplementationNote(db, id) {
+  return db.prepare(`SELECT * FROM implementation_notes WHERE id = ?`).get(id);
+}
+
+export function insertImplementationNote(db, note) {
+  const info = db.prepare(`
+    INSERT INTO implementation_notes
+      (product, title, good_points, bad_points, attachment_type, attachment_value, shareable)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    note.product ?? '',
+    note.title,
+    note.good_points ?? null,
+    note.bad_points ?? null,
+    note.attachment_type ?? null,
+    note.attachment_value ?? null,
+    note.shareable ? 1 : 0,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateImplementationNote(db, id, patch) {
+  const allowed = new Set([
+    'product', 'title', 'good_points', 'bad_points',
+    'attachment_type', 'attachment_value',
+    'shareable', 'shared_at', 'shared_origin',
+  ]);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    args.push(k === 'shareable' ? (v ? 1 : 0) : v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE implementation_notes SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteImplementationNote(db, id) {
+  db.prepare(`DELETE FROM implementation_notes WHERE id = ?`).run(id);
+}
+
+// ---- work locations -------------------------------------------------------
+
+export function listWorkLocations(db, { limit = 200, offset = 0 } = {}) {
+  return db.prepare(`
+    SELECT * FROM work_locations
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(Number(limit) || 200, Number(offset) || 0);
+}
+
+export function getWorkLocation(db, id) {
+  return db.prepare(`SELECT * FROM work_locations WHERE id = ?`).get(id);
+}
+
+export function insertWorkLocation(db, loc) {
+  const info = db.prepare(`
+    INSERT INTO work_locations
+      (name, address, latitude, longitude, description, url, tags, shareable)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    loc.name,
+    loc.address ?? null,
+    loc.latitude == null ? null : Number(loc.latitude),
+    loc.longitude == null ? null : Number(loc.longitude),
+    loc.description ?? null,
+    loc.url ?? null,
+    loc.tags ?? null,
+    loc.shareable ? 1 : 0,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateWorkLocation(db, id, patch) {
+  const allowed = new Set([
+    'name', 'address', 'latitude', 'longitude', 'description', 'url', 'tags',
+    'shareable', 'shared_at', 'shared_origin',
+    'owner_user_id', 'owner_user_name',
+  ]);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    if (k === 'shareable') args.push(v ? 1 : 0);
+    else if (k === 'latitude' || k === 'longitude') args.push(v == null ? null : Number(v));
+    else args.push(v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE work_locations SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteWorkLocation(db, id) {
+  db.prepare(`DELETE FROM work_locations WHERE id = ?`).run(id);
+}
+
+export function setWorkLocationOwner(db, id, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }) {
+  db.prepare(`
+    UPDATE work_locations
+       SET owner_user_id = ?, owner_user_name = ?, shared_at = ?, shared_origin = ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+  `).run(ownerUserId ?? null, ownerUserName ?? null, sharedAt ?? null, sharedOrigin ?? null, id);
+}
+
+// ---- tasks ----------------------------------------------------------------
+
+export function listTasks(db, { status = null, limit = 100, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (status) {
+    where.push('status = ?');
+    args.push(status);
+  }
+  args.push(limit, offset);
+  return db.prepare(`
+    SELECT * FROM tasks
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY
+      CASE status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
+      COALESCE(due_at, '9999-12-31') ASC,
+      created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
+
+export function getTask(db, id) {
+  return db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
+}
+
+export function insertTask(db, task) {
+  const info = db.prepare(`
+    INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    task.title,
+    task.details ?? null,
+    task.status || 'todo',
+    task.creator_type === 'ai' ? 'ai' : 'human',
+    task.due_at ?? null,
+    task.share_actio ? 1 : 0,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateTask(db, id, patch) {
+  const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin']);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    args.push(k === 'share_actio' ? (v ? 1 : 0) : v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE tasks SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteTask(db, id) {
+  db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+}
+
+// ---- external chat messages ----------------------------------------------
+
+export function insertExternalChatMessage(db, msg) {
+  const info = db.prepare(`
+    INSERT INTO external_chat_messages (source, conversation_id, role, content, metadata_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    msg.source,
+    msg.conversation_id ?? null,
+    msg.role ?? null,
+    msg.content,
+    msg.metadata ? JSON.stringify(msg.metadata) : null,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function listExternalChatMessages(db, { source = null, limit = 100, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (source) {
+    where.push('source = ?');
+    args.push(source);
+  }
+  args.push(limit, offset);
+  return db.prepare(`
+    SELECT * FROM external_chat_messages
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY received_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
 
 export function ensureUserStopwordsTable(db) {
   db.exec(`

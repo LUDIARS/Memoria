@@ -82,12 +82,8 @@
             <span class="tab-label" data-full="⚙ 作業キュー" data-short="⚙ キュー">⚙ 作業キュー</span>
             <span id="tabQueueCount" class="tab-count hidden">0</span>
           </button>
-          <button class="tab" data-tab="events">
-            <span class="tab-label" data-full="📋 予定" data-short="📋 予定">📋 予定</span>
-          </button>
-          <button class="tab" data-tab="visits">
-            <span class="tab-label" data-full="🕘 アクセス履歴" data-short="🕘 履歴">🕘 アクセス履歴</span>
-            <span id="tabVisitsCount" class="tab-count hidden">0</span>
+          <button class="tab" data-tab="worklog">
+            <span class="tab-label" data-full="📝 作業ログ" data-short="📝 ログ">📝 作業ログ</span>
           </button>
           <button class="tab" data-tab="trends">
             <span class="tab-label" data-full="📊 傾向" data-short="📊 傾向">📊 傾向</span>
@@ -155,31 +151,6 @@
             </div>
           </div>
         </div>
-      </div>
-
-      <div id="visitsView" class="hidden">
-        <div class="visits-bar">
-          <span>ブラウザで開いた URL の履歴。各ドメインの説明は裏で Sonnet が分類して付与しています。</span>
-          <span class="grow"></span>
-          <select id="visitsRange">
-            <option value="today">今日のみ</option>
-            <option value="7" selected>過去 7 日</option>
-            <option value="30">過去 30 日</option>
-            <option value="90">過去 90 日</option>
-          </select>
-          <button id="visitsRefresh" class="ghost">更新</button>
-        </div>
-        <div class="visits-actions">
-          <label class="check-inline">
-            <input type="checkbox" id="visitsAll" /> 全選択
-          </label>
-          <span id="visitsSelCount">0</span> 件選択中
-          <button id="visitsBookmark">選択をブックマークに保存</button>
-          <button id="visitsDelete" class="ghost">選択を履歴から削除</button>
-        </div>
-        <ul id="visitsList" class="visits-list"></ul>
-        <div id="visitsEmpty" class="queue-empty hidden">本日の未保存履歴はありません。</div>
-        <ul id="visitsResults" class="visits-results"></ul>
       </div>
 
       <div id="trendsView" class="hidden">
@@ -451,12 +422,93 @@
         <div id="queueHistory" class="queue-history-list"></div>
       </div>
 
-      <div id="eventsView" class="hidden">
-        <div class="events-bar">
-          <div id="uptimeStatus" class="uptime-status"></div>
-          <button id="eventsRefresh" class="ghost">更新</button>
+      <div id="worklogView" class="hidden">
+        <div class="worklog-daynav">
+          <button id="wlPrevDay" class="ghost" title="前日">◀</button>
+          <input id="wlDate" type="date" />
+          <button id="wlNextDay" class="ghost" title="翌日">▶</button>
+          <button id="wlToday" class="ghost">今日</button>
+          <span class="grow"></span>
+          <span id="wlSummary" class="worklog-summary"></span>
+          <button id="wlRefresh" class="ghost">更新</button>
         </div>
-        <ul id="eventsList" class="events-list"></ul>
+        <nav class="worklog-subtabs" id="worklogSubtabs">
+          <button class="wl-subtab active" data-sub="schedule">📋 予定</button>
+          <button class="wl-subtab" data-sub="github">🐙 GitHub</button>
+          <button class="wl-subtab" data-sub="claude">🤖 Claude Code</button>
+          <button class="wl-subtab" data-sub="gemini">💎 Gemini</button>
+          <button class="wl-subtab" data-sub="codex">📜 Codex</button>
+          <button class="wl-subtab" data-sub="browsing">🌐 ブラウジング</button>
+          <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
+        </nav>
+
+        <section id="wlScheduleView" class="wl-sub">
+          <div id="wlUptimeStatus" class="uptime-status"></div>
+          <ul id="wlScheduleList" class="events-list"></ul>
+          <div id="wlScheduleEmpty" class="queue-empty hidden">この日のイベントはありません。</div>
+        </section>
+
+        <section id="wlGithubView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlGithubSummary"></div>
+          <ul id="wlGithubList" class="wl-list"></ul>
+          <div id="wlGithubEmpty" class="queue-empty hidden">この日の git commit はありません。</div>
+        </section>
+
+        <section id="wlClaudeView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlClaudeSummary"></div>
+          <ul id="wlClaudeList" class="wl-list"></ul>
+          <div id="wlClaudeEmpty" class="queue-empty hidden">この日の Claude Code prompt はありません。</div>
+        </section>
+
+        <section id="wlGeminiView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlGeminiSummary"></div>
+          <ul id="wlGeminiList" class="wl-list"></ul>
+          <div id="wlGeminiEmpty" class="queue-empty hidden">この日の Gemini prompt はありません。 (gemini hook 未設定の場合は記録されません)</div>
+        </section>
+
+        <section id="wlCodexView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlCodexSummary"></div>
+          <ul id="wlCodexList" class="wl-list"></ul>
+          <div id="wlCodexEmpty" class="queue-empty hidden">この日の Codex prompt はありません。 (codex hook 未設定の場合は記録されません)</div>
+        </section>
+
+        <section id="wlBrowsingView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlBrowsingSummary"></div>
+          <div class="wl-browsing-grid">
+            <div class="wl-browsing-col">
+              <h4>当日訪問ページ <span id="wlVisitsCount" class="wl-count">0</span></h4>
+              <ul id="wlVisitsList" class="wl-list"></ul>
+              <div id="wlVisitsEmpty" class="queue-empty hidden">この日のページ閲覧履歴はありません。</div>
+            </div>
+            <div class="wl-browsing-col">
+              <h4>再訪したブックマーク <span id="wlRevisitsCount" class="wl-count">0</span></h4>
+              <ul id="wlRevisitsList" class="wl-list"></ul>
+              <div id="wlRevisitsEmpty" class="queue-empty hidden">この日の再訪ブックマークはありません。</div>
+              <h4 class="wl-h-sub">上位ドメイン <span id="wlDomainsCount" class="wl-count">0</span></h4>
+              <ul id="wlDomainsList" class="wl-domains-list"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- 旧アクセス履歴ビュー (visitsView) は廃止された。
+             既存 listener 互換のため hidden の placeholder DOM を残す。 -->
+        <div id="visitsView" class="hidden" aria-hidden="true">
+          <select id="visitsRange"><option value="7" selected>7</option></select>
+          <button id="visitsRefresh"></button>
+          <input type="checkbox" id="visitsAll" />
+          <span id="visitsSelCount">0</span>
+          <button id="visitsBookmark"></button>
+          <button id="visitsDelete"></button>
+          <ul id="visitsList"></ul>
+          <div id="visitsEmpty"></div>
+          <ul id="visitsResults"></ul>
+        </div>
+
+        <section id="wlDigView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlDigSummary"></div>
+          <ul id="wlDigList" class="wl-list"></ul>
+          <div id="wlDigEmpty" class="queue-empty hidden">この日のディグはありません。</div>
+        </section>
       </div>
 
       <div id="tracksView" class="hidden">

@@ -88,6 +88,17 @@ export async function getSharedDictionary(id) {
   return r.rows[0] || null;
 }
 
+export async function getSharedImplementationNote(id) {
+  const r = await query(
+    `SELECT id, product, title, good_points, bad_points, attachment_type, attachment_value,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM implementation_notes
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rows[0] || null;
+}
+
 export async function insertSharedBookmark({ url, title, summary, memo, categories, ownerUserId, ownerUserName, sharedOrigin }) {
   const r = await query(
     `INSERT INTO bookmarks (url, title, summary, memo, owner_user_id, owner_user_name, shared_origin)
@@ -217,12 +228,158 @@ export async function deleteSharedDictionary(id, { actingUserId, role }) {
   return { ok: true };
 }
 
+export async function listSharedImplementationNotes({ limit = 50, before = null } = {}) {
+  const args = [];
+  let where = 'WHERE hidden_at IS NULL';
+  if (before) { args.push(before); where += ` AND shared_at < $${args.length}`; }
+  args.push(limit);
+  const r = await query(
+    `SELECT id, product, title, good_points, bad_points, attachment_type, attachment_value,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM implementation_notes
+       ${where}
+       ORDER BY shared_at DESC
+       LIMIT $${args.length}`,
+    args,
+  );
+  return r.rows;
+}
+
+export async function insertSharedImplementationNote({ product, title, goodPoints, badPoints, attachmentType, attachmentValue, ownerUserId, ownerUserName, sharedOrigin }) {
+  const r = await query(
+    `INSERT INTO implementation_notes
+       (product, title, good_points, bad_points, attachment_type, attachment_value, owner_user_id, owner_user_name, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, shared_at`,
+    [product ?? '', title, goodPoints ?? null, badPoints ?? null, attachmentType ?? null, attachmentValue ?? null, ownerUserId, ownerUserName, sharedOrigin ?? null],
+  );
+  return { id: r.rows[0].id, shared_at: r.rows[0].shared_at };
+}
+
+export async function deleteSharedImplementationNote(id, { actingUserId, role }) {
+  const r = await query('SELECT owner_user_id FROM implementation_notes WHERE id = $1', [id]);
+  if (!r.rowCount) return { ok: false, error: 'not_found' };
+  const owner = r.rows[0].owner_user_id;
+  if (owner !== actingUserId && role !== 'admin' && role !== 'moderator') {
+    return { ok: false, error: 'forbidden' };
+  }
+  await query('DELETE FROM implementation_notes WHERE id = $1', [id]);
+  await query(
+    `INSERT INTO share_log (resource_kind, resource_id, action, acting_user_id)
+       VALUES ('implementation_note', $1, 'delete', $2)`,
+    [id, actingUserId],
+  );
+  return { ok: true };
+}
+
+// ── work locations ─────────────────────────────────────────────────────────
+
+export async function listSharedWorkLocations({ limit = 100, before = null } = {}) {
+  const args = [];
+  let where = 'WHERE hidden_at IS NULL';
+  if (before) { args.push(before); where += ` AND shared_at < $${args.length}`; }
+  args.push(limit);
+  const r = await query(
+    `SELECT id, name, address, latitude, longitude, description, url, tags,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM work_locations
+       ${where}
+       ORDER BY shared_at DESC
+       LIMIT $${args.length}`,
+    args,
+  );
+  return r.rows;
+}
+
+export async function getSharedWorkLocation(id) {
+  const r = await query(
+    `SELECT id, name, address, latitude, longitude, description, url, tags,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM work_locations
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rowCount ? r.rows[0] : null;
+}
+
+export async function insertSharedWorkLocation({ name, address, latitude, longitude, description, url, tags, ownerUserId, ownerUserName, sharedOrigin }) {
+  const r = await query(
+    `INSERT INTO work_locations
+       (name, address, latitude, longitude, description, url, tags, owner_user_id, owner_user_name, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, shared_at`,
+    [name, address ?? null, latitude ?? null, longitude ?? null, description ?? null, url ?? null, tags ?? null, ownerUserId, ownerUserName, sharedOrigin ?? null],
+  );
+  return { id: r.rows[0].id, shared_at: r.rows[0].shared_at };
+}
+
+export async function deleteSharedWorkLocation(id, { actingUserId, role }) {
+  const r = await query('SELECT owner_user_id FROM work_locations WHERE id = $1', [id]);
+  if (!r.rowCount) return { ok: false, error: 'not_found' };
+  const owner = r.rows[0].owner_user_id;
+  if (owner !== actingUserId && role !== 'admin' && role !== 'moderator') {
+    return { ok: false, error: 'forbidden' };
+  }
+  await query('DELETE FROM work_locations WHERE id = $1', [id]);
+  await query(
+    `INSERT INTO share_log (resource_kind, resource_id, action, acting_user_id)
+       VALUES ('work_location', $1, 'delete', $2)`,
+    [id, actingUserId],
+  );
+  return { ok: true };
+}
+
+// ── workplace presence ─────────────────────────────────────────────────────
+
+export async function insertWorkplacePresence({ userId, userName, workplaceName, address, latitude, longitude, kind, sharedOrigin }) {
+  const k = kind === 'leave' ? 'leave' : 'enter';
+  const r = await query(
+    `INSERT INTO workplace_presence
+       (user_id, user_name, workplace_name, address, latitude, longitude, kind, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, occurred_at`,
+    [userId, userName, workplaceName, address ?? null, latitude ?? null, longitude ?? null, k, sharedOrigin ?? null],
+  );
+  return { id: r.rows[0].id, occurred_at: r.rows[0].occurred_at };
+}
+
+export async function listRecentWorkplacePresence({ limit = 50, sinceHours = 24 } = {}) {
+  const since = Math.max(1, Math.min(24 * 30, Number(sinceHours) || 24));
+  const lim = Math.max(1, Math.min(500, Number(limit) || 50));
+  const r = await query(
+    `SELECT id, user_id, user_name, workplace_name, address, latitude, longitude, kind, occurred_at
+       FROM workplace_presence
+       WHERE occurred_at >= now() - ($1 || ' hours')::interval
+       ORDER BY occurred_at DESC
+       LIMIT $2`,
+    [String(since), lim],
+  );
+  return r.rows;
+}
+
+// Latest presence per user (for "who is where right now" view).
+export async function listCurrentWorkplacePresence({ limit = 100 } = {}) {
+  const lim = Math.max(1, Math.min(500, Number(limit) || 100));
+  const r = await query(
+    `SELECT DISTINCT ON (user_id)
+            user_id, user_name, workplace_name, address, latitude, longitude, kind, occurred_at
+       FROM workplace_presence
+       WHERE occurred_at >= now() - interval '24 hours'
+       ORDER BY user_id, occurred_at DESC
+       LIMIT $1`,
+    [lim],
+  );
+  return r.rows.filter(row => row.kind === 'enter');
+}
+
 // ── moderation ─────────────────────────────────────────────────────────────
 
 const TABLE_BY_KIND = {
   bookmark: 'bookmarks',
   dig: 'dig_sessions',
   dict: 'dictionary_entries',
+  implementation_note: 'implementation_notes',
+  work_location: 'work_locations',
 };
 
 function tableForKind(kind) {
@@ -282,6 +439,10 @@ export async function listHidden({ limit = 100 } = {}) {
      ${sql('dig', 'dig_sessions', 'query')}
      UNION ALL
      ${sql('dict', 'dictionary_entries', 'term')}
+     UNION ALL
+     ${sql('implementation_note', 'implementation_notes', 'title')}
+     UNION ALL
+     ${sql('work_location', 'work_locations', 'name')}
      ORDER BY hidden_at DESC
      LIMIT $1`,
     [limit],

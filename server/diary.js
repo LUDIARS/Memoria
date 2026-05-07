@@ -114,8 +114,9 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
       can_do: cat.can_do || null,
       kind: cat.kind || null,
       catalog_title: cat.title || null,
+      domain_private: !!cat.domain_private,
     } : d;
-  });
+  }).filter(d => !d.domain_private);
 
   const activeHours = hourlyVisits
     .map((n, h) => ({ hour: h, count: n }))
