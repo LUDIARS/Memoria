@@ -4384,6 +4384,115 @@ app.get('/api/locations', (c) => {
 });
 
 /**
+ * GPS 軌跡 + 作業場所カタログから「その日の仕事セッション」を検出する。
+ *
+ * 検出ルール:
+ *   - 各 GPS 点について最近接の work_location (lat/lng 設定済) を探し、
+ *     **10m 以内** ならその場所に居たと見なす。
+ *   - 同じ workplace 上の連続点を 1 セッションにまとめる。
+ *   - **継続 60 分以上** のセッションだけを採用 (短滞在は除外)。
+ *   - workplace 名に "自宅" を含む場合は、 セッション窓内の activity_events
+ *     (git_commit / claude_code_prompt / etc.) が 1 件以上あるときのみ
+ *     `is_working = true` とする。 ない場合は private time として除外しない
+ *     が working フラグを立てない。
+ *   - その他の場所は常に `is_working = true`。
+ */
+app.get('/api/work-sessions', (c) => {
+  const date = c.req.query('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'date=YYYY-MM-DD required' }, 400);
+  }
+  const points = listGpsLocationsForDate(db, date);
+  if (!points.length) return c.json({ date, items: [] });
+
+  const places = listWorkLocations(db, { limit: 500 }).filter(w =>
+    Number.isFinite(w.latitude) && Number.isFinite(w.longitude)
+  );
+  if (!places.length) return c.json({ date, items: [] });
+
+  const placesById = new Map(places.map(p => [p.id, p]));
+
+  function distMeters(p1, p2) {
+    const R = 6_371_008;
+    const toRad = d => (d * Math.PI) / 180;
+    const f1 = toRad(p1.lat), f2 = toRad(p2.lat);
+    const df = toRad(p2.lat - p1.lat), dl = toRad(p2.lon - p1.lon);
+    const h = Math.sin(df/2) ** 2 + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  // 10m 圏内ルール: 各点を最近接 workplace に紐付け
+  const RADIUS_M = 10;
+  const tagged = points.map(p => {
+    let bestId = null;
+    let bestDist = Infinity;
+    for (const w of places) {
+      const d = distMeters({ lat: p.lat, lon: p.lon }, { lat: w.latitude, lon: w.longitude });
+      if (d <= RADIUS_M && d < bestDist) {
+        bestId = w.id;
+        bestDist = d;
+      }
+    }
+    return { recorded_at: p.recorded_at, workplace_id: bestId };
+  });
+
+  // 連続する同 workplace の点を 1 セッションに畳む
+  const sessions = [];
+  let cur = null;
+  for (const t of tagged) {
+    if (!t.workplace_id) {
+      if (cur) { sessions.push(cur); cur = null; }
+      continue;
+    }
+    if (!cur || cur.workplace_id !== t.workplace_id) {
+      if (cur) sessions.push(cur);
+      cur = { workplace_id: t.workplace_id, started_at: t.recorded_at, ended_at: t.recorded_at, points: 1 };
+    } else {
+      cur.ended_at = t.recorded_at;
+      cur.points += 1;
+    }
+  }
+  if (cur) sessions.push(cur);
+
+  // 継続 60 分ルール + working 判定
+  const MIN_DURATION_MIN = 60;
+  const items = sessions
+    .map(s => {
+      const w = placesById.get(s.workplace_id);
+      const startMs = Date.parse(s.started_at);
+      const endMs = Date.parse(s.ended_at);
+      const durationMin = Math.max(0, Math.round((endMs - startMs) / 60000));
+      const isHome = (w?.name || '').includes('自宅') || /home/i.test(w?.name || '');
+      const out = {
+        workplace_id: s.workplace_id,
+        workplace_name: w?.name || '',
+        workplace_address: w?.address || '',
+        started_at: s.started_at,
+        ended_at: s.ended_at,
+        duration_min: durationMin,
+        points_count: s.points,
+        is_home: isHome,
+        is_working: !isHome,
+        activity_counts: {},
+      };
+      // 自宅: activity_events で working 判定
+      const acts = db.prepare(`
+        SELECT kind, COUNT(*) AS n
+        FROM activity_events
+        WHERE occurred_at >= ? AND occurred_at <= ?
+        GROUP BY kind
+      `).all(s.started_at, s.ended_at);
+      for (const a of acts) out.activity_counts[a.kind] = a.n;
+      const totalActs = acts.reduce((acc, a) => acc + a.n, 0);
+      if (isHome) out.is_working = totalActs > 0;
+      return out;
+    })
+    .filter(s => s.duration_min >= MIN_DURATION_MIN);
+
+  return c.json({ date, items });
+});
+
+/**
  * 位置情報を持っている日と件数。 UI の date picker 用。
  */
 app.get('/api/locations/days', (c) => {

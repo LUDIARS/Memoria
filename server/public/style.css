@@ -5018,6 +5018,34 @@ dialog.loc-edit-modal[open] {
 .wl-sub { padding: 12px; }
 .wl-sub.hidden { display: none; }
 
+/* tracks 用: 仕事セッション一覧 */
+.tracks-work-sessions { margin: 8px 0 12px; padding: 0 4px; }
+.tracks-work-sessions h4 { margin: 0 0 6px; font-size: 13px; }
+.ws-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.ws-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.ws-time { font-family: ui-monospace, monospace; color: var(--muted); white-space: nowrap; }
+.ws-place { font-weight: 600; }
+.ws-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid;
+}
+.ws-badge.ws-working { color: #065f46; background: #d1fae5; border-color: #10b981; }
+.ws-badge.ws-idle { color: #6b7280; background: #f3f4f6; border-color: #9ca3af; }
+
 .wl-summary-row {
   font-size: 13px;
   color: var(--muted);

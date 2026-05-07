@@ -340,6 +340,8 @@
               <button id="diaryGenerate" class="ghost">再生成</button>
               <button id="diaryDelete" class="danger">削除</button>
             </div>
+            <h4>仕事中タイムライン (GPS + 行動ログ)</h4>
+            <div id="diaryWorkSessions" class="diary-summary"></div>
             <h4>作業内容 (Sonnet)</h4>
             <div id="diaryWork" class="diary-summary"></div>
             <h4>ハイライト (Opus 1M)</h4>
@@ -535,6 +537,7 @@
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
           を入れるか、 環境変数 <code>GOOGLE_MAPS_API_KEY</code> を設定してください。
         </div>
+        <div id="tracksWorkSessions" class="tracks-work-sessions"></div>
         <div id="tracksMap" class="tracks-map"></div>
         <div class="tracks-recent">
           <div class="tracks-recent-head">

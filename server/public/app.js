@@ -2680,6 +2680,9 @@ function renderDiaryDetail() {
     $('diaryHighlights').textContent = d.highlights || '(なし)';
   }
 
+  // GPS から推定した「仕事中」セッションを上に表示
+  renderDiaryWorkSessions(d.date).catch(() => {});
+
   // Hourly chart: live_metrics is computed fresh on every request and includes
   // page_visits as a fallback for events captured before visit_events existed,
   // so it's preferred over the snapshot stored at generation time.
@@ -7992,10 +7995,94 @@ async function renderTracksForCurrentDate() {
     // live append のキャッシュ。 表示中の日付が「今日 (local)」なら使われる。
     tracksState.todayPoints = (date === todayLocalIso()) ? pts.slice() : [];
     updateTracksStatsLine(pts);
+    renderWorkSessions(date).catch(() => {});
   } catch (e) {
     console.error('[tracks] render failed', e);
     $('tracksStats').textContent = '取得失敗';
   }
+}
+
+async function renderDiaryWorkSessions(date) {
+  const el = $('diaryWorkSessions');
+  if (!el) return;
+  let items = [];
+  try {
+    const r = await api(`/api/work-sessions?date=${encodeURIComponent(date)}`);
+    items = r.items || [];
+  } catch {
+    el.innerHTML = '<div class="muted" style="font-size:12px">作業セッションを取得できませんでした。</div>';
+    return;
+  }
+  if (!items.length) {
+    el.innerHTML = '<div class="muted" style="font-size:12px">この日は登録した作業場所での 1 時間以上の滞在が検出されませんでした。</div>';
+    return;
+  }
+  const totalWorkMin = items
+    .filter(s => s.is_working)
+    .reduce((acc, s) => acc + (s.duration_min || 0), 0);
+  const head = totalWorkMin > 0
+    ? `合計仕事中: ${(totalWorkMin / 60).toFixed(1)}h`
+    : 'GPS 上は作業場所滞在ありだが、 自宅 + 開発活動なしのため「仕事中」とは判定されず';
+  el.innerHTML = `
+    <div class="muted" style="font-size:12px;margin-bottom:6px">${head}</div>
+    <ul class="ws-list">${items.map(s => {
+      const start = (s.started_at || '').replace('T', ' ').slice(11, 16);
+      const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
+      const dur = s.duration_min >= 60 ? `${(s.duration_min / 60).toFixed(1)}h` : `${s.duration_min}分`;
+      const icon = s.is_home ? '🏠' : '🏢';
+      const statusBadge = s.is_working
+        ? '<span class="ws-badge ws-working">仕事中</span>'
+        : '<span class="ws-badge ws-idle">休息</span>';
+      const acts = s.activity_counts || {};
+      const actSummary = Object.entries(acts).map(([k, n]) => `${k}:${n}`).join(' / ');
+      const actNote = s.is_home && actSummary
+        ? `<span class="muted" style="font-size:11px"> · ${escapeHtml(actSummary)}</span>` : '';
+      return `<li class="ws-item">
+        <span class="ws-time">${start}-${end} (${dur})</span>
+        <span class="ws-place">${icon} ${escapeHtml(s.workplace_name || '?')}</span>
+        ${statusBadge}${actNote}
+      </li>`;
+    }).join('')}</ul>`;
+}
+
+async function renderWorkSessions(date) {
+  const el = $('tracksWorkSessions');
+  if (!el) return;
+  let items = [];
+  try {
+    const r = await api(`/api/work-sessions?date=${encodeURIComponent(date)}`);
+    items = r.items || [];
+  } catch (e) {
+    el.innerHTML = `<div class="muted" style="font-size:12px">作業セッション取得失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!items.length) {
+    el.innerHTML = '<div class="muted" style="font-size:12px">この日は登録した作業場所での 1 時間以上の滞在が検出されませんでした。</div>';
+    return;
+  }
+  el.innerHTML = `
+    <h4 style="margin:8px 0 4px">🛠 作業セッション (${items.length} 件)</h4>
+    <ul class="ws-list">${items.map(s => {
+      const start = (s.started_at || '').replace('T', ' ').slice(11, 16);
+      const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
+      const dur = s.duration_min >= 60
+        ? `${(s.duration_min / 60).toFixed(1)}h`
+        : `${s.duration_min}分`;
+      const icon = s.is_home ? '🏠' : '🏢';
+      const statusBadge = s.is_working
+        ? '<span class="ws-badge ws-working">仕事中</span>'
+        : '<span class="ws-badge ws-idle">休息</span>';
+      const acts = s.activity_counts || {};
+      const actSummary = Object.entries(acts)
+        .map(([k, n]) => `${k}:${n}`).join(' / ');
+      const actNote = s.is_home && actSummary
+        ? `<span class="muted" style="font-size:11px"> · ${escapeHtml(actSummary)}</span>` : '';
+      return `<li class="ws-item">
+        <span class="ws-time">${start}-${end} (${dur})</span>
+        <span class="ws-place">${icon} ${escapeHtml(s.workplace_name || '?')}</span>
+        ${statusBadge}${actNote}
+      </li>`;
+    }).join('')}</ul>`;
 }
 
 function updateTracksStatsLine(pts, { live = false } = {}) {
