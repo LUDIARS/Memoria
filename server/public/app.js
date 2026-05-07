@@ -602,10 +602,10 @@ function jobLabel(item) {
   return kindHint + `seq #${item.seq}`;
 }
 
-// tracks のみ worklog の sub-tab。 queue / external / meals は日付情報を持たないので
-// database 配下に移動。 bookmarks / dict / domain / workplace も database に集約。
-const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external', 'meals']);
+// 日付ベースの sub (tracks / meals) は worklog 配下。
+// 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
+const WORKLOG_REDIRECT_TABS = new Set(['tracks', 'meals']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
 
 function switchTab(tab) {
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
@@ -5245,13 +5245,13 @@ async function savePrivacySettings() {
 }
 
 function applyFeatureVisibility(s) {
-  // tracks は worklog のサブタブ、 meals は database のサブタブに移動済み。 該当ボタンを hidden に。
+  // tracks / meals とも worklog のサブタブ。
   const tracksSub = document.querySelector('#worklogSubtabs [data-sub="tracks"]');
-  const mealsSub = document.querySelector('#databaseSubtabs [data-db-sub="meals"]');
+  const mealsSub = document.querySelector('#worklogSubtabs [data-sub="meals"]');
   if (tracksSub) tracksSub.hidden = s.tracks_visible === false;
   if (mealsSub) mealsSub.hidden = s.meals_visible === false;
   if (state.tab === 'worklog' && state.worklog?.sub === 'tracks' && s.tracks_visible === false) switchTab('database');
-  if (state.tab === 'database' && state.database?.sub === 'meals' && s.meals_visible === false) switchTab('database');
+  if (state.tab === 'worklog' && state.worklog?.sub === 'meals' && s.meals_visible === false) switchTab('database');
   reflowTabsForViewport();
 }
 
@@ -6965,6 +6965,7 @@ const WL_SUB_VIEWS = {
   browsing: 'wlBrowsingView',
   dig: 'wlDigView',
   tracks: 'tracksView',
+  meals: 'mealsView',
 };
 
 // データベースタブのサブビュー一覧
@@ -6973,7 +6974,6 @@ const DB_SUB_VIEWS = {
   dict: 'dictView',
   domain: 'domainView',
   workplace: 'workplaceView',
-  meals: 'mealsView',
   queue: 'queueView',
   external: 'externalView',
 };
@@ -7008,13 +7008,12 @@ function switchDatabaseSub(sub) {
   if (sub === 'dict') loadDictionary();
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
-  if (sub === 'meals') loadMeals();
   if (sub === 'queue') renderQueue();
   if (sub === 'external') loadExternalConfig();
 }
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
-const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig']);
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'meals']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -7027,7 +7026,7 @@ const WL_KIND_BY_SUB = {
 function migrateWorklogSubViews() {
   const wl = $('worklogView');
   if (!wl) return;
-  for (const id of ['tracksView']) {
+  for (const id of ['tracksView', 'mealsView']) {
     const v = $(id);
     if (v && v.parentNode !== wl) {
       v.classList.add('hidden');
@@ -7066,6 +7065,7 @@ async function loadWorklog() {
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
   if (sub === 'tracks') return loadTracks();
+  if (sub === 'meals') return loadMeals();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
