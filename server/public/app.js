@@ -4774,14 +4774,23 @@ function ensureMemoriaFeatureViews() {
       <div class="simple-panel">
         <div class="simple-panel-head">
           <h2>🗺️ 作業場所</h2>
-          <button id="workplaceNewBtn" type="button">+ 場所を追加</button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button id="workplaceCheckinBtn" type="button" class="ghost">📍 ここで作業中</button>
+            <button id="workplaceFromGpsBtn" type="button" class="ghost">📍 現在地から登録</button>
+            <button id="workplaceNewBtn" type="button">+ 場所を追加</button>
+          </div>
         </div>
-        <p class="diary-settings-help">よく作業するカフェ・コワーキング・図書館などをまとめ、Hub にシェアしてチームでナレッジ共有できます。</p>
+        <p class="diary-settings-help">よく作業するカフェ・コワーキング・図書館などをまとめ、Hub にシェアしてチームでナレッジ共有できます。GPS と Place API (OpenStreetMap Nominatim) で現在地を取得して登録/チェックインできます。</p>
+        <div id="workplaceCurrentBanner" class="muted" style="margin:6px 0 10px"></div>
         <div id="workplaceList" class="simple-list"></div>
         <section id="workplaceEditorModal" class="dict-detail modal-panel hidden foundation-form">
           <button type="button" class="modal-close" id="workplaceEditorClose" aria-label="close">×</button>
           <h3 id="workplaceEditorHeading">作業場所を追加</h3>
           <input type="hidden" id="workplaceEditorId" />
+          <div class="simple-actions" style="justify-content:flex-start">
+            <button type="button" class="ghost" id="workplaceEditorGpsBtn">📍 現在地を取得</button>
+            <span id="workplaceEditorGpsStatus" class="muted" style="font-size:11px"></span>
+          </div>
           <label class="simple-field">
             <span>名前</span>
             <input id="workplaceEditorName" type="text" placeholder="例: WeWork 六本木" />
@@ -4866,7 +4875,14 @@ function ensureMemoriaFeatureViews() {
       <label>Nuntius URL: <input id="taskReminderNuntiusUrl" type="text" placeholder="https://nuntius.example.com/notify" /></label>
       <h4 style="margin-top:12px">MCP サーバ</h4>
       <label class="check-inline"><input id="mcpAutostartEnabled" type="checkbox" /> Memoria 起動時に MCP サーバを同時起動する (任意)</label>
-      <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。</p>`;
+      <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
+      <label class="check-inline"><input id="workplaceGeoEnabled" type="checkbox" /> GPS で現在地を取得して作業場所をマッチする</label>
+      <label class="check-inline"><input id="workplaceAutoShareEnabled" type="checkbox" /> 作業場所が切り替わったとき Hub に共有する (オプトイン)</label>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径:
+        <input id="workplaceMatchRadiusM" type="number" min="20" max="2000" step="10" style="width:80px" />
+        m
+      </label>
+      <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer && !$('setupDocsBody')) {
@@ -5081,6 +5097,10 @@ async function loadPrivacySettings() {
   if ($('taskReminderNuntiusEnabled')) $('taskReminderNuntiusEnabled').checked = !!s.tasks_reminder_nuntius_enabled;
   if ($('taskReminderNuntiusUrl')) $('taskReminderNuntiusUrl').value = s.tasks_reminder_nuntius_url || '';
   if ($('mcpAutostartEnabled')) $('mcpAutostartEnabled').checked = !!s.mcp_autostart_enabled;
+  if ($('workplaceGeoEnabled')) $('workplaceGeoEnabled').checked = !!s.workplace_geo_enabled;
+  if ($('workplaceAutoShareEnabled')) $('workplaceAutoShareEnabled').checked = !!s.workplace_auto_share_enabled;
+  if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 150;
+  configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
   }
@@ -5105,12 +5125,16 @@ async function savePrivacySettings() {
       tasks_reminder_nuntius_enabled: !!($('taskReminderNuntiusEnabled')?.checked),
       tasks_reminder_nuntius_url: $('taskReminderNuntiusUrl')?.value.trim() || '',
       mcp_autostart_enabled: !!($('mcpAutostartEnabled')?.checked),
+      workplace_geo_enabled: !!($('workplaceGeoEnabled')?.checked),
+      workplace_auto_share_enabled: !!($('workplaceAutoShareEnabled')?.checked),
+      workplace_match_radius_m: Number($('workplaceMatchRadiusM')?.value ?? 150),
     }),
   });
   const s = r.settings || {};
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
   }
+  configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   applyFeatureVisibility(s);
 }
 
@@ -5674,6 +5698,125 @@ function closeWorkplaceEditor() {
   hideModal('workplaceEditorModal');
 }
 
+// ── GPS / Place API helpers ────────────────────────────────────────────────
+
+function getCurrentPositionPromise(opts = {}) {
+  return new Promise((resolve, reject) => {
+    if (!('geolocation' in navigator)) {
+      reject(new Error('このブラウザは Geolocation に対応していません'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos.coords),
+      (err) => reject(new Error(err.message || 'GPS 取得失敗')),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000, ...opts },
+    );
+  });
+}
+
+async function resolvePlaceForCoords(coords) {
+  return api('/api/work-locations/resolve-place', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+  });
+}
+
+async function fillEditorFromCurrentLocation() {
+  const status = $('workplaceEditorGpsStatus');
+  if (status) status.textContent = 'GPS 取得中…';
+  try {
+    const coords = await getCurrentPositionPromise();
+    if (status) status.textContent = '逆ジオコーディング中…';
+    const place = await resolvePlaceForCoords(coords).catch(() => null);
+    if ($('workplaceEditorLat')) $('workplaceEditorLat').value = coords.latitude.toFixed(6);
+    if ($('workplaceEditorLng')) $('workplaceEditorLng').value = coords.longitude.toFixed(6);
+    if (place?.name && !$('workplaceEditorName').value) {
+      $('workplaceEditorName').value = place.name;
+    }
+    if (place?.address && !$('workplaceEditorAddress').value) {
+      $('workplaceEditorAddress').value = place.address;
+    }
+    if (status) status.textContent = place?.name ? `取得: ${place.name}` : '座標のみ取得';
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${e.message}`;
+    else alert(`GPS 取得失敗: ${e.message}`);
+  }
+}
+
+async function openEditorFromCurrentGps() {
+  openWorkplaceEditor(null);
+  await fillEditorFromCurrentLocation();
+}
+
+let _workplaceCheckinTimer = null;
+let _workplaceGeoEnabled = false;
+const WORKPLACE_CHECKIN_INTERVAL_MS = 5 * 60 * 1000;
+
+async function _silentCheckin() {
+  if (!_workplaceGeoEnabled) return;
+  if (document.visibilityState !== 'visible') return;
+  try {
+    const coords = await getCurrentPositionPromise({ timeout: 8000, maximumAge: 60000 });
+    const r = await api('/api/work-locations/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+    });
+    const banner = $('workplaceCurrentBanner');
+    if (banner && r.matched) {
+      const broadcast = r.changed && r.broadcast?.ok ? ' ・ Hub に共有しました' : '';
+      banner.textContent = `📍 ${r.workplace.name}${broadcast}`;
+    }
+  } catch (e) {
+    // 静かに失敗 (バッテリ最適化で deny されるなど)。手動ボタンでは表示する。
+    console.debug('[workplace] silent checkin skipped:', e.message);
+  }
+}
+
+function configureWorkplaceCheckin(enabled) {
+  _workplaceGeoEnabled = !!enabled;
+  if (_workplaceCheckinTimer) {
+    clearInterval(_workplaceCheckinTimer);
+    _workplaceCheckinTimer = null;
+  }
+  if (_workplaceGeoEnabled) {
+    _workplaceCheckinTimer = setInterval(_silentCheckin, WORKPLACE_CHECKIN_INTERVAL_MS);
+    // visibility change で復帰時にも 1 回トリガー
+    document.addEventListener('visibilitychange', _onWorkplaceVisibility);
+  } else {
+    document.removeEventListener('visibilitychange', _onWorkplaceVisibility);
+  }
+}
+
+function _onWorkplaceVisibility() {
+  if (document.visibilityState === 'visible') _silentCheckin();
+}
+
+async function workplaceCheckinNow() {
+  const banner = $('workplaceCurrentBanner');
+  if (banner) banner.textContent = 'GPS 取得中…';
+  try {
+    const coords = await getCurrentPositionPromise();
+    const r = await api('/api/work-locations/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+    });
+    if (banner) {
+      if (r.matched) {
+        const dist = r.distance_m != null ? ` (${r.distance_m}m)` : '';
+        const broadcast = r.broadcast?.ok ? ' ・ Hub に共有済み' : (r.changed && r.broadcast?.error ? ` ・ Hub 共有失敗: ${r.broadcast.error}` : '');
+        banner.textContent = `📍 ${r.workplace.name}${dist}${broadcast}`;
+      } else {
+        banner.textContent = '近くに登録済みの作業場所がありません。「現在地から登録」で追加できます。';
+      }
+    }
+  } catch (e) {
+    if (banner) banner.textContent = `チェックイン失敗: ${e.message}`;
+  }
+}
+
 async function saveWorkLocationFromForm() {
   const name = $('workplaceEditorName')?.value.trim();
   if (!name) { alert('名前を入力してください'); return; }
@@ -6002,6 +6145,9 @@ ensureMemoriaFeatureViews = function () {
   if ($('workplaceEditorClose')) $('workplaceEditorClose').onclick = closeWorkplaceEditor;
   if ($('workplaceEditorCancelBtn')) $('workplaceEditorCancelBtn').onclick = closeWorkplaceEditor;
   if ($('workplaceEditorSaveBtn')) $('workplaceEditorSaveBtn').onclick = saveWorkLocationFromForm;
+  if ($('workplaceEditorGpsBtn')) $('workplaceEditorGpsBtn').onclick = fillEditorFromCurrentLocation;
+  if ($('workplaceFromGpsBtn')) $('workplaceFromGpsBtn').onclick = openEditorFromCurrentGps;
+  if ($('workplaceCheckinBtn')) $('workplaceCheckinBtn').onclick = workplaceCheckinNow;
   document.querySelectorAll('#tasksMenu [data-task-menu]').forEach((btn) => {
     btn.onclick = () => {
       state.taskMenu = btn.dataset.taskMenu;

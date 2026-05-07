@@ -329,6 +329,49 @@ export async function deleteSharedWorkLocation(id, { actingUserId, role }) {
   return { ok: true };
 }
 
+// ── workplace presence ─────────────────────────────────────────────────────
+
+export async function insertWorkplacePresence({ userId, userName, workplaceName, address, latitude, longitude, kind, sharedOrigin }) {
+  const k = kind === 'leave' ? 'leave' : 'enter';
+  const r = await query(
+    `INSERT INTO workplace_presence
+       (user_id, user_name, workplace_name, address, latitude, longitude, kind, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, occurred_at`,
+    [userId, userName, workplaceName, address ?? null, latitude ?? null, longitude ?? null, k, sharedOrigin ?? null],
+  );
+  return { id: r.rows[0].id, occurred_at: r.rows[0].occurred_at };
+}
+
+export async function listRecentWorkplacePresence({ limit = 50, sinceHours = 24 } = {}) {
+  const since = Math.max(1, Math.min(24 * 30, Number(sinceHours) || 24));
+  const lim = Math.max(1, Math.min(500, Number(limit) || 50));
+  const r = await query(
+    `SELECT id, user_id, user_name, workplace_name, address, latitude, longitude, kind, occurred_at
+       FROM workplace_presence
+       WHERE occurred_at >= now() - ($1 || ' hours')::interval
+       ORDER BY occurred_at DESC
+       LIMIT $2`,
+    [String(since), lim],
+  );
+  return r.rows;
+}
+
+// Latest presence per user (for "who is where right now" view).
+export async function listCurrentWorkplacePresence({ limit = 100 } = {}) {
+  const lim = Math.max(1, Math.min(500, Number(limit) || 100));
+  const r = await query(
+    `SELECT DISTINCT ON (user_id)
+            user_id, user_name, workplace_name, address, latitude, longitude, kind, occurred_at
+       FROM workplace_presence
+       WHERE occurred_at >= now() - interval '24 hours'
+       ORDER BY user_id, occurred_at DESC
+       LIMIT $1`,
+    [lim],
+  );
+  return r.rows.filter(row => row.kind === 'enter');
+}
+
 // ── moderation ─────────────────────────────────────────────────────────────
 
 const TABLE_BY_KIND = {

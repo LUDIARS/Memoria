@@ -240,6 +240,19 @@ export async function shareWorkLocation(state, w) {
   });
 }
 
+export async function shareWorkplacePresence(state, presence) {
+  return multiFetch(state, '/api/shared/workplace-presence', {
+    method: 'POST',
+    body: JSON.stringify({
+      workplace_name: presence.workplace_name,
+      address: presence.address || null,
+      latitude: presence.latitude == null ? null : Number(presence.latitude),
+      longitude: presence.longitude == null ? null : Number(presence.longitude),
+      kind: presence.kind === 'leave' ? 'leave' : 'enter',
+    }),
+  });
+}
+
 export async function fetchMe(state) {
   return multiFetch(state, '/api/me');
 }

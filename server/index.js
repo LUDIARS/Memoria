@@ -110,7 +110,7 @@ import {
   readMultiServers, persistServers, upsertServer, removeServer,
   saveServerSession, clearServerSession, setActive, listConnectedActive,
   fetchMe, shareBookmark, shareDig, shareDictionary,
-  shareImplementationNote, shareWorkLocation,
+  shareImplementationNote, shareWorkLocation, shareWorkplacePresence,
   multiFetch,
 } from './local/multi-client.js';
 
@@ -160,6 +160,9 @@ function privacySettings() {
     tasks_reminder_nuntius_enabled: settingBool(s, 'features.tasks.reminder.nuntius_enabled', false),
     tasks_reminder_nuntius_url: s['features.tasks.reminder.nuntius_url'] || '',
     mcp_autostart_enabled: settingBool(s, 'features.mcp.autostart.enabled', false),
+    workplace_geo_enabled: settingBool(s, 'features.workplace.geo.enabled', true),
+    workplace_auto_share_enabled: settingBool(s, 'features.workplace.share.enabled', false),
+    workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 150),
   };
 }
 
@@ -1775,6 +1778,8 @@ app.patch('/api/privacy/settings', async (c) => {
     ['tasks_reminder_enabled', 'features.tasks.reminder.enabled'],
     ['tasks_reminder_nuntius_enabled', 'features.tasks.reminder.nuntius_enabled'],
     ['mcp_autostart_enabled', 'features.mcp.autostart.enabled'],
+    ['workplace_geo_enabled', 'features.workplace.geo.enabled'],
+    ['workplace_auto_share_enabled', 'features.workplace.share.enabled'],
   ]) {
     if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
   }
@@ -1782,6 +1787,7 @@ app.patch('/api/privacy/settings', async (c) => {
   if (typeof body.tasks_reminder_hour === 'number') patch['features.tasks.reminder.hour'] = String(Math.max(0, Math.min(23, Math.floor(body.tasks_reminder_hour))));
   if (typeof body.tasks_reminder_minute === 'number') patch['features.tasks.reminder.minute'] = String(Math.max(0, Math.min(59, Math.floor(body.tasks_reminder_minute))));
   if (typeof body.tasks_reminder_nuntius_url === 'string') patch['features.tasks.reminder.nuntius_url'] = body.tasks_reminder_nuntius_url.trim();
+  if (typeof body.workplace_match_radius_m === 'number') patch['features.workplace.match.radius_m'] = String(Math.max(20, Math.min(2000, Math.floor(body.workplace_match_radius_m))));
   if (Object.keys(patch).length) setAppSettings(db, patch);
   if (Object.prototype.hasOwnProperty.call(body, 'mcp_autostart_enabled')) syncMcpAutostart();
   return c.json({ settings: privacySettings() });
@@ -1980,6 +1986,151 @@ app.delete('/api/work-locations/:id', (c) => {
   if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
   deleteWorkLocation(db, id);
   return c.json({ ok: true });
+});
+
+// ── Place API: reverse geocode a lat/lng to {name, address}
+//
+// Default provider: OpenStreetMap Nominatim (free, no API key, but
+// rate-limited and User-Agent required). Switchable via
+// `places.api.url` setting.
+app.post('/api/work-locations/resolve-place', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const lat = Number(body.latitude);
+  const lng = Number(body.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return c.json({ error: 'latitude+longitude required' }, 400);
+  }
+  const settings = getAppSettings(db);
+  const baseUrl = (settings['places.api.url'] || 'https://nominatim.openstreetmap.org/reverse').replace(/\/+$/, '');
+  const ua = settings['places.api.ua'] || 'Memoria/0.2 (workplace resolver)';
+  const url = `${baseUrl}?format=jsonv2&zoom=18&addressdetails=1&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': ua, 'Accept': 'application/json', 'Accept-Language': 'ja,en;q=0.5' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return c.json({ error: `place api ${res.status}` }, 502);
+    const json = await res.json();
+    const a = json.address || {};
+    const name = json.name || a.amenity || a.shop || a.office || a.building
+      || a.tourism || a.leisure || a.public_building || a.road
+      || (json.display_name || '').split(',')[0] || '';
+    return c.json({
+      name: String(name).trim().slice(0, 120),
+      address: String(json.display_name || '').slice(0, 240),
+      latitude: Number(json.lat ?? lat),
+      longitude: Number(json.lon ?? lng),
+      raw: { osm_id: json.osm_id, type: json.type, category: json.category },
+    });
+  } catch (e) {
+    return c.json({ error: `place api: ${e.message}` }, 502);
+  }
+});
+
+// Haversine distance in meters between two {lat,lng} points.
+function _haversineMeters(a, b) {
+  const R = 6_371_000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+// ── Checkin: GPS coords → match nearest local work_location → broadcast
+// to Hub if user opted-in and the workplace changed since last checkin.
+app.post('/api/work-locations/checkin', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const lat = Number(body.latitude);
+  const lng = Number(body.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return c.json({ error: 'latitude+longitude required' }, 400);
+  }
+  const settings = privacySettings();
+  if (!settings.workplace_geo_enabled) {
+    return c.json({ error: 'workplace_geo disabled' }, 403);
+  }
+  const radius = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 150));
+
+  // Find nearest workplace within radius.
+  const all = listWorkLocations(db, { limit: 500 });
+  let matched = null;
+  let matchedDist = Infinity;
+  for (const w of all) {
+    if (!Number.isFinite(w.latitude) || !Number.isFinite(w.longitude)) continue;
+    const d = _haversineMeters({ lat, lng }, { lat: w.latitude, lng: w.longitude });
+    if (d <= radius && d < matchedDist) {
+      matched = w;
+      matchedDist = d;
+    }
+  }
+
+  const appS = getAppSettings(db);
+  const lastId = appS['workplace.current.id'] ? Number(appS['workplace.current.id']) : null;
+  const now = new Date().toISOString();
+  const result = {
+    matched: !!matched,
+    workplace: matched || null,
+    distance_m: matched ? Math.round(matchedDist) : null,
+    changed: false,
+    broadcast: null,
+  };
+
+  if (matched) {
+    if (lastId !== matched.id) {
+      result.changed = true;
+      setAppSettings(db, {
+        'workplace.current.id': String(matched.id),
+        'workplace.current.at': now,
+      });
+
+      // Optional broadcast to Hub.
+      if (settings.workplace_auto_share_enabled) {
+        try {
+          const state = readMultiState(db);
+          if (isConnected(state)) {
+            const r = await shareWorkplacePresence(state, {
+              workplace_name: matched.name,
+              address: matched.address,
+              latitude: matched.latitude,
+              longitude: matched.longitude,
+              kind: 'enter',
+            });
+            result.broadcast = { ok: true, id: r.id, occurred_at: r.occurred_at };
+          } else {
+            result.broadcast = { ok: false, error: 'not_connected' };
+          }
+        } catch (e) {
+          console.error('[workplace/checkin] broadcast failed', e);
+          result.broadcast = { ok: false, error: e.message };
+        }
+      }
+    }
+  } else if (lastId) {
+    // We left the previously matched workplace.
+    result.changed = true;
+    const prev = getWorkLocation(db, lastId);
+    setAppSettings(db, { 'workplace.current.id': '', 'workplace.current.at': now });
+    if (prev && settings.workplace_auto_share_enabled) {
+      try {
+        const state = readMultiState(db);
+        if (isConnected(state)) {
+          await shareWorkplacePresence(state, {
+            workplace_name: prev.name,
+            address: prev.address,
+            latitude: prev.latitude,
+            longitude: prev.longitude,
+            kind: 'leave',
+          });
+          result.broadcast = { ok: true, kind: 'leave' };
+        }
+      } catch (e) {
+        console.error('[workplace/checkin] leave broadcast failed', e);
+      }
+    }
+  }
+  return c.json(result);
 });
 
 async function shareTaskToActio(task) {
