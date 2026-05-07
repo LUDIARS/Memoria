@@ -3912,12 +3912,8 @@ dialog.meal-modal[open] {
 /* Simple feature panes injected by app.js for tasks / implementation notes. */
 .simple-panel {
   padding: 16px;
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
-}
-/* タスクは 3 ペイン + カテゴリリストが入るので PC では少し広げる */
-@media (min-width: 1100px) {
-  #tasksView .simple-panel { max-width: 1200px; }
 }
 .simple-panel h2 {
   margin: 0 0 12px;
