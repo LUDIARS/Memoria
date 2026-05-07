@@ -471,16 +471,20 @@ async function refreshQueue() {
     if (totalDepth === 0) totalDepth = snap.depth || 0;
     const badge = $('queueBadge');
     const tabCount = $('tabQueueCount');
+    const wlBadge = $('wlQueueBadge');
     if (totalDepth > 0) {
       badge.classList.remove('hidden');
-      tabCount.classList.remove('hidden');
+      tabCount?.classList.remove('hidden');
+      wlBadge?.classList.remove('hidden');
       $('queueCount').textContent = totalDepth;
-      tabCount.textContent = totalDepth;
+      if (tabCount) tabCount.textContent = totalDepth;
+      if (wlBadge) wlBadge.textContent = totalDepth;
     } else {
       badge.classList.add('hidden');
-      tabCount.classList.add('hidden');
+      tabCount?.classList.add('hidden');
+      wlBadge?.classList.add('hidden');
     }
-    if (state.tab === 'queue') renderQueue();
+    if (state.tab === 'worklog' && state.worklog?.sub === 'queue') renderQueue();
     return totalDepth;
   } catch { return 0; }
 }
@@ -598,7 +602,18 @@ function jobLabel(item) {
   return kindHint + `seq #${item.seq}`;
 }
 
+// queue / domain / tracks / external は worklog の sub-tab として畳み込む。
+// switchTab に旧 key で来たら worklog + 該当 subtab に redirect する。
+const WORKLOG_REDIRECT_TABS = new Set(['queue', 'domain', 'tracks', 'external']);
+
 function switchTab(tab) {
+  if (WORKLOG_REDIRECT_TABS.has(tab)) {
+    const sub = tab;
+    if (state.worklog) state.worklog.sub = sub;
+    switchTab('worklog');
+    switchWorklogSub(sub);
+    return;
+  }
   state.tab = tab;
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
@@ -606,35 +621,27 @@ function switchTab(tab) {
   const layout = document.querySelector('.layout');
   if (layout) layout.dataset.activeTab = tab;
   $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
-  $('queueView').classList.toggle('hidden', tab !== 'queue');
   $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('dictView').classList.toggle('hidden', tab !== 'dict');
-  $('domainView').classList.toggle('hidden', tab !== 'domain');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
-  $('tracksView')?.classList.toggle('hidden', tab !== 'tracks');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('workplaceView')?.classList.toggle('hidden', tab !== 'workplace');
   if (tab === 'workplace') loadWorkLocations().catch(console.warn);
-  $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
-  if (tab === 'queue') renderQueue();
   if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'dict') loadDictionary();
-  if (tab === 'domain') loadDomainCatalog();
   if (tab === 'diary') loadDiary();
-  if (tab === 'tracks') loadTracks();
   if (tab === 'meals') loadMeals();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
-  if (tab === 'external') loadExternalConfig();
   if (tab === 'multi') loadMulti();
   bumpTabUsage(tab);
   closeTabMoreMenu();
@@ -4172,7 +4179,7 @@ setInterval(async () => {
   const depth = await refreshQueue();
   await refreshVisitsBadge();
   if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
-  if (state.tab === 'queue') renderQueue();
+  if (state.tab === 'worklog' && state.worklog?.sub === 'queue') renderQueue();
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
@@ -4743,9 +4750,9 @@ function ensureMemoriaFeatureViews() {
   const tabs = document.querySelector('.tabs-scroll');
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
     for (const spec of [
-      ['tasks', 'タスク'],
-      ['impl', '実装自慢'],
-      ['workplace', '作業場所'],
+      ['tasks', '📝 タスク'],
+      ['impl', '✨ 実装自慢'],
+      ['workplace', '🗺️ 作業場所'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -5224,7 +5231,7 @@ function applyFeatureVisibility(s) {
   const mealsTab = document.querySelector('.tab[data-tab="meals"]');
   if (tracksTab) tracksTab.hidden = s.tracks_visible === false;
   if (mealsTab) mealsTab.hidden = s.meals_visible === false;
-  if (state.tab === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
+  if (state.tab === 'worklog' && state.worklog?.sub === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
   if (state.tab === 'meals' && s.meals_visible === false) switchTab('bookmarks');
   reflowTabsForViewport();
 }
@@ -6512,6 +6519,7 @@ function renderTaskBoard() {
 function decorateTaskAndImplTabs() {
   const taskTab = document.querySelector('.tab[data-tab="tasks"]');
   const implTab = document.querySelector('.tab[data-tab="impl"]');
+  const workplaceTab = document.querySelector('.tab[data-tab="workplace"]');
   if (taskTab) {
     const label = taskTab.querySelector('.tab-label');
     if (label) {
@@ -6531,6 +6539,16 @@ function decorateTaskAndImplTabs() {
     }
     if (!isNarrowViewport()) implTab.style.order = '-19';
     else implTab.style.order = '';
+  }
+  if (workplaceTab) {
+    const label = workplaceTab.querySelector('.tab-label');
+    if (label) {
+      label.textContent = '🗺️ 作業場所';
+      label.dataset.full = '🗺️ 作業場所';
+      label.dataset.short = '🗺️ 作業場所';
+    }
+    if (!isNarrowViewport()) workplaceTab.style.order = '-18';
+    else workplaceTab.style.order = '';
   }
 }
 
@@ -6800,7 +6818,15 @@ const WL_SUB_VIEWS = {
   codex: 'wlCodexView',
   browsing: 'wlBrowsingView',
   dig: 'wlDigView',
+  // 旧トップタブから移植してきた sub
+  queue: 'queueView',
+  domain: 'domainView',
+  tracks: 'tracksView',
+  external: 'externalView',
 };
+
+// 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -6808,6 +6834,21 @@ const WL_KIND_BY_SUB = {
   gemini: 'gemini_prompt',
   codex: 'codex_prompt',
 };
+
+// 起動時に top-level だった 4 view を worklogView に取り込む。
+function migrateWorklogSubViews() {
+  const wl = $('worklogView');
+  if (!wl) return;
+  for (const id of ['queueView', 'domainView', 'tracksView', 'externalView']) {
+    const v = $(id);
+    if (v && v.parentNode !== wl) {
+      v.classList.add('hidden');
+      v.classList.add('wl-sub');
+      wl.appendChild(v);
+    }
+  }
+}
+migrateWorklogSubViews();
 
 function switchWorklogSub(sub) {
   if (!WL_SUB_VIEWS[sub]) return;
@@ -6819,6 +6860,9 @@ function switchWorklogSub(sub) {
     const view = $(viewId);
     if (view) view.classList.toggle('hidden', key !== sub);
   }
+  // date-based でない sub のときは date toolbar / summary を隠す
+  const dateBar = document.querySelector('#worklogView .worklog-daynav');
+  if (dateBar) dateBar.classList.toggle('hidden', !WL_DATE_BASED.has(sub));
   loadWorklog();
 }
 
@@ -6829,6 +6873,10 @@ async function loadWorklog() {
   if (sub === 'schedule') return loadWorklogSchedule(date);
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
+  if (sub === 'queue') return renderQueue();
+  if (sub === 'domain') return loadDomainCatalog();
+  if (sub === 'tracks') return loadTracks();
+  if (sub === 'external') return loadExternalConfig();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
@@ -7497,7 +7545,7 @@ async function loadTracks() {
     });
     document.addEventListener('visibilitychange', () => {
       // タブに戻ってきたら最新の状態に再同期 + WS 再接続
-      if (document.visibilityState === 'visible' && state.tab === 'tracks') {
+      if (document.visibilityState === 'visible' && (state.tab === 'worklog' && state.worklog?.sub === 'tracks')) {
         renderTracksForCurrentDate();
         ensureLiveSocket();
       }
@@ -7596,7 +7644,7 @@ function scheduleLiveReconnect() {
   if (document.visibilityState !== 'visible') return;
   tracksState.wsReconnectTimer = setTimeout(() => {
     tracksState.wsReconnectTimer = null;
-    if (state.tab === 'tracks') ensureLiveSocket();
+    if ((state.tab === 'worklog' && state.worklog?.sub === 'tracks')) ensureLiveSocket();
   }, 3000);
 }
 

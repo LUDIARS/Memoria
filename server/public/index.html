@@ -78,12 +78,9 @@
           <button class="tab active" data-tab="bookmarks">
             <span class="tab-label" data-full="📚 ブックマーク" data-short="📚 ブクマ">📚 ブックマーク</span>
           </button>
-          <button class="tab" data-tab="queue">
-            <span class="tab-label" data-full="⚙ 作業キュー" data-short="⚙ キュー">⚙ 作業キュー</span>
-            <span id="tabQueueCount" class="tab-count hidden">0</span>
-          </button>
           <button class="tab" data-tab="worklog">
             <span class="tab-label" data-full="📝 作業ログ" data-short="📝 ログ">📝 作業ログ</span>
+            <span id="tabQueueCount" class="tab-count hidden">0</span>
           </button>
           <button class="tab" data-tab="trends">
             <span class="tab-label" data-full="📊 傾向" data-short="📊 傾向">📊 傾向</span>
@@ -98,20 +95,11 @@
           <button class="tab" data-tab="dict">
             <span class="tab-label" data-full="📖 辞書" data-short="📖 辞書">📖 辞書</span>
           </button>
-          <button class="tab" data-tab="domain">
-            <span class="tab-label" data-full="🏷 ドメイン" data-short="🏷 ドメ">🏷 ドメイン</span>
-          </button>
           <button class="tab" data-tab="diary">
             <span class="tab-label" data-full="📅 日記" data-short="📅 日記">📅 日記</span>
           </button>
-          <button class="tab" data-tab="tracks">
-            <span class="tab-label" data-full="🗺 軌跡" data-short="🗺 軌跡">🗺 軌跡</span>
-          </button>
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
-          </button>
-          <button class="tab" data-tab="external">
-            <span class="tab-label" data-full="🔌 外部情報設定" data-short="🔌 設定">🔌 外部情報設定</span>
           </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
@@ -440,6 +428,10 @@
           <button class="wl-subtab" data-sub="codex">📜 Codex</button>
           <button class="wl-subtab" data-sub="browsing">🌐 ブラウジング</button>
           <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
+          <button class="wl-subtab" data-sub="queue">⚙ キュー <span id="wlQueueBadge" class="tab-count hidden">0</span></button>
+          <button class="wl-subtab" data-sub="domain">🏷 ドメイン</button>
+          <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
+          <button class="wl-subtab" data-sub="external">🔌 外部</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">

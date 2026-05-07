@@ -4974,9 +4974,12 @@ dialog.loc-edit-modal[open] {
 
 .worklog-subtabs {
   display: flex;
+  flex-wrap: nowrap;
   gap: 4px;
   padding: 8px 12px 0 12px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
   border-bottom: 1px solid var(--border);
   scrollbar-width: thin;
 }
@@ -4990,6 +4993,18 @@ dialog.loc-edit-modal[open] {
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+@media (max-width: 760px) {
+  .worklog-subtabs {
+    padding: 6px 8px 0 8px;
+    gap: 2px;
+  }
+  .wl-subtab {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
 }
 .wl-subtab:hover { color: var(--text); background: var(--card); }
 .wl-subtab.active {
