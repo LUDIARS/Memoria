@@ -4939,10 +4939,16 @@ function ensureMemoriaFeatureViews() {
       <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
       <label class="check-inline"><input id="workplaceGeoEnabled" type="checkbox" /> GPS で現在地を取得して作業場所をマッチする</label>
       <label class="check-inline"><input id="workplaceAutoShareEnabled" type="checkbox" /> 作業場所が切り替わったとき Hub に共有する (オプトイン)</label>
-      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径:
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径 (作業場所判定 / 1 日の作業セッション検出):
         <input id="workplaceMatchRadiusM" type="number" min="20" max="2000" step="10" style="width:80px" />
         m
       </label>
+      <p class="diary-settings-help" style="margin-top:6px">
+        OwnTracks の locator displacement (移動 N m ごとに送信) と GPS の精度を考慮した距離。
+        既定 50m。 OwnTracks 側を 50m に設定しているならここも 50-100m が目安。
+        屋内ビル (室内 GPS オフセット) で取りこぼす場合は 100-200m に上げてください。
+        この半径を超えた点で「離脱」と判定し、 セッションがそこで終了します。
+      </p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
@@ -5201,7 +5207,7 @@ async function loadPrivacySettings() {
   if ($('mcpAutostartEnabled')) $('mcpAutostartEnabled').checked = !!s.mcp_autostart_enabled;
   if ($('workplaceGeoEnabled')) $('workplaceGeoEnabled').checked = !!s.workplace_geo_enabled;
   if ($('workplaceAutoShareEnabled')) $('workplaceAutoShareEnabled').checked = !!s.workplace_auto_share_enabled;
-  if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 150;
+  if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 50;
   configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);

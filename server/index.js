@@ -170,7 +170,9 @@ function privacySettings() {
     mcp_autostart_enabled: settingBool(s, 'features.mcp.autostart.enabled', false),
     workplace_geo_enabled: settingBool(s, 'features.workplace.geo.enabled', true),
     workplace_auto_share_enabled: settingBool(s, 'features.workplace.share.enabled', false),
-    workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 150),
+    // OwnTracks の locator displacement と整合させやすい 50m を既定に。
+    // 屋内ビルや GPS が荒い環境では 100-200m に上げる。
+    workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 50),
   };
 }
 
@@ -4422,9 +4424,13 @@ app.get('/api/work-sessions', (c) => {
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
-  // 50m 圏内ルール: 各点を最近接 workplace に紐付け
-  // (iPhone GPS の accuracy_m は 14-47m 程度 + 屋内ビルでオフセット)
-  const RADIUS_M = 50;
+  // 圏内ルール: 各点を最近接 workplace に紐付け。
+  // 半径は privacySettings.workplace_match_radius_m (default 50m) を共有。
+  // ・OwnTracks の locator displacement 設定 (50m / 100m など) や、
+  //   ビル内の GPS オフセット (室内では 30-100m 平気でずれる) に応じて
+  //   設定 → プライバシー → 「マッチ半径」 で調整可。
+  const settings = privacySettings();
+  const RADIUS_M = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 50));
   const tagged = points.map(p => {
     let bestId = null;
     let bestDist = Infinity;
@@ -4438,20 +4444,29 @@ app.get('/api/work-sessions', (c) => {
     return { recorded_at: p.recorded_at, workplace_id: bestId };
   });
 
-  // 連続する同 workplace の点を 1 セッションに畳む
+  // 連続する同 workplace の点を 1 セッションに畳む。
+  // **離脱判定**: GPS 点が「workplace 外 (50m+)」 または「別の workplace 圏内」に
+  // なった瞬間のタイムスタンプを `ended_at` とする。 この方が
+  // 「最終 inside 点」より正確 (GPS が sparse な場合に滞在時間が短く出る問題を緩和).
   const sessions = [];
   let cur = null;
   for (const t of tagged) {
-    if (!t.workplace_id) {
-      if (cur) { sessions.push(cur); cur = null; }
+    if (!cur) {
+      if (t.workplace_id) {
+        cur = { workplace_id: t.workplace_id, started_at: t.recorded_at, ended_at: t.recorded_at, points: 1 };
+      }
       continue;
     }
-    if (!cur || cur.workplace_id !== t.workplace_id) {
-      if (cur) sessions.push(cur);
-      cur = { workplace_id: t.workplace_id, started_at: t.recorded_at, ended_at: t.recorded_at, points: 1 };
-    } else {
+    if (t.workplace_id === cur.workplace_id) {
       cur.ended_at = t.recorded_at;
       cur.points += 1;
+    } else {
+      // 離脱: この点 (workplace 外 or 別 workplace) の時刻を離脱時刻に。
+      cur.ended_at = t.recorded_at;
+      sessions.push(cur);
+      cur = t.workplace_id
+        ? { workplace_id: t.workplace_id, started_at: t.recorded_at, ended_at: t.recorded_at, points: 1 }
+        : null;
     }
   }
   if (cur) sessions.push(cur);
