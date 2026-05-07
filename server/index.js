@@ -97,7 +97,13 @@ import {
   insertExternalChatMessage, listExternalChatMessages,
   listWorkLocations, getWorkLocation, insertWorkLocation,
   updateWorkLocation, deleteWorkLocation, setWorkLocationOwner,
+  listAgentProjects, getAgentProject, insertAgentProject,
+  updateAgentProject, deleteAgentProject,
+  listAgentRuns, getAgentRun,
 } from './db.js';
+import {
+  startAgentRun, cancelAgentRun, readAgentRunLog, isRunning as isAgentRunning,
+} from './agent-dispatch.js';
 import {
   ensureUserStopwordsTable, listUserStopwords, addUserStopword, removeUserStopword,
 } from './db.js';
@@ -1933,6 +1939,113 @@ app.delete('/api/tasks/:id', (c) => {
   if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
   deleteTask(db, id);
   return c.json({ ok: true });
+});
+
+// ---- agent projects + runs (AI 実装委託) ----------------------------------
+
+app.get('/api/agent-projects', (c) => {
+  return c.json({ items: listAgentProjects(db) });
+});
+
+app.post('/api/agent-projects', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  const path = String(body.path || '').trim();
+  if (!name) return c.json({ error: 'name required' }, 400);
+  if (!path) return c.json({ error: 'path required' }, 400);
+  const id = insertAgentProject(db, {
+    name,
+    path,
+    rules: typeof body.rules === 'string' ? body.rules : null,
+    default_agent: ['claude_code', 'codex', 'gemini'].includes(body.default_agent) ? body.default_agent : 'claude_code',
+  });
+  return c.json({ project: getAgentProject(db, id) }, 201);
+});
+
+app.patch('/api/agent-projects/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getAgentProject(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.name === 'string') patch.name = body.name.trim();
+  if (typeof body.path === 'string') patch.path = body.path.trim();
+  if (typeof body.rules === 'string' || body.rules === null) patch.rules = body.rules;
+  if (['claude_code', 'codex', 'gemini'].includes(body.default_agent)) patch.default_agent = body.default_agent;
+  updateAgentProject(db, id, patch);
+  return c.json({ project: getAgentProject(db, id) });
+});
+
+app.delete('/api/agent-projects/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getAgentProject(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteAgentProject(db, id);
+  return c.json({ ok: true });
+});
+
+// Spawn an agent run for a task.
+// Body: { project_id, agent? }
+app.post('/api/tasks/:id/agent-run', async (c) => {
+  const taskId = Number(c.req.param('id'));
+  const task = getTask(db, taskId);
+  if (!task) return c.json({ error: 'task not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const projectId = Number(body.project_id || task.project_id);
+  if (!projectId) return c.json({ error: 'project_id required' }, 400);
+  const project = getAgentProject(db, projectId);
+  if (!project) return c.json({ error: 'project not found' }, 404);
+  const agent = body.agent || project.default_agent || 'claude_code';
+  try {
+    const settings = getAppSettings(db);
+    const runId = startAgentRun(db, {
+      dataDir: DATA_DIR,
+      settings,
+      task,
+      project,
+      agent,
+      gitBashPath: settings['runtime.git_bash_path'] || null,
+    });
+    // Persist project_id on the task so re-runs have a default.
+    if (task.project_id !== projectId) {
+      updateTask(db, taskId, { /* not allowed via patch list */ });
+      // direct write since updateTask doesn't allow project_id
+      db.prepare(`UPDATE tasks SET project_id = ?, updated_at = datetime('now') WHERE id = ?`)
+        .run(projectId, taskId);
+    }
+    return c.json({ run: getAgentRun(db, runId) }, 201);
+  } catch (e) {
+    return c.json({ error: e.message }, 400);
+  }
+});
+
+app.get('/api/agent-runs', (c) => {
+  const taskId = c.req.query('task_id') ? Number(c.req.query('task_id')) : null;
+  const projectId = c.req.query('project_id') ? Number(c.req.query('project_id')) : null;
+  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  return c.json({ items: listAgentRuns(db, { taskId, projectId, limit }) });
+});
+
+app.get('/api/agent-runs/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const run = getAgentRun(db, id);
+  if (!run) return c.json({ error: 'not found' }, 404);
+  return c.json({ run, running: isAgentRunning(id) });
+});
+
+app.get('/api/agent-runs/:id/log', (c) => {
+  const id = Number(c.req.param('id'));
+  const run = getAgentRun(db, id);
+  if (!run) return c.json({ error: 'not found' }, 404);
+  const tail = Math.min(Number(c.req.query('tail') || 64 * 1024), 1024 * 1024);
+  const log = readAgentRunLog(DATA_DIR, run, { tail });
+  return c.json({ run, running: isAgentRunning(id), log });
+});
+
+app.post('/api/agent-runs/:id/cancel', (c) => {
+  const id = Number(c.req.param('id'));
+  const run = getAgentRun(db, id);
+  if (!run) return c.json({ error: 'not found' }, 404);
+  const r = cancelAgentRun(db, id);
+  return c.json(r);
 });
 
 // ---- work locations -------------------------------------------------------

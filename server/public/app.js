@@ -4130,7 +4130,9 @@ function hideModal(panelId) {
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen);
+  const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
+  const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -4141,6 +4143,8 @@ function closeAllModals() {
   hideModal('taskEditorModal');
   hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
+  if ($('agentProjectEditor')) hideModal('agentProjectEditor');
+  if ($('agentRunModal')) hideModal('agentRunModal');
 }
 $('dictDetailClose')?.addEventListener('click', () => {
   state.dictDetail = null;
@@ -4630,6 +4634,7 @@ document.addEventListener('click', (ev) => {
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
+  if (stab === 'agent-projects') loadAgentProjects().catch(console.warn);
   panel.scrollTop = 0;
 });
 
@@ -4840,6 +4845,7 @@ function ensureMemoriaFeatureViews() {
     for (const spec of [
       ['privacy', 'プライバシー / 表示'],
       ['setup', 'セットアップ手順'],
+      ['agent-projects', 'AI 実装プロジェクト'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -4894,6 +4900,47 @@ function ensureMemoriaFeatureViews() {
       <h4>セットアップ手順</h4>
       <div id="setupDocsList" class="setup-docs-list"></div>
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+  if (footer && !$('agentProjectsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'agentProjectsBody';
+    sec.className = 'settings-tab-body hidden';
+    sec.dataset.stab = 'agent-projects';
+    sec.innerHTML = `
+      <h4>AI 実装プロジェクト</h4>
+      <p class="diary-settings-help">タスクに「🤖 AI実装」を依頼するときに使うプロジェクト一覧です。プロジェクトごとにルール・パス・既定エージェントを登録します。</p>
+      <div id="agentProjectsList" class="simple-list"></div>
+      <div class="simple-actions"><button id="agentProjectAddBtn" type="button">+ プロジェクト追加</button></div>
+      <section id="agentProjectEditor" class="dict-detail modal-panel hidden foundation-form">
+        <button type="button" class="modal-close" id="agentProjectEditorClose" aria-label="close">×</button>
+        <h3 id="agentProjectEditorHeading">プロジェクトを追加</h3>
+        <input type="hidden" id="agentProjectEditorId" />
+        <label class="simple-field">
+          <span>名前</span>
+          <input id="agentProjectEditorName" type="text" placeholder="例: Memoria" />
+        </label>
+        <label class="simple-field">
+          <span>パス (絶対パス)</span>
+          <input id="agentProjectEditorPath" type="text" placeholder="例: E:\\Document\\Ars\\Memoria" />
+        </label>
+        <label class="simple-field">
+          <span>既定エージェント</span>
+          <select id="agentProjectEditorAgent">
+            <option value="claude_code">Claude Code</option>
+            <option value="codex">Codex CLI</option>
+            <option value="gemini">Gemini CLI</option>
+          </select>
+        </label>
+        <label class="simple-field">
+          <span>ルール (Markdown)</span>
+          <textarea id="agentProjectEditorRules" rows="14" placeholder="技術スタック・規約・Do/Don't・完了条件 など。AI 実装時にプロンプトの先頭に貼られます。"></textarea>
+        </label>
+        <div class="simple-actions">
+          <button id="agentProjectEditorSaveBtn">保存</button>
+          <button id="agentProjectEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+        </div>
+      </section>`;
     footer.parentNode.insertBefore(sec, footer);
   }
 
@@ -5587,6 +5634,7 @@ function taskCardHtml(t) {
       <p>${escapeHtml(t.details || '')}</p>
       <div class="simple-actions">
         ${doneBtn}
+        <button class="ghost" data-task-agent="${t.id}">🤖 AI実装</button>
         <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
         <button class="danger" data-task-delete="${t.id}">削除</button>
       </div>
@@ -5696,6 +5744,271 @@ function openWorkplaceEditor(w = null) {
 
 function closeWorkplaceEditor() {
   hideModal('workplaceEditorModal');
+}
+
+// ── Agent projects (AI 実装プロジェクト) ───────────────────────────────────
+
+let _agentProjectsCache = [];
+
+async function loadAgentProjects() {
+  const list = $('agentProjectsList');
+  if (!list) return;
+  try {
+    const r = await api('/api/agent-projects');
+    _agentProjectsCache = r.items || [];
+  } catch (e) {
+    list.innerHTML = `<div class="queue-empty">読み込み失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!_agentProjectsCache.length) {
+    list.innerHTML = '<div class="queue-empty">プロジェクトがまだ登録されていません。「+ プロジェクト追加」から登録してください。</div>';
+  } else {
+    list.innerHTML = _agentProjectsCache.map(p => `
+      <div class="simple-item" data-id="${p.id}" data-agent-project-open="${p.id}">
+        <div class="simple-item-head">
+          <strong>${escapeHtml(p.name)}</strong>
+          <span class="muted">${escapeHtml(p.default_agent || 'claude_code')}</span>
+        </div>
+        <div class="muted" style="font-family:ui-monospace,monospace;font-size:11px">${escapeHtml(p.path)}</div>
+        <div class="simple-actions">
+          <button class="ghost" data-agent-project-edit="${p.id}">編集</button>
+          <button class="danger" data-agent-project-delete="${p.id}">削除</button>
+        </div>
+      </div>`).join('');
+  }
+  list.querySelectorAll('[data-agent-project-edit]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const p = _agentProjectsCache.find(x => x.id === Number(btn.dataset.agentProjectEdit));
+      if (p) openAgentProjectEditor(p);
+    });
+  });
+  list.querySelectorAll('[data-agent-project-delete]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('このプロジェクトを削除しますか?')) return;
+      await api(`/api/agent-projects/${btn.dataset.agentProjectDelete}`, { method: 'DELETE' });
+      loadAgentProjects();
+    });
+  });
+}
+
+function openAgentProjectEditor(p = null) {
+  const isEdit = !!p;
+  if (!$('agentProjectEditor')) return;
+  $('agentProjectEditorHeading').textContent = isEdit ? 'プロジェクトを変更' : 'プロジェクトを追加';
+  $('agentProjectEditorId').value = p?.id ? String(p.id) : '';
+  $('agentProjectEditorName').value = p?.name || '';
+  $('agentProjectEditorPath').value = p?.path || '';
+  $('agentProjectEditorAgent').value = p?.default_agent || 'claude_code';
+  $('agentProjectEditorRules').value = p?.rules || '';
+  showModal('agentProjectEditor');
+  $('agentProjectEditorName').focus();
+}
+
+function closeAgentProjectEditor() { hideModal('agentProjectEditor'); }
+
+async function saveAgentProjectFromForm() {
+  const name = $('agentProjectEditorName')?.value.trim();
+  const path = $('agentProjectEditorPath')?.value.trim();
+  if (!name) return alert('名前を入力してください');
+  if (!path) return alert('パスを入力してください');
+  const editId = Number($('agentProjectEditorId')?.value || 0);
+  const payload = {
+    name, path,
+    default_agent: $('agentProjectEditorAgent')?.value || 'claude_code',
+    rules: $('agentProjectEditorRules')?.value || '',
+  };
+  try {
+    if (editId) {
+      await api(`/api/agent-projects/${editId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api('/api/agent-projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    closeAgentProjectEditor();
+    loadAgentProjects();
+  } catch (e) {
+    alert(`保存失敗: ${e.message}`);
+  }
+}
+
+// ── Agent run modal (AI 実装依頼) ──────────────────────────────────────────
+
+let _agentRunCurrentTask = null;
+let _agentRunPollTimer = null;
+
+function ensureAgentRunModal() {
+  if ($('agentRunModal')) return;
+  const modal = document.createElement('section');
+  modal.id = 'agentRunModal';
+  modal.className = 'dict-detail modal-panel hidden foundation-form';
+  modal.innerHTML = `
+    <button type="button" class="modal-close" id="agentRunClose" aria-label="close">×</button>
+    <h3 id="agentRunHeading">🤖 AI に実装を依頼</h3>
+    <div id="agentRunTaskInfo" class="muted" style="margin-bottom:8px"></div>
+    <label class="simple-field">
+      <span>プロジェクト</span>
+      <select id="agentRunProject"></select>
+    </label>
+    <label class="simple-field">
+      <span>エージェント</span>
+      <select id="agentRunAgent">
+        <option value="claude_code">Claude Code</option>
+        <option value="codex">Codex CLI</option>
+        <option value="gemini">Gemini CLI</option>
+      </select>
+    </label>
+    <div class="simple-actions">
+      <button id="agentRunStartBtn">▶ 実装を開始</button>
+      <button id="agentRunCancelBtn" type="button" class="ghost">キャンセル</button>
+    </div>
+    <h4 style="margin-top:16px">実行履歴</h4>
+    <div id="agentRunHistory" class="simple-list" style="max-height:180px;overflow-y:auto"></div>
+    <h4 style="margin-top:16px">ログ</h4>
+    <div id="agentRunLogStatus" class="muted" style="font-size:11px"></div>
+    <pre id="agentRunLog" class="setup-doc-body" style="max-height:280px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre>
+    <div class="simple-actions">
+      <button id="agentRunRefreshBtn" type="button" class="ghost">ログ更新</button>
+      <button id="agentRunCancelRunBtn" type="button" class="danger" hidden>実行をキャンセル</button>
+    </div>`;
+  document.body.appendChild(modal);
+  $('agentRunClose').onclick = closeAgentRunModal;
+  $('agentRunCancelBtn').onclick = closeAgentRunModal;
+  $('agentRunStartBtn').onclick = startAgentRunFromModal;
+  $('agentRunRefreshBtn').onclick = () => {
+    const id = Number($('agentRunLog').dataset.runId || 0);
+    if (id) refreshAgentRunLog(id);
+  };
+  $('agentRunCancelRunBtn').onclick = async () => {
+    const id = Number($('agentRunLog').dataset.runId || 0);
+    if (!id) return;
+    if (!confirm('実行中のエージェントを停止しますか?')) return;
+    try { await api(`/api/agent-runs/${id}/cancel`, { method: 'POST' }); }
+    catch (e) { alert(e.message); }
+    refreshAgentRunLog(id);
+  };
+}
+
+async function openAgentRunModal(task) {
+  ensureAgentRunModal();
+  _agentRunCurrentTask = task;
+  $('agentRunTaskInfo').textContent = `タスク: ${task.title}`;
+  // load projects
+  try {
+    const r = await api('/api/agent-projects');
+    const items = r.items || [];
+    if (!items.length) {
+      $('agentRunProject').innerHTML = '<option value="">（プロジェクト未登録 — 設定→AI 実装プロジェクトから登録してください）</option>';
+      $('agentRunStartBtn').disabled = true;
+    } else {
+      $('agentRunProject').innerHTML = items.map(p =>
+        `<option value="${p.id}" data-default-agent="${escapeHtml(p.default_agent)}">${escapeHtml(p.name)}</option>`
+      ).join('');
+      $('agentRunStartBtn').disabled = false;
+      // Pre-select task.project_id if any
+      if (task.project_id) $('agentRunProject').value = String(task.project_id);
+      const selOpt = $('agentRunProject').selectedOptions[0];
+      if (selOpt?.dataset.defaultAgent) $('agentRunAgent').value = selOpt.dataset.defaultAgent;
+      $('agentRunProject').onchange = () => {
+        const o = $('agentRunProject').selectedOptions[0];
+        if (o?.dataset.defaultAgent) $('agentRunAgent').value = o.dataset.defaultAgent;
+      };
+    }
+  } catch (e) {
+    alert(`プロジェクト取得失敗: ${e.message}`);
+  }
+  // Load run history.
+  await refreshAgentRunHistory(task.id);
+  $('agentRunLog').textContent = '';
+  $('agentRunLog').dataset.runId = '';
+  $('agentRunLogStatus').textContent = '';
+  $('agentRunCancelRunBtn').hidden = true;
+  showModal('agentRunModal');
+}
+
+function closeAgentRunModal() {
+  hideModal('agentRunModal');
+  if (_agentRunPollTimer) { clearInterval(_agentRunPollTimer); _agentRunPollTimer = null; }
+}
+
+async function refreshAgentRunHistory(taskId) {
+  try {
+    const r = await api(`/api/agent-runs?task_id=${encodeURIComponent(taskId)}&limit=20`);
+    const items = r.items || [];
+    const el = $('agentRunHistory');
+    if (!items.length) { el.innerHTML = '<div class="queue-empty">履歴なし</div>'; return; }
+    el.innerHTML = items.map(run => {
+      const at = (run.started_at || '').replace('T', ' ').slice(0, 19);
+      const status = escapeHtml(run.status);
+      const exit = run.exit_code != null ? ` (exit ${run.exit_code})` : '';
+      return `<div class="simple-item" data-agent-run-open="${run.id}">
+        <div class="simple-item-head">
+          <strong>#${run.id} ${escapeHtml(run.agent)}</strong>
+          <span class="muted">${at}</span>
+        </div>
+        <div class="muted">${status}${exit}</div>
+        ${run.summary ? `<div style="font-size:11px">${escapeHtml(run.summary).slice(0, 200)}</div>` : ''}
+      </div>`;
+    }).join('');
+    el.querySelectorAll('[data-agent-run-open]').forEach(it => {
+      it.addEventListener('click', () => refreshAgentRunLog(Number(it.dataset.agentRunOpen)));
+    });
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+async function refreshAgentRunLog(runId) {
+  try {
+    const r = await api(`/api/agent-runs/${runId}/log?tail=131072`);
+    $('agentRunLog').textContent = r.log || '(ログなし)';
+    $('agentRunLog').dataset.runId = String(runId);
+    const status = r.run?.status || 'unknown';
+    const at = (r.run?.started_at || '').replace('T', ' ').slice(0, 19);
+    const exit = r.run?.exit_code != null ? ` (exit ${r.run.exit_code})` : '';
+    $('agentRunLogStatus').textContent = `#${runId} · ${status}${exit} · started ${at} · ${r.running ? '実行中' : '停止'}`;
+    $('agentRunCancelRunBtn').hidden = !r.running;
+    if (_agentRunPollTimer) { clearInterval(_agentRunPollTimer); _agentRunPollTimer = null; }
+    if (r.running) {
+      _agentRunPollTimer = setInterval(() => refreshAgentRunLog(runId), 3000);
+    }
+    // tail-like behaviour: scroll to bottom
+    const pre = $('agentRunLog');
+    pre.scrollTop = pre.scrollHeight;
+  } catch (e) {
+    $('agentRunLogStatus').textContent = `ログ取得失敗: ${e.message}`;
+  }
+}
+
+async function startAgentRunFromModal() {
+  if (!_agentRunCurrentTask) return;
+  const projectId = Number($('agentRunProject')?.value || 0);
+  const agent = $('agentRunAgent')?.value || 'claude_code';
+  if (!projectId) return alert('プロジェクトを選択してください');
+  $('agentRunStartBtn').disabled = true;
+  $('agentRunStartBtn').textContent = '起動中…';
+  try {
+    const r = await api(`/api/tasks/${_agentRunCurrentTask.id}/agent-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, agent }),
+    });
+    await refreshAgentRunHistory(_agentRunCurrentTask.id);
+    if (r.run?.id) refreshAgentRunLog(r.run.id);
+  } catch (e) {
+    alert(`起動失敗: ${e.message}`);
+  } finally {
+    $('agentRunStartBtn').disabled = false;
+    $('agentRunStartBtn').textContent = '▶ 実装を開始';
+  }
 }
 
 // ── GPS / Place API helpers ────────────────────────────────────────────────
@@ -5938,6 +6251,14 @@ function renderTaskBoard() {
       await loadTasks();
     });
   });
+  document.querySelectorAll('[data-task-agent]').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const id = Number(btn.dataset.taskAgent);
+      const task = state.taskItems.find((t) => t.id === id);
+      if (task) openAgentRunModal(task);
+    });
+  });
   document.querySelectorAll('[data-task-delete]').forEach((btn) => {
     btn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -6141,6 +6462,10 @@ ensureMemoriaFeatureViews = function () {
   if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
   if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
   if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
+  if ($('agentProjectAddBtn')) $('agentProjectAddBtn').onclick = () => openAgentProjectEditor(null);
+  if ($('agentProjectEditorClose')) $('agentProjectEditorClose').onclick = closeAgentProjectEditor;
+  if ($('agentProjectEditorCancelBtn')) $('agentProjectEditorCancelBtn').onclick = closeAgentProjectEditor;
+  if ($('agentProjectEditorSaveBtn')) $('agentProjectEditorSaveBtn').onclick = saveAgentProjectFromForm;
   if ($('workplaceNewBtn')) $('workplaceNewBtn').onclick = () => openWorkplaceEditor(null);
   if ($('workplaceEditorClose')) $('workplaceEditorClose').onclick = closeWorkplaceEditor;
   if ($('workplaceEditorCancelBtn')) $('workplaceEditorCancelBtn').onclick = closeWorkplaceEditor;

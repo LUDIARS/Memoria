@@ -336,6 +336,7 @@ export function openDb(dbPath) {
       share_actio   INTEGER NOT NULL DEFAULT 0,
       shared_at     TEXT,
       shared_origin TEXT,
+      project_id    INTEGER,
       created_at    TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -343,6 +344,35 @@ export function openDb(dbPath) {
       ON tasks(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(due_at);
+
+    CREATE TABLE IF NOT EXISTS agent_projects (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      name           TEXT NOT NULL,
+      path           TEXT NOT NULL,
+      rules          TEXT,
+      default_agent  TEXT NOT NULL DEFAULT 'claude_code',
+      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id        INTEGER,
+      project_id     INTEGER,
+      agent          TEXT NOT NULL,
+      prompt         TEXT,
+      status         TEXT NOT NULL DEFAULT 'pending',
+      exit_code      INTEGER,
+      log_path       TEXT,
+      pid            INTEGER,
+      summary        TEXT,
+      started_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_task
+      ON agent_runs(task_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_status
+      ON agent_runs(status);
 
     CREATE TABLE IF NOT EXISTS work_locations (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -408,6 +438,7 @@ export function openDb(dbPath) {
     ['share_actio', 'INTEGER NOT NULL DEFAULT 0'],
     ['shared_at', 'TEXT'],
     ['shared_origin', 'TEXT'],
+    ['project_id', 'INTEGER'],
   ]) {
     if (taskCols.length > 0 && !taskCols.includes(col)) {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
@@ -2750,6 +2781,95 @@ export function updateImplementationNote(db, id, patch) {
 
 export function deleteImplementationNote(db, id) {
   db.prepare(`DELETE FROM implementation_notes WHERE id = ?`).run(id);
+}
+
+// ---- agent projects + runs (AI 実装委託) ----------------------------------
+
+export function listAgentProjects(db) {
+  return db.prepare(`SELECT * FROM agent_projects ORDER BY created_at ASC`).all();
+}
+
+export function getAgentProject(db, id) {
+  return db.prepare(`SELECT * FROM agent_projects WHERE id = ?`).get(id);
+}
+
+export function insertAgentProject(db, p) {
+  const info = db.prepare(`
+    INSERT INTO agent_projects (name, path, rules, default_agent)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    p.name,
+    p.path,
+    p.rules ?? null,
+    p.default_agent || 'claude_code',
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateAgentProject(db, id, patch) {
+  const allowed = new Set(['name', 'path', 'rules', 'default_agent']);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    args.push(v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE agent_projects SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteAgentProject(db, id) {
+  db.prepare(`DELETE FROM agent_projects WHERE id = ?`).run(id);
+}
+
+export function listAgentRuns(db, { taskId = null, projectId = null, limit = 100, offset = 0 } = {}) {
+  const where = [];
+  const args = [];
+  if (taskId != null) { where.push('task_id = ?'); args.push(Number(taskId)); }
+  if (projectId != null) { where.push('project_id = ?'); args.push(Number(projectId)); }
+  args.push(Number(limit) || 100, Number(offset) || 0);
+  return db.prepare(`
+    SELECT * FROM agent_runs
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY started_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args);
+}
+
+export function getAgentRun(db, id) {
+  return db.prepare(`SELECT * FROM agent_runs WHERE id = ?`).get(id);
+}
+
+export function insertAgentRun(db, r) {
+  const info = db.prepare(`
+    INSERT INTO agent_runs (task_id, project_id, agent, prompt, status, log_path)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    r.task_id ?? null,
+    r.project_id ?? null,
+    r.agent,
+    r.prompt ?? null,
+    r.status || 'pending',
+    r.log_path ?? null,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateAgentRun(db, id, patch) {
+  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at']);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    args.push(v);
+  }
+  if (!cols.length) return;
+  args.push(id);
+  db.prepare(`UPDATE agent_runs SET ${cols.join(', ')} WHERE id = ?`).run(...args);
 }
 
 // ---- work locations -------------------------------------------------------
