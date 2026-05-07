@@ -4187,6 +4187,9 @@ async function openAiSettings() {
     const providers = r.providers;
     const providerModels = r.provider_models || {};
     const providerDefaults = r.provider_default_model || {};
+    // 同じ /api/llm/config をタスク AI 依頼モーダルでも引くので、共有キャッシュにも入れておく
+    _providerModelsCache = providerModels;
+    _providerDefaultsCache = providerDefaults;
     const optionsHtml = providers.map(p => `<option value="${p.key}">${escapeHtml(p.label)}</option>`).join('');
     function modelOptionsFor(provider, current) {
       const list = providerModels[provider] || [];
@@ -5926,29 +5929,43 @@ function ensureAgentRunModal() {
   };
 }
 
-// agent ↔ model のマッピング (UI 側)。サーバ側の AGENT_DEFAULT_MODEL とほぼ同期。
-const AGENT_MODELS = {
-  claude_code: [
-    { id: 'sonnet', label: 'Sonnet 4.6 (default)' },
-    { id: 'haiku', label: 'Haiku 4.5 (fast)' },
-    { id: 'opus', label: 'Opus 4.7' },
-    { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)' },
-  ],
-  codex: [
-    { id: '5.3-codex', label: '5.3-codex (default)' },
-    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
-  ],
-  gemini: [
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-  ],
+// 設定画面とタスク AI 依頼でモデル一覧を共有するためのキャッシュ。
+// サーバの `/api/llm/config` (server/llm.js の PROVIDER_MODELS / PROVIDER_DEFAULT_MODEL)
+// が単一の出所。
+let _providerModelsCache = null;
+let _providerDefaultsCache = null;
+async function ensureProviderModels() {
+  if (_providerModelsCache) return _providerModelsCache;
+  try {
+    const r = await api('/api/llm/config');
+    _providerModelsCache = r.provider_models || {};
+    _providerDefaultsCache = r.provider_default_model || {};
+  } catch {
+    _providerModelsCache = {};
+    _providerDefaultsCache = {};
+  }
+  return _providerModelsCache;
+}
+function invalidateProviderModelsCache() {
+  _providerModelsCache = null;
+  _providerDefaultsCache = null;
+}
+
+// 実装エージェント名 → llm provider key のマッピング。
+// 設定画面と AI 依頼モーダルで同じモデルリストを引けるようにする。
+const AGENT_TO_PROVIDER = {
+  claude_code: 'claude',
+  codex:       'codex',
+  gemini:      'gemini',
 };
 
-function refreshAgentModelDropdown() {
+async function refreshAgentModelDropdown() {
   const agent = $('agentRunAgent')?.value || 'claude_code';
-  const models = AGENT_MODELS[agent] || [];
   const sel = $('agentRunModel');
   if (!sel) return;
+  await ensureProviderModels();
+  const provider = AGENT_TO_PROVIDER[agent] || 'claude';
+  const models = (_providerModelsCache && _providerModelsCache[provider]) || [];
   const cur = sel.value;
   sel.innerHTML = models.map(m =>
     `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label)}</option>`
@@ -5978,15 +5995,15 @@ async function openAgentRunModal(task) {
         const o = $('agentRunProject').selectedOptions[0];
         if (o?.dataset.defaultAgent) {
           $('agentRunAgent').value = o.dataset.defaultAgent;
-          refreshAgentModelDropdown();
+          refreshAgentModelDropdown().catch(() => {});
         }
       };
     }
   } catch (e) {
     alert(`プロジェクト取得失敗: ${e.message}`);
   }
-  refreshAgentModelDropdown();
-  $('agentRunAgent').onchange = refreshAgentModelDropdown;
+  await refreshAgentModelDropdown();
+  $('agentRunAgent').onchange = () => { refreshAgentModelDropdown().catch(() => {}); };
   // Load run history.
   await refreshAgentRunHistory(task.id);
   $('agentRunLog').textContent = '';
