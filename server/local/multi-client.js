@@ -215,10 +215,27 @@ export async function shareImplementationNote(state, n) {
   return multiFetch(state, '/api/shared/implementation-notes', {
     method: 'POST',
     body: JSON.stringify({
-      product: n.product,
+      product: n.product || '',
       title: n.title,
       good_points: n.good_points || null,
       bad_points: n.bad_points || null,
+      attachment_type: n.attachment_type || null,
+      attachment_value: n.attachment_value || null,
+    }),
+  });
+}
+
+export async function shareWorkLocation(state, w) {
+  return multiFetch(state, '/api/shared/work-locations', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: w.name,
+      address: w.address || null,
+      latitude: w.latitude == null ? null : Number(w.latitude),
+      longitude: w.longitude == null ? null : Number(w.longitude),
+      description: w.description || null,
+      url: w.url || null,
+      tags: w.tags || null,
     }),
   });
 }

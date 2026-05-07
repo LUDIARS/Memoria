@@ -618,6 +618,8 @@ function switchTab(tab) {
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
+  $('workplaceView')?.classList.toggle('hidden', tab !== 'workplace');
+  if (tab === 'workplace') loadWorkLocations().catch(console.warn);
   $('externalView')?.classList.toggle('hidden', tab !== 'external');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   if (tab === 'queue') renderQueue();
@@ -3484,13 +3486,17 @@ function renderTrendWorkHours(items) {
     el.innerHTML = '<div class="queue-empty">作業時間が記録された日記がまだありません</div>';
     return;
   }
+  const presentHours = present.map((d) => ({
+    ...d,
+    hours: Number(d.minutes || 0) / 60,
+  }));
   el.innerHTML = svgHorizontalBar(
-    present,
+    presentHours,
     (d) => String(d.date || '').slice(5),
-    (d) => Number(d.minutes || 0),
-    '',
+    (d) => Number(d.hours || 0),
+    '時間',
     {
-      valueLabel: (v) => `${(v / 60).toFixed(1)}h`,
+      valueLabel: (v) => `${v.toFixed(1)} 時間`,
     }
   );
 }
@@ -4123,7 +4129,8 @@ function hideModal(panelId) {
   const domOpen  = !$('domainDetail').classList.contains('hidden');
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen);
+  const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -4133,6 +4140,7 @@ function closeAllModals() {
   hideModal('domainDetail');
   hideModal('taskEditorModal');
   hideModal('implEditorModal');
+  hideModal('workplaceEditorModal');
 }
 $('dictDetailClose')?.addEventListener('click', () => {
   state.dictDetail = null;
@@ -4698,6 +4706,7 @@ function ensureMemoriaFeatureViews() {
     for (const spec of [
       ['tasks', 'タスク'],
       ['impl', '実装自慢'],
+      ['workplace', '作業場所'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -4757,6 +4766,64 @@ function ensureMemoriaFeatureViews() {
       </div>`;
     content.appendChild(div);
   }
+  if (content && !$('workplaceView')) {
+    const div = document.createElement('div');
+    div.id = 'workplaceView';
+    div.className = 'hidden';
+    div.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-panel-head">
+          <h2>🗺️ 作業場所</h2>
+          <button id="workplaceNewBtn" type="button">+ 場所を追加</button>
+        </div>
+        <p class="diary-settings-help">よく作業するカフェ・コワーキング・図書館などをまとめ、Hub にシェアしてチームでナレッジ共有できます。</p>
+        <div id="workplaceList" class="simple-list"></div>
+        <section id="workplaceEditorModal" class="dict-detail modal-panel hidden foundation-form">
+          <button type="button" class="modal-close" id="workplaceEditorClose" aria-label="close">×</button>
+          <h3 id="workplaceEditorHeading">作業場所を追加</h3>
+          <input type="hidden" id="workplaceEditorId" />
+          <label class="simple-field">
+            <span>名前</span>
+            <input id="workplaceEditorName" type="text" placeholder="例: WeWork 六本木" />
+          </label>
+          <label class="simple-field">
+            <span>住所</span>
+            <input id="workplaceEditorAddress" type="text" placeholder="例: 東京都港区六本木..." />
+          </label>
+          <div class="simple-field-row">
+            <label class="simple-field">
+              <span>緯度 (任意)</span>
+              <input id="workplaceEditorLat" type="number" step="0.000001" />
+            </label>
+            <label class="simple-field">
+              <span>経度 (任意)</span>
+              <input id="workplaceEditorLng" type="number" step="0.000001" />
+            </label>
+          </div>
+          <label class="simple-field">
+            <span>URL (任意)</span>
+            <input id="workplaceEditorUrl" type="text" placeholder="https://..." />
+          </label>
+          <label class="simple-field">
+            <span>タグ (カンマ区切り)</span>
+            <input id="workplaceEditorTags" type="text" placeholder="wifi, 電源, 静か" />
+          </label>
+          <label class="simple-field">
+            <span>説明 / メモ</span>
+            <textarea id="workplaceEditorDescription" rows="6" placeholder="営業時間・wifi・電源・席数・雰囲気など"></textarea>
+          </label>
+          <label class="simple-check-row">
+            <input id="workplaceEditorShareable" type="checkbox" />
+            <span>シェア可能にする</span>
+          </label>
+          <div class="simple-actions">
+            <button id="workplaceEditorSaveBtn">保存</button>
+            <button id="workplaceEditorCancelBtn" type="button" class="ghost">キャンセル</button>
+          </div>
+        </section>
+      </div>`;
+    content.appendChild(div);
+  }
 
   const settingsTabs = document.querySelector('.settings-tabs');
   const footer = document.querySelector('.settings-footer');
@@ -4797,6 +4864,8 @@ function ensureMemoriaFeatureViews() {
       </label>
       <label class="check-inline"><input id="taskReminderNuntiusEnabled" type="checkbox" /> Nuntius にも送る</label>
       <label>Nuntius URL: <input id="taskReminderNuntiusUrl" type="text" placeholder="https://nuntius.example.com/notify" /></label>
+      <h4 style="margin-top:12px">MCP サーバ</h4>
+      <label class="check-inline"><input id="mcpAutostartEnabled" type="checkbox" /> Memoria 起動時に MCP サーバを同時起動する (任意)</label>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
@@ -5011,6 +5080,7 @@ async function loadPrivacySettings() {
   if ($('taskReminderMinute')) $('taskReminderMinute').value = s.tasks_reminder_minute ?? 0;
   if ($('taskReminderNuntiusEnabled')) $('taskReminderNuntiusEnabled').checked = !!s.tasks_reminder_nuntius_enabled;
   if ($('taskReminderNuntiusUrl')) $('taskReminderNuntiusUrl').value = s.tasks_reminder_nuntius_url || '';
+  if ($('mcpAutostartEnabled')) $('mcpAutostartEnabled').checked = !!s.mcp_autostart_enabled;
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
   }
@@ -5034,6 +5104,7 @@ async function savePrivacySettings() {
       tasks_reminder_minute: Number($('taskReminderMinute')?.value ?? 0),
       tasks_reminder_nuntius_enabled: !!($('taskReminderNuntiusEnabled')?.checked),
       tasks_reminder_nuntius_url: $('taskReminderNuntiusUrl')?.value.trim() || '',
+      mcp_autostart_enabled: !!($('mcpAutostartEnabled')?.checked),
     }),
   });
   const s = r.settings || {};
@@ -5502,6 +5573,144 @@ function renderTaskDetail() {
   // Task detail is edited in a modal dialog.
 }
 
+// ---- work locations -------------------------------------------------------
+
+let _workplaceItems = [];
+
+async function loadWorkLocations() {
+  ensureMemoriaFeatureViews();
+  const list = $('workplaceList');
+  if (!list) return;
+  try {
+    const r = await api('/api/work-locations');
+    _workplaceItems = r.items || [];
+  } catch (e) {
+    list.innerHTML = `<div class="queue-empty">読み込み失敗: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!_workplaceItems.length) {
+    list.innerHTML = '<div class="queue-empty">まだ登録された場所がありません。「+ 場所を追加」から登録できます。</div>';
+    return;
+  }
+  list.innerHTML = _workplaceItems.map(w => {
+    const owner = w.owner_user_name ? `<span class="muted">by ${escapeHtml(w.owner_user_name)}</span>` : '';
+    const tags = (w.tags || '').split(',').map(s => s.trim()).filter(Boolean)
+      .map(t => `<span class="wl-meta">${escapeHtml(t)}</span>`).join(' ');
+    const link = w.url ? `<a href="${escapeHtml(w.url)}" target="_blank" rel="noopener">${escapeHtml(w.url)}</a>` : '';
+    const coord = (Number.isFinite(w.latitude) && Number.isFinite(w.longitude))
+      ? `<span class="muted">${w.latitude.toFixed(4)}, ${w.longitude.toFixed(4)}</span>` : '';
+    const sharedTag = w.shared_at
+      ? `シェア済み: ${escapeHtml(fmtDate(w.shared_at))}`
+      : (w.shareable ? 'シェア可能' : '非公開');
+    const isOwned = !w.owner_user_id;
+    return `
+      <div class="simple-item" data-id="${w.id}" data-workplace-open="${w.id}">
+        <div class="simple-item-head">
+          <strong>${escapeHtml(w.name)}</strong>
+          ${owner}
+        </div>
+        <div class="muted">${escapeHtml(w.address || '')}</div>
+        <div>${tags} ${coord}</div>
+        <p>${escapeHtml(w.description || '')}</p>
+        ${link ? `<div>${link}</div>` : ''}
+        <div class="simple-actions">
+          <span class="muted">${sharedTag}</span>
+          ${isOwned ? `<button class="ghost" data-workplace-share="${w.id}" ${w.shared_at ? 'disabled' : ''}>シェア</button>` : ''}
+          <button class="danger" data-workplace-delete="${w.id}">削除</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('[data-workplace-open]').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('button,a,input,select,textarea')) return;
+      const id = Number(el.dataset.workplaceOpen || 0);
+      const w = _workplaceItems.find(x => x.id === id);
+      if (w) openWorkplaceEditor(w);
+    });
+  });
+  list.querySelectorAll('[data-workplace-share]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await api('/api/multi/share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'work_location', id: Number(btn.dataset.workplaceShare) }),
+        });
+        showShareToast('作業場所をシェアしました');
+      } catch (e) { alert(e.message); }
+      loadWorkLocations();
+    });
+  });
+  list.querySelectorAll('[data-workplace-delete]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!confirm('この場所を削除しますか?')) return;
+      await api(`/api/work-locations/${btn.dataset.workplaceDelete}`, { method: 'DELETE' });
+      loadWorkLocations();
+    });
+  });
+}
+
+function openWorkplaceEditor(w = null) {
+  const isEdit = !!w;
+  if (!$('workplaceEditorModal')) return;
+  $('workplaceEditorHeading').textContent = isEdit ? '作業場所を変更' : '作業場所を追加';
+  $('workplaceEditorId').value = w?.id ? String(w.id) : '';
+  $('workplaceEditorName').value = w?.name || '';
+  $('workplaceEditorAddress').value = w?.address || '';
+  $('workplaceEditorLat').value = w?.latitude == null ? '' : w.latitude;
+  $('workplaceEditorLng').value = w?.longitude == null ? '' : w.longitude;
+  $('workplaceEditorUrl').value = w?.url || '';
+  $('workplaceEditorTags').value = w?.tags || '';
+  $('workplaceEditorDescription').value = w?.description || '';
+  $('workplaceEditorShareable').checked = !!w?.shareable;
+  showModal('workplaceEditorModal');
+  $('workplaceEditorName').focus();
+}
+
+function closeWorkplaceEditor() {
+  hideModal('workplaceEditorModal');
+}
+
+async function saveWorkLocationFromForm() {
+  const name = $('workplaceEditorName')?.value.trim();
+  if (!name) { alert('名前を入力してください'); return; }
+  const editId = Number($('workplaceEditorId')?.value || 0);
+  const latStr = $('workplaceEditorLat')?.value;
+  const lngStr = $('workplaceEditorLng')?.value;
+  const payload = {
+    name,
+    address: $('workplaceEditorAddress')?.value.trim() || null,
+    latitude: latStr === '' || latStr == null ? null : Number(latStr),
+    longitude: lngStr === '' || lngStr == null ? null : Number(lngStr),
+    url: $('workplaceEditorUrl')?.value.trim() || null,
+    tags: $('workplaceEditorTags')?.value.trim() || null,
+    description: $('workplaceEditorDescription')?.value.trim() || null,
+    shareable: !!$('workplaceEditorShareable')?.checked,
+  };
+  try {
+    if (editId) {
+      await api(`/api/work-locations/${editId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api('/api/work-locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    closeWorkplaceEditor();
+    await loadWorkLocations();
+  } catch (e) {
+    alert(`保存に失敗しました: ${e.message}`);
+  }
+}
+
 function openTaskEditor(task = null) {
   const isEdit = !!task;
   if (!$('taskEditorModal')) return;
@@ -5789,6 +5998,10 @@ ensureMemoriaFeatureViews = function () {
   if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
   if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
   if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
+  if ($('workplaceNewBtn')) $('workplaceNewBtn').onclick = () => openWorkplaceEditor(null);
+  if ($('workplaceEditorClose')) $('workplaceEditorClose').onclick = closeWorkplaceEditor;
+  if ($('workplaceEditorCancelBtn')) $('workplaceEditorCancelBtn').onclick = closeWorkplaceEditor;
+  if ($('workplaceEditorSaveBtn')) $('workplaceEditorSaveBtn').onclick = saveWorkLocationFromForm;
   document.querySelectorAll('#tasksMenu [data-task-menu]').forEach((btn) => {
     btn.onclick = () => {
       state.taskMenu = btn.dataset.taskMenu;
@@ -5911,7 +6124,11 @@ async function loadWorklog() {
   if (sub === 'schedule') return loadWorklogSchedule(date);
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
-  if (WL_KIND_BY_SUB[sub]) return loadWorklogActivity(date, sub);
+  if (WL_KIND_BY_SUB[sub]) {
+    await loadWorklogActivity(date, sub);
+    if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
+    return;
+  }
 }
 
 async function loadWorklogSchedule(date) {
@@ -6062,6 +6279,70 @@ function renderWorklogPrompts(items, listEl, summaryEl, sub) {
       ${content ? `<div class="wl-content truncate" title="${escapeHtml(content)}">${escapeHtml(content)}</div>` : ''}
     </li>`;
   }).join('');
+}
+
+async function loadGeminiWebResearchLogs(date) {
+  const listEl = $('wlGeminiWebList');
+  const emptyEl = $('wlGeminiWebEmpty');
+  if (!listEl || !emptyEl) return;
+  try {
+    const r = await api('/api/external-chat/messages?source=gemini-web&limit=200');
+    const items = (r.items || []).filter((it) => String(it.received_at || '').startsWith(date));
+    if (!items.length) {
+      listEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    listEl.innerHTML = items.map((it) => {
+      let meta = {};
+      try { meta = it.metadata_json ? JSON.parse(it.metadata_json) : (it.metadata || {}); } catch {}
+      const title = meta.title || '(no title)';
+      const url = meta.url || '';
+      const t = String(it.received_at || '').slice(11, 19);
+      return `<li>
+        <div class="wl-row1">
+          <span class="wl-time">${escapeHtml(t)}</span>
+          ${url ? `<a class="wl-source" href="${escapeHtml(url)}" target="_blank" rel="noopener">link</a>` : ''}
+        </div>
+        <div class="wl-content"><strong>${escapeHtml(title)}</strong></div>
+        <div class="wl-content">${escapeHtml(it.content || '')}</div>
+      </li>`;
+    }).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function saveGeminiWebResearchLog() {
+  const title = $('wlGeminiWebTitle')?.value.trim() || '';
+  const url = $('wlGeminiWebUrl')?.value.trim() || '';
+  const content = $('wlGeminiWebContent')?.value.trim() || '';
+  if (!content) return;
+  await api('/api/external-chat/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source: 'gemini-web',
+      role: 'assistant',
+      content,
+      metadata: { title, url, kind: 'research' },
+    }),
+  });
+  await api('/api/activity/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'gemini_prompt',
+      source: 'gemini-web',
+      content: title || content.slice(0, 120),
+      metadata: { via: 'manual-research-log', url },
+    }),
+  }).catch(() => {});
+  $('wlGeminiWebTitle').value = '';
+  $('wlGeminiWebUrl').value = '';
+  $('wlGeminiWebContent').value = '';
+  await loadGeminiWebResearchLogs(state.worklog.date);
 }
 
 async function loadWorklogBrowsing(date) {
@@ -6241,6 +6522,21 @@ $('wlDate')?.addEventListener('change', (e) => {
   }
 });
 $('wlRefresh')?.addEventListener('click', () => loadWorklog());
+$('wlGeminiWebSaveBtn')?.addEventListener('click', () => {
+  saveGeminiWebResearchLog().catch((e) => {
+    console.error(e);
+    alert(`Gemini Web 調査ログの保存に失敗しました: ${e.message}`);
+  });
+});
+$('wlGeminiWebContent')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    saveGeminiWebResearchLog().catch((err) => {
+      console.error(err);
+      alert(`Gemini Web 調査ログの保存に失敗しました: ${err.message}`);
+    });
+  }
+});
 
 // ── 🌐 Multi (Memoria Hub) browse ─────────────────────────────────────────
 state.multiSubtab = 'bookmarks';

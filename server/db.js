@@ -344,6 +344,26 @@ export function openDb(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(due_at);
 
+    CREATE TABLE IF NOT EXISTS work_locations (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      name           TEXT NOT NULL,
+      address        TEXT,
+      latitude       REAL,
+      longitude      REAL,
+      description    TEXT,
+      url            TEXT,
+      tags           TEXT,
+      shareable      INTEGER NOT NULL DEFAULT 0,
+      shared_at      TEXT,
+      shared_origin  TEXT,
+      owner_user_id  TEXT,
+      owner_user_name TEXT,
+      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_work_locations_created
+      ON work_locations(created_at DESC);
+
     CREATE TABLE IF NOT EXISTS external_chat_messages (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       source         TEXT NOT NULL,
@@ -2730,6 +2750,72 @@ export function updateImplementationNote(db, id, patch) {
 
 export function deleteImplementationNote(db, id) {
   db.prepare(`DELETE FROM implementation_notes WHERE id = ?`).run(id);
+}
+
+// ---- work locations -------------------------------------------------------
+
+export function listWorkLocations(db, { limit = 200, offset = 0 } = {}) {
+  return db.prepare(`
+    SELECT * FROM work_locations
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(Number(limit) || 200, Number(offset) || 0);
+}
+
+export function getWorkLocation(db, id) {
+  return db.prepare(`SELECT * FROM work_locations WHERE id = ?`).get(id);
+}
+
+export function insertWorkLocation(db, loc) {
+  const info = db.prepare(`
+    INSERT INTO work_locations
+      (name, address, latitude, longitude, description, url, tags, shareable)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    loc.name,
+    loc.address ?? null,
+    loc.latitude == null ? null : Number(loc.latitude),
+    loc.longitude == null ? null : Number(loc.longitude),
+    loc.description ?? null,
+    loc.url ?? null,
+    loc.tags ?? null,
+    loc.shareable ? 1 : 0,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateWorkLocation(db, id, patch) {
+  const allowed = new Set([
+    'name', 'address', 'latitude', 'longitude', 'description', 'url', 'tags',
+    'shareable', 'shared_at', 'shared_origin',
+    'owner_user_id', 'owner_user_name',
+  ]);
+  const cols = [];
+  const args = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    cols.push(`${k} = ?`);
+    if (k === 'shareable') args.push(v ? 1 : 0);
+    else if (k === 'latitude' || k === 'longitude') args.push(v == null ? null : Number(v));
+    else args.push(v);
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE work_locations SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteWorkLocation(db, id) {
+  db.prepare(`DELETE FROM work_locations WHERE id = ?`).run(id);
+}
+
+export function setWorkLocationOwner(db, id, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }) {
+  db.prepare(`
+    UPDATE work_locations
+       SET owner_user_id = ?, owner_user_name = ?, shared_at = ?, shared_origin = ?,
+           updated_at = datetime('now')
+     WHERE id = ?
+  `).run(ownerUserId ?? null, ownerUserName ?? null, sharedAt ?? null, sharedOrigin ?? null, id);
 }
 
 // ---- tasks ----------------------------------------------------------------

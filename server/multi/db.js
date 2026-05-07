@@ -90,7 +90,7 @@ export async function getSharedDictionary(id) {
 
 export async function getSharedImplementationNote(id) {
   const r = await query(
-    `SELECT id, product, title, good_points, bad_points,
+    `SELECT id, product, title, good_points, bad_points, attachment_type, attachment_value,
             owner_user_id, owner_user_name, shared_at, shared_origin
        FROM implementation_notes
        WHERE id = $1 AND hidden_at IS NULL`,
@@ -234,7 +234,7 @@ export async function listSharedImplementationNotes({ limit = 50, before = null 
   if (before) { args.push(before); where += ` AND shared_at < $${args.length}`; }
   args.push(limit);
   const r = await query(
-    `SELECT id, product, title, good_points, bad_points,
+    `SELECT id, product, title, good_points, bad_points, attachment_type, attachment_value,
             owner_user_id, owner_user_name, shared_at, shared_origin
        FROM implementation_notes
        ${where}
@@ -245,13 +245,13 @@ export async function listSharedImplementationNotes({ limit = 50, before = null 
   return r.rows;
 }
 
-export async function insertSharedImplementationNote({ product, title, goodPoints, badPoints, ownerUserId, ownerUserName, sharedOrigin }) {
+export async function insertSharedImplementationNote({ product, title, goodPoints, badPoints, attachmentType, attachmentValue, ownerUserId, ownerUserName, sharedOrigin }) {
   const r = await query(
     `INSERT INTO implementation_notes
-       (product, title, good_points, bad_points, owner_user_id, owner_user_name, shared_origin)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (product, title, good_points, bad_points, attachment_type, attachment_value, owner_user_id, owner_user_name, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, shared_at`,
-    [product, title, goodPoints ?? null, badPoints ?? null, ownerUserId, ownerUserName, sharedOrigin ?? null],
+    [product ?? '', title, goodPoints ?? null, badPoints ?? null, attachmentType ?? null, attachmentValue ?? null, ownerUserId, ownerUserName, sharedOrigin ?? null],
   );
   return { id: r.rows[0].id, shared_at: r.rows[0].shared_at };
 }
@@ -272,6 +272,63 @@ export async function deleteSharedImplementationNote(id, { actingUserId, role })
   return { ok: true };
 }
 
+// ── work locations ─────────────────────────────────────────────────────────
+
+export async function listSharedWorkLocations({ limit = 100, before = null } = {}) {
+  const args = [];
+  let where = 'WHERE hidden_at IS NULL';
+  if (before) { args.push(before); where += ` AND shared_at < $${args.length}`; }
+  args.push(limit);
+  const r = await query(
+    `SELECT id, name, address, latitude, longitude, description, url, tags,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM work_locations
+       ${where}
+       ORDER BY shared_at DESC
+       LIMIT $${args.length}`,
+    args,
+  );
+  return r.rows;
+}
+
+export async function getSharedWorkLocation(id) {
+  const r = await query(
+    `SELECT id, name, address, latitude, longitude, description, url, tags,
+            owner_user_id, owner_user_name, shared_at, shared_origin
+       FROM work_locations
+       WHERE id = $1 AND hidden_at IS NULL`,
+    [id],
+  );
+  return r.rowCount ? r.rows[0] : null;
+}
+
+export async function insertSharedWorkLocation({ name, address, latitude, longitude, description, url, tags, ownerUserId, ownerUserName, sharedOrigin }) {
+  const r = await query(
+    `INSERT INTO work_locations
+       (name, address, latitude, longitude, description, url, tags, owner_user_id, owner_user_name, shared_origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, shared_at`,
+    [name, address ?? null, latitude ?? null, longitude ?? null, description ?? null, url ?? null, tags ?? null, ownerUserId, ownerUserName, sharedOrigin ?? null],
+  );
+  return { id: r.rows[0].id, shared_at: r.rows[0].shared_at };
+}
+
+export async function deleteSharedWorkLocation(id, { actingUserId, role }) {
+  const r = await query('SELECT owner_user_id FROM work_locations WHERE id = $1', [id]);
+  if (!r.rowCount) return { ok: false, error: 'not_found' };
+  const owner = r.rows[0].owner_user_id;
+  if (owner !== actingUserId && role !== 'admin' && role !== 'moderator') {
+    return { ok: false, error: 'forbidden' };
+  }
+  await query('DELETE FROM work_locations WHERE id = $1', [id]);
+  await query(
+    `INSERT INTO share_log (resource_kind, resource_id, action, acting_user_id)
+       VALUES ('work_location', $1, 'delete', $2)`,
+    [id, actingUserId],
+  );
+  return { ok: true };
+}
+
 // ── moderation ─────────────────────────────────────────────────────────────
 
 const TABLE_BY_KIND = {
@@ -279,6 +336,7 @@ const TABLE_BY_KIND = {
   dig: 'dig_sessions',
   dict: 'dictionary_entries',
   implementation_note: 'implementation_notes',
+  work_location: 'work_locations',
 };
 
 function tableForKind(kind) {
@@ -340,6 +398,8 @@ export async function listHidden({ limit = 100 } = {}) {
      ${sql('dict', 'dictionary_entries', 'term')}
      UNION ALL
      ${sql('implementation_note', 'implementation_notes', 'title')}
+     UNION ALL
+     ${sql('work_location', 'work_locations', 'name')}
      ORDER BY hidden_at DESC
      LIMIT $1`,
     [limit],

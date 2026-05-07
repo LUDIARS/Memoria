@@ -3985,6 +3985,14 @@ dialog.meal-modal[open] {
   gap: 8px;
   margin-top: 4px;
 }
+.simple-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 480px) {
+  .simple-field-row { grid-template-columns: 1fr; }
+}
 .simple-check-row {
   display: grid;
   grid-template-columns: 18px 1fr;
@@ -4876,6 +4884,30 @@ dialog.loc-edit-modal[open] {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 60vw;
+}
+.wl-gemini-web-box {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  display: grid;
+  gap: 8px;
+}
+.wl-gemini-web-box h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.wl-gemini-web-box label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.wl-gemini-web-box input,
+.wl-gemini-web-box textarea {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .worklog-subtabs {

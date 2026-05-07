@@ -6,6 +6,7 @@ import { WebSocketServer } from 'ws';
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import {
   openDb,
   insertBookmark,
@@ -94,6 +95,8 @@ import {
   updateImplementationNote, deleteImplementationNote,
   listTasks, getTask, insertTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
+  listWorkLocations, getWorkLocation, insertWorkLocation,
+  updateWorkLocation, deleteWorkLocation, setWorkLocationOwner,
 } from './db.js';
 import {
   ensureUserStopwordsTable, listUserStopwords, addUserStopword, removeUserStopword,
@@ -107,7 +110,7 @@ import {
   readMultiServers, persistServers, upsertServer, removeServer,
   saveServerSession, clearServerSession, setActive, listConnectedActive,
   fetchMe, shareBookmark, shareDig, shareDictionary,
-  shareImplementationNote,
+  shareImplementationNote, shareWorkLocation,
   multiFetch,
 } from './local/multi-client.js';
 
@@ -156,7 +159,42 @@ function privacySettings() {
     tasks_reminder_minute: Number(s['features.tasks.reminder.minute'] ?? 0),
     tasks_reminder_nuntius_enabled: settingBool(s, 'features.tasks.reminder.nuntius_enabled', false),
     tasks_reminder_nuntius_url: s['features.tasks.reminder.nuntius_url'] || '',
+    mcp_autostart_enabled: settingBool(s, 'features.mcp.autostart.enabled', false),
   };
+}
+
+let mcpChild = null;
+function mcpServerDir() {
+  return resolve(__dirname, '..', 'mcp-server');
+}
+function startMcpServer() {
+  if (mcpChild) return;
+  if (!existsSync(mcpServerDir())) return;
+  const env = {
+    ...process.env,
+    MEMORIA_URL: process.env.MEMORIA_URL || `http://127.0.0.1:${PORT}`,
+  };
+  const child = spawn(process.execPath, ['index.js'], {
+    cwd: mcpServerDir(),
+    env,
+    stdio: ['ignore', 'ignore', 'inherit'],
+    detached: false,
+  });
+  child.on('exit', () => { if (mcpChild?.pid === child.pid) mcpChild = null; });
+  child.on('error', (e) => console.error('[mcp] spawn failed:', e.message));
+  mcpChild = child;
+  console.log(`[mcp] started pid=${child.pid}`);
+}
+function stopMcpServer() {
+  if (!mcpChild) return;
+  try { mcpChild.kill('SIGTERM'); } catch {}
+  mcpChild = null;
+  console.log('[mcp] stopped');
+}
+function syncMcpAutostart() {
+  const s = privacySettings();
+  if (s.mcp_autostart_enabled) startMcpServer();
+  else stopMcpServer();
 }
 
 function featureEnabled(key) {
@@ -1736,6 +1774,7 @@ app.patch('/api/privacy/settings', async (c) => {
     ['tasks_actio_share_enabled', 'features.tasks.actio_share.enabled'],
     ['tasks_reminder_enabled', 'features.tasks.reminder.enabled'],
     ['tasks_reminder_nuntius_enabled', 'features.tasks.reminder.nuntius_enabled'],
+    ['mcp_autostart_enabled', 'features.mcp.autostart.enabled'],
   ]) {
     if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
   }
@@ -1744,6 +1783,7 @@ app.patch('/api/privacy/settings', async (c) => {
   if (typeof body.tasks_reminder_minute === 'number') patch['features.tasks.reminder.minute'] = String(Math.max(0, Math.min(59, Math.floor(body.tasks_reminder_minute))));
   if (typeof body.tasks_reminder_nuntius_url === 'string') patch['features.tasks.reminder.nuntius_url'] = body.tasks_reminder_nuntius_url.trim();
   if (Object.keys(patch).length) setAppSettings(db, patch);
+  if (Object.prototype.hasOwnProperty.call(body, 'mcp_autostart_enabled')) syncMcpAutostart();
   return c.json({ settings: privacySettings() });
 });
 
@@ -1886,6 +1926,59 @@ app.delete('/api/tasks/:id', (c) => {
   const id = Number(c.req.param('id'));
   if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
   deleteTask(db, id);
+  return c.json({ ok: true });
+});
+
+// ---- work locations -------------------------------------------------------
+
+app.get('/api/work-locations', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 200), 500);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  return c.json({ items: listWorkLocations(db, { limit, offset }) });
+});
+
+app.post('/api/work-locations', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  if (!name) return c.json({ error: 'name required' }, 400);
+  const id = insertWorkLocation(db, {
+    name,
+    address: typeof body.address === 'string' ? body.address.trim() : null,
+    latitude: body.latitude == null || body.latitude === '' ? null : Number(body.latitude),
+    longitude: body.longitude == null || body.longitude === '' ? null : Number(body.longitude),
+    description: typeof body.description === 'string' ? body.description.trim() : null,
+    url: typeof body.url === 'string' ? body.url.trim() : null,
+    tags: typeof body.tags === 'string' ? body.tags.trim() : null,
+    shareable: !!body.shareable,
+  });
+  return c.json({ location: getWorkLocation(db, id) }, 201);
+});
+
+app.patch('/api/work-locations/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.name === 'string') patch.name = body.name.trim();
+  if (typeof body.address === 'string' || body.address === null) patch.address = body.address;
+  if (body.latitude === null || body.latitude === '' || body.latitude === undefined) {
+    if ('latitude' in body) patch.latitude = null;
+  } else patch.latitude = Number(body.latitude);
+  if (body.longitude === null || body.longitude === '' || body.longitude === undefined) {
+    if ('longitude' in body) patch.longitude = null;
+  } else patch.longitude = Number(body.longitude);
+  if (typeof body.description === 'string' || body.description === null) patch.description = body.description;
+  if (typeof body.url === 'string' || body.url === null) patch.url = body.url;
+  if (typeof body.tags === 'string' || body.tags === null) patch.tags = body.tags;
+  if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
+  updateWorkLocation(db, id, patch);
+  return c.json({ location: getWorkLocation(db, id) });
+});
+
+app.delete('/api/work-locations/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteWorkLocation(db, id);
   return c.json({ ok: true });
 });
 
@@ -2204,6 +2297,14 @@ app.post('/api/multi/share', async (c) => {
       updateImplementationNote(db, body.id, { shared_at: r.shared_at, shared_origin: state.url });
       return c.json({ ok: true, remote: r });
     }
+    if (body.kind === 'work_location') {
+      const w = getWorkLocation(db, body.id);
+      if (!w) return c.json({ error: 'not_found' }, 404);
+      if (!w.shareable) return c.json({ error: 'location is not marked shareable' }, 409);
+      const r = await shareWorkLocation(state, w);
+      updateWorkLocation(db, body.id, { shared_at: r.shared_at, shared_origin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
     return c.json({ error: 'unknown kind' }, 400);
   } catch (e) {
     console.error('[multi/share]', e);
@@ -2211,7 +2312,7 @@ app.post('/api/multi/share', async (c) => {
   }
 });
 
-// Body: { kind: 'bookmark' | 'dig' | 'dict', remote_id }
+// Body: { kind: 'bookmark' | 'dig' | 'dict' | 'implementation_note' | 'work_location', remote_id }
 //
 // Pulls a single resource from the connected Hub and writes it into the
 // local SQLite. owner_user_id / owner_user_name are populated from the
@@ -2302,6 +2403,43 @@ app.post('/api/multi/download', async (c) => {
         sharedOrigin: state.url,
       });
       return c.json({ ok: true, id });
+    }
+    if (body.kind === 'implementation_note') {
+      const remote = await multiFetch(state,`/api/shared/implementation-notes/${body.remote_id}`);
+      const id = insertImplementationNote(db, {
+        product: remote.product || '',
+        title: remote.title,
+        good_points: remote.good_points,
+        bad_points: remote.bad_points,
+        attachment_type: remote.attachment_type,
+        attachment_value: remote.attachment_value,
+        shareable: 0,
+      });
+      updateImplementationNote(db, id, {
+        shared_at: remote.shared_at,
+        shared_origin: state.url,
+      });
+      return c.json({ ok: true, id, owner: remote.owner_user_name });
+    }
+    if (body.kind === 'work_location') {
+      const remote = await multiFetch(state,`/api/shared/work-locations/${body.remote_id}`);
+      const id = insertWorkLocation(db, {
+        name: remote.name,
+        address: remote.address,
+        latitude: remote.latitude,
+        longitude: remote.longitude,
+        description: remote.description,
+        url: remote.url,
+        tags: remote.tags,
+        shareable: 0,
+      });
+      setWorkLocationOwner(db, id, {
+        ownerUserId: remote.owner_user_id,
+        ownerUserName: remote.owner_user_name,
+        sharedAt: remote.shared_at,
+        sharedOrigin: state.url,
+      });
+      return c.json({ ok: true, id, owner: remote.owner_user_name });
     }
     return c.json({ error: 'unknown kind' }, 400);
   } catch (e) {
@@ -4143,6 +4281,11 @@ wss.on('connection', (ws) => {
   // 接続直後の hello (UI 側で接続成立を確認しやすくする)
   try { ws.send(JSON.stringify({ type: 'hello', ts: Date.now() })); } catch {}
 });
+
+syncMcpAutostart();
+process.on('exit', () => stopMcpServer());
+process.on('SIGINT', () => { stopMcpServer(); process.exit(0); });
+process.on('SIGTERM', () => { stopMcpServer(); process.exit(0); });
 
 // Task reminder: 1分ごとに時刻チェック、当日初回のみ送信
 setInterval(async () => {
