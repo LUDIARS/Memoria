@@ -2681,9 +2681,9 @@ function renderDiaryDetail() {
   }
 
   // GPS から推定した「仕事中」セッションを上に表示
-  renderDiaryWorkSessions(d.date).catch(() => {});
+  renderDiaryWorkSessions(d.date).catch(e => console.error('[diary] work sessions render', e));
   // 移動 / 滞在時間サマリ
-  renderDiaryGpsSummary(d.date).catch(() => {});
+  renderDiaryGpsSummary(d.date).catch(e => console.error('[diary] gps summary render', e));
 
   // Hourly chart: live_metrics is computed fresh on every request and includes
   // page_visits as a fallback for events captured before visit_events existed,
@@ -8025,8 +8025,9 @@ async function renderDiaryGpsSummary(date) {
     ]);
     points = pr.points || [];
     sessions = sr.items || [];
-  } catch {
-    el.innerHTML = '<div class="muted" style="font-size:12px">GPS 情報の取得に失敗しました — 判断不能</div>';
+  } catch (err) {
+    console.error('[diary gps summary] fetch failed', err);
+    el.innerHTML = `<div class="muted" style="font-size:12px">GPS 情報の取得に失敗しました — 判断不能 (${escapeHtml(err.message || '')})</div>`;
     return;
   }
   if (!points.length) {
