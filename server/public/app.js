@@ -4745,9 +4745,9 @@ function renderEvents(items) {
   if (!items.length) { el.innerHTML = '<li class="queue-empty">イベント記録なし</li>'; return; }
   el.innerHTML = items.map(e => {
     const label = EVENT_LABELS[e.type] || e.type;
-    const occ = (e.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const occ = fmtLocalDateTime(e.occurred_at);
     const dur = e.duration_ms ? ` · ${Math.round(e.duration_ms / 1000)}秒` : '';
-    const ended = e.ended_at ? ` → ${e.ended_at.replace('T',' ').slice(0,19)}` : '';
+    const ended = e.ended_at ? ` → ${fmtLocalDateTime(e.ended_at)}` : '';
     const det = e.details ? `<div class="ev-det">${escapeHtml(JSON.stringify(e.details))}</div>` : '';
     return `<li class="ev-row ev-${e.type}">
       <span class="ev-tag">${label}</span>
@@ -6108,7 +6108,7 @@ async function refreshAgentRunHistory(taskId) {
     const el = $('agentRunHistory');
     if (!items.length) { el.innerHTML = '<div class="queue-empty">履歴なし</div>'; return; }
     el.innerHTML = items.map(run => {
-      const at = (run.started_at || '').replace('T', ' ').slice(0, 19);
+      const at = fmtLocalDateTime(run.started_at);
       const status = escapeHtml(run.status);
       const exit = run.exit_code != null ? ` (exit ${run.exit_code})` : '';
       const model = run.model ? `:${escapeHtml(run.model)}` : '';
@@ -6135,7 +6135,7 @@ async function refreshAgentRunLog(runId) {
     $('agentRunLog').textContent = r.log || '(ログなし)';
     $('agentRunLog').dataset.runId = String(runId);
     const status = r.run?.status || 'unknown';
-    const at = (r.run?.started_at || '').replace('T', ' ').slice(0, 19);
+    const at = fmtLocalDateTime(r.run?.started_at);
     const exit = r.run?.exit_code != null ? ` (exit ${r.run.exit_code})` : '';
     $('agentRunLogStatus').textContent = `#${runId} · ${status}${exit} · started ${at} · ${r.running ? '実行中' : '停止'}`;
     $('agentRunCancelRunBtn').hidden = !r.running;
@@ -7112,9 +7112,9 @@ function renderWorklogSchedule(items) {
   empty.classList.add('hidden');
   list.innerHTML = items.map(e => {
     const label = EVENT_LABELS[e.type] || e.type;
-    const occ = (e.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const occ = fmtLocalDateTime(e.occurred_at);
     const dur = e.duration_ms ? ` · ${Math.round(e.duration_ms / 1000)}秒` : '';
-    const ended = e.ended_at ? ` → ${e.ended_at.replace('T',' ').slice(0,19)}` : '';
+    const ended = e.ended_at ? ` → ${fmtLocalDateTime(e.ended_at)}` : '';
     const det = e.details ? `<div class="ev-det">${escapeHtml(JSON.stringify(e.details))}</div>` : '';
     return `<li class="ev-row ev-${e.type}">
       <span class="ev-tag">${label}</span>
@@ -7180,7 +7180,7 @@ function renderWorklogGithub(items, listEl, summaryEl) {
   }
   listEl.innerHTML = sortedRepos.map(([repo, list]) => {
     const rows = list.map(it => {
-      const t = (it.occurred_at || '').replace('T', ' ').slice(0, 19);
+      const t = fmtLocalDateTime(it.occurred_at);
       const sha = (it.ref_id || '').slice(0, 7);
       const meta = it.metadata || {};
       const branch = meta.branch ? ` [${escapeHtml(meta.branch)}]` : '';
@@ -7207,7 +7207,7 @@ function renderWorklogPrompts(items, listEl, summaryEl, sub) {
     summaryEl.innerHTML = `<strong>${escapeHtml(labelForSub(sub))}</strong>${items.length} prompts`;
   }
   listEl.innerHTML = items.map(it => {
-    const t = (it.occurred_at || '').replace('T', ' ').slice(0, 19);
+    const t = fmtLocalDateTime(it.occurred_at);
     const meta = it.metadata || {};
     const cwd = meta.cwd ? `${escapeHtml(meta.cwd)}` : '';
     const branch = meta.branch ? ` · ${escapeHtml(meta.branch)}` : '';
@@ -7242,7 +7242,7 @@ async function loadGeminiWebResearchLogs(date) {
       try { meta = it.metadata_json ? JSON.parse(it.metadata_json) : (it.metadata || {}); } catch {}
       const title = meta.title || '(no title)';
       const url = meta.url || '';
-      const t = String(it.received_at || '').slice(11, 19);
+      const t = fmtLocalHms(it.received_at);
       return `<li>
         <div class="wl-row1">
           <span class="wl-time">${escapeHtml(t)}</span>
@@ -7316,7 +7316,7 @@ function renderWorklogBrowsing(r) {
   } else {
     visitsEmpty.classList.add('hidden');
     visitsList.innerHTML = visits.map(v => {
-      const t = (v.last_seen_at || '').slice(11, 19);
+      const t = fmtLocalHms(v.last_seen_at);
       const bm = v.is_bookmarked ? '<span class="wl-source">★ BM</span>' : '';
       const dom = v.domain ? `<span class="wl-meta">${escapeHtml(v.domain)}</span>` : '';
       const cnt = v.visit_count > 1 ? `<span class="wl-meta">×${v.visit_count}</span>` : '';
@@ -7362,7 +7362,7 @@ function renderWorklogBrowsing(r) {
     reEmpty.classList.add('hidden');
     reList.innerHTML = revisits.map(b => {
       const cnt = `<span class="wl-meta">×${b.visit_count}</span>`;
-      const t = (b.last_seen_at || '').slice(11, 19);
+      const t = fmtLocalHms(b.last_seen_at);
       return `<li>
         <div class="wl-row1">
           <span class="wl-time">${escapeHtml(t)}</span>${cnt}
@@ -7426,7 +7426,7 @@ function renderWorklogDig(r) {
   }
   empty.classList.add('hidden');
   list.innerHTML = items.map(d => {
-    const t = (d.created_at || '').replace('T', ' ').slice(0, 19);
+    const t = fmtLocalDateTime(d.created_at);
     const status = d.status ? `<span class="wl-source">${escapeHtml(d.status)}</span>` : '';
     const summary = d.summary ? `<div class="wl-content truncate">${escapeHtml(d.summary)}</div>` : '';
     const sources = d.source_count ? `<span class="wl-meta">${d.source_count} sources</span>` : '';
@@ -8195,6 +8195,25 @@ function fmtLocalHm(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// HH:MM:SS (local)
+function fmtLocalHms(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+}
+
+// YYYY-MM-DD HH:MM:SS (local)
+function fmtLocalDateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${dd} ${fmtLocalHms(iso)}`;
 }
 
 function fmtHm(totalMin) {
