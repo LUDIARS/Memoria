@@ -6,6 +6,7 @@ import { WebSocketServer } from 'ws';
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import {
   openDb,
   insertBookmark,
@@ -48,6 +49,7 @@ import {
   addDictionaryLink, removeDictionaryLink,
   insertVisitEvent, insertExternalVisitEvent, getDiary, listDiariesInRange, upsertDiary, updateDiaryNotes,
   deleteDiary, getDiarySettings, setDiarySettings,
+  setDiaryDataDir, migrateDiariesToSidecar,
   getWeekly, listWeeklyForMonth, upsertWeekly, deleteWeekly,
   getDomainCatalog, listDomainCatalog, listDomainCatalogWithCounts, getDomainCatalogMap,
   insertDomainPending, setDomainCatalog, deleteDomainCatalog,
@@ -61,6 +63,7 @@ import { extractWordCloud, validateWordRelevance } from './wordcloud.js';
 import { startUptimeTracking, readHeartbeat, DOWNTIME_THRESHOLD_MS } from './local/uptime.js';
 import { listServerEvents, listServerEventsForDate } from './db.js';
 import { recordActivityEvent, activityEventsForDate, listActivityEvents, activityEventsPage } from './db.js';
+import { pageVisitsForDate, revisitedBookmarksForDate, browsingDomainStatsForDate } from './db.js';
 import {
   aggregateDay, fetchGithubActivity, fetchGithubRange,
   generateDiary, generateWorkContent, generateHighlights,
@@ -88,6 +91,14 @@ import {
   insertMeal, getMeal, listMeals, countMeals, updateMeal, deleteMeal, listPendingMeals,
 } from './db.js';
 import {
+  listImplementationNotes, getImplementationNote, insertImplementationNote,
+  updateImplementationNote, deleteImplementationNote,
+  listTasks, getTask, insertTask, updateTask, deleteTask,
+  insertExternalChatMessage, listExternalChatMessages,
+  listWorkLocations, getWorkLocation, insertWorkLocation,
+  updateWorkLocation, deleteWorkLocation, setWorkLocationOwner,
+} from './db.js';
+import {
   ensureUserStopwordsTable, listUserStopwords, addUserStopword, removeUserStopword,
 } from './db.js';
 import { initWebPush, getVapidPublicKey, saveSubscription, sendPushToAll } from './push.js';
@@ -99,6 +110,7 @@ import {
   readMultiServers, persistServers, upsertServer, removeServer,
   saveServerSession, clearServerSession, setActive, listConnectedActive,
   fetchMe, shareBookmark, shareDig, shareDictionary,
+  shareImplementationNote, shareWorkLocation, shareWorkplacePresence,
   multiFetch,
 } from './local/multi-client.js';
 
@@ -114,10 +126,83 @@ mkdirSync(HTML_DIR, { recursive: true });
 mkdirSync(MEAL_DIR, { recursive: true });
 const db = openDb(DB_PATH);
 ensureUserStopwordsTable(db);
+// Diary 本文の太い JSON 列 (metrics_json / github_commits_json) は
+// `<DATA_DIR>/diary/<date>.json` に切り出す。 既存行は起動時に 1 回だけ
+// 移行する (idempotent、 行数 0 なら no-op)。
+setDiaryDataDir(DATA_DIR);
+const _diaryMig = migrateDiariesToSidecar(db);
+if (_diaryMig.moved > 0) {
+  console.log(`[diary] migrated ${_diaryMig.moved} row(s) to sidecar JSON`);
+}
 loadLlmConfigFromSettings(getAppSettings(db));
 initWebPush(DATA_DIR);
 const HEARTBEAT_FILE = join(DATA_DIR, 'heartbeat.json');
 startUptimeTracking({ db, dataDir: DATA_DIR, heartbeatFile: HEARTBEAT_FILE });
+
+function settingBool(settings, key, fallback = true) {
+  const v = settings[key];
+  if (v == null || v === '') return fallback;
+  return !['0', 'false', 'off', 'no'].includes(String(v).toLowerCase());
+}
+
+function privacySettings() {
+  const s = getAppSettings(db);
+  return {
+    tracks_enabled: settingBool(s, 'features.tracks.enabled', true),
+    tracks_visible: settingBool(s, 'features.tracks.visible', true),
+    meals_enabled: settingBool(s, 'features.meals.enabled', true),
+    meals_visible: settingBool(s, 'features.meals.visible', true),
+    tasks_actio_share_enabled: settingBool(s, 'features.tasks.actio_share.enabled', true),
+    actio_share_url: s['actio.share_url'] || '',
+    tasks_reminder_enabled: settingBool(s, 'features.tasks.reminder.enabled', true),
+    tasks_reminder_hour: Number(s['features.tasks.reminder.hour'] ?? 6),
+    tasks_reminder_minute: Number(s['features.tasks.reminder.minute'] ?? 0),
+    tasks_reminder_nuntius_enabled: settingBool(s, 'features.tasks.reminder.nuntius_enabled', false),
+    tasks_reminder_nuntius_url: s['features.tasks.reminder.nuntius_url'] || '',
+    mcp_autostart_enabled: settingBool(s, 'features.mcp.autostart.enabled', false),
+    workplace_geo_enabled: settingBool(s, 'features.workplace.geo.enabled', true),
+    workplace_auto_share_enabled: settingBool(s, 'features.workplace.share.enabled', false),
+    workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 150),
+  };
+}
+
+let mcpChild = null;
+function mcpServerDir() {
+  return resolve(__dirname, '..', 'mcp-server');
+}
+function startMcpServer() {
+  if (mcpChild) return;
+  if (!existsSync(mcpServerDir())) return;
+  const env = {
+    ...process.env,
+    MEMORIA_URL: process.env.MEMORIA_URL || `http://127.0.0.1:${PORT}`,
+  };
+  const child = spawn(process.execPath, ['index.js'], {
+    cwd: mcpServerDir(),
+    env,
+    stdio: ['ignore', 'ignore', 'inherit'],
+    detached: false,
+  });
+  child.on('exit', () => { if (mcpChild?.pid === child.pid) mcpChild = null; });
+  child.on('error', (e) => console.error('[mcp] spawn failed:', e.message));
+  mcpChild = child;
+  console.log(`[mcp] started pid=${child.pid}`);
+}
+function stopMcpServer() {
+  if (!mcpChild) return;
+  try { mcpChild.kill('SIGTERM'); } catch {}
+  mcpChild = null;
+  console.log('[mcp] stopped');
+}
+function syncMcpAutostart() {
+  const s = privacySettings();
+  if (s.mcp_autostart_enabled) startMcpServer();
+  else stopMcpServer();
+}
+
+function featureEnabled(key) {
+  return privacySettings()[key] !== false;
+}
 const summaryQueue = new FifoQueue();
 const cloudQueue = new FifoQueue();
 const domainCatalogQueue = new FifoQueue();
@@ -192,9 +277,14 @@ function maybeQueueDomain(url) {
       return;
     }
     if (result.dropRow) {
-      // 404 / DNS error / non-2xx → drop the row entirely so it can be retried later.
-      deleteDomainCatalog(db, domain);
-      console.log(`[domain-catalog] dropped ${domain}: ${result.error}`);
+      // 404 / DNS error / non-2xx → keep the row as error (registered but unclassified).
+      setDomainCatalog(db, domain, {
+        title: null,
+        description: null,
+        status: 'error',
+        error: result.error ?? 'fetch failed',
+      });
+      console.log(`[domain-catalog] fetch failed ${domain}: ${result.error}`);
       return;
     }
     if (!result.ok) {
@@ -711,6 +801,7 @@ function parseMealAdditionsJson(json) {
 //   eaten_at:   ISO8601 string (optional, 手動上書き)
 //   lat / lon:  number (optional, 手動上書き)
 app.post('/api/meals', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const form = await c.req.formData().catch(() => null);
   if (!form) return c.json({ error: 'multipart/form-data required' }, 400);
   const photo = form.get('photo');
@@ -811,6 +902,7 @@ app.post('/api/meals', async (c) => {
 //   lat / lon:    number (任意、 未指定なら GPS 軌跡から推定)
 //   user_note:    string (任意)
 app.post('/api/meals/manual', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') return c.json({ error: 'json body required' }, 400);
   const description = typeof body.description === 'string' ? body.description.trim() : '';
@@ -876,6 +968,7 @@ app.post('/api/meals/manual', async (c) => {
 });
 
 app.get('/api/meals', (c) => {
+  if (!featureEnabled('meals_visible')) return c.json({ meals: [], total: 0 });
   const from = c.req.query('from') || undefined;
   const to = c.req.query('to') || undefined;
   const limit = Math.min(Number(c.req.query('limit') || 100), 500);
@@ -886,6 +979,7 @@ app.get('/api/meals', (c) => {
 });
 
 app.get('/api/meals/:id', (c) => {
+  if (!featureEnabled('meals_visible')) return c.json({ error: 'meals are hidden' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -893,6 +987,7 @@ app.get('/api/meals/:id', (c) => {
 });
 
 app.get('/api/meals/:id/photo', (c) => {
+  if (!featureEnabled('meals_visible')) return c.json({ error: 'meals are hidden' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -911,6 +1006,7 @@ app.get('/api/meals/:id/photo', (c) => {
 });
 
 app.patch('/api/meals/:id', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -965,6 +1061,7 @@ app.patch('/api/meals/:id', async (c) => {
 });
 
 app.delete('/api/meals/:id', (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -981,6 +1078,7 @@ app.delete('/api/meals/:id', (c) => {
 });
 
 app.post('/api/meals/:id/reanalyze', (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -1011,6 +1109,7 @@ function parseAdditions(json) {
 }
 
 app.post('/api/meals/:id/additions', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const meal = getMeal(db, id);
   if (!meal) return c.json({ error: 'not found' }, 404);
@@ -1047,6 +1146,7 @@ app.post('/api/meals/:id/additions', async (c) => {
 });
 
 app.patch('/api/meals/:id/additions/:idx', async (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const idx = Number(c.req.param('idx'));
   const meal = getMeal(db, id);
@@ -1079,6 +1179,7 @@ app.patch('/api/meals/:id/additions/:idx', async (c) => {
 });
 
 app.delete('/api/meals/:id/additions/:idx', (c) => {
+  if (!featureEnabled('meals_enabled')) return c.json({ error: 'meals are disabled' }, 403);
   const id = Number(c.req.param('id'));
   const idx = Number(c.req.param('idx'));
   const meal = getMeal(db, id);
@@ -1628,6 +1729,469 @@ app.post('/api/dictionary/upsert-from-source', async (c) => {
   return c.json({ id: entryId, existed });
 });
 
+// ---- setup docs / privacy / notes / tasks / external chat -----------------
+
+const SETUP_DOCS = {
+  tailscale: {
+    title: 'Tailscale を使用した VPN 構築方法',
+    body: '# Tailscale を使用した VPN 構築方法\n\n1. Memoria を動かす PC と、接続したい端末に Tailscale をインストールします。\n2. すべて同じ tailnet にログインします。\n3. Memoria 側の PC で `tailscale ip -4` を実行し、Tailscale IP を確認します。\n4. 端末側から `http://<tailscale-ip>:5180` を開きます。\n5. OwnTracks や Legatus を使う場合も、接続先はこの Tailscale IP にします。\n6. 外部公開が必要ない場合は、インターネットへ直接公開しないでください。',
+  },
+  cloudflare: {
+    title: 'Cloudflare Tunnel を使用した公開方法',
+    body: '# Cloudflare Tunnel を使用した公開方法\n\n1. Memoria を動かす PC に `cloudflared` をインストールします。\n2. `cloudflared tunnel login` を実行し、Tunnel を作成します。\n3. 公開ホスト名の転送先を `http://localhost:5180` に設定します。\n4. 個人データを扱うため、Cloudflare Access などで認証を必ず設定します。\n5. tailnet 外のネットワークから Web UI と `/share` が動くことを確認します。\n6. 認証なしで Memoria を直接公開しないでください。',
+  },
+  legatus: {
+    title: 'Legatus の起動方法',
+    body: '# Legatus の起動方法\n\n1. Memoria と同じ PC、または到達可能な PC で Legatus プロジェクトを開きます。\n2. 必要な取込モジュールだけを有効にします。GPS / DNS / SNI などは明示的に ON にしてください。\n3. 転送先 URL に `http://localhost:5180/api/locations/ingest` や `http://localhost:5180/api/visits/external` を設定します。\n4. Legatus 側の README に従って dev 起動またはサービス起動します。\n5. Memoria の 設定 -> 連携 / API key で Legatus の接続状態を確認します。',
+  },
+  sharing: {
+    title: 'シェアするための設定',
+    body: '# シェアするための設定\n\n1. 設定 -> データ / Hub を開きます。\n2. Memoria Hub の URL を追加し、Cernere で接続します。\n3. 公開したい Hub だけを有効にします。\n4. ブックマーク、ディグ、辞書、実装自慢は各画面のシェア操作から共有します。\n5. タスクを Actio にシェアする場合は、設定 -> プライバシー / 表示 で Actio シェアを許可し、Actio シェア URL を設定します。\n6. シェア前に内容を確認し、秘密情報や個人情報を含めないでください。',
+  },
+  mcp: {
+    title: 'MCPサーバの設定方法',
+    body: '# MCPサーバの設定方法\n\n## 概要\nMemoria MCP サーバ (mcp-server/index.js) を使うと、Claude Desktop や Claude Code からブックマーク検索・タスク操作・辞書参照などを直接呼び出せます。\n\n## 依存インストール\n```\ncd mcp-server && npm install\n```\n\n## MEMORIA_URL の設定\n環境変数 MEMORIA_URL で Memoria サーバの URL を指定します。\n- デフォルト: http://localhost:5180\n- Tailscale 経由の場合: http://<tailscale-ip>:5180\n- Cloudflare Tunnel 経由の場合: https://<your-tunnel-host>\n\n## Claude Desktop の設定\n%APPDATA%\\Claude\\claude_desktop_config.json (Windows) または\n~/Library/Application Support/Claude/claude_desktop_config.json (Mac) に以下を追加:\n\n{\n  "mcpServers": {\n    "memoria": {\n      "command": "node",\n      "args": ["C:/path/to/Memoria/mcp-server/index.js"],\n      "env": { "MEMORIA_URL": "http://localhost:5180" }\n    }\n  }\n}\n\n## Claude Code の設定\n.claude/settings.json または ~/.claude/settings.json に以下を追加:\n\n{\n  "mcpServers": {\n    "memoria": {\n      "command": "node",\n      "args": ["/path/to/Memoria/mcp-server/index.js"],\n      "env": { "MEMORIA_URL": "http://localhost:5180" }\n    }\n  }\n}\n\n## 動作確認\nClaude に以下を試してください:\n- add_task でタスクを追加\n- list_tasks でタスク一覧を取得\n- search_bookmarks でブックマーク検索\n- list_diary_entries で日記一覧を取得',
+  },
+};
+
+app.get('/api/setup-docs', (c) => {
+  return c.json({ docs: Object.entries(SETUP_DOCS).map(([key, v]) => ({ key, title: v.title })) });
+});
+
+app.get('/api/setup-docs/:key', (c) => {
+  const doc = SETUP_DOCS[c.req.param('key')];
+  if (!doc) return c.json({ error: 'not found' }, 404);
+  return c.json({ key: c.req.param('key'), ...doc });
+});
+
+app.get('/api/privacy/settings', (c) => c.json({ settings: privacySettings() }));
+
+app.patch('/api/privacy/settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  for (const [bodyKey, settingKey] of [
+    ['tracks_enabled', 'features.tracks.enabled'],
+    ['tracks_visible', 'features.tracks.visible'],
+    ['meals_enabled', 'features.meals.enabled'],
+    ['meals_visible', 'features.meals.visible'],
+    ['tasks_actio_share_enabled', 'features.tasks.actio_share.enabled'],
+    ['tasks_reminder_enabled', 'features.tasks.reminder.enabled'],
+    ['tasks_reminder_nuntius_enabled', 'features.tasks.reminder.nuntius_enabled'],
+    ['mcp_autostart_enabled', 'features.mcp.autostart.enabled'],
+    ['workplace_geo_enabled', 'features.workplace.geo.enabled'],
+    ['workplace_auto_share_enabled', 'features.workplace.share.enabled'],
+  ]) {
+    if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
+  }
+  if (typeof body.actio_share_url === 'string') patch['actio.share_url'] = body.actio_share_url.trim();
+  if (typeof body.tasks_reminder_hour === 'number') patch['features.tasks.reminder.hour'] = String(Math.max(0, Math.min(23, Math.floor(body.tasks_reminder_hour))));
+  if (typeof body.tasks_reminder_minute === 'number') patch['features.tasks.reminder.minute'] = String(Math.max(0, Math.min(59, Math.floor(body.tasks_reminder_minute))));
+  if (typeof body.tasks_reminder_nuntius_url === 'string') patch['features.tasks.reminder.nuntius_url'] = body.tasks_reminder_nuntius_url.trim();
+  if (typeof body.workplace_match_radius_m === 'number') patch['features.workplace.match.radius_m'] = String(Math.max(20, Math.min(2000, Math.floor(body.workplace_match_radius_m))));
+  if (Object.keys(patch).length) setAppSettings(db, patch);
+  if (Object.prototype.hasOwnProperty.call(body, 'mcp_autostart_enabled')) syncMcpAutostart();
+  return c.json({ settings: privacySettings() });
+});
+
+app.get('/api/implementation-notes', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  const shareable = c.req.query('shareable');
+  const items = listImplementationNotes(db, {
+    limit,
+    offset,
+    shareable: shareable == null ? null : shareable === '1' || shareable === 'true',
+  });
+  return c.json({ items });
+});
+
+app.post('/api/implementation-notes', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const title = String(body.title || '').trim();
+  if (!title) return c.json({ error: 'title required' }, 400);
+  const attachmentType = String(body.attachment_type || '').trim();
+  const attachmentValue = String(body.attachment_value || '').trim();
+  const id = insertImplementationNote(db, {
+    product: String(body.product || '').trim(),
+    title,
+    good_points: String(body.good_points || '').trim(),
+    bad_points: String(body.bad_points || '').trim(),
+    attachment_type: attachmentType || null,
+    attachment_value: attachmentValue || null,
+    shareable: !!body.shareable,
+  });
+  return c.json({ note: getImplementationNote(db, id) }, 201);
+});
+
+app.patch('/api/implementation-notes/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getImplementationNote(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  for (const k of ['product', 'title', 'good_points', 'bad_points', 'attachment_type', 'attachment_value']) {
+    if (typeof body[k] === 'string') patch[k] = body[k].trim();
+  }
+  if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
+  updateImplementationNote(db, id, patch);
+  return c.json({ note: getImplementationNote(db, id) });
+});
+
+app.delete('/api/implementation-notes/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getImplementationNote(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteImplementationNote(db, id);
+  return c.json({ ok: true });
+});
+
+app.post('/api/implementation-notes/:id/share', async (c) => {
+  const id = Number(c.req.param('id'));
+  const note = getImplementationNote(db, id);
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (!note.shareable) return c.json({ error: 'note is not marked shareable' }, 409);
+  updateImplementationNote(db, id, { shared_at: new Date().toISOString(), shared_origin: 'local' });
+  return c.json({ ok: true, note: getImplementationNote(db, id) });
+});
+
+app.get('/api/tasks', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  const status = c.req.query('status') || null;
+  return c.json({ items: listTasks(db, { status, limit, offset }) });
+});
+
+function appendTaskDiaryLog(line) {
+  const date = formatLocalDate(new Date());
+  const row = getDiary(db, date);
+  const prev = String(row?.notes || '').trimEnd();
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const next = prev ? `${prev}\n${hh}:${mm} ${line}` : `${hh}:${mm} ${line}`;
+  upsertDiary(db, { date, notes: next, status: row?.status || 'pending' });
+}
+
+app.post('/api/tasks', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const title = String(body.title || '').trim();
+  if (!title) return c.json({ error: 'title required' }, 400);
+  const status = ['todo', 'doing', 'done'].includes(body.status) ? body.status : 'todo';
+  const id = insertTask(db, {
+    title,
+    details: String(body.details || '').trim(),
+    status,
+    creator_type: body.creator_type === 'ai' ? 'ai' : 'human',
+    due_at: body.due_at || null,
+    share_actio: !!body.share_actio,
+  });
+  const created = getTask(db, id);
+  appendTaskDiaryLog(`タスク発行: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
+  recordActivityEvent(db, {
+    kind: 'task_created',
+    content: created.title,
+    metadata: created.due_at ? { due_at: created.due_at } : undefined,
+  });
+  return c.json({ task: created }, 201);
+});
+
+app.patch('/api/tasks/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  const before = getTask(db, id);
+  if (!before) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.title === 'string') patch.title = body.title.trim();
+  if (typeof body.details === 'string') patch.details = body.details.trim();
+  if (['todo', 'doing', 'done'].includes(body.status)) patch.status = body.status;
+  if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
+  if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
+  if (before.creator_type === 'ai' && Object.hasOwn(patch, 'due_at') && patch.due_at !== before.due_at) {
+    patch.creator_type = 'human';
+  }
+  updateTask(db, id, patch);
+  const after = getTask(db, id);
+  const completedNow = before.status !== 'done' && after.status === 'done';
+  if (completedNow) {
+    appendTaskDiaryLog(`タスク完了: ${after.title}`);
+    recordActivityEvent(db, { kind: 'task_done', content: after.title });
+  } else {
+    const changed = ['title', 'details', 'status', 'due_at', 'share_actio'].some((k) => Object.hasOwn(patch, k));
+    const isHumanChange = before.creator_type === 'human' || (before.creator_type === 'ai' && after.creator_type === 'human');
+    if (changed && isHumanChange) {
+      appendTaskDiaryLog(`タスク更新: ${after.title}${after.due_at ? ` (期日: ${after.due_at})` : ''}`);
+      recordActivityEvent(db, {
+        kind: 'task_updated',
+        content: after.title,
+        metadata: patch.status ? { status: after.status } : undefined,
+      });
+    }
+  }
+  return c.json({ task: after });
+});
+
+app.delete('/api/tasks/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteTask(db, id);
+  return c.json({ ok: true });
+});
+
+// ---- work locations -------------------------------------------------------
+
+app.get('/api/work-locations', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 200), 500);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  return c.json({ items: listWorkLocations(db, { limit, offset }) });
+});
+
+app.post('/api/work-locations', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  if (!name) return c.json({ error: 'name required' }, 400);
+  const id = insertWorkLocation(db, {
+    name,
+    address: typeof body.address === 'string' ? body.address.trim() : null,
+    latitude: body.latitude == null || body.latitude === '' ? null : Number(body.latitude),
+    longitude: body.longitude == null || body.longitude === '' ? null : Number(body.longitude),
+    description: typeof body.description === 'string' ? body.description.trim() : null,
+    url: typeof body.url === 'string' ? body.url.trim() : null,
+    tags: typeof body.tags === 'string' ? body.tags.trim() : null,
+    shareable: !!body.shareable,
+  });
+  return c.json({ location: getWorkLocation(db, id) }, 201);
+});
+
+app.patch('/api/work-locations/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.name === 'string') patch.name = body.name.trim();
+  if (typeof body.address === 'string' || body.address === null) patch.address = body.address;
+  if (body.latitude === null || body.latitude === '' || body.latitude === undefined) {
+    if ('latitude' in body) patch.latitude = null;
+  } else patch.latitude = Number(body.latitude);
+  if (body.longitude === null || body.longitude === '' || body.longitude === undefined) {
+    if ('longitude' in body) patch.longitude = null;
+  } else patch.longitude = Number(body.longitude);
+  if (typeof body.description === 'string' || body.description === null) patch.description = body.description;
+  if (typeof body.url === 'string' || body.url === null) patch.url = body.url;
+  if (typeof body.tags === 'string' || body.tags === null) patch.tags = body.tags;
+  if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
+  updateWorkLocation(db, id, patch);
+  return c.json({ location: getWorkLocation(db, id) });
+});
+
+app.delete('/api/work-locations/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteWorkLocation(db, id);
+  return c.json({ ok: true });
+});
+
+// ── Place API: reverse geocode a lat/lng to {name, address}
+//
+// Default provider: OpenStreetMap Nominatim (free, no API key, but
+// rate-limited and User-Agent required). Switchable via
+// `places.api.url` setting.
+app.post('/api/work-locations/resolve-place', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const lat = Number(body.latitude);
+  const lng = Number(body.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return c.json({ error: 'latitude+longitude required' }, 400);
+  }
+  const settings = getAppSettings(db);
+  const baseUrl = (settings['places.api.url'] || 'https://nominatim.openstreetmap.org/reverse').replace(/\/+$/, '');
+  const ua = settings['places.api.ua'] || 'Memoria/0.2 (workplace resolver)';
+  const url = `${baseUrl}?format=jsonv2&zoom=18&addressdetails=1&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': ua, 'Accept': 'application/json', 'Accept-Language': 'ja,en;q=0.5' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return c.json({ error: `place api ${res.status}` }, 502);
+    const json = await res.json();
+    const a = json.address || {};
+    const name = json.name || a.amenity || a.shop || a.office || a.building
+      || a.tourism || a.leisure || a.public_building || a.road
+      || (json.display_name || '').split(',')[0] || '';
+    return c.json({
+      name: String(name).trim().slice(0, 120),
+      address: String(json.display_name || '').slice(0, 240),
+      latitude: Number(json.lat ?? lat),
+      longitude: Number(json.lon ?? lng),
+      raw: { osm_id: json.osm_id, type: json.type, category: json.category },
+    });
+  } catch (e) {
+    return c.json({ error: `place api: ${e.message}` }, 502);
+  }
+});
+
+// Haversine distance in meters between two {lat,lng} points.
+function _haversineMeters(a, b) {
+  const R = 6_371_000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+// ── Checkin: GPS coords → match nearest local work_location → broadcast
+// to Hub if user opted-in and the workplace changed since last checkin.
+app.post('/api/work-locations/checkin', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const lat = Number(body.latitude);
+  const lng = Number(body.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return c.json({ error: 'latitude+longitude required' }, 400);
+  }
+  const settings = privacySettings();
+  if (!settings.workplace_geo_enabled) {
+    return c.json({ error: 'workplace_geo disabled' }, 403);
+  }
+  const radius = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 150));
+
+  // Find nearest workplace within radius.
+  const all = listWorkLocations(db, { limit: 500 });
+  let matched = null;
+  let matchedDist = Infinity;
+  for (const w of all) {
+    if (!Number.isFinite(w.latitude) || !Number.isFinite(w.longitude)) continue;
+    const d = _haversineMeters({ lat, lng }, { lat: w.latitude, lng: w.longitude });
+    if (d <= radius && d < matchedDist) {
+      matched = w;
+      matchedDist = d;
+    }
+  }
+
+  const appS = getAppSettings(db);
+  const lastId = appS['workplace.current.id'] ? Number(appS['workplace.current.id']) : null;
+  const now = new Date().toISOString();
+  const result = {
+    matched: !!matched,
+    workplace: matched || null,
+    distance_m: matched ? Math.round(matchedDist) : null,
+    changed: false,
+    broadcast: null,
+  };
+
+  if (matched) {
+    if (lastId !== matched.id) {
+      result.changed = true;
+      setAppSettings(db, {
+        'workplace.current.id': String(matched.id),
+        'workplace.current.at': now,
+      });
+
+      // Optional broadcast to Hub.
+      if (settings.workplace_auto_share_enabled) {
+        try {
+          const state = readMultiState(db);
+          if (isConnected(state)) {
+            const r = await shareWorkplacePresence(state, {
+              workplace_name: matched.name,
+              address: matched.address,
+              latitude: matched.latitude,
+              longitude: matched.longitude,
+              kind: 'enter',
+            });
+            result.broadcast = { ok: true, id: r.id, occurred_at: r.occurred_at };
+          } else {
+            result.broadcast = { ok: false, error: 'not_connected' };
+          }
+        } catch (e) {
+          console.error('[workplace/checkin] broadcast failed', e);
+          result.broadcast = { ok: false, error: e.message };
+        }
+      }
+    }
+  } else if (lastId) {
+    // We left the previously matched workplace.
+    result.changed = true;
+    const prev = getWorkLocation(db, lastId);
+    setAppSettings(db, { 'workplace.current.id': '', 'workplace.current.at': now });
+    if (prev && settings.workplace_auto_share_enabled) {
+      try {
+        const state = readMultiState(db);
+        if (isConnected(state)) {
+          await shareWorkplacePresence(state, {
+            workplace_name: prev.name,
+            address: prev.address,
+            latitude: prev.latitude,
+            longitude: prev.longitude,
+            kind: 'leave',
+          });
+          result.broadcast = { ok: true, kind: 'leave' };
+        }
+      } catch (e) {
+        console.error('[workplace/checkin] leave broadcast failed', e);
+      }
+    }
+  }
+  return c.json(result);
+});
+
+async function shareTaskToActio(task) {
+  const settings = privacySettings();
+  if (!settings.tasks_actio_share_enabled) throw new Error('Actio task sharing is disabled');
+  if (!settings.actio_share_url) throw new Error('actio_share_url is not configured');
+  const res = await fetch(settings.actio_share_url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source: 'memoria',
+      external_id: `memoria-task-${task.id}`,
+      title: task.title,
+      details: task.details || '',
+      status: task.status,
+      due_at: task.due_at || null,
+    }),
+  });
+  if (!res.ok) throw new Error(`Actio ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return res.json().catch(() => ({}));
+}
+
+app.post('/api/tasks/:id/share/actio', async (c) => {
+  const id = Number(c.req.param('id'));
+  const task = getTask(db, id);
+  if (!task) return c.json({ error: 'not found' }, 404);
+  try {
+    const result = await shareTaskToActio(task);
+    updateTask(db, id, {
+      share_actio: 1,
+      shared_at: new Date().toISOString(),
+      shared_origin: privacySettings().actio_share_url || 'actio',
+    });
+    return c.json({ ok: true, result, task: getTask(db, id) });
+  } catch (e) {
+    return c.json({ error: e.message }, 502);
+  }
+});
+
+app.post('/api/external-chat/messages', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const source = String(body.source || '').trim() || 'unknown';
+  const content = String(body.content || '').trim();
+  if (!content) return c.json({ error: 'content required' }, 400);
+  const id = insertExternalChatMessage(db, {
+    source,
+    conversation_id: body.conversation_id || null,
+    role: body.role || null,
+    content,
+    metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : null,
+  });
+  return c.json({ id }, 201);
+});
+
+app.get('/api/external-chat/messages', (c) => {
+  const limit = Math.min(Number(c.req.query('limit') || 100), 200);
+  const offset = Math.max(0, Number(c.req.query('offset') || 0));
+  const source = c.req.query('source') || null;
+  return c.json({ items: listExternalChatMessages(db, { source, limit, offset }) });
+});
+
 // ---- llm config -----------------------------------------------------------
 
 app.get('/api/llm/config', (c) => {
@@ -1845,7 +2409,7 @@ async function proxyMulti(c, method) {
 app.get('/api/multi/proxy/*', (c) => proxyMulti(c, 'GET'));
 app.post('/api/multi/proxy/*', (c) => proxyMulti(c, 'POST'));
 
-// Body: { kind: 'bookmark' | 'dig' | 'dict', id }
+// Body: { kind: 'bookmark' | 'dig' | 'dict' | 'implementation_note', id }
 app.post('/api/multi/share', async (c) => {
   const body = await c.req.json().catch(() => null);
   if (!body?.kind || body.id == null) return c.json({ error: 'kind+id required' }, 400);
@@ -1876,6 +2440,22 @@ app.post('/api/multi/share', async (c) => {
       markDictionaryShared(db, body.id, { sharedAt: r.shared_at, sharedOrigin: state.url });
       return c.json({ ok: true, remote: r });
     }
+    if (body.kind === 'implementation_note') {
+      const n = getImplementationNote(db, body.id);
+      if (!n) return c.json({ error: 'not_found' }, 404);
+      if (!n.shareable) return c.json({ error: 'note is not marked shareable' }, 409);
+      const r = await shareImplementationNote(state, n);
+      updateImplementationNote(db, body.id, { shared_at: r.shared_at, shared_origin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
+    if (body.kind === 'work_location') {
+      const w = getWorkLocation(db, body.id);
+      if (!w) return c.json({ error: 'not_found' }, 404);
+      if (!w.shareable) return c.json({ error: 'location is not marked shareable' }, 409);
+      const r = await shareWorkLocation(state, w);
+      updateWorkLocation(db, body.id, { shared_at: r.shared_at, shared_origin: state.url });
+      return c.json({ ok: true, remote: r });
+    }
     return c.json({ error: 'unknown kind' }, 400);
   } catch (e) {
     console.error('[multi/share]', e);
@@ -1883,7 +2463,7 @@ app.post('/api/multi/share', async (c) => {
   }
 });
 
-// Body: { kind: 'bookmark' | 'dig' | 'dict', remote_id }
+// Body: { kind: 'bookmark' | 'dig' | 'dict' | 'implementation_note' | 'work_location', remote_id }
 //
 // Pulls a single resource from the connected Hub and writes it into the
 // local SQLite. owner_user_id / owner_user_name are populated from the
@@ -1974,6 +2554,43 @@ app.post('/api/multi/download', async (c) => {
         sharedOrigin: state.url,
       });
       return c.json({ ok: true, id });
+    }
+    if (body.kind === 'implementation_note') {
+      const remote = await multiFetch(state,`/api/shared/implementation-notes/${body.remote_id}`);
+      const id = insertImplementationNote(db, {
+        product: remote.product || '',
+        title: remote.title,
+        good_points: remote.good_points,
+        bad_points: remote.bad_points,
+        attachment_type: remote.attachment_type,
+        attachment_value: remote.attachment_value,
+        shareable: 0,
+      });
+      updateImplementationNote(db, id, {
+        shared_at: remote.shared_at,
+        shared_origin: state.url,
+      });
+      return c.json({ ok: true, id, owner: remote.owner_user_name });
+    }
+    if (body.kind === 'work_location') {
+      const remote = await multiFetch(state,`/api/shared/work-locations/${body.remote_id}`);
+      const id = insertWorkLocation(db, {
+        name: remote.name,
+        address: remote.address,
+        latitude: remote.latitude,
+        longitude: remote.longitude,
+        description: remote.description,
+        url: remote.url,
+        tags: remote.tags,
+        shareable: 0,
+      });
+      setWorkLocationOwner(db, id, {
+        ownerUserId: remote.owner_user_id,
+        ownerUserName: remote.owner_user_name,
+        sharedAt: remote.shared_at,
+        sharedOrigin: state.url,
+      });
+      return c.json({ ok: true, id, owner: remote.owner_user_name });
     }
     return c.json({ error: 'unknown kind' }, 400);
   } catch (e) {
@@ -2151,8 +2768,12 @@ app.post('/api/domains/:domain/regenerate', (c) => {
   insertDomainPending(db, d);
   domainCatalogQueue.enqueue(async () => {
     const result = await classifyDomain({ domain: d });
-    if (result.skip || result.dropRow) {
+    if (result.skip) {
       deleteDomainCatalog(db, d);
+      return;
+    }
+    if (result.dropRow) {
+      setDomainCatalog(db, d, { title: null, description: null, status: 'error', error: result.error ?? 'fetch failed' });
       return;
     }
     if (!result.ok) {
@@ -2218,8 +2839,12 @@ app.post('/api/domains/recatalog-all', async (c) => {
       insertDomainPending(db, domain);
       domainCatalogQueue.enqueue(async () => {
         const result = await classifyDomain({ domain });
-        if (result.skip || result.dropRow) {
+        if (result.skip) {
           deleteDomainCatalog(db, domain);
+          return;
+        }
+        if (result.dropRow) {
+          setDomainCatalog(db, domain, { title: null, description: null, status: 'error', error: result.error ?? 'fetch failed' });
           return;
         }
         if (!result.ok) {
@@ -2879,7 +3504,8 @@ app.post('/api/activity/event', async (c) => {
   }
   const kind = String(body.kind || '');
   if (!kind) return c.json({ error: 'kind required' }, 400);
-  if (kind !== 'git_commit' && kind !== 'claude_code_prompt') {
+  const ALLOWED_KINDS = new Set(['git_commit', 'claude_code_prompt', 'gemini_prompt', 'codex_prompt']);
+  if (!ALLOWED_KINDS.has(kind)) {
     return c.json({ error: `unknown kind: ${kind}` }, 400);
   }
   try {
@@ -2906,16 +3532,74 @@ app.post('/api/activity/event', async (c) => {
 //   total は当日全件数。 limit は 1-1000、 offset は >= 0。
 app.get('/api/activity/events', (c) => {
   const date = c.req.query('date');
+  const kind = c.req.query('kind') || null;
   if (date) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);
     const limit = Number(c.req.query('limit')) || 100;
     const offset = Number(c.req.query('offset')) || 0;
-    const page = activityEventsPage(db, date, { limit, offset });
-    return c.json({ date, ...page });
+    const page = activityEventsPage(db, date, { limit, offset, kind });
+    return c.json({ date, kind, ...page });
   }
   const limit = Math.min(Number(c.req.query('limit')) || 200, 1000);
-  const kind = c.req.query('kind') || null;
   return c.json({ items: listActivityEvents(db, { limit, kind }) });
+});
+
+// ── 作業ログ (worklog) 用 集計 -------------------------------------------
+// /api/worklog/server-events?date=YYYY-MM-DD  当日のサーバ稼働イベント
+// /api/worklog/browsing?date=YYYY-MM-DD       当日のページ訪問 / 再訪 BM / ドメイン Top
+// dig は既存 /api/diary/:date/digs を再利用 (作業ログ・日記で共有)。
+
+app.get('/api/worklog/server-events', (c) => {
+  const date = c.req.query('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'invalid date' }, 400);
+  }
+  return c.json({ date, items: listServerEventsForDate(db, date) });
+});
+
+app.get('/api/worklog/browsing', (c) => {
+  const date = c.req.query('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'invalid date' }, 400);
+  }
+  const visitLimit = Math.min(Number(c.req.query('visit_limit')) || 200, 2000);
+  const revisitLimit = Math.min(Number(c.req.query('revisit_limit')) || 100, 500);
+  const domainLimit = Math.min(Number(c.req.query('domain_limit')) || 30, 200);
+
+  const visits = pageVisitsForDate(db, date, { limit: visitLimit });
+  const revisits = revisitedBookmarksForDate(db, date, { limit: revisitLimit });
+  const stats = browsingDomainStatsForDate(db, date, { limit: domainLimit });
+
+  // Enrich visits with domain catalog so the UI can show site_name / kind / status
+  const visitDomains = [...new Set(visits.map(v => extractDomainFromUrl(v.url)).filter(Boolean))];
+  const topDomainNames = (stats.top_domains || []).map(d => d.domain).filter(Boolean);
+  const allDomains = [...new Set([...visitDomains, ...topDomainNames])];
+  const catalog = getDomainCatalogMap(db, allDomains);
+  const enrichedVisits = visits.map(v => {
+    const dom = extractDomainFromUrl(v.url);
+    const cat = dom ? catalog.get(dom) : null;
+    return {
+      ...v,
+      domain: dom,
+      catalog: cat ? {
+        site_name: cat.site_name, kind: cat.kind, description: cat.description,
+        status: cat.status,
+      } : null,
+    };
+  });
+  const enrichedTopDomains = (stats.top_domains || []).map(d => ({
+    ...d,
+    catalog_status: catalog.get(d.domain)?.status ?? null,
+  }));
+
+  return c.json({
+    date,
+    visits: enrichedVisits,
+    revisits,
+    top_domains: enrichedTopDomains,
+    total_pages: stats.total_pages,
+    total_visits: stats.total_visits,
+  });
 });
 
 // Paginated dig list for the diary panel.
@@ -3297,6 +3981,7 @@ app.delete('/api/locations/settings/key', (c) => {
  *     deviceIds[], source: { via, tool, requestId } }
  */
 app.post('/api/legatus/location-summary', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return c.json({ error: 'json body required' }, 400);
@@ -3370,6 +4055,7 @@ app.post('/api/legatus/location-summary', async (c) => {
  *   - 簡易形式:       { lat, lon, recorded_at?, device_id?, accuracy_m?, ... }
  */
 app.post('/api/locations/ingest', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   const denied = checkIngestKey(c);
   if (denied) return denied;
 
@@ -3482,6 +4168,7 @@ app.patch('/api/tracks/settings', async (c) => {
  * 多くても OK.
  */
 app.get('/api/locations/recent', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ points: [], decimated: 0, pool: 0 });
   const limit = Math.min(500, Math.max(1, Number(c.req.query('limit') ?? '50')));
   const settingsDecimate = Number(getAppSettings(db)['tracks.decimate_meters'] ?? '0');
   const decimateM = Math.max(0, Number(c.req.query('decimate') ?? settingsDecimate));
@@ -3530,6 +4217,7 @@ app.get('/api/locations/recent', (c) => {
  * 何も無ければ { point: null } を返す。
  */
 app.get('/api/locations/latest', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ point: null });
   const row = db.prepare(
     `SELECT id, user_id, device_id, recorded_at, lat, lon,
             accuracy_m, altitude_m, velocity_kmh, course_deg,
@@ -3545,6 +4233,7 @@ app.get('/api/locations/latest', (c) => {
  *   GET /api/locations?date=YYYY-MM-DD              (local TZ)
  */
 app.get('/api/locations', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ points: [] });
   const url = new URL(c.req.url);
   const date = url.searchParams.get('date');
   if (date) {
@@ -3565,6 +4254,7 @@ app.get('/api/locations', (c) => {
  * 位置情報を持っている日と件数。 UI の date picker 用。
  */
 app.get('/api/locations/days', (c) => {
+  if (!featureEnabled('tracks_visible')) return c.json({ days: [] });
   const limit = Math.min(Number(c.req.query('limit') ?? 365) || 365, 3650);
   const days = listGpsLocationDays(db, { limit });
   return c.json({ days });
@@ -3575,6 +4265,7 @@ app.get('/api/locations/days', (c) => {
  *   DELETE /api/locations?older_than=ISO
  */
 app.delete('/api/locations', (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   const denied = checkIngestKey(c);
   if (denied) return denied;
   const olderThan = c.req.query('older_than');
@@ -3595,6 +4286,7 @@ app.delete('/api/locations', (c) => {
 app.get('/api/locations/resolve-debug', (c) => c.json(getResolverDebug()));
 
 app.post('/api/locations/resolve-all', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   let body = {};
   try { body = await c.req.json(); } catch {}
   const limit = Math.min(500, Math.max(1, Number(body.limit ?? 100)));
@@ -3622,6 +4314,7 @@ app.post('/api/locations/resolve-all', async (c) => {
  *   body: { device_id?, threshold? }   — 省略可、 全デバイス + default 50m
  */
 app.post('/api/locations/compress', async (c) => {
+  if (!featureEnabled('tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
   let body = {};
   try { body = await c.req.json(); } catch {}
   const deviceId = typeof body.device_id === 'string' && body.device_id.length > 0 ? body.device_id : null;
@@ -3739,6 +4432,56 @@ wss.on('connection', (ws) => {
   // 接続直後の hello (UI 側で接続成立を確認しやすくする)
   try { ws.send(JSON.stringify({ type: 'hello', ts: Date.now() })); } catch {}
 });
+
+syncMcpAutostart();
+process.on('exit', () => stopMcpServer());
+process.on('SIGINT', () => { stopMcpServer(); process.exit(0); });
+process.on('SIGTERM', () => { stopMcpServer(); process.exit(0); });
+
+// Task reminder: 1分ごとに時刻チェック、当日初回のみ送信
+setInterval(async () => {
+  try {
+    const s = privacySettings();
+    if (!s.tasks_reminder_enabled) return;
+    const now = new Date();
+    if (now.getHours() !== s.tasks_reminder_hour || now.getMinutes() !== s.tasks_reminder_minute) return;
+    const today = now.toISOString().slice(0, 10);
+    const appS = getAppSettings(db);
+    if (appS['tasks.reminder.last_sent_date'] === today) return;
+
+    const tasks = [
+      ...listTasks(db, { status: 'todo', limit: 20 }),
+      ...listTasks(db, { status: 'doing', limit: 20 }),
+    ];
+    if (!tasks.length) {
+      setAppSettings(db, { 'tasks.reminder.last_sent_date': today });
+      return;
+    }
+
+    const todoCount = tasks.filter(t => t.status === 'todo').length;
+    const doingCount = tasks.filter(t => t.status === 'doing').length;
+    const preview = tasks.slice(0, 5).map(t => `・${t.title.slice(0, 50)}`).join('\n');
+    const more = tasks.length > 5 ? `\n…他 ${tasks.length - 5} 件` : '';
+    const pushBody = `todo: ${todoCount} 件, 進行中: ${doingCount} 件\n${preview}${more}`;
+
+    await sendPushToAll(db, { title: '📋 本日のタスクリマインド', body: pushBody })
+      .catch(e => console.error('[reminder] push failed:', e?.message));
+
+    if (s.tasks_reminder_nuntius_enabled && s.tasks_reminder_nuntius_url) {
+      await fetch(s.tasks_reminder_nuntius_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '📋 本日のタスクリマインド', body: pushBody }),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(e => console.error('[reminder] nuntius failed:', e?.message));
+    }
+
+    setAppSettings(db, { 'tasks.reminder.last_sent_date': today });
+    console.log(`[reminder] sent for ${today}: ${tasks.length} task(s)`);
+  } catch (e) {
+    console.error('[reminder] unexpected error:', e?.message);
+  }
+}, 60_000).unref?.();
 
 // keep-alive: 30s ごとに ping。 Cloudflare の idle timeout (100s 程度) を超えない。
 setInterval(() => {
