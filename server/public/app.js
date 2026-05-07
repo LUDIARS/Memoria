@@ -2682,6 +2682,8 @@ function renderDiaryDetail() {
 
   // GPS から推定した「仕事中」セッションを上に表示
   renderDiaryWorkSessions(d.date).catch(() => {});
+  // 移動 / 滞在時間サマリ
+  renderDiaryGpsSummary(d.date).catch(() => {});
 
   // Hourly chart: live_metrics is computed fresh on every request and includes
   // page_visits as a fallback for events captured before visit_events existed,
@@ -8000,6 +8002,66 @@ async function renderTracksForCurrentDate() {
     console.error('[tracks] render failed', e);
     $('tracksStats').textContent = '取得失敗';
   }
+}
+
+function fmtHm(totalMin) {
+  if (!Number.isFinite(totalMin) || totalMin <= 0) return '0分';
+  const h = Math.floor(totalMin / 60);
+  const m = Math.round(totalMin - h * 60);
+  if (h === 0) return `${m}分`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+async function renderDiaryGpsSummary(date) {
+  const el = $('diaryGpsSummary');
+  if (!el) return;
+  let points = [];
+  let sessions = [];
+  try {
+    const [pr, sr] = await Promise.all([
+      api(`/api/locations?date=${encodeURIComponent(date)}`),
+      api(`/api/work-sessions?date=${encodeURIComponent(date)}`),
+    ]);
+    points = pr.points || [];
+    sessions = sr.items || [];
+  } catch {
+    el.innerHTML = '<div class="muted" style="font-size:12px">GPS 情報の取得に失敗しました — 判断不能</div>';
+    return;
+  }
+  if (!points.length) {
+    el.innerHTML = '<div class="muted" style="font-size:12px">この日は GPS の記録がありません — 移動・滞在時間は判断不能</div>';
+    return;
+  }
+  // 区分別時間 (walk / transit / still)
+  const stats = classifyAll(points);
+  const walkMin = (stats.walkSec || 0) / 60;
+  const transitMin = (stats.transitSec || 0) / 60;
+  const stillMin = (stats.stillSec || 0) / 60;
+  const totalMoveMin = walkMin + transitMin;
+  // 作業場所ごとの滞在時間 (work-sessions API は ≥60 分のみ返す前提)
+  const placeTotals = new Map();
+  let totalAtWorkMin = 0;
+  for (const s of sessions) {
+    placeTotals.set(s.workplace_name || '?', (placeTotals.get(s.workplace_name || '?') || 0) + (s.duration_min || 0));
+    totalAtWorkMin += s.duration_min || 0;
+  }
+  const placesHtml = placeTotals.size
+    ? [...placeTotals.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, min]) => `<li>${escapeHtml(name)} <span class="muted">${fmtHm(min)}</span></li>`).join('')
+    : '<li class="muted">この日は登録した作業場所での 1 時間以上の滞在なし</li>';
+  el.innerHTML = `
+    <ul class="diary-gps-stats">
+      <li><span class="muted">🚶 徒歩</span> <strong>${fmtHm(walkMin)}</strong></li>
+      <li><span class="muted">🚃 交通機関</span> <strong>${fmtHm(transitMin)}</strong></li>
+      <li><span class="muted">⏸ 停止</span> <strong>${fmtHm(stillMin)}</strong></li>
+      <li><span class="muted">移動 合計</span> <strong>${fmtHm(totalMoveMin)}</strong></li>
+      <li><span class="muted">作業場所 滞在 合計</span> <strong>${fmtHm(totalAtWorkMin)}</strong></li>
+    </ul>
+    <div class="muted" style="font-size:11px;margin:6px 0 4px">作業場所別:</div>
+    <ul class="diary-gps-places">${placesHtml}</ul>
+  `;
 }
 
 async function renderDiaryWorkSessions(date) {
