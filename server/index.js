@@ -4388,7 +4388,8 @@ app.get('/api/locations', (c) => {
  *
  * 検出ルール:
  *   - 各 GPS 点について最近接の work_location (lat/lng 設定済) を探し、
- *     **10m 以内** ならその場所に居たと見なす。
+ *     **50m 以内** ならその場所に居たと見なす (iPhone の GPS accuracy_m
+ *     は 14-47m 程度なので 10m だと取りこぼす).
  *   - 同じ workplace 上の連続点を 1 セッションにまとめる。
  *   - **継続 60 分以上** のセッションだけを採用 (短滞在は除外)。
  *   - workplace 名に "自宅" を含む場合は、 セッション窓内の activity_events
@@ -4421,8 +4422,9 @@ app.get('/api/work-sessions', (c) => {
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
-  // 10m 圏内ルール: 各点を最近接 workplace に紐付け
-  const RADIUS_M = 10;
+  // 50m 圏内ルール: 各点を最近接 workplace に紐付け
+  // (iPhone GPS の accuracy_m は 14-47m 程度 + 屋内ビルでオフセット)
+  const RADIUS_M = 50;
   const tagged = points.map(p => {
     let bestId = null;
     let bestDist = Infinity;

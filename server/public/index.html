@@ -75,8 +75,8 @@
     <section class="content">
       <nav class="tabs">
         <div class="tabs-scroll">
-          <button class="tab active" data-tab="bookmarks">
-            <span class="tab-label" data-full="📚 ブックマーク" data-short="📚 ブクマ">📚 ブックマーク</span>
+          <button class="tab active" data-tab="database">
+            <span class="tab-label" data-full="🗄 データベース" data-short="🗄 DB">🗄 データベース</span>
           </button>
           <button class="tab" data-tab="worklog">
             <span class="tab-label" data-full="📝 作業ログ" data-short="📝 ログ">📝 作業ログ</span>
@@ -91,9 +91,6 @@
           </button>
           <button class="tab" data-tab="dig">
             <span class="tab-label" data-full="🔎 ディグる" data-short="🔎 ディグ">🔎 ディグる</span>
-          </button>
-          <button class="tab" data-tab="dict">
-            <span class="tab-label" data-full="📖 辞書" data-short="📖 辞書">📖 辞書</span>
           </button>
           <button class="tab" data-tab="diary">
             <span class="tab-label" data-full="📅 日記" data-short="📅 日記">📅 日記</span>
@@ -414,6 +411,15 @@
         <div id="queueHistory" class="queue-history-list"></div>
       </div>
 
+      <div id="databaseView" class="hidden">
+        <nav class="worklog-subtabs" id="databaseSubtabs">
+          <button class="wl-subtab active" data-db-sub="bookmarks">📚 ブックマーク</button>
+          <button class="wl-subtab" data-db-sub="dict">📖 辞書</button>
+          <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
+          <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
+        </nav>
+      </div>
+
       <div id="worklogView" class="hidden">
         <div class="worklog-daynav">
           <button id="wlPrevDay" class="ghost" title="前日">◀</button>
@@ -433,7 +439,6 @@
           <button class="wl-subtab" data-sub="browsing">🌐 ブラウジング</button>
           <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
           <button class="wl-subtab" data-sub="queue">⚙ キュー <span id="wlQueueBadge" class="tab-count hidden">0</span></button>
-          <button class="wl-subtab" data-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
           <button class="wl-subtab" data-sub="external">🔌 外部</button>
         </nav>

@@ -10,7 +10,7 @@ const state = {
   search: '',
   searchDebounce: null,
   sort: 'created_desc',
-  tab: 'bookmarks',
+  tab: 'database',
   queue: { items: [], history: [] },
   visits: [],
   visitsSelected: new Set(),
@@ -602,9 +602,10 @@ function jobLabel(item) {
   return kindHint + `seq #${item.seq}`;
 }
 
-// queue / domain / tracks / external は worklog の sub-tab として畳み込む。
-// switchTab に旧 key で来たら worklog + 該当 subtab に redirect する。
-const WORKLOG_REDIRECT_TABS = new Set(['queue', 'domain', 'tracks', 'external']);
+// queue / tracks / external は worklog の sub-tab として畳み込む。
+// bookmarks / dict / domain / workplace は database タブの sub-tab として畳み込む。
+const WORKLOG_REDIRECT_TABS = new Set(['queue', 'tracks', 'external']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace']);
 
 function switchTab(tab) {
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
@@ -614,30 +615,39 @@ function switchTab(tab) {
     switchWorklogSub(sub);
     return;
   }
+  if (DATABASE_REDIRECT_TABS.has(tab)) {
+    const sub = tab;
+    state.database = state.database || {};
+    state.database.sub = sub;
+    switchTab('database');
+    switchDatabaseSub(sub);
+    return;
+  }
   state.tab = tab;
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
   });
   const layout = document.querySelector('.layout');
   if (layout) layout.dataset.activeTab = tab;
-  $('bookmarksView').classList.toggle('hidden', tab !== 'bookmarks');
+  $('databaseView')?.classList.toggle('hidden', tab !== 'database');
   $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
-  $('dictView').classList.toggle('hidden', tab !== 'dict');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
-  $('workplaceView')?.classList.toggle('hidden', tab !== 'workplace');
-  if (tab === 'workplace') loadWorkLocations().catch(console.warn);
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
+  if (tab === 'database') {
+    // Re-show whichever DB sub was last picked.
+    const sub = state.database?.sub || 'bookmarks';
+    switchDatabaseSub(sub);
+  }
   if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
-  if (tab === 'dict') loadDictionary();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'tasks') loadTasks();
@@ -4757,7 +4767,6 @@ function ensureMemoriaFeatureViews() {
     for (const spec of [
       ['tasks', '📝 タスク'],
       ['impl', '✨ 実装自慢'],
-      ['workplace', '🗺️ 作業場所'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -6545,16 +6554,7 @@ function decorateTaskAndImplTabs() {
     if (!isNarrowViewport()) implTab.style.order = '-19';
     else implTab.style.order = '';
   }
-  if (workplaceTab) {
-    const label = workplaceTab.querySelector('.tab-label');
-    if (label) {
-      label.textContent = '🗺️ 作業場所';
-      label.dataset.full = '🗺️ 作業場所';
-      label.dataset.short = '🗺️ 作業場所';
-    }
-    if (!isNarrowViewport()) workplaceTab.style.order = '-18';
-    else workplaceTab.style.order = '';
-  }
+  if (workplaceTab) workplaceTab.remove(); // workplace は database のサブタブに移行
 }
 
 const baseEnsureMemoriaFeatureViews = ensureMemoriaFeatureViews;
@@ -6825,10 +6825,49 @@ const WL_SUB_VIEWS = {
   dig: 'wlDigView',
   // 旧トップタブから移植してきた sub
   queue: 'queueView',
-  domain: 'domainView',
   tracks: 'tracksView',
   external: 'externalView',
 };
+
+// データベースタブのサブビュー一覧
+const DB_SUB_VIEWS = {
+  bookmarks: 'bookmarksView',
+  dict: 'dictView',
+  domain: 'domainView',
+  workplace: 'workplaceView',
+};
+
+state.database = state.database || { sub: 'bookmarks' };
+
+function migrateDatabaseSubViews() {
+  const db = $('databaseView');
+  if (!db) return;
+  for (const id of Object.values(DB_SUB_VIEWS)) {
+    const v = $(id);
+    if (v && v.parentNode !== db) {
+      v.classList.add('hidden');
+      v.classList.add('wl-sub');
+      db.appendChild(v);
+    }
+  }
+}
+
+function switchDatabaseSub(sub) {
+  if (!DB_SUB_VIEWS[sub]) return;
+  state.database = state.database || {};
+  state.database.sub = sub;
+  document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.dbSub === sub);
+  });
+  for (const [key, viewId] of Object.entries(DB_SUB_VIEWS)) {
+    const view = $(viewId);
+    if (view) view.classList.toggle('hidden', key !== sub);
+  }
+  if (sub === 'bookmarks') load();
+  if (sub === 'dict') loadDictionary();
+  if (sub === 'domain') loadDomainCatalog();
+  if (sub === 'workplace') loadWorkLocations().catch(console.warn);
+}
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
 const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig']);
@@ -6854,6 +6893,10 @@ function migrateWorklogSubViews() {
   }
 }
 migrateWorklogSubViews();
+migrateDatabaseSubViews();
+document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
+  btn.addEventListener('click', () => switchDatabaseSub(btn.dataset.dbSub));
+});
 
 function switchWorklogSub(sub) {
   if (!WL_SUB_VIEWS[sub]) return;
