@@ -2986,13 +2986,62 @@ export function insertTask(db, task) {
   return Number(info.lastInsertRowid);
 }
 
+/**
+ * Distinct categories from tasks + manually registered ones (stored in
+ * app_settings as JSON `task.categories.registered`). Merged + deduped +
+ * sorted ascending. Manually-registered ones can have 0 tasks attached
+ * (they show up in the side menu so users can pre-create categories).
+ */
 export function listTaskCategories(db) {
-  return db.prepare(`
+  const fromTasks = db.prepare(`
     SELECT DISTINCT category
     FROM tasks
     WHERE category IS NOT NULL AND category != ''
-    ORDER BY category ASC
   `).all().map(r => r.category);
+  let registered = [];
+  try {
+    const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
+      .get('task.categories.registered');
+    if (raw?.value) registered = JSON.parse(raw.value) || [];
+  } catch {}
+  const all = new Set();
+  for (const c of fromTasks) if (c) all.add(c);
+  for (const c of registered) if (c) all.add(c);
+  return [...all].sort((a, b) => a.localeCompare(b));
+}
+
+export function registerTaskCategory(db, name) {
+  const n = String(name || '').trim();
+  if (!n) return;
+  let registered = [];
+  try {
+    const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
+      .get('task.categories.registered');
+    if (raw?.value) registered = JSON.parse(raw.value) || [];
+  } catch {}
+  if (!registered.includes(n)) {
+    registered.push(n);
+    db.prepare(`
+      INSERT INTO app_settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run('task.categories.registered', JSON.stringify(registered));
+  }
+}
+
+export function unregisterTaskCategory(db, name) {
+  const n = String(name || '').trim();
+  if (!n) return;
+  let registered = [];
+  try {
+    const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
+      .get('task.categories.registered');
+    if (raw?.value) registered = JSON.parse(raw.value) || [];
+  } catch {}
+  const next = registered.filter(c => c !== n);
+  db.prepare(`
+    INSERT INTO app_settings (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run('task.categories.registered', JSON.stringify(next));
 }
 
 export function updateTask(db, id, patch) {

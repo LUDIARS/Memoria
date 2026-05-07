@@ -94,7 +94,8 @@ import {
 import {
   listImplementationNotes, getImplementationNote, insertImplementationNote,
   updateImplementationNote, deleteImplementationNote,
-  listTasks, listTaskCategories, getTask, insertTask, updateTask, deleteTask,
+  listTasks, listTaskCategories, registerTaskCategory, unregisterTaskCategory,
+  getTask, insertTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
   listWorkLocations, getWorkLocation, insertWorkLocation,
   updateWorkLocation, deleteWorkLocation, setWorkLocationOwner,
@@ -1867,6 +1868,20 @@ app.get('/api/tasks', (c) => {
 });
 
 app.get('/api/tasks/categories', (c) => {
+  return c.json({ items: listTaskCategories(db) });
+});
+
+app.post('/api/tasks/categories', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  if (!name) return c.json({ error: 'name required' }, 400);
+  registerTaskCategory(db, name);
+  return c.json({ items: listTaskCategories(db) }, 201);
+});
+
+app.delete('/api/tasks/categories/:name', (c) => {
+  const name = decodeURIComponent(c.req.param('name'));
+  unregisterTaskCategory(db, name);
   return c.json({ items: listTaskCategories(db) });
 });
 

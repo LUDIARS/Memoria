@@ -4057,6 +4057,56 @@ dialog.meal-modal[open] {
   color: var(--text);
   background: #fff;
 }
+.tasks-menu-section {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.tasks-menu-h {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+#tasksCategoryList {
+  display: grid;
+  gap: 4px;
+}
+#tasksCategoryList button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 6px 10px;
+  position: relative;
+}
+#tasksCategoryList .task-cat-del {
+  display: none;
+  margin-left: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 4px;
+}
+#tasksCategoryList button:hover .task-cat-del { display: inline; }
+#tasksCategoryList .task-cat-del:hover { color: #c00; }
+.tasks-cat-add {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tasks-cat-add input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.tasks-cat-add button {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .task-done-drop {
   display: none;
   margin-top: 4px;

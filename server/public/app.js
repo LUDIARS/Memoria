@@ -5623,6 +5623,7 @@ renderDomainDetail = function () {
 
 state.taskMenu = 'todo';
 state.taskItems = [];
+state.taskCategoryFilter = null;
 state.taskDetail = null;
 
 function taskDatePartition(task) {
@@ -6273,6 +6274,82 @@ function closeImplEditor() {
   hideModal('implEditorModal');
 }
 
+function renderTaskCategoryMenu() {
+  const list = $('tasksCategoryList');
+  if (!list) return;
+  // Distinct categories from currently loaded tasks + pre-fetched _taskCategoriesCache
+  const fromTasks = new Set();
+  for (const t of state.taskItems) {
+    if (t.category) fromTasks.add(t.category);
+  }
+  const merged = new Set([...(_taskCategoriesCache || []), ...fromTasks]);
+  const cats = [...merged].sort((a, b) => a.localeCompare(b));
+  const counts = {};
+  for (const t of state.taskItems) {
+    const k = t.category || '__none__';
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  const buttons = [
+    `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${state.taskItems.length}</span></button>`,
+    `<button type="button" data-task-cat="__none__" class="${state.taskCategoryFilter === '__none__' ? 'active' : ''}">未分類 <span class="muted">${counts['__none__'] || 0}</span></button>`,
+  ];
+  for (const c of cats) {
+    buttons.push(
+      `<button type="button" data-task-cat="${escapeHtml(c)}" class="${state.taskCategoryFilter === c ? 'active' : ''}" title="${escapeHtml(c)}">
+        ${escapeHtml(c)} <span class="muted">${counts[c] || 0}</span>
+        <span class="task-cat-del" data-task-cat-del="${escapeHtml(c)}" title="登録から外す">✕</span>
+      </button>`
+    );
+  }
+  list.innerHTML = buttons.join('');
+  list.querySelectorAll('[data-task-cat]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-task-cat-del]')) return;
+      const v = btn.dataset.taskCat;
+      state.taskCategoryFilter = v === '' ? null : v;
+      renderTaskBoard();
+    });
+  });
+  list.querySelectorAll('[data-task-cat-del]').forEach(el => {
+    el.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const name = el.dataset.taskCatDel;
+      if (!confirm(`カテゴリ "${name}" を一覧から外しますか? (既存タスクの category 値は残ります)`)) return;
+      try {
+        await api(`/api/tasks/categories/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        await reloadTaskCategoriesCache();
+        if (state.taskCategoryFilter === name) state.taskCategoryFilter = null;
+        renderTaskBoard();
+      } catch (e) { alert(e.message); }
+    });
+  });
+}
+
+let _taskCategoriesCache = [];
+async function reloadTaskCategoriesCache() {
+  try {
+    const r = await api('/api/tasks/categories');
+    _taskCategoriesCache = r.items || [];
+  } catch { _taskCategoriesCache = []; }
+}
+
+async function addNewTaskCategoryFromMenu() {
+  const inp = $('tasksNewCatInput');
+  const name = (inp?.value || '').trim();
+  if (!name) return;
+  try {
+    await api('/api/tasks/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    inp.value = '';
+    await reloadTaskCategoriesCache();
+    state.taskCategoryFilter = name;
+    renderTaskBoard();
+  } catch (e) { alert(e.message); }
+}
+
 function renderTaskBoard() {
   const menu = $('tasksMenu');
   const middle = $('tasksDueNow');
@@ -6281,9 +6358,15 @@ function renderTaskBoard() {
   menu.querySelectorAll('[data-task-menu]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.taskMenu === state.taskMenu);
   });
-  const base = state.taskMenu === 'done'
+  renderTaskCategoryMenu();
+  const statusFiltered = state.taskMenu === 'done'
     ? state.taskItems.filter((t) => t.status === 'done')
     : state.taskItems.filter((t) => t.status !== 'done');
+  const base = state.taskCategoryFilter == null
+    ? statusFiltered
+    : (state.taskCategoryFilter === '__none__'
+        ? statusFiltered.filter((t) => !t.category)
+        : statusFiltered.filter((t) => t.category === state.taskCategoryFilter));
   const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
   const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
   middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
@@ -6411,8 +6494,18 @@ ensureMemoriaFeatureViews = function () {
         <div id="taskForm" class="simple-form hidden"></div>
         <div class="tasks-three-pane">
           <aside id="tasksMenu" class="tasks-menu">
-            <button type="button" data-task-menu="todo" class="active">TODO</button>
-            <button type="button" data-task-menu="done">完了済み</button>
+            <div class="tasks-menu-section">
+              <button type="button" data-task-menu="todo" class="active">TODO</button>
+              <button type="button" data-task-menu="done">完了済み</button>
+            </div>
+            <div class="tasks-menu-section">
+              <h4 class="tasks-menu-h">カテゴリ</h4>
+              <div id="tasksCategoryList"></div>
+              <div class="tasks-cat-add">
+                <input id="tasksNewCatInput" type="text" placeholder="新しいカテゴリ" />
+                <button type="button" id="tasksNewCatBtn">+ 追加</button>
+              </div>
+            </div>
             <div id="taskDoneDrop" class="task-done-drop" title="タスクをここにドロップで完了">
               完了
             </div>
@@ -6553,11 +6646,20 @@ ensureMemoriaFeatureViews = function () {
       renderTaskBoard();
     };
   });
+  if ($('tasksNewCatBtn')) $('tasksNewCatBtn').onclick = addNewTaskCategoryFromMenu;
+  if ($('tasksNewCatInput')) {
+    $('tasksNewCatInput').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); addNewTaskCategoryFromMenu(); }
+    });
+  }
 };
 
 loadTasks = async function () {
   ensureMemoriaFeatureViews();
-  const r = await api('/api/tasks');
+  const [r] = await Promise.all([
+    api('/api/tasks'),
+    reloadTaskCategoriesCache(),
+  ]);
   state.taskItems = r.items || [];
   if (state.taskDetail?.id) {
     state.taskDetail = state.taskItems.find((t) => t.id === state.taskDetail.id) || null;
