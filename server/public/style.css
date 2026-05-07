@@ -3912,7 +3912,7 @@ dialog.meal-modal[open] {
 /* Simple feature panes injected by app.js for tasks / implementation notes. */
 .simple-panel {
   padding: 16px;
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 .simple-panel h2 {
@@ -4027,7 +4027,7 @@ dialog.meal-modal[open] {
 }
 .tasks-three-pane {
   display: grid;
-  grid-template-columns: 20% 40% 40%;
+  grid-template-columns: minmax(220px, 22%) 1fr 1fr;
   gap: 12px;
   align-items: start;
   margin-bottom: 12px;
@@ -4056,6 +4056,56 @@ dialog.meal-modal[open] {
 .tasks-menu button:not(.active) {
   color: var(--text);
   background: #fff;
+}
+.tasks-menu-section {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.tasks-menu-h {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+#tasksCategoryList {
+  display: grid;
+  gap: 4px;
+}
+#tasksCategoryList button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 6px 10px;
+  position: relative;
+}
+#tasksCategoryList .task-cat-del {
+  display: none;
+  margin-left: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 4px;
+}
+#tasksCategoryList button:hover .task-cat-del { display: inline; }
+#tasksCategoryList .task-cat-del:hover { color: #c00; }
+.tasks-cat-add {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tasks-cat-add input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.tasks-cat-add button {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .task-done-drop {
   display: none;
@@ -4126,6 +4176,18 @@ dialog.meal-modal[open] {
   border-color: #1f56c0;
   color: #1f56c0;
   background: #eaf1ff;
+}
+.task-category {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid #6b7080;
+  color: #4a4f5e;
+  background: #f3f4f8;
+  margin-left: 4px;
 }
 .task-detail-panel {
   border: 1px solid var(--border);
@@ -4912,9 +4974,12 @@ dialog.loc-edit-modal[open] {
 
 .worklog-subtabs {
   display: flex;
+  flex-wrap: nowrap;
   gap: 4px;
   padding: 8px 12px 0 12px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
   border-bottom: 1px solid var(--border);
   scrollbar-width: thin;
 }
@@ -4928,6 +4993,18 @@ dialog.loc-edit-modal[open] {
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}
+@media (max-width: 760px) {
+  .worklog-subtabs {
+    padding: 6px 8px 0 8px;
+    gap: 2px;
+  }
+  .wl-subtab {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
 }
 .wl-subtab:hover { color: var(--text); background: var(--card); }
 .wl-subtab.active {
@@ -4940,6 +5017,56 @@ dialog.loc-edit-modal[open] {
 
 .wl-sub { padding: 12px; }
 .wl-sub.hidden { display: none; }
+
+/* tracks 用: 仕事セッション一覧 */
+.tracks-work-sessions { margin: 8px 0 12px; padding: 0 4px; }
+.tracks-work-sessions h4 { margin: 0 0 6px; font-size: 13px; }
+.ws-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.ws-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.ws-time { font-family: ui-monospace, monospace; color: var(--muted); white-space: nowrap; }
+.ws-place { font-weight: 600; }
+.ws-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid;
+}
+.ws-badge.ws-working { color: #065f46; background: #d1fae5; border-color: #10b981; }
+.ws-badge.ws-idle { color: #6b7280; background: #f3f4f6; border-color: #9ca3af; }
+
+/* 日記の 移動・滞在サマリ — 4 行で表示 */
+.diary-gps-summary { padding: 4px 0; }
+.diary-gps-stats {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.diary-gps-stats li {
+  display: grid;
+  grid-template-columns: minmax(140px, auto) 80px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.diary-gps-stats li:last-child { border-bottom: none; }
+.diary-gps-label { color: var(--muted); }
+.diary-gps-detail { font-size: 11px; }
 
 .wl-summary-row {
   font-size: 13px;

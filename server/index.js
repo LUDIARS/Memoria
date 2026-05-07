@@ -73,6 +73,7 @@ import {
 } from './diary.js';
 import {
   TASKS as LLM_TASKS, PROVIDERS as LLM_PROVIDERS,
+  PROVIDER_MODELS as LLM_PROVIDER_MODELS, PROVIDER_DEFAULT_MODEL as LLM_PROVIDER_DEFAULT_MODEL,
   getLlmConfig, loadLlmConfigFromSettings, settingsPatchFromConfig,
 } from './llm.js';
 import { getAppSettings, setAppSettings } from './db.js';
@@ -93,11 +94,18 @@ import {
 import {
   listImplementationNotes, getImplementationNote, insertImplementationNote,
   updateImplementationNote, deleteImplementationNote,
-  listTasks, getTask, insertTask, updateTask, deleteTask,
+  listTasks, listTaskCategories, registerTaskCategory, unregisterTaskCategory,
+  getTask, insertTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
   listWorkLocations, getWorkLocation, insertWorkLocation,
   updateWorkLocation, deleteWorkLocation, setWorkLocationOwner,
+  listAgentProjects, getAgentProject, insertAgentProject,
+  updateAgentProject, deleteAgentProject,
+  listAgentRuns, getAgentRun,
 } from './db.js';
+import {
+  startAgentRun, cancelAgentRun, readAgentRunLog, isRunning as isAgentRunning,
+} from './agent-dispatch.js';
 import {
   ensureUserStopwordsTable, listUserStopwords, addUserStopword, removeUserStopword,
 } from './db.js';
@@ -162,7 +170,9 @@ function privacySettings() {
     mcp_autostart_enabled: settingBool(s, 'features.mcp.autostart.enabled', false),
     workplace_geo_enabled: settingBool(s, 'features.workplace.geo.enabled', true),
     workplace_auto_share_enabled: settingBool(s, 'features.workplace.share.enabled', false),
-    workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 150),
+    // OwnTracks の locator displacement と整合させやすい 50m を既定に。
+    // 屋内ビルや GPS が荒い環境では 100-200m に上げる。
+    workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 50),
   };
 }
 
@@ -1859,6 +1869,24 @@ app.get('/api/tasks', (c) => {
   return c.json({ items: listTasks(db, { status, limit, offset }) });
 });
 
+app.get('/api/tasks/categories', (c) => {
+  return c.json({ items: listTaskCategories(db) });
+});
+
+app.post('/api/tasks/categories', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  if (!name) return c.json({ error: 'name required' }, 400);
+  registerTaskCategory(db, name);
+  return c.json({ items: listTaskCategories(db) }, 201);
+});
+
+app.delete('/api/tasks/categories/:name', (c) => {
+  const name = decodeURIComponent(c.req.param('name'));
+  unregisterTaskCategory(db, name);
+  return c.json({ items: listTaskCategories(db) });
+});
+
 function appendTaskDiaryLog(line) {
   const date = formatLocalDate(new Date());
   const row = getDiary(db, date);
@@ -1882,6 +1910,7 @@ app.post('/api/tasks', async (c) => {
     creator_type: body.creator_type === 'ai' ? 'ai' : 'human',
     due_at: body.due_at || null,
     share_actio: !!body.share_actio,
+    category: typeof body.category === 'string' ? body.category.trim() : null,
   });
   const created = getTask(db, id);
   appendTaskDiaryLog(`タスク発行: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
@@ -1904,6 +1933,7 @@ app.patch('/api/tasks/:id', async (c) => {
   if (['todo', 'doing', 'done'].includes(body.status)) patch.status = body.status;
   if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
   if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
+  if (typeof body.category === 'string' || body.category === null) patch.category = body.category;
   if (before.creator_type === 'ai' && Object.hasOwn(patch, 'due_at') && patch.due_at !== before.due_at) {
     patch.creator_type = 'human';
   }
@@ -1933,6 +1963,108 @@ app.delete('/api/tasks/:id', (c) => {
   if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
   deleteTask(db, id);
   return c.json({ ok: true });
+});
+
+// ---- agent projects + runs (AI 実装委託) ----------------------------------
+
+app.get('/api/agent-projects', (c) => {
+  return c.json({ items: listAgentProjects(db) });
+});
+
+app.post('/api/agent-projects', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  const path = String(body.path || '').trim();
+  if (!name) return c.json({ error: 'name required' }, 400);
+  if (!path) return c.json({ error: 'path required' }, 400);
+  const id = insertAgentProject(db, {
+    name,
+    path,
+    rules: typeof body.rules === 'string' ? body.rules : null,
+    default_agent: ['claude_code', 'codex', 'gemini'].includes(body.default_agent) ? body.default_agent : 'claude_code',
+  });
+  return c.json({ project: getAgentProject(db, id) }, 201);
+});
+
+app.patch('/api/agent-projects/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getAgentProject(db, id)) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch = {};
+  if (typeof body.name === 'string') patch.name = body.name.trim();
+  if (typeof body.path === 'string') patch.path = body.path.trim();
+  if (typeof body.rules === 'string' || body.rules === null) patch.rules = body.rules;
+  if (['claude_code', 'codex', 'gemini'].includes(body.default_agent)) patch.default_agent = body.default_agent;
+  updateAgentProject(db, id, patch);
+  return c.json({ project: getAgentProject(db, id) });
+});
+
+app.delete('/api/agent-projects/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!getAgentProject(db, id)) return c.json({ error: 'not found' }, 404);
+  deleteAgentProject(db, id);
+  return c.json({ ok: true });
+});
+
+// Spawn an agent run for a task.
+// Body: { project_id, agent?, model? }
+app.post('/api/tasks/:id/agent-run', async (c) => {
+  const taskId = Number(c.req.param('id'));
+  const task = getTask(db, taskId);
+  if (!task) return c.json({ error: 'task not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const projectId = Number(body.project_id);
+  if (!projectId) return c.json({ error: 'project_id required' }, 400);
+  const project = getAgentProject(db, projectId);
+  if (!project) return c.json({ error: 'project not found' }, 404);
+  const agent = body.agent || project.default_agent || 'claude_code';
+  const model = typeof body.model === 'string' ? body.model.trim() : '';
+  try {
+    const settings = getAppSettings(db);
+    const runId = startAgentRun(db, {
+      dataDir: DATA_DIR,
+      settings,
+      task,
+      project,
+      agent,
+      model: model || null,
+      gitBashPath: settings['runtime.git_bash_path'] || null,
+    });
+    return c.json({ run: getAgentRun(db, runId) }, 201);
+  } catch (e) {
+    return c.json({ error: e.message }, 400);
+  }
+});
+
+app.get('/api/agent-runs', (c) => {
+  const taskId = c.req.query('task_id') ? Number(c.req.query('task_id')) : null;
+  const projectId = c.req.query('project_id') ? Number(c.req.query('project_id')) : null;
+  const limit = Math.min(Number(c.req.query('limit') || 100), 500);
+  return c.json({ items: listAgentRuns(db, { taskId, projectId, limit }) });
+});
+
+app.get('/api/agent-runs/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  const run = getAgentRun(db, id);
+  if (!run) return c.json({ error: 'not found' }, 404);
+  return c.json({ run, running: isAgentRunning(id) });
+});
+
+app.get('/api/agent-runs/:id/log', (c) => {
+  const id = Number(c.req.param('id'));
+  const run = getAgentRun(db, id);
+  if (!run) return c.json({ error: 'not found' }, 404);
+  const tail = Math.min(Number(c.req.query('tail') || 64 * 1024), 1024 * 1024);
+  const log = readAgentRunLog(DATA_DIR, run, { tail });
+  return c.json({ run, running: isAgentRunning(id), log });
+});
+
+app.post('/api/agent-runs/:id/cancel', (c) => {
+  const id = Number(c.req.param('id'));
+  const run = getAgentRun(db, id);
+  if (!run) return c.json({ error: 'not found' }, 404);
+  const r = cancelAgentRun(db, id);
+  return c.json(r);
 });
 
 // ---- work locations -------------------------------------------------------
@@ -2219,7 +2351,10 @@ app.get('/api/llm/config', (c) => {
       label: v.label,
       kind: v.kind,
       supportsTools: v.supportsTools,
+      supportsModel: v.supportsModel,
     })),
+    provider_models: LLM_PROVIDER_MODELS,
+    provider_default_model: LLM_PROVIDER_DEFAULT_MODEL,
     runtime: {
       // Read-only — these are fixed for the process lifetime. Exposing them
       // so the AI / Settings panel can show "Memoria is running on port X
@@ -4123,15 +4258,15 @@ app.post('/api/locations/ingest', async (c) => {
  *   GET  /api/tracks/settings → { decimate_meters, show_polyline }
  *   PATCH /api/tracks/settings { decimate_meters?, show_polyline? }
  *
- * - decimate_meters: 0 = 全点描画 (既定). >0 で連続点を間引く.
- * - show_polyline:   false = 点マーカーのみ (既定). true で区間色分け線も描く.
+ * - decimate_meters: 0 = 全点描画 (既定 / 推奨).
+ * - show_polyline:   true = 区間色分け線も描く (既定 / 推奨).  false で点マーカーのみ.
  */
 app.get('/api/tracks/settings', (c) => {
   const s = getAppSettings(db);
   const v = Number(s['tracks.decimate_meters'] ?? '0');
   return c.json({
     decimate_meters: Number.isFinite(v) ? v : 0,
-    show_polyline: (s['tracks.show_polyline'] ?? 'false') === 'true',
+    show_polyline: (s['tracks.show_polyline'] ?? 'true') === 'true',
   });
 });
 app.patch('/api/tracks/settings', async (c) => {
@@ -4248,6 +4383,137 @@ app.get('/api/locations', (c) => {
   const deviceId = url.searchParams.get('device') ?? undefined;
   const points = listGpsLocationsInRange(db, { from, to, deviceId });
   return c.json({ from, to, deviceId: deviceId ?? null, points });
+});
+
+/**
+ * GPS 軌跡 + 作業場所カタログから「その日の仕事セッション」を検出する。
+ *
+ * 検出ルール:
+ *   - 各 GPS 点について最近接の work_location (lat/lng 設定済) を探し、
+ *     **50m 以内** ならその場所に居たと見なす (iPhone の GPS accuracy_m
+ *     は 14-47m 程度なので 10m だと取りこぼす).
+ *   - 同じ workplace 上の連続点を 1 セッションにまとめる。
+ *   - **継続 60 分以上** のセッションだけを採用 (短滞在は除外)。
+ *   - workplace 名に "自宅" を含む場合は、 セッション窓内の activity_events
+ *     (git_commit / claude_code_prompt / etc.) が 1 件以上あるときのみ
+ *     `is_working = true` とする。 ない場合は private time として除外しない
+ *     が working フラグを立てない。
+ *   - その他の場所は常に `is_working = true`。
+ */
+app.get('/api/work-sessions', (c) => {
+  const date = c.req.query('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'date=YYYY-MM-DD required' }, 400);
+  }
+  const points = listGpsLocationsForDate(db, date);
+  if (!points.length) return c.json({ date, items: [] });
+
+  const places = listWorkLocations(db, { limit: 500 }).filter(w =>
+    Number.isFinite(w.latitude) && Number.isFinite(w.longitude)
+  );
+  if (!places.length) return c.json({ date, items: [] });
+
+  const placesById = new Map(places.map(p => [p.id, p]));
+
+  function distMeters(p1, p2) {
+    const R = 6_371_008;
+    const toRad = d => (d * Math.PI) / 180;
+    const f1 = toRad(p1.lat), f2 = toRad(p2.lat);
+    const df = toRad(p2.lat - p1.lat), dl = toRad(p2.lon - p1.lon);
+    const h = Math.sin(df/2) ** 2 + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  // 圏内ルール: 各点を最近接 workplace に紐付け。
+  // 半径は privacySettings.workplace_match_radius_m (default 50m) を共有。
+  // ・OwnTracks の locator displacement 設定 (50m / 100m など) や、
+  //   ビル内の GPS オフセット (室内では 30-100m 平気でずれる) に応じて
+  //   設定 → プライバシー → 「マッチ半径」 で調整可。
+  const settings = privacySettings();
+  const RADIUS_M = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 50));
+  const tagged = points.map(p => {
+    let bestId = null;
+    let bestDist = Infinity;
+    for (const w of places) {
+      const d = distMeters({ lat: p.lat, lon: p.lon }, { lat: w.latitude, lon: w.longitude });
+      if (d <= RADIUS_M && d < bestDist) {
+        bestId = w.id;
+        bestDist = d;
+      }
+    }
+    return { recorded_at: p.recorded_at, workplace_id: bestId };
+  });
+
+  // 連続する同 workplace の点を 1 セッションに畳む。
+  // **離脱判定**: GPS 点が「workplace 外 (50m+)」 または「別の workplace 圏内」に
+  // なった瞬間のタイムスタンプを `ended_at` とする。 この方が
+  // 「最終 inside 点」より正確 (GPS が sparse な場合に滞在時間が短く出る問題を緩和).
+  const sessions = [];
+  let cur = null;
+  for (const t of tagged) {
+    if (!cur) {
+      if (t.workplace_id) {
+        cur = { workplace_id: t.workplace_id, started_at: t.recorded_at, ended_at: t.recorded_at, points: 1 };
+      }
+      continue;
+    }
+    if (t.workplace_id === cur.workplace_id) {
+      cur.ended_at = t.recorded_at;
+      cur.points += 1;
+    } else {
+      // 離脱: この点 (workplace 外 or 別 workplace) の時刻を離脱時刻に。
+      cur.ended_at = t.recorded_at;
+      sessions.push(cur);
+      cur = t.workplace_id
+        ? { workplace_id: t.workplace_id, started_at: t.recorded_at, ended_at: t.recorded_at, points: 1 }
+        : null;
+    }
+  }
+  if (cur) sessions.push(cur);
+
+  // 継続 60 分ルール + working 判定
+  const MIN_DURATION_MIN = 60;
+  const allSessions = sessions.map(s => {
+    const w = placesById.get(s.workplace_id);
+    const startMs = Date.parse(s.started_at);
+    const endMs = Date.parse(s.ended_at);
+    const durationMin = Math.max(0, Math.round((endMs - startMs) / 60000));
+    const isHome = (w?.name || '').includes('自宅') || /home/i.test(w?.name || '');
+    const out = {
+      workplace_id: s.workplace_id,
+      workplace_name: w?.name || '',
+      workplace_address: w?.address || '',
+      started_at: s.started_at,
+      ended_at: s.ended_at,
+      duration_min: durationMin,
+      points_count: s.points,
+      is_home: isHome,
+      is_working: !isHome,
+      activity_counts: {},
+    };
+    // 自宅: activity_events で working 判定
+    const acts = db.prepare(`
+      SELECT kind, COUNT(*) AS n
+      FROM activity_events
+      WHERE occurred_at >= ? AND occurred_at <= ?
+      GROUP BY kind
+    `).all(s.started_at, s.ended_at);
+    for (const a of acts) out.activity_counts[a.kind] = a.n;
+    const totalActs = acts.reduce((acc, a) => acc + a.n, 0);
+    if (isHome) out.is_working = totalActs > 0;
+    return out;
+  });
+
+  // tallies は短いセッションも含める。 items は ≥60 分のみ。
+  const tallies = { home_minutes: 0, workplace_minutes: 0, by_workplace: {} };
+  for (const s of allSessions) {
+    if (s.is_home) tallies.home_minutes += s.duration_min;
+    else tallies.workplace_minutes += s.duration_min;
+    tallies.by_workplace[s.workplace_name] = (tallies.by_workplace[s.workplace_name] || 0) + s.duration_min;
+  }
+  const items = allSessions.filter(s => s.duration_min >= MIN_DURATION_MIN);
+
+  return c.json({ date, items, tallies });
 });
 
 /**

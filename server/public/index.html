@@ -75,15 +75,12 @@
     <section class="content">
       <nav class="tabs">
         <div class="tabs-scroll">
-          <button class="tab active" data-tab="bookmarks">
-            <span class="tab-label" data-full="📚 ブックマーク" data-short="📚 ブクマ">📚 ブックマーク</span>
-          </button>
-          <button class="tab" data-tab="queue">
-            <span class="tab-label" data-full="⚙ 作業キュー" data-short="⚙ キュー">⚙ 作業キュー</span>
-            <span id="tabQueueCount" class="tab-count hidden">0</span>
+          <button class="tab active" data-tab="database">
+            <span class="tab-label" data-full="🗄 データベース" data-short="🗄 DB">🗄 データベース</span>
           </button>
           <button class="tab" data-tab="worklog">
             <span class="tab-label" data-full="📝 作業ログ" data-short="📝 ログ">📝 作業ログ</span>
+            <span id="tabQueueCount" class="tab-count hidden">0</span>
           </button>
           <button class="tab" data-tab="trends">
             <span class="tab-label" data-full="📊 傾向" data-short="📊 傾向">📊 傾向</span>
@@ -95,23 +92,11 @@
           <button class="tab" data-tab="dig">
             <span class="tab-label" data-full="🔎 ディグる" data-short="🔎 ディグ">🔎 ディグる</span>
           </button>
-          <button class="tab" data-tab="dict">
-            <span class="tab-label" data-full="📖 辞書" data-short="📖 辞書">📖 辞書</span>
-          </button>
-          <button class="tab" data-tab="domain">
-            <span class="tab-label" data-full="🏷 ドメイン" data-short="🏷 ドメ">🏷 ドメイン</span>
-          </button>
           <button class="tab" data-tab="diary">
             <span class="tab-label" data-full="📅 日記" data-short="📅 日記">📅 日記</span>
           </button>
-          <button class="tab" data-tab="tracks">
-            <span class="tab-label" data-full="🗺 軌跡" data-short="🗺 軌跡">🗺 軌跡</span>
-          </button>
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
-          </button>
-          <button class="tab" data-tab="external">
-            <span class="tab-label" data-full="🔌 外部情報設定" data-short="🔌 設定">🔌 外部情報設定</span>
           </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
@@ -352,6 +337,8 @@
               <button id="diaryGenerate" class="ghost">再生成</button>
               <button id="diaryDelete" class="danger">削除</button>
             </div>
+            <h4>仕事中タイムライン (GPS + 行動ログ)</h4>
+            <div id="diaryWorkSessions" class="diary-summary"></div>
             <h4>作業内容 (Sonnet)</h4>
             <div id="diaryWork" class="diary-summary"></div>
             <h4>ハイライト (Opus 1M)</h4>
@@ -378,6 +365,8 @@
             <div id="diaryMeals" class="diary-meals"></div>
             <h4>⚖️ カロリーバランス (適正 vs 摂取 vs 消費)</h4>
             <div id="diaryCaloricBalance" class="diary-caloric-balance"></div>
+            <h4>📍 移動・滞在時間 (GPS)</h4>
+            <div id="diaryGpsSummary" class="diary-gps-summary"></div>
             <h4>GitHub commits (リポ別件数)</h4>
             <ul id="diaryGithub" class="diary-github"></ul>
             <h4>🛠 開発活動 (git commit + Claude Code 指示)</h4>
@@ -422,6 +411,15 @@
         <div id="queueHistory" class="queue-history-list"></div>
       </div>
 
+      <div id="databaseView" class="hidden">
+        <nav class="worklog-subtabs" id="databaseSubtabs">
+          <button class="wl-subtab active" data-db-sub="bookmarks">📚 ブックマーク</button>
+          <button class="wl-subtab" data-db-sub="dict">📖 辞書</button>
+          <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
+          <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
+        </nav>
+      </div>
+
       <div id="worklogView" class="hidden">
         <div class="worklog-daynav">
           <button id="wlPrevDay" class="ghost" title="前日">◀</button>
@@ -440,6 +438,9 @@
           <button class="wl-subtab" data-sub="codex">📜 Codex</button>
           <button class="wl-subtab" data-sub="browsing">🌐 ブラウジング</button>
           <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
+          <button class="wl-subtab" data-sub="queue">⚙ キュー <span id="wlQueueBadge" class="tab-count hidden">0</span></button>
+          <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
+          <button class="wl-subtab" data-sub="external">🔌 外部</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">
@@ -543,6 +544,7 @@
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
           を入れるか、 環境変数 <code>GOOGLE_MAPS_API_KEY</code> を設定してください。
         </div>
+        <div id="tracksWorkSessions" class="tracks-work-sessions"></div>
         <div id="tracksMap" class="tracks-map"></div>
         <div class="tracks-recent">
           <div class="tracks-recent-head">
@@ -1191,6 +1193,6 @@ bogus-priv</code></pre>
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260503c"></script>
+  <script src="app.js?v=20260507d"></script>
 </body>
 </html>
