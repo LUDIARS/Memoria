@@ -5565,12 +5565,31 @@ addImplementationNoteFromForm = async function () {
   const title = $('implEditorTitle')?.value.trim();
   if (!title) return;
   const noteId = Number($('implEditorNoteId')?.value || 0);
+  const attachmentType = $('implEditorAttachmentType')?.value || '';
+  const attachmentValue = $('implEditorAttachmentValue')?.value.trim() || '';
+  // attachment_type=github の場合は github.com の URL を必須に
+  if (attachmentType === 'github') {
+    let host = '';
+    try { host = new URL(attachmentValue).hostname.toLowerCase(); } catch {}
+    if (!/^(www\.)?github\.com$|\.github\.com$/.test(host)) {
+      alert('GitHub のプロダクトを選択した場合は GitHub の URL (https://github.com/...) を「添付内容」に入れてください。');
+      $('implEditorAttachmentValue')?.focus();
+      return;
+    }
+  }
+  if (attachmentType === 'article') {
+    if (!/^https?:\/\//.test(attachmentValue)) {
+      alert('「記事」を選択した場合は URL を「添付内容」に入れてください。');
+      $('implEditorAttachmentValue')?.focus();
+      return;
+    }
+  }
   const payload = {
     title,
     good_points: $('implEditorGood')?.value.trim() || '',
     bad_points: $('implEditorBad')?.value.trim() || '',
-    attachment_type: $('implEditorAttachmentType')?.value || '',
-    attachment_value: $('implEditorAttachmentValue')?.value.trim() || '',
+    attachment_type: attachmentType,
+    attachment_value: attachmentValue,
     shareable: !!$('implEditorShareable')?.checked,
   };
   if (noteId) {
@@ -6347,8 +6366,117 @@ function openImplEditor(note = null) {
   $('implEditorAttachmentType').value = note?.attachment_type || '';
   $('implEditorAttachmentValue').value = note?.attachment_value || '';
   $('implEditorShareable').checked = !!note?.shareable;
+  if ($('implEditorAttachmentHint')) $('implEditorAttachmentHint').textContent = '';
   showModal('implEditorModal');
   $('implEditorTitle').focus();
+}
+
+// ── implEditor paste / drop 自動分類 ─────────────────────────────────────
+const _GITHUB_HOST = /(^|\.)github\.com$/i;
+const _CODE_HINT = /^\s*(import |export |function |class |const |let |var |if \(|for \(|while \(|def |#include|<\?php|public class|fn |package )/m;
+
+function _classifyTextValue(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return null;
+  // URL one-liner?
+  const urlMatch = trimmed.match(/^https?:\/\/\S+$/);
+  if (urlMatch) {
+    let host = '';
+    try { host = new URL(trimmed).hostname.toLowerCase(); } catch {}
+    if (_GITHUB_HOST.test(host)) return { type: 'github', value: trimmed };
+    return { type: 'article', value: trimmed };
+  }
+  // Code-ish? (multiple lines + code keywords)
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.length >= 2 && _CODE_HINT.test(trimmed)) {
+    return { type: 'code', value: trimmed };
+  }
+  return null; // free text → leave as-is
+}
+
+function _applyAutoClassification(result, hint) {
+  if (!result) return;
+  const sel = $('implEditorAttachmentType');
+  const val = $('implEditorAttachmentValue');
+  const help = $('implEditorAttachmentHint');
+  if (sel) sel.value = result.type;
+  if (val) val.value = result.value;
+  if (help) help.textContent = hint || `${result.type} として自動分類しました。`;
+}
+
+function wireImplEditorPasteAndDrop(modal) {
+  // paste — テキストか画像
+  modal.addEventListener('paste', async (ev) => {
+    const items = ev.clipboardData?.items || [];
+    let handled = false;
+    for (const it of items) {
+      if (it.kind === 'file') {
+        const file = it.getAsFile();
+        if (!file) continue;
+        if (file.type.startsWith('image/')) {
+          const dataUrl = await _fileToDataUrl(file);
+          _applyAutoClassification({ type: 'screenshot', value: dataUrl }, `スクリーンキャプチャ (${file.type}, ${(file.size/1024).toFixed(0)} KB)`);
+          handled = true;
+          break;
+        }
+        if (file.type.startsWith('video/')) {
+          _applyAutoClassification({ type: 'video', value: file.name }, `動画ファイル: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB) — パスや URL を手動で記入してください`);
+          handled = true;
+          break;
+        }
+      }
+    }
+    if (handled) { ev.preventDefault(); return; }
+    // text path: 直接 paste されると textarea にも入るので preventDefault しない。
+    // 自動分類は textarea の value を見て決める。
+    setTimeout(() => {
+      const text = $('implEditorAttachmentValue')?.value || '';
+      const r = _classifyTextValue(text);
+      if (r) _applyAutoClassification(r, `${r.type === 'github' ? 'GitHub URL' : r.type === 'article' ? '記事 URL' : 'コードスニペット'} として自動分類しました。`);
+    }, 0);
+  });
+  // drop — ファイル
+  modal.addEventListener('dragover', (ev) => {
+    if (ev.dataTransfer?.types?.includes('Files')) {
+      ev.preventDefault();
+      modal.classList.add('drag-over');
+    }
+  });
+  modal.addEventListener('dragleave', () => modal.classList.remove('drag-over'));
+  modal.addEventListener('drop', async (ev) => {
+    modal.classList.remove('drag-over');
+    const files = [...(ev.dataTransfer?.files || [])];
+    const text = ev.dataTransfer?.getData('text/uri-list') || ev.dataTransfer?.getData('text/plain') || '';
+    if (files.length) {
+      ev.preventDefault();
+      const file = files[0];
+      if (file.type.startsWith('image/')) {
+        const dataUrl = await _fileToDataUrl(file);
+        _applyAutoClassification({ type: 'screenshot', value: dataUrl }, `スクリーンキャプチャ ${file.name}`);
+        return;
+      }
+      if (file.type.startsWith('video/')) {
+        _applyAutoClassification({ type: 'video', value: file.name }, `動画ファイル: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)`);
+        return;
+      }
+      _applyAutoClassification({ type: 'other', value: file.name }, `その他ファイル: ${file.name}`);
+      return;
+    }
+    if (text) {
+      ev.preventDefault();
+      const r = _classifyTextValue(text);
+      if (r) _applyAutoClassification(r, '');
+    }
+  });
+}
+
+function _fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(file);
+  });
 }
 
 function closeImplEditor() {
@@ -6658,6 +6786,11 @@ ensureMemoriaFeatureViews = function () {
       <button type="button" class="modal-close" id="implEditorClose" aria-label="close">×</button>
       <h3 id="implEditorHeading">実装自慢を追加</h3>
       <input type="hidden" id="implEditorNoteId" />
+      <p class="diary-settings-help" style="margin-top:-4px">
+        このウィンドウを開いている間、 <b>コピペ</b> と <b>ファイル D&D</b> を受け付けます。
+        画像 → スクリーンキャプチャ、 リンク → GitHub なら GitHub / 記事なら 記事 / その他、
+        コード片 → コードスニペット、 動画ファイル → 動画 として自動選択 + 添付内容に転記。
+      </p>
       <label class="simple-field">
         <span>ドヤポイント</span>
         <input id="implEditorTitle" type="text" />
@@ -6675,6 +6808,7 @@ ensureMemoriaFeatureViews = function () {
         <select id="implEditorAttachmentType">
           <option value="">なし</option>
           <option value="github">GitHub のプロダクト</option>
+          <option value="article">記事</option>
           <option value="screenshot">スクリーンキャプチャ</option>
           <option value="video">動画</option>
           <option value="code">コードスニペット</option>
@@ -6684,6 +6818,7 @@ ensureMemoriaFeatureViews = function () {
       <label class="simple-field">
         <span>添付内容</span>
         <textarea id="implEditorAttachmentValue" rows="4"></textarea>
+        <span id="implEditorAttachmentHint" class="muted" style="font-size:11px"></span>
       </label>
       <label class="simple-check-row">
         <input id="implEditorShareable" type="checkbox" />
@@ -6694,6 +6829,7 @@ ensureMemoriaFeatureViews = function () {
         <button id="implEditorCancelBtn" type="button" class="ghost">キャンセル</button>
       </div>`;
     panel.appendChild(modal);
+    wireImplEditorPasteAndDrop(modal);
   }
   decorateTaskAndImplTabs();
   upgradeTaskFormMarkup();

@@ -1421,6 +1421,11 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .modal-panel.ext-setup { background: var(--panel) !important; }
 .modal-panel#taskEditorModal { z-index: 110; }
+.modal-panel.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel)) !important;
+}
 .modal-close {
   /* 右上ピン留めの×。 スマホでも押しやすいよう 44x44 を確保。 */
   position: absolute;
