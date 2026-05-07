@@ -4473,40 +4473,47 @@ app.get('/api/work-sessions', (c) => {
 
   // 継続 60 分ルール + working 判定
   const MIN_DURATION_MIN = 60;
-  const items = sessions
-    .map(s => {
-      const w = placesById.get(s.workplace_id);
-      const startMs = Date.parse(s.started_at);
-      const endMs = Date.parse(s.ended_at);
-      const durationMin = Math.max(0, Math.round((endMs - startMs) / 60000));
-      const isHome = (w?.name || '').includes('自宅') || /home/i.test(w?.name || '');
-      const out = {
-        workplace_id: s.workplace_id,
-        workplace_name: w?.name || '',
-        workplace_address: w?.address || '',
-        started_at: s.started_at,
-        ended_at: s.ended_at,
-        duration_min: durationMin,
-        points_count: s.points,
-        is_home: isHome,
-        is_working: !isHome,
-        activity_counts: {},
-      };
-      // 自宅: activity_events で working 判定
-      const acts = db.prepare(`
-        SELECT kind, COUNT(*) AS n
-        FROM activity_events
-        WHERE occurred_at >= ? AND occurred_at <= ?
-        GROUP BY kind
-      `).all(s.started_at, s.ended_at);
-      for (const a of acts) out.activity_counts[a.kind] = a.n;
-      const totalActs = acts.reduce((acc, a) => acc + a.n, 0);
-      if (isHome) out.is_working = totalActs > 0;
-      return out;
-    })
-    .filter(s => s.duration_min >= MIN_DURATION_MIN);
+  const allSessions = sessions.map(s => {
+    const w = placesById.get(s.workplace_id);
+    const startMs = Date.parse(s.started_at);
+    const endMs = Date.parse(s.ended_at);
+    const durationMin = Math.max(0, Math.round((endMs - startMs) / 60000));
+    const isHome = (w?.name || '').includes('自宅') || /home/i.test(w?.name || '');
+    const out = {
+      workplace_id: s.workplace_id,
+      workplace_name: w?.name || '',
+      workplace_address: w?.address || '',
+      started_at: s.started_at,
+      ended_at: s.ended_at,
+      duration_min: durationMin,
+      points_count: s.points,
+      is_home: isHome,
+      is_working: !isHome,
+      activity_counts: {},
+    };
+    // 自宅: activity_events で working 判定
+    const acts = db.prepare(`
+      SELECT kind, COUNT(*) AS n
+      FROM activity_events
+      WHERE occurred_at >= ? AND occurred_at <= ?
+      GROUP BY kind
+    `).all(s.started_at, s.ended_at);
+    for (const a of acts) out.activity_counts[a.kind] = a.n;
+    const totalActs = acts.reduce((acc, a) => acc + a.n, 0);
+    if (isHome) out.is_working = totalActs > 0;
+    return out;
+  });
 
-  return c.json({ date, items });
+  // tallies は短いセッションも含める。 items は ≥60 分のみ。
+  const tallies = { home_minutes: 0, workplace_minutes: 0, by_workplace: {} };
+  for (const s of allSessions) {
+    if (s.is_home) tallies.home_minutes += s.duration_min;
+    else tallies.workplace_minutes += s.duration_min;
+    tallies.by_workplace[s.workplace_name] = (tallies.by_workplace[s.workplace_name] || 0) + s.duration_min;
+  }
+  const items = allSessions.filter(s => s.duration_min >= MIN_DURATION_MIN);
+
+  return c.json({ date, items, tallies });
 });
 
 /**

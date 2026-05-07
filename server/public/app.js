@@ -8067,6 +8067,7 @@ async function renderDiaryGpsSummary(date) {
   if (!el) return;
   let points = [];
   let sessions = [];
+  let tallies = { home_minutes: 0, workplace_minutes: 0, by_workplace: {} };
   try {
     const [pr, sr] = await Promise.all([
       api(`/api/locations?date=${encodeURIComponent(date)}`),
@@ -8074,6 +8075,7 @@ async function renderDiaryGpsSummary(date) {
     ]);
     points = pr.points || [];
     sessions = sr.items || [];
+    if (sr.tallies) tallies = sr.tallies;
   } catch (err) {
     console.error('[diary gps summary] fetch failed', err);
     el.innerHTML = `<div class="muted" style="font-size:12px">GPS 情報の取得に失敗しました — 判断不能 (${escapeHtml(err.message || '')})</div>`;
@@ -8089,28 +8091,45 @@ async function renderDiaryGpsSummary(date) {
   const transitMin = (stats.transitSec || 0) / 60;
   const stillMin = (stats.stillSec || 0) / 60;
   const totalMoveMin = walkMin + transitMin;
-  // 作業場所ごとの滞在時間 (work-sessions API は ≥60 分のみ返す前提)
-  const placeTotals = new Map();
-  let totalAtWorkMin = 0;
-  for (const s of sessions) {
-    placeTotals.set(s.workplace_name || '?', (placeTotals.get(s.workplace_name || '?') || 0) + (s.duration_min || 0));
-    totalAtWorkMin += s.duration_min || 0;
-  }
-  const placesHtml = placeTotals.size
-    ? [...placeTotals.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, min]) => `<li>${escapeHtml(name)} <span class="muted">${fmtHm(min)}</span></li>`).join('')
-    : '<li class="muted">この日は登録した作業場所での 1 時間以上の滞在なし</li>';
+  const homeMin = tallies.home_minutes || 0;
+  const workMin = tallies.workplace_minutes || 0;
+  // 不明または停止: 全停止時間から自宅 + 作業場所の滞在時間を引いた残り
+  const unknownStillMin = Math.max(0, stillMin - homeMin - workMin);
+
+  // 作業場所別 (自宅以外) 内訳
+  const workPlaces = Object.entries(tallies.by_workplace || {})
+    .filter(([name]) => !(name && (name.includes('自宅') || /home/i.test(name))));
+  const workplaceDetail = workPlaces.length
+    ? workPlaces.sort((a, b) => b[1] - a[1])
+        .map(([name, min]) => `${escapeHtml(name)} ${fmtHm(min)}`).join(' / ')
+    : '';
+
+  // 移動手段の内訳
+  const moveDetail = (walkMin > 0 || transitMin > 0)
+    ? `🚶 ${fmtHm(walkMin)} / 🚃 ${fmtHm(transitMin)}`
+    : '';
+
   el.innerHTML = `
     <ul class="diary-gps-stats">
-      <li><span class="muted">🚶 徒歩</span> <strong>${fmtHm(walkMin)}</strong></li>
-      <li><span class="muted">🚃 交通機関</span> <strong>${fmtHm(transitMin)}</strong></li>
-      <li><span class="muted">⏸ 停止</span> <strong>${fmtHm(stillMin)}</strong></li>
-      <li><span class="muted">移動 合計</span> <strong>${fmtHm(totalMoveMin)}</strong></li>
-      <li><span class="muted">作業場所 滞在 合計</span> <strong>${fmtHm(totalAtWorkMin)}</strong></li>
+      <li>
+        <span class="diary-gps-label">🚆 移動手段</span>
+        <strong>${fmtHm(totalMoveMin)}</strong>
+        ${moveDetail ? `<span class="muted diary-gps-detail">${moveDetail}</span>` : ''}
+      </li>
+      <li>
+        <span class="diary-gps-label">🏠 自宅滞在</span>
+        <strong>${fmtHm(homeMin)}</strong>
+      </li>
+      <li>
+        <span class="diary-gps-label">🏢 作業場所滞在</span>
+        <strong>${fmtHm(workMin)}</strong>
+        ${workplaceDetail ? `<span class="muted diary-gps-detail">${workplaceDetail}</span>` : ''}
+      </li>
+      <li>
+        <span class="diary-gps-label">⏸ 不明または停止</span>
+        <strong>${fmtHm(unknownStillMin)}</strong>
+      </li>
     </ul>
-    <div class="muted" style="font-size:11px;margin:6px 0 4px">作業場所別:</div>
-    <ul class="diary-gps-places">${placesHtml}</ul>
   `;
 }
 
@@ -8142,6 +8161,7 @@ async function renderDiaryWorkSessions(date) {
       const end = (s.ended_at || '').replace('T', ' ').slice(11, 16);
       const dur = s.duration_min >= 60 ? `${(s.duration_min / 60).toFixed(1)}h` : `${s.duration_min}分`;
       const icon = s.is_home ? '🏠' : '🏢';
+      const placeLabel = s.is_home ? '自宅' : (s.workplace_name || '?');
       const statusBadge = s.is_working
         ? '<span class="ws-badge ws-working">仕事中</span>'
         : '<span class="ws-badge ws-idle">休息</span>';
@@ -8151,7 +8171,7 @@ async function renderDiaryWorkSessions(date) {
         ? `<span class="muted" style="font-size:11px"> · ${escapeHtml(actSummary)}</span>` : '';
       return `<li class="ws-item">
         <span class="ws-time">${start}-${end} (${dur})</span>
-        <span class="ws-place">${icon} ${escapeHtml(s.workplace_name || '?')}</span>
+        <span class="ws-place">${icon} ${escapeHtml(placeLabel)}</span>
         ${statusBadge}${actNote}
       </li>`;
     }).join('')}</ul>`;
