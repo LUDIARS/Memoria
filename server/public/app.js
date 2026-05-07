@@ -8002,19 +8002,23 @@ function updateTracksStatsLine(pts, { live = false } = {}) {
   const el = $('tracksStats');
   if (!el) return;
   if (!pts.length) { el.textContent = '点なし'; return; }
-  const w = tracksState.walkingStats || { walkMeters: 0, walkSec: 0, transitMeters: 0, transitSec: 0 };
+  const w = tracksState.walkingStats || { walkMeters: 0, walkSec: 0, transitMeters: 0, transitSec: 0, walkCapped: false };
   const walkKm = w.walkMeters / 1000;
   const walkMin = w.walkSec / 60;
   const transitKm = (w.transitMeters || 0) / 1000;
   const liveTag = live ? ' (live)' : '';
+  const cappedTag = w.walkCapped ? ' (20km上限)' : '';
   // 運動 = 徒歩のみ. 交通機関 (>5 km/h) は移動量として別立てで表示するが運動換算しない.
   el.textContent =
-    `${pts.length} 点 · 🚶 徒歩 ${walkKm.toFixed(2)} km / ${walkMin.toFixed(0)} 分 (運動) · 🚃 交通機関 ${transitKm.toFixed(2)} km${liveTag}`;
+    `${pts.length} 点 · 🚶 徒歩 ${walkKm.toFixed(2)} km${cappedTag} / ${walkMin.toFixed(0)} 分 (運動) · 🚃 交通機関 ${transitKm.toFixed(2)} km${liveTag}`;
 }
 
 // 徒歩判定 — 連続 2 点の速度が 1〜5 km/h なら walk と分類.
 const WALK_MIN_KMH = 1.0;
 const WALK_MAX_KMH = 5.0;
+// 1 日の徒歩(運動)累計上限. これ以上は GPS ジッタ / 誤検知の可能性が高いので
+// 累計を打ち切る (距離は cap、 区分は walk のまま色付けは維持).
+const WALK_DAILY_CAP_M = 20_000;
 
 /**
  * 連続点を tracksState.decimateMeters (default 2m) で間引く.
@@ -8063,12 +8067,25 @@ function classifyAll(points) {
   let walkMeters = 0, walkSec = 0;
   let transitMeters = 0, transitSec = 0;
   let stillMeters = 0, stillSec = 0;
+  let walkCapped = false;
   for (let i = 1; i < points.length; i++) {
     const seg = classifySegment(points[i-1], points[i]);
     cats[i] = seg.category;
     if (seg.category === 'walk') {
-      walkMeters += seg.meters;
-      walkSec += seg.dt;
+      // 1 日 20 km を超えた walk 区間は運動換算しない (transit に振り替え).
+      if (walkMeters + seg.meters > WALK_DAILY_CAP_M) {
+        const remain = Math.max(0, WALK_DAILY_CAP_M - walkMeters);
+        walkMeters += remain;
+        walkSec += seg.dt * (seg.meters > 0 ? remain / seg.meters : 0);
+        const overMeters = seg.meters - remain;
+        const overSec = seg.dt - seg.dt * (seg.meters > 0 ? remain / seg.meters : 0);
+        transitMeters += overMeters;
+        transitSec += overSec;
+        walkCapped = true;
+      } else {
+        walkMeters += seg.meters;
+        walkSec += seg.dt;
+      }
     } else if (seg.category === 'fast') {
       // 5 km/h 超 = 交通機関想定. 軌跡には出すが運動換算しない.
       transitMeters += seg.meters;
@@ -8078,7 +8095,7 @@ function classifyAll(points) {
       stillSec += seg.dt;
     }
   }
-  return { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec };
+  return { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec, walkCapped };
 }
 
 const CAT_COLORS = {
@@ -8109,7 +8126,7 @@ function drawTracks(points) {
   tracksState.lastDrawnKeptCount = points.length;
 
   // 徒歩判定 → 各点を色分けで打つ
-  const { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec } = classifyAll(points);
+  const { cats, walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec, walkCapped } = classifyAll(points);
 
   // 区間ごとに polyline を 1 本ずつ描画 (cats[i] = points[i-1] → points[i] の category).
   // 既定では「点のみ表示」 (tracksState.showPolyline=false) で線を描かない.
@@ -8163,6 +8180,7 @@ function drawTracks(points) {
   }
 
   // 始点 / 終点に大きい marker
+  const path = points.map(p => ({ lat: p.lat, lng: p.lon }));
   const start = path[0];
   const end = path[path.length - 1];
   tracksState.dotMarkers.push(new google.maps.Marker({
@@ -8185,7 +8203,7 @@ function drawTracks(points) {
   }
 
   // 区分別 stats を保持. 表示は renderTracksForCurrentDate / handleLivePoint が更新.
-  tracksState.walkingStats = { walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec };
+  tracksState.walkingStats = { walkMeters, walkSec, transitMeters, transitSec, stillMeters, stillSec, walkCapped };
 
   if (path.length >= 2) {
     const b = new google.maps.LatLngBounds();

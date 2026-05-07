@@ -4256,15 +4256,15 @@ app.post('/api/locations/ingest', async (c) => {
  *   GET  /api/tracks/settings → { decimate_meters, show_polyline }
  *   PATCH /api/tracks/settings { decimate_meters?, show_polyline? }
  *
- * - decimate_meters: 0 = 全点描画 (既定). >0 で連続点を間引く.
- * - show_polyline:   false = 点マーカーのみ (既定). true で区間色分け線も描く.
+ * - decimate_meters: 0 = 全点描画 (既定 / 推奨).
+ * - show_polyline:   true = 区間色分け線も描く (既定 / 推奨).  false で点マーカーのみ.
  */
 app.get('/api/tracks/settings', (c) => {
   const s = getAppSettings(db);
   const v = Number(s['tracks.decimate_meters'] ?? '0');
   return c.json({
     decimate_meters: Number.isFinite(v) ? v : 0,
-    show_polyline: (s['tracks.show_polyline'] ?? 'false') === 'true',
+    show_polyline: (s['tracks.show_polyline'] ?? 'true') === 'true',
   });
 });
 app.patch('/api/tracks/settings', async (c) => {
