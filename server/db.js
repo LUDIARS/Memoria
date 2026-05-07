@@ -2991,21 +2991,30 @@ export function insertTask(db, task) {
  * app_settings as JSON `task.categories.registered`). Merged + deduped +
  * sorted ascending. Manually-registered ones can have 0 tasks attached
  * (they show up in the side menu so users can pre-create categories).
+ *
+ * 1 タスクは複数カテゴリを持てる。 `tasks.category` カラムには **カンマ区切り**
+ * で保存する (`"開発, 学習"` のように)。 ここでは split + flatten + 重複排除する。
  */
 export function listTaskCategories(db) {
-  const fromTasks = db.prepare(`
-    SELECT DISTINCT category
+  const rows = db.prepare(`
+    SELECT category
     FROM tasks
     WHERE category IS NOT NULL AND category != ''
-  `).all().map(r => r.category);
+  `).all();
+  const fromTasks = new Set();
+  for (const row of rows) {
+    for (const c of String(row.category || '').split(',')) {
+      const t = c.trim();
+      if (t) fromTasks.add(t);
+    }
+  }
   let registered = [];
   try {
     const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
       .get('task.categories.registered');
     if (raw?.value) registered = JSON.parse(raw.value) || [];
   } catch {}
-  const all = new Set();
-  for (const c of fromTasks) if (c) all.add(c);
+  const all = new Set([...fromTasks]);
   for (const c of registered) if (c) all.add(c);
   return [...all].sort((a, b) => a.localeCompare(b));
 }

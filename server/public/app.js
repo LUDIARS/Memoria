@@ -5654,9 +5654,17 @@ function formatTaskDue(dueAt) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 1 タスク複数カテゴリ: tasks.category は "tag1, tag2" のような文字列。
+// 空白を trim、 重複排除、 空文字を除く。
+function parseTaskCategories(s) {
+  if (!s) return [];
+  return [...new Set(String(s).split(',').map(x => x.trim()).filter(Boolean))];
+}
+
 function taskCardHtml(t) {
   const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
-  const catBadge = t.category ? `<span class="task-category">${escapeHtml(t.category)}</span>` : '';
+  const cats = parseTaskCategories(t.category);
+  const catBadges = cats.map(c => `<span class="task-category">${escapeHtml(c)}</span>`).join('');
   const doneBtn = t.status === 'done'
     ? '<button class="ghost" disabled>Done</button>'
     : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
@@ -5664,7 +5672,7 @@ function taskCardHtml(t) {
     <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
         <strong>${escapeHtml(t.title)}</strong>
-        ${aiBadge}${catBadge}
+        ${aiBadge}${catBadges}
       </div>
       <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
       <p>${escapeHtml(t.details || '')}</p>
@@ -6323,17 +6331,18 @@ function closeImplEditor() {
 function renderTaskCategoryMenu() {
   const list = $('tasksCategoryList');
   if (!list) return;
-  // Distinct categories from currently loaded tasks + pre-fetched _taskCategoriesCache
+  // Distinct categories from currently loaded tasks (each task may have many) + pre-fetched cache
   const fromTasks = new Set();
   for (const t of state.taskItems) {
-    if (t.category) fromTasks.add(t.category);
+    for (const c of parseTaskCategories(t.category)) fromTasks.add(c);
   }
   const merged = new Set([...(_taskCategoriesCache || []), ...fromTasks]);
   const cats = [...merged].sort((a, b) => a.localeCompare(b));
-  const counts = {};
+  const counts = { __none__: 0 };
   for (const t of state.taskItems) {
-    const k = t.category || '__none__';
-    counts[k] = (counts[k] || 0) + 1;
+    const cs = parseTaskCategories(t.category);
+    if (!cs.length) counts.__none__ += 1;
+    for (const c of cs) counts[c] = (counts[c] || 0) + 1;
   }
   const buttons = [
     `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${state.taskItems.length}</span></button>`,
@@ -6411,8 +6420,8 @@ function renderTaskBoard() {
   const base = state.taskCategoryFilter == null
     ? statusFiltered
     : (state.taskCategoryFilter === '__none__'
-        ? statusFiltered.filter((t) => !t.category)
-        : statusFiltered.filter((t) => t.category === state.taskCategoryFilter));
+        ? statusFiltered.filter((t) => parseTaskCategories(t.category).length === 0)
+        : statusFiltered.filter((t) => parseTaskCategories(t.category).includes(state.taskCategoryFilter)));
   const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
   const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
   middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
@@ -6591,8 +6600,8 @@ ensureMemoriaFeatureViews = function () {
             </select>
           </label>
           <label class="simple-field">
-            <span>カテゴリ</span>
-            <input id="taskEditorCategory" type="text" list="taskCategoryOptions" placeholder="例: 開発 / 雑務 / 学習" />
+            <span>カテゴリ (カンマ区切りで複数指定可)</span>
+            <input id="taskEditorCategory" type="text" list="taskCategoryOptions" placeholder="例: 開発, 学習" />
             <datalist id="taskCategoryOptions"></datalist>
           </label>
           <label class="simple-check-row">
