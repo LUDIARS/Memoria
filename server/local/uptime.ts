@@ -11,34 +11,49 @@
 
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import type BetterSqlite3 from 'better-sqlite3';
 import { insertServerEvent } from '../db/index.js';
+
+type Db = BetterSqlite3.Database;
 
 const TICK_MS = 1000;
 const RESTART_GRACE_MS = 5 * 60 * 1000; // 5 minutes — see DOWNTIME_THRESHOLD_MS
 
-let timer = null;
+let timer: NodeJS.Timeout | null = null;
 let installedShutdownHandlers = false;
-let activeDb = null;
-let activeFile = null;
-let bootTime = null;
-let startEventId = null;
+let activeDb: Db | null = null;
+let activeFile: string | null = null;
+let bootTime: Date | null = null;
+let startEventId: number | null = null;
 
 export const DOWNTIME_THRESHOLD_MS = 5 * 60 * 1000;
 
-export function startUptimeTracking({ db, dataDir, heartbeatFile }) {
+export interface StartUptimeArgs {
+  db: Db;
+  dataDir: string;
+  heartbeatFile?: string;
+}
+
+export interface HeartbeatRecord {
+  last_heartbeat_at?: string;
+  pid?: number;
+  [key: string]: unknown;
+}
+
+export function startUptimeTracking({ db, dataDir, heartbeatFile }: StartUptimeArgs): void {
   if (timer) stopUptimeTracking();
   activeDb = db;
   activeFile = heartbeatFile || `${dataDir}/heartbeat.json`;
   mkdirSync(dirname(activeFile), { recursive: true });
 
   bootTime = new Date();
-  let priorHeartbeat = null;
+  let priorHeartbeat: Date | null = null;
   if (existsSync(activeFile)) {
     try {
       const raw = readFileSync(activeFile, 'utf8');
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as { last_heartbeat_at?: string };
       if (parsed?.last_heartbeat_at) priorHeartbeat = new Date(parsed.last_heartbeat_at);
-    } catch {}
+    } catch { /* swallow */ }
   }
 
   // Record the start event.
@@ -47,6 +62,7 @@ export function startUptimeTracking({ db, dataDir, heartbeatFile }) {
     occurredAt: bootTime.toISOString(),
     details: { pid: process.pid },
   });
+  void startEventId;
 
   // Compute the gap since last heartbeat — if any.
   if (priorHeartbeat && Number.isFinite(priorHeartbeat.getTime())) {
@@ -66,15 +82,17 @@ export function startUptimeTracking({ db, dataDir, heartbeatFile }) {
   }
 
   // Heartbeat tick.
-  const tick = () => {
+  const tick = (): void => {
+    if (!activeFile || !bootTime) return;
     try {
       writeFileSync(activeFile, JSON.stringify({
         server_started_at: bootTime.toISOString(),
         last_heartbeat_at: new Date().toISOString(),
         pid: process.pid,
       }), 'utf8');
-    } catch (e) {
-      console.warn(`[uptime] heartbeat write failed: ${e.message}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[uptime] heartbeat write failed: ${msg}`);
     }
   };
   tick();
@@ -83,25 +101,25 @@ export function startUptimeTracking({ db, dataDir, heartbeatFile }) {
 
   if (!installedShutdownHandlers) {
     installedShutdownHandlers = true;
-    const shutdown = (signal) => {
-      try { recordCleanShutdown(signal); } catch {}
+    const shutdown = (signal: string): void => {
+      try { recordCleanShutdown(signal); } catch { /* swallow */ }
       process.exit(0);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGHUP', () => shutdown('SIGHUP'));
-    process.on('beforeExit', () => { try { recordCleanShutdown('beforeExit'); } catch {} });
+    process.on('beforeExit', () => { try { recordCleanShutdown('beforeExit'); } catch { /* swallow */ } });
   }
 }
 
-export function stopUptimeTracking() {
+export function stopUptimeTracking(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
   }
 }
 
-function recordCleanShutdown(signal) {
+function recordCleanShutdown(signal: string): void {
   if (!activeDb || !bootTime) return;
   const now = new Date();
   insertServerEvent(activeDb, {
@@ -119,15 +137,15 @@ function recordCleanShutdown(signal) {
         clean_shutdown: true,
         signal,
       }), 'utf8');
-    } catch {}
+    } catch { /* swallow */ }
   }
   stopUptimeTracking();
 }
 
-export function readHeartbeat(heartbeatFile) {
+export function readHeartbeat(heartbeatFile: string): HeartbeatRecord | null {
   if (!existsSync(heartbeatFile)) return null;
   try {
-    return JSON.parse(readFileSync(heartbeatFile, 'utf8'));
+    return JSON.parse(readFileSync(heartbeatFile, 'utf8')) as HeartbeatRecord;
   } catch {
     return null;
   }
