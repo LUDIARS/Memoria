@@ -3,16 +3,21 @@ import { runLlm } from './llm.js';
 
 const MAX_TEXT = 30000; // chars passed to claude
 
+export interface ClaudeSummaryResult {
+  summary: string;
+  categories: string[];
+}
+
 /**
  * Extract a reasonably clean text representation of an HTML page.
  */
-export function htmlToText(html) {
+export function htmlToText(html: string): string {
   const root = parseHtml(html, {
     blockTextElements: { script: false, style: false, noscript: false, pre: true },
   });
   // Remove obviously useless nodes.
   root.querySelectorAll('script, style, noscript, svg, iframe, link, meta').forEach(n => n.remove());
-  const text = root.text.replace(/[\t  ]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  const text = root.text.replace(/[\t  ]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   return text;
 }
 
@@ -20,7 +25,17 @@ export function htmlToText(html) {
  * Ask Claude Code (CLI, non-interactive) to produce a summary + 3-5 categories.
  * Returns { summary: string, categories: string[] }.
  */
-export async function summarizeWithClaude({ url, title, html, timeoutMs = 180_000 }) {
+export async function summarizeWithClaude({
+  url,
+  title,
+  html,
+  timeoutMs = 180_000,
+}: {
+  url: string;
+  title: string;
+  html: string;
+  timeoutMs?: number;
+}): Promise<ClaudeSummaryResult> {
   const text = htmlToText(html).slice(0, MAX_TEXT);
 
   const prompt = [
@@ -44,7 +59,7 @@ export async function summarizeWithClaude({ url, title, html, timeoutMs = 180_00
   return parseClaudeJson(stdout);
 }
 
-function parseClaudeJson(raw) {
+function parseClaudeJson(raw: string): ClaudeSummaryResult {
   let text = raw.trim();
   // Strip code fences if Claude wrapped it.
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
@@ -54,15 +69,16 @@ function parseClaudeJson(raw) {
   const last = text.lastIndexOf('}');
   if (first >= 0 && last > first) text = text.slice(first, last + 1);
 
-  let obj;
+  let obj: { summary?: unknown; categories?: unknown };
   try {
     obj = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`Failed to parse Claude output as JSON: ${e.message}\nRaw (first 300): ${raw.slice(0, 300)}`);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to parse Claude output as JSON: ${msg}\nRaw (first 300): ${raw.slice(0, 300)}`);
   }
   const summary = String(obj.summary ?? '').trim();
   const cats = Array.isArray(obj.categories) ? obj.categories : [];
-  const categories = cats.map(c => String(c).trim()).filter(Boolean).slice(0, 5);
+  const categories = cats.map((c: unknown) => String(c).trim()).filter(Boolean).slice(0, 5);
   if (!summary) throw new Error('Claude output had empty summary');
   if (categories.length === 0) throw new Error('Claude output had no categories');
   return { summary, categories };
