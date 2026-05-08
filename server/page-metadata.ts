@@ -3,11 +3,22 @@
 // specific page is". Cached forever in page_metadata; 404 / DNS errors
 // drop the row so it can be retried later.
 
-import { parse as parseHtml } from 'node-html-parser';
+import { parse as parseHtml, type HTMLElement } from 'node-html-parser';
 import { shouldSkipDomain } from './domain-catalog.js';
 import { runLlm } from './llm.js';
 
-const SUMMARY_PROMPT = ({ url, title, metaDescription, ogTitle, ogDescription, ogType, headers, bodySample }) => [
+interface PromptArgs {
+  url: string;
+  title: string;
+  metaDescription: string;
+  ogTitle: string;
+  ogDescription: string;
+  ogType: string;
+  headers: string;
+  bodySample: string;
+}
+
+const SUMMARY_PROMPT = ({ url, title, metaDescription, ogTitle, ogDescription, ogType, headers, bodySample }: PromptArgs): string => [
   'あなたは Web ページのメタ情報をもとに、「このページは何か」を 1〜2 文の日本語で説明する係です。',
   'JSON 1 オブジェクトのみで出力してください。前置き不要、コードフェンス禁止。',
   '',
@@ -29,13 +40,51 @@ const SUMMARY_PROMPT = ({ url, title, metaDescription, ogTitle, ogDescription, o
   bodySample,
 ].join('\n');
 
-export async function fetchPageMetadata({ url, timeoutMs = 60_000 }) {
-  let host;
-  try { host = new URL(url).hostname.toLowerCase(); }
-  catch { return { dropRow: true, error: 'invalid url' }; }
+export type PageMetadataFetchResult =
+  | { skip: true }
+  | { dropRow: true; error: string }
+  | {
+      ok: false;
+      http_status?: number;
+      content_type?: string;
+      title?: string;
+      meta_description?: string;
+      og_title?: string;
+      og_description?: string;
+      og_image?: string;
+      og_type?: string;
+      error: string;
+    }
+  | {
+      ok: true;
+      http_status: number;
+      content_type: string;
+      title: string;
+      meta_description?: string;
+      og_title?: string;
+      og_description?: string;
+      og_image?: string;
+      og_type?: string;
+      summary: string;
+      kind: string;
+    };
+
+export async function fetchPageMetadata({
+  url,
+  timeoutMs = 60_000,
+}: {
+  url: string;
+  timeoutMs?: number;
+}): Promise<PageMetadataFetchResult> {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return { dropRow: true, error: 'invalid url' };
+  }
   if (shouldSkipDomain(host)) return { skip: true };
 
-  let res;
+  let res: Response;
   try {
     res = await fetch(url, {
       redirect: 'follow',
@@ -46,8 +95,8 @@ export async function fetchPageMetadata({ url, timeoutMs = 60_000 }) {
       },
       signal: AbortSignal.timeout(20_000),
     });
-  } catch (e) {
-    return { dropRow: true, error: `fetch: ${e.message}` };
+  } catch (e: unknown) {
+    return { dropRow: true, error: `fetch: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   const httpStatus = res.status;
@@ -71,11 +120,16 @@ export async function fetchPageMetadata({ url, timeoutMs = 60_000 }) {
     };
   }
 
-  let html;
+  let html: string;
   try {
     html = await res.text();
-  } catch (e) {
-    return { ok: false, http_status: httpStatus, content_type: contentType, error: `body: ${e.message}` };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      http_status: httpStatus,
+      content_type: contentType,
+      error: `body: ${e instanceof Error ? e.message : String(e)}`,
+    };
   }
 
   const root = parseHtml(html, { lowerCaseTagName: false });
@@ -99,16 +153,17 @@ export async function fetchPageMetadata({ url, timeoutMs = 60_000 }) {
     url, title, metaDescription, ogTitle, ogDescription, ogType,
     headers: interestingHeaders, bodySample,
   });
-  let parsed;
+  let parsed: { summary: string; kind: string };
   try {
     const stdout = await runLlm({ task: 'page_summary', prompt: promptText, timeoutMs });
     parsed = parseSummaryJson(stdout);
-  } catch (e) {
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
     return {
       ok: false, http_status: httpStatus, content_type: contentType,
       title, meta_description: metaDescription, og_title: ogTitle,
       og_description: ogDescription, og_image: ogImage, og_type: ogType,
-      error: `claude: ${e.message}`,
+      error: `claude: ${msg}`,
     };
   }
 
@@ -127,7 +182,7 @@ export async function fetchPageMetadata({ url, timeoutMs = 60_000 }) {
   };
 }
 
-function pickMeta(root, selectors) {
+function pickMeta(root: HTMLElement, selectors: string[]): string {
   for (const sel of selectors) {
     const v = root.querySelector(sel)?.getAttribute('content');
     if (v) return v.replace(/\s+/g, ' ').trim().slice(0, 500);
@@ -135,19 +190,22 @@ function pickMeta(root, selectors) {
   return '';
 }
 
-function parseSummaryJson(raw) {
+function parseSummaryJson(raw: string): { summary: string; kind: string } {
   let text = raw.trim();
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) text = fence[1].trim();
   const first = text.indexOf('{');
   const last = text.lastIndexOf('}');
   if (first >= 0 && last > first) text = text.slice(first, last + 1);
-  let obj;
-  try { obj = JSON.parse(text); }
-  catch (e) { throw new Error(`json parse: ${e.message}`); }
+  let obj: { summary?: unknown; kind?: unknown };
+  try {
+    obj = JSON.parse(text);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`json parse: ${msg}`);
+  }
   return {
     summary: String(obj.summary ?? '').trim().slice(0, 400),
     kind: String(obj.kind ?? '').trim().slice(0, 40),
   };
 }
-
