@@ -8189,31 +8189,49 @@ async function renderTracksForCurrentDate() {
   }
 }
 
-// ISO 文字列 (UTC または +09:00) を JST (= ブラウザのローカル) で HH:MM 形式に整形
+// SQLite の `datetime('now')` は "YYYY-MM-DD HH:MM:SS" (TZ なし、 内部は UTC) を返すが、
+// `new Date()` はこれをローカル時刻として解釈してしまう。 Memoria は UTC で
+// 統一して保管しているので、 TZ サフィックスがなければ UTC とみなして parse する。
+function parseUtcIso(iso) {
+  if (iso == null) return null;
+  let s = String(iso).trim();
+  if (!s) return null;
+  // 末尾に TZ 指定がない場合は UTC として扱う
+  const hasTz = /(Z|[+-]\d{2}:?\d{2})$/.test(s);
+  if (!hasTz) {
+    s = s.replace(' ', 'T');
+    // 秒・ミリ秒の有無に関わらず Z を付ければ UTC parse される
+    s = s + 'Z';
+  } else if (s.includes(' ') && !s.includes('T')) {
+    // "YYYY-MM-DD HH:MM:SSZ" のような hybrid も一応サポート
+    s = s.replace(' ', 'T');
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// HH:MM (local — = JST for JST users)
 function fmtLocalHm(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
+  const d = parseUtcIso(iso);
+  if (!d) return '';
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 // HH:MM:SS (local)
 function fmtLocalHms(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
+  const d = parseUtcIso(iso);
+  if (!d) return '';
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
 }
 
 // YYYY-MM-DD HH:MM:SS (local)
 function fmtLocalDateTime(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
+  const d = parseUtcIso(iso);
+  if (!d) return '';
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mo}-${dd} ${fmtLocalHms(iso)}`;
+  return `${y}-${mo}-${dd} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
 }
 
 function fmtHm(totalMin) {
