@@ -1630,26 +1630,32 @@ interface WeeklyPromptArgs {
   weekEnd: string;
   dailyBlock: string;
   githubBlock: string;
+  totalsBlock: string;
 }
 
-const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }: WeeklyPromptArgs): string => [
+const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock, totalsBlock }: WeeklyPromptArgs): string => [
   `あなたは ${weekStart} から ${weekEnd} までの「週報」を書きます。`,
-  '7 日分の日報と GitHub コミットヒストリから、週全体での実作業を統合してください。',
+  '7 日分の日報 + GitHub commit + 定量サマリ (= 週合計の作業時間 / ブックマーク数 / 訪問数 / commit 数 / Claude Code 指示数) から週全体を統合してください。',
   '',
-  '出力フォーマット (markdown のみ。前置き不要):',
+  '出力フォーマット (markdown のみ。 前置き不要):',
   '## 今週やったこと',
-  '一段落で週全体を概観。',
+  '**2〜3 文以内**の超簡潔サマリ (詳細は書かない、 全体の流れを掴ませる程度)。',
   '## 主な成果',
-  '- 箇条書き。GitHub commit から実装した機能・修正を中心に。',
-  '- 進捗が大きかったプロジェクトを優先。',
+  '- 箇条書き。 各行は「**(N commit)** プロジェクト名: やったこと」 のように **commit 数を必ず prefix** する。',
+  '- 進捗が大きかったプロジェクトを優先 (上位 5 件まで)。',
   '## トピック別',
-  '- 学んだこと・調べたこと (作業内容ベース)',
+  '- 学んだこと・調べたこと (作業内容ベース、 1-3 行)',
   '## 来週への引き継ぎ',
-  '- 未完了に見える作業やフォローアップ',
+  '- 未完了 / フォローアップ (1-3 行)',
   '',
   '出力ルール:',
-  '- 創作禁止。日報と commit に基づくこと',
+  '- 創作禁止。 日報と commit に基づくこと',
+  '- 数字 (commit 数 / 訪問数 / etc) は提示された定量サマリと一致させる',
   '- リポジトリ名は短く (org/ は省いて末尾のみで OK)',
+  '- 全体で **300-500 字程度に収める**こと (短くまとめる)',
+  '',
+  '## 入力 0: 定量サマリ (この数値は変えない)',
+  totalsBlock,
   '',
   '## 入力 1: 日報サマリ (日付ごと)',
   dailyBlock,
@@ -1662,6 +1668,50 @@ export interface DailyDiaryEntry {
   date: string;
   summary?: string | null;
   work_content?: string | null;
+  work_minutes?: number | null;
+}
+
+export interface WeeklyMetrics {
+  /** diary_entries.work_minutes の週合計 (Sonnet 推定値の積み上げ)。 0 = 記録なし */
+  work_minutes: number;
+  /** 今週中に新規作成された bookmarks (created_at で count) */
+  bookmarks: number;
+  /** 今週中の visit_events (= 1 訪問 1 行) */
+  visit_events: number;
+  /** GitHub API から取得した commit 総数 (githubByRepo.total と一致) */
+  github_commits: number;
+  /** activity_events kind='git_commit' のローカル post-commit 件数 */
+  git_commits_local: number;
+  /** activity_events kind='claude_code_prompt' の件数 */
+  claude_code_prompts: number;
+}
+
+function formatWorkTime(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0 分 (記録なし)';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h <= 0) return `${m} 分`;
+  return m > 0 ? `${h} 時間 ${m} 分` : `${h} 時間`;
+}
+
+function formatTotalsBlock(metrics: WeeklyMetrics): string {
+  return [
+    `- ⏱ 作業時間 (Sonnet 推定の週合計): ${formatWorkTime(metrics.work_minutes)}`,
+    `- 🔖 ブックマーク新規追加: ${metrics.bookmarks} 件`,
+    `- 🌐 Web 訪問 (記録分): ${metrics.visit_events} 件`,
+    `- 🐙 GitHub commit: ${metrics.github_commits} 件 (API 取得)`,
+    `- 💻 ローカル commit (hook): ${metrics.git_commits_local} 件`,
+    `- 🤖 Claude Code 指示: ${metrics.claude_code_prompts} 件`,
+  ].join('\n');
+}
+
+function formatTotalsHeader(weekStart: string, weekEnd: string, metrics: WeeklyMetrics): string {
+  return [
+    `# 週報 ${weekStart} 〜 ${weekEnd}`,
+    '',
+    '## 今週の定量サマリ',
+    formatTotalsBlock(metrics),
+  ].join('\n');
 }
 
 export interface GenerateWeeklyArgs {
@@ -1669,28 +1719,36 @@ export interface GenerateWeeklyArgs {
   weekEnd: string;
   dailyDiaries: DailyDiaryEntry[];
   githubByRepo: GithubByRepo;
+  metrics: WeeklyMetrics;
   timeoutMs?: number;
 }
 
 /**
- * Generate a weekly narrative from 7 daily diaries + commits.
- * The caller pre-fetches both via the GitHub API (per-repo commits API).
+ * Generate a weekly narrative from 7 daily diaries + commits + 定量メトリクス。
+ * 出力には冒頭に「定量サマリ (deterministic)」 を必ず含み、 LLM はその下に
+ * 短いナラティブ (今週やったこと / 主な成果 / トピック / 引き継ぎ) を書く。
  */
 export async function generateWeekly({
-  weekStart, weekEnd, dailyDiaries, githubByRepo, timeoutMs = 360_000,
+  weekStart, weekEnd, dailyDiaries, githubByRepo, metrics, timeoutMs = 360_000,
 }: GenerateWeeklyArgs): Promise<string> {
-  const dailyBlock = dailyDiaries.map(d => {
+  const dailyBlock = dailyDiaries.map((d) => {
     const head = d.summary || d.work_content || '(日報なし)';
-    return `### ${d.date}\n${(head || '').slice(0, 1500)}`;
+    const wm = d.work_minutes != null && d.work_minutes > 0 ? ` [${formatWorkTime(d.work_minutes)}]` : '';
+    return `### ${d.date}${wm}\n${(head || '').slice(0, 1200)}`;
   }).join('\n\n');
   const githubBlock = githubByRepo.repos.length
-    ? githubByRepo.repos.map(r => {
-      const samples = (r.samples || []).map(s => `  - ${s.sha} ${s.message}`).join('\n');
+    ? githubByRepo.repos.map((r) => {
+      const samples = (r.samples || []).slice(0, 6).map((s) => `  - ${s.sha} ${s.message}`).join('\n');
       return `${r.repo}: ${r.count} commits\n${samples}`;
     }).join('\n\n')
     : '(commit なし)';
-  const prompt = WEEKLY_PROMPT({ weekStart, weekEnd, dailyBlock, githubBlock });
-  return await runLlm({ task: 'diary_weekly', prompt, timeoutMs });
+  const totalsBlock = formatTotalsBlock(metrics);
+  const prompt = WEEKLY_PROMPT({ weekStart, weekEnd, dailyBlock, githubBlock, totalsBlock });
+  const narrative = await runLlm({ task: 'diary_weekly', prompt, timeoutMs });
+  // deterministic な定量サマリ + LLM ナラティブを連結。 万一 LLM が定量見出しを
+  // 重ねて出してきた場合に備え、 narrative 側の重複は触らずそのまま残す。
+  const header = formatTotalsHeader(weekStart, weekEnd, metrics);
+  return `${header}\n\n${narrative.trim()}`;
 }
 
 export interface FetchGithubRangeArgs {
