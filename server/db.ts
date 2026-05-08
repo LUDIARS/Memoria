@@ -1,8 +1,49 @@
 import Database from 'better-sqlite3';
+import type BetterSqlite3 from 'better-sqlite3';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export function openDb(dbPath) {
+import type { BookmarkRow } from './db/types/bookmark.js';
+import type { TaskRow } from './db/types/task.js';
+import type { AgentRunRow, AgentProjectRow } from './db/types/agent.js';
+import type { WorkLocationRow } from './db/types/workplace.js';
+import type { GpsLocationRow } from './db/types/gps.js';
+import type { MealRow } from './db/types/meal.js';
+import type { DigSessionRow } from './db/types/dig.js';
+import type { DiaryEntryRow, WeeklyReportRow } from './db/types/diary.js';
+import type { DictionaryEntryRow, DictionaryLinkRow } from './db/types/dictionary.js';
+import type { WordCloudRow } from './db/types/wordcloud.js';
+import type { PageVisitRow, VisitEventRow } from './db/types/visit.js';
+import type { PageMetadataRow, DomainCatalogRow } from './db/types/page.js';
+import type { ServerEventRow, ActivityEventRow, ActivityKind } from './db/types/activity.js';
+import type { PushSubscriptionRow } from './db/types/push.js';
+import type { ExternalChatMessageRow } from './db/types/chat.js';
+import type { UserStopwordRow } from './db/types/stopwords.js';
+import type { ImplementationNoteRow } from './db/types/impl.js';
+
+type Db = BetterSqlite3.Database;
+
+// ── helpers (parsing / domain extraction) ─────────────────────────
+
+function safeParse(s: string | null | undefined): unknown {
+  if (s == null) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+function extractDomain(url: string): string | null {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+}
+
+function firstPathSegment(url: string): string | null {
+  try {
+    const segs = new URL(url).pathname.split('/').filter(Boolean);
+    return segs[0] || null;
+  } catch { return null; }
+}
+
+// ── openDb / schema ───────────────────────────────────────────────
+
+export function openDb(dbPath: string): Db {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
@@ -411,7 +452,7 @@ export function openDb(dbPath) {
   `);
 
   // Forward-compat: 既存 DB に列を ALTER で追加
-  const mealsCols = db.prepare(`PRAGMA table_info(meals)`).all().map(c => c.name);
+  const mealsCols = (db.prepare(`PRAGMA table_info(meals)`).all() as { name: string }[]).map(c => c.name);
   if (mealsCols.length > 0 && !mealsCols.includes('additions_json')) {
     db.exec(`ALTER TABLE meals ADD COLUMN additions_json TEXT`);
   }
@@ -419,7 +460,7 @@ export function openDb(dbPath) {
     db.exec(`ALTER TABLE meals ADD COLUMN nutrients_json TEXT`);
   }
 
-  const implCols = db.prepare(`PRAGMA table_info(implementation_notes)`).all().map(c => c.name);
+  const implCols = (db.prepare(`PRAGMA table_info(implementation_notes)`).all() as { name: string }[]).map(c => c.name);
   for (const col of ['shared_at', 'shared_origin']) {
     if (implCols.length > 0 && !implCols.includes(col)) {
       db.exec(`ALTER TABLE implementation_notes ADD COLUMN ${col} TEXT`);
@@ -432,33 +473,34 @@ export function openDb(dbPath) {
     db.exec(`ALTER TABLE implementation_notes ADD COLUMN attachment_value TEXT`);
   }
 
-  const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all().map(c => c.name);
-  for (const [col, ddl] of [
+  const taskCols = (db.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[]).map(c => c.name);
+  const taskAlters: ReadonlyArray<readonly [string, string]> = [
     ['due_at', 'TEXT'],
     ['creator_type', `TEXT NOT NULL DEFAULT 'human'`],
     ['share_actio', 'INTEGER NOT NULL DEFAULT 0'],
     ['shared_at', 'TEXT'],
     ['shared_origin', 'TEXT'],
     ['category', 'TEXT'],
-  ]) {
+  ];
+  for (const [col, ddl] of taskAlters) {
     if (taskCols.length > 0 && !taskCols.includes(col)) {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
     }
   }
   // agent_runs.model — add if missing on existing DBs.
-  const arCols = db.prepare(`PRAGMA table_info(agent_runs)`).all().map(c => c.name);
+  const arCols = (db.prepare(`PRAGMA table_info(agent_runs)`).all() as { name: string }[]).map(c => c.name);
   if (arCols.length > 0 && !arCols.includes('model')) {
     db.exec(`ALTER TABLE agent_runs ADD COLUMN model TEXT`);
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
-  const wcCols = db.prepare(`PRAGMA table_info(word_clouds)`).all().map(c => c.name);
+  const wcCols = (db.prepare(`PRAGMA table_info(word_clouds)`).all() as { name: string }[]).map(c => c.name);
   if (!wcCols.includes('origin_bookmark_id')) {
     db.exec(`ALTER TABLE word_clouds ADD COLUMN origin_bookmark_id INTEGER`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_word_clouds_bookmark ON word_clouds(origin_bookmark_id)`);
   }
 
-  const dsCols = db.prepare(`PRAGMA table_info(dig_sessions)`).all().map(c => c.name);
+  const dsCols = (db.prepare(`PRAGMA table_info(dig_sessions)`).all() as { name: string }[]).map(c => c.name);
   if (!dsCols.includes('preview_json')) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN preview_json TEXT`);
   }
@@ -474,7 +516,7 @@ export function openDb(dbPath) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN raw_results_json TEXT`);
   }
 
-  const deCols = db.prepare(`PRAGMA table_info(diary_entries)`).all().map(c => c.name);
+  const deCols = (db.prepare(`PRAGMA table_info(diary_entries)`).all() as { name: string }[]).map(c => c.name);
   if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
   if (!deCols.includes('highlights'))   db.exec(`ALTER TABLE diary_entries ADD COLUMN highlights TEXT`);
   // Sonnet (`diary_work`) infers focused work minutes from the URL timeline
@@ -483,7 +525,7 @@ export function openDb(dbPath) {
   if (!deCols.includes('work_minutes')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_minutes INTEGER`);
 
   // gps_locations: 圧縮メタ列を後付けで足す
-  const gpsCols = db.prepare(`PRAGMA table_info(gps_locations)`).all().map(c => c.name);
+  const gpsCols = (db.prepare(`PRAGMA table_info(gps_locations)`).all() as { name: string }[]).map(c => c.name);
   if (gpsCols.length > 0 && !gpsCols.includes('samples_count')) {
     db.exec(`ALTER TABLE gps_locations ADD COLUMN samples_count INTEGER NOT NULL DEFAULT 1`);
   }
@@ -506,7 +548,7 @@ export function openDb(dbPath) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_locations_unresolved
            ON gps_locations(place_resolved_at) WHERE place_resolved_at IS NULL`);
 
-  const dcCols = db.prepare(`PRAGMA table_info(domain_catalog)`).all().map(c => c.name);
+  const dcCols = (db.prepare(`PRAGMA table_info(domain_catalog)`).all() as { name: string }[]).map(c => c.name);
   if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);
   if (!dcCols.includes('can_do'))      db.exec(`ALTER TABLE domain_catalog ADD COLUMN can_do TEXT`);
   if (!dcCols.includes('notes'))       db.exec(`ALTER TABLE domain_catalog ADD COLUMN notes TEXT`);
@@ -518,7 +560,7 @@ export function openDb(dbPath) {
   // Same columns exist on the multi-server schema (Postgres) — see docs/.
   const shareCols = ['owner_user_id', 'owner_user_name', 'shared_at', 'shared_origin'];
   for (const tbl of ['bookmarks', 'dictionary_entries', 'dig_sessions']) {
-    const existing = db.prepare(`PRAGMA table_info(${tbl})`).all().map(c => c.name);
+    const existing = (db.prepare(`PRAGMA table_info(${tbl})`).all() as { name: string }[]).map(c => c.name);
     for (const col of shareCols) {
       if (!existing.includes(col)) db.exec(`ALTER TABLE ${tbl} ADD COLUMN ${col} TEXT`);
     }
@@ -529,13 +571,13 @@ export function openDb(dbPath) {
   // device_os    = "iOS" / "Android" / "macOS" / "Windows" / "Linux" / null
   // source       = "browser" (拡張機能からの POST), "dns" (Legatus dnstap),
   //                "sni" (Legatus SNI tap, 将来拡張)
-  const veCols = db.prepare(`PRAGMA table_info(visit_events)`).all().map(c => c.name);
+  const veCols = (db.prepare(`PRAGMA table_info(visit_events)`).all() as { name: string }[]).map(c => c.name);
   if (!veCols.includes('device_label')) db.exec(`ALTER TABLE visit_events ADD COLUMN device_label TEXT`);
   if (!veCols.includes('device_os'))    db.exec(`ALTER TABLE visit_events ADD COLUMN device_os TEXT`);
   if (!veCols.includes('source'))       db.exec(`ALTER TABLE visit_events ADD COLUMN source TEXT`);
 
   // Forward-compat: ensure newer columns exist on older DBs.
-  const cols = db.prepare(`PRAGMA table_info(bookmarks)`).all().map(c => c.name);
+  const cols = (db.prepare(`PRAGMA table_info(bookmarks)`).all() as { name: string }[]).map(c => c.name);
   if (!cols.includes('last_accessed_at')) {
     db.exec(`ALTER TABLE bookmarks ADD COLUMN last_accessed_at TEXT`);
   }
@@ -548,25 +590,54 @@ export function openDb(dbPath) {
 
 // ── push_subscriptions DAO ────────────────────────────────────
 
-export function findPushSubscriptionByEndpoint(db, endpoint) {
-  return db.prepare(`SELECT * FROM push_subscriptions WHERE endpoint = ?`).get(endpoint);
+export function findPushSubscriptionByEndpoint(db: Db, endpoint: string): PushSubscriptionRow | undefined {
+  return db.prepare(`SELECT * FROM push_subscriptions WHERE endpoint = ?`).get(endpoint) as PushSubscriptionRow | undefined;
 }
 
-export function listActivePushSubscriptions(db) {
+export interface PushSubscriptionListItem {
+  id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  label: string | null;
+  user_agent: string | null;
+  created_at: string;
+}
+
+export function listActivePushSubscriptions(db: Db): PushSubscriptionListItem[] {
   return db.prepare(`
     SELECT id, endpoint, p256dh, auth, label, user_agent, created_at
     FROM push_subscriptions
     WHERE revoked_at IS NULL
     ORDER BY created_at DESC
-  `).all();
+  `).all() as PushSubscriptionListItem[];
 }
 
-export function listPushSubscriptions(db) {
+export interface PushSubscriptionMetaItem {
+  id: number;
+  endpoint: string;
+  label: string | null;
+  user_agent: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+export function listPushSubscriptions(db: Db): PushSubscriptionMetaItem[] {
   return db.prepare(`
     SELECT id, endpoint, label, user_agent, created_at, revoked_at
     FROM push_subscriptions
     ORDER BY (revoked_at IS NOT NULL), created_at DESC
-  `).all();
+  `).all() as PushSubscriptionMetaItem[];
+}
+
+export interface InsertPushSubscriptionInput {
+  id?: number | null;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  label?: string | null;
+  userAgent?: string | null;
+  revokedAt?: string | null;
 }
 
 /**
@@ -574,17 +645,10 @@ export function listPushSubscriptions(db) {
  * (used to re-enable a revoked endpoint without losing its label).
  * Returns the row id.
  */
-/**
- * @param {object} arg
- * @param {number|null|undefined} [arg.id]
- * @param {string} arg.endpoint
- * @param {string} arg.p256dh
- * @param {string} arg.auth
- * @param {string|null|undefined} [arg.label]
- * @param {string|null|undefined} [arg.userAgent]
- * @param {string|null|undefined} [arg.revokedAt]
- */
-export function insertPushSubscription(db, { id, endpoint, p256dh, auth, label, userAgent, revokedAt }) {
+export function insertPushSubscription(
+  db: Db,
+  { id, endpoint, p256dh, auth, label, userAgent, revokedAt }: InsertPushSubscriptionInput,
+): number {
   if (id) {
     db.prepare(`
       UPDATE push_subscriptions
@@ -597,19 +661,33 @@ export function insertPushSubscription(db, { id, endpoint, p256dh, auth, label, 
     INSERT INTO push_subscriptions (endpoint, p256dh, auth, label, user_agent)
     VALUES (?, ?, ?, ?, ?)
   `).run(endpoint, p256dh, auth, label ?? null, userAgent ?? null);
-  return info.lastInsertRowid;
+  return Number(info.lastInsertRowid);
 }
 
-export function markPushSubscriptionRevoked(db, id) {
+export function markPushSubscriptionRevoked(db: Db, id: number): void {
   db.prepare(`UPDATE push_subscriptions SET revoked_at = datetime('now') WHERE id = ?`).run(id);
 }
 
-export function deletePushSubscription(db, id) {
+export function deletePushSubscription(db: Db, id: number): number {
   const info = db.prepare(`DELETE FROM push_subscriptions WHERE id = ?`).run(id);
   return info.changes;
 }
 
 // ── bookmarks DAO ─────────────────────────────────────────────
+
+export type BookmarkSort = 'created_desc' | 'created_asc' | 'accessed_desc' | 'accessed_asc' | 'title_asc';
+
+export interface ListBookmarksOptions {
+  category?: string;
+  sort?: BookmarkSort;
+  limit?: number;
+  offset?: number;
+  q?: string;
+}
+
+export interface BookmarkWithCategories extends BookmarkRow {
+  categories: string[];
+}
 
 /**
  * List bookmarks with optional category / search / pagination.
@@ -624,8 +702,11 @@ export function deletePushSubscription(db, id) {
  *   when `limit` is a positive number. Use `countBookmarks` for the total
  *   when paginating.
  */
-export function listBookmarks(db, { category, sort = 'created_desc', limit, offset = 0, q } = {}) {
-  const orderClauses = {
+export function listBookmarks(
+  db: Db,
+  { category, sort = 'created_desc', limit, offset = 0, q }: ListBookmarksOptions = {},
+): BookmarkWithCategories[] {
+  const orderClauses: Record<BookmarkSort, string> = {
     created_desc: 'b.created_at DESC',
     created_asc: 'b.created_at ASC',
     accessed_desc: 'COALESCE(b.last_accessed_at, b.created_at) DESC',
@@ -633,8 +714,8 @@ export function listBookmarks(db, { category, sort = 'created_desc', limit, offs
     title_asc: 'b.title ASC',
   };
   const orderBy = orderClauses[sort] ?? orderClauses.created_desc;
-  const where = [];
-  const params = [];
+  const where: string[] = [];
+  const params: unknown[] = [];
   let join = '';
   if (category) {
     join = 'JOIN bookmark_categories bc ON bc.bookmark_id = b.id';
@@ -642,27 +723,32 @@ export function listBookmarks(db, { category, sort = 'created_desc', limit, offs
     params.push(category);
   }
   if (q) {
-    where.push('(b.title LIKE ? OR b.url LIKE ? OR COALESCE(b.summary, \'\') LIKE ?)');
+    where.push("(b.title LIKE ? OR b.url LIKE ? OR COALESCE(b.summary, '') LIKE ?)");
     const pat = `%${q}%`;
     params.push(pat, pat, pat);
   }
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   let sql = `SELECT b.* FROM bookmarks b ${join} ${whereClause} ORDER BY ${orderBy}`;
-  const queryParams = [...params];
-  if (Number.isFinite(limit) && limit > 0) {
+  const queryParams: unknown[] = [...params];
+  if (Number.isFinite(limit) && (limit as number) > 0) {
     sql += ' LIMIT ? OFFSET ?';
-    queryParams.push(Math.floor(limit), Math.max(0, Math.floor(offset) || 0));
+    queryParams.push(Math.floor(limit as number), Math.max(0, Math.floor(offset) || 0));
   }
-  const rows = db.prepare(sql).all(...queryParams);
+  const rows = db.prepare(sql).all(...queryParams) as BookmarkRow[];
   return rows.map(r => ({ ...r, categories: getCategories(db, r.id) }));
+}
+
+export interface CountBookmarksOptions {
+  category?: string;
+  q?: string;
 }
 
 /** Count bookmarks matching the same filters as `listBookmarks`. Cheaper
  * than fetching everything just to check `length`, and lets the UI show
  * "全 N 件中 M 件表示中" when paginating. */
-export function countBookmarks(db, { category, q } = {}) {
-  const where = [];
-  const params = [];
+export function countBookmarks(db: Db, { category, q }: CountBookmarksOptions = {}): number {
+  const where: string[] = [];
+  const params: unknown[] = [];
   let join = '';
   if (category) {
     join = 'JOIN bookmark_categories bc ON bc.bookmark_id = b.id';
@@ -670,49 +756,69 @@ export function countBookmarks(db, { category, q } = {}) {
     params.push(category);
   }
   if (q) {
-    where.push('(b.title LIKE ? OR b.url LIKE ? OR COALESCE(b.summary, \'\') LIKE ?)');
+    where.push("(b.title LIKE ? OR b.url LIKE ? OR COALESCE(b.summary, '') LIKE ?)");
     const pat = `%${q}%`;
     params.push(pat, pat, pat);
   }
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const row = db.prepare(`SELECT COUNT(DISTINCT b.id) AS n FROM bookmarks b ${join} ${whereClause}`).get(...params);
+  const row = db.prepare(`SELECT COUNT(DISTINCT b.id) AS n FROM bookmarks b ${join} ${whereClause}`)
+    .get(...params) as { n: number };
   return row.n;
 }
 
-export function getBookmark(db, id) {
-  const row = db.prepare(`SELECT * FROM bookmarks WHERE id = ?`).get(id);
+export function getBookmark(db: Db, id: number): BookmarkWithCategories | null {
+  const row = db.prepare(`SELECT * FROM bookmarks WHERE id = ?`).get(id) as BookmarkRow | undefined;
   if (!row) return null;
   return { ...row, categories: getCategories(db, id) };
 }
 
-export function getCategories(db, bookmarkId) {
-  return db.prepare(`SELECT category FROM bookmark_categories WHERE bookmark_id = ? ORDER BY category`)
-    .all(bookmarkId)
+export function getCategories(db: Db, bookmarkId: number): string[] {
+  return (db.prepare(`SELECT category FROM bookmark_categories WHERE bookmark_id = ? ORDER BY category`)
+    .all(bookmarkId) as { category: string }[])
     .map(r => r.category);
 }
 
-export function listAllCategories(db) {
+export interface CategoryWithCount {
+  category: string;
+  count: number;
+}
+
+export function listAllCategories(db: Db): CategoryWithCount[] {
   return db.prepare(`
     SELECT category, COUNT(*) AS count
     FROM bookmark_categories
     GROUP BY category
     ORDER BY count DESC, category ASC
-  `).all();
+  `).all() as CategoryWithCount[];
 }
 
-export function insertBookmark(db, { url, title, htmlPath }) {
+export interface InsertBookmarkInput {
+  url: string;
+  title: string;
+  htmlPath: string;
+}
+
+export function insertBookmark(db: Db, { url, title, htmlPath }: InsertBookmarkInput): number {
   const stmt = db.prepare(`
     INSERT INTO bookmarks (url, title, html_path) VALUES (?, ?, ?)
   `);
   const info = stmt.run(url, title, htmlPath);
-  return info.lastInsertRowid;
+  return Number(info.lastInsertRowid);
 }
 
-export function findBookmarkByUrl(db, url) {
-  return db.prepare(`SELECT * FROM bookmarks WHERE url = ? ORDER BY id DESC LIMIT 1`).get(url) ?? null;
+export function findBookmarkByUrl(db: Db, url: string): BookmarkRow | null {
+  return (db.prepare(`SELECT * FROM bookmarks WHERE url = ? ORDER BY id DESC LIMIT 1`)
+    .get(url) as BookmarkRow | undefined) ?? null;
 }
 
-export function setSummary(db, id, { summary, categories, status, error }) {
+export interface SetSummaryInput {
+  summary?: string | null;
+  categories?: string[];
+  status: string;
+  error?: string | null;
+}
+
+export function setSummary(db: Db, id: number, { summary, categories, status, error }: SetSummaryInput): void {
   const tx = db.transaction(() => {
     db.prepare(`
       UPDATE bookmarks
@@ -732,7 +838,12 @@ export function setSummary(db, id, { summary, categories, status, error }) {
   tx();
 }
 
-export function updateMemoAndCategories(db, id, { memo, categories }) {
+export interface UpdateMemoAndCategoriesInput {
+  memo?: string;
+  categories?: string[];
+}
+
+export function updateMemoAndCategories(db: Db, id: number, { memo, categories }: UpdateMemoAndCategoriesInput): void {
   const tx = db.transaction(() => {
     if (typeof memo === 'string') {
       db.prepare(`UPDATE bookmarks SET memo = ?, updated_at = datetime('now') WHERE id = ?`).run(memo, id);
@@ -749,8 +860,13 @@ export function updateMemoAndCategories(db, id, { memo, categories }) {
   tx();
 }
 
+export interface UpsertVisitInput {
+  url: string;
+  title?: string | null;
+}
+
 /** Upsert a visit row for any URL (whether bookmarked or not). */
-export function upsertVisit(db, { url, title }) {
+export function upsertVisit(db: Db, { url, title }: UpsertVisitInput): void {
   db.prepare(`
     INSERT INTO page_visits (url, title)
     VALUES (?, ?)
@@ -761,11 +877,15 @@ export function upsertVisit(db, { url, title }) {
   `).run(url, title ?? null);
 }
 
+export interface ListUnsavedVisitsOptions {
+  since?: string;
+}
+
 /**
  * URLs visited today (local time) that are NOT yet bookmarked.
  * `since` is an optional ISO string lower bound; default = start of local day.
  */
-export function listUnsavedVisits(db, { since } = {}) {
+export function listUnsavedVisits(db: Db, { since }: ListUnsavedVisitsOptions = {}): PageVisitRow[] {
   const sinceClause = since
     ? `v.last_seen_at >= ?`
     : `date(v.last_seen_at, 'localtime') = date('now', 'localtime')`;
@@ -777,11 +897,18 @@ export function listUnsavedVisits(db, { since } = {}) {
     WHERE b.id IS NULL
       AND ${sinceClause}
     ORDER BY v.last_seen_at DESC
-  `).all(...args);
+  `).all(...args) as PageVisitRow[];
 }
 
-export function deleteVisit(db, url) {
+export function deleteVisit(db: Db, url: string): void {
   db.prepare(`DELETE FROM page_visits WHERE url = ?`).run(url);
+}
+
+export interface SuggestedVisit extends PageVisitRow {
+  domain: string | null;
+  same_domain_bookmarks: number;
+  same_path_prefix_bookmarks: 0 | 1;
+  score: number;
 }
 
 /**
@@ -789,7 +916,7 @@ export function deleteVisit(db, url) {
  * The intent is to surface URLs that the user is probably reading but hasn't bookmarked
  * because the same domain (or path prefix) is already in their library.
  */
-export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
+export function listSuggestedVisits(db: Db, { sinceDays = 30 }: { sinceDays?: number } = {}): SuggestedVisit[] {
   const visits = db.prepare(`
     SELECT v.url, v.title, v.first_seen_at, v.last_seen_at, v.visit_count
     FROM page_visits v
@@ -797,11 +924,11 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
     WHERE b.id IS NULL
       AND v.last_seen_at >= datetime('now', ?)
     ORDER BY v.last_seen_at DESC
-  `).all(`-${Number(sinceDays) || 30} days`);
+  `).all(`-${Number(sinceDays) || 30} days`) as PageVisitRow[];
 
-  const bookmarkUrls = db.prepare(`SELECT url FROM bookmarks`).all().map(r => r.url);
-  const domainCounts = new Map();
-  const pathPrefixIndex = new Map();
+  const bookmarkUrls = (db.prepare(`SELECT url FROM bookmarks`).all() as { url: string }[]).map(r => r.url);
+  const domainCounts = new Map<string, number>();
+  const pathPrefixIndex = new Map<string, Set<string>>();
   for (const u of bookmarkUrls) {
     const d = extractDomain(u);
     if (!d) continue;
@@ -809,7 +936,7 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
     const segs = firstPathSegment(u);
     if (segs) {
       if (!pathPrefixIndex.has(d)) pathPrefixIndex.set(d, new Set());
-      pathPrefixIndex.get(d).add(segs);
+      pathPrefixIndex.get(d)!.add(segs);
     }
   }
 
@@ -817,7 +944,7 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
     const domain = extractDomain(v.url);
     const firstSeg = firstPathSegment(v.url);
     const sameDomain = domain ? (domainCounts.get(domain) || 0) : 0;
-    const samePrefix = (domain && firstSeg && pathPrefixIndex.get(domain)?.has(firstSeg)) ? 1 : 0;
+    const samePrefix: 0 | 1 = (domain && firstSeg && pathPrefixIndex.get(domain)?.has(firstSeg)) ? 1 : 0;
     const score = sameDomain * 10 + samePrefix * 8 + Math.min(v.visit_count || 1, 20) * 2;
     return {
       ...v,
@@ -831,20 +958,27 @@ export function listSuggestedVisits(db, { sinceDays = 30 } = {}) {
 
 // ── dig sessions ----------------------------------------------------------
 
-export function insertDigSession(db, query, theme = null) {
-  return db
+export function insertDigSession(db: Db, query: string, theme: string | null = null): number {
+  const info = db
     .prepare(`INSERT INTO dig_sessions (query, theme) VALUES (?, ?)`)
-    .run(query, theme || null).lastInsertRowid;
+    .run(query, theme || null);
+  return Number(info.lastInsertRowid);
 }
 
-export function setDigResult(db, id, { status, result, error }) {
+export interface SetDigResultInput {
+  status: string;
+  result?: unknown;
+  error?: string | null;
+}
+
+export function setDigResult(db: Db, id: number, { status, result, error }: SetDigResultInput): void {
   db.prepare(`
     UPDATE dig_sessions SET status = ?, result_json = ?, error = ?
     WHERE id = ?
   `).run(status, result ? JSON.stringify(result) : null, error ?? null, id);
 }
 
-export function setDigPreview(db, id, preview) {
+export function setDigPreview(db: Db, id: number, preview: unknown): void {
   db.prepare(`UPDATE dig_sessions SET preview_json = ? WHERE id = ?`)
     .run(preview ? JSON.stringify(preview) : null, id);
 }
@@ -852,7 +986,7 @@ export function setDigPreview(db, id, preview) {
 /** Persist the no-AI SERP scrape (`runDigRawSerp` output). Called as soon
  * as the scrape lands so the FE can render Google-style results before any
  * Claude phase finishes. */
-export function setDigRawResults(db, id, raw) {
+export function setDigRawResults(db: Db, id: number, raw: unknown): void {
   db.prepare(`UPDATE dig_sessions SET raw_results_json = ? WHERE id = ?`)
     .run(raw ? JSON.stringify(raw) : null, id);
 }
@@ -867,13 +1001,19 @@ export function setDigRawResults(db, id, raw) {
  * 走行中の queue ジョブが後から `setDigResult` を呼んでも、 行が無いので
  * UPDATE が何もしないだけで安全。
  */
-export function deleteDigSession(db, id) {
+export function deleteDigSession(db: Db, id: number): number {
   const info = db.prepare(`DELETE FROM dig_sessions WHERE id = ?`).run(id);
   return info.changes;
 }
 
-export function getDigSession(db, id) {
-  const row = db.prepare(`SELECT * FROM dig_sessions WHERE id = ?`).get(id);
+export interface DigSessionParsed extends DigSessionRow {
+  result: unknown;
+  preview: unknown;
+  raw_results: unknown;
+}
+
+export function getDigSession(db: Db, id: number): DigSessionParsed | null {
+  const row = db.prepare(`SELECT * FROM dig_sessions WHERE id = ?`).get(id) as DigSessionRow | undefined;
   if (!row) return null;
   return {
     ...row,
@@ -883,23 +1023,38 @@ export function getDigSession(db, id) {
   };
 }
 
-export function listDigSessions(db, { theme, limit = 30 } = {}) {
+export interface DigSessionListItem {
+  id: number;
+  query: string;
+  theme: string | null;
+  status: string;
+  created_at: string;
+}
+
+export function listDigSessions(db: Db, { theme, limit = 30 }: { theme?: string | null; limit?: number } = {}): DigSessionListItem[] {
   if (theme) {
     return db.prepare(`
       SELECT id, query, theme, status, created_at FROM dig_sessions
       WHERE theme = ?
       ORDER BY id DESC LIMIT ?
-    `).all(theme, limit);
+    `).all(theme, limit) as DigSessionListItem[];
   }
   return db.prepare(`
     SELECT id, query, theme, status, created_at FROM dig_sessions
     ORDER BY id DESC LIMIT ?
-  `).all(limit);
+  `).all(limit) as DigSessionListItem[];
+}
+
+export interface DigThemeRow {
+  theme: string;
+  session_count: number;
+  last_at: string;
+  last_query: string | null;
 }
 
 /// テーマ一覧 (各テーマのセッション数 + 最新時刻 + 直近クエリ)。
 /// theme = NULL のセッションは除外。
-export function listDigThemes(db, limit = 60) {
+export function listDigThemes(db: Db, limit = 60): DigThemeRow[] {
   return db.prepare(`
     SELECT
       theme                      AS theme,
@@ -913,25 +1068,37 @@ export function listDigThemes(db, limit = 60) {
     GROUP BY theme
     ORDER BY last_at DESC
     LIMIT ?
-  `).all(limit);
+  `).all(limit) as DigThemeRow[];
+}
+
+export interface DigThemeContext {
+  queries: string[];
+  topics: { word: string; count: number }[];
+  sources: { url: string; title: string }[];
+}
+
+interface DigThemeSessionRow {
+  id: number;
+  query: string;
+  result_json: string | null;
 }
 
 /// あるテーマで過去に取得した topics / source 情報をまとめる。
 /// LLM プロンプトに渡すコンテキスト用。
-export function digThemeContext(db, theme, { limit = 8 } = {}) {
+export function digThemeContext(db: Db, theme: string, { limit = 8 }: { limit?: number } = {}): DigThemeContext {
   const sessions = db.prepare(`
     SELECT id, query, result_json FROM dig_sessions
     WHERE theme = ? AND status = 'done' AND result_json IS NOT NULL
     ORDER BY id DESC LIMIT ?
-  `).all(theme, limit);
-  const topics = new Map(); // topic -> count
-  const sources = []; // {url, title}
-  const queries = [];
+  `).all(theme, limit) as DigThemeSessionRow[];
+  const topics = new Map<string, number>(); // topic -> count
+  const sources: { url: string; title: string }[] = []; // {url, title}
+  const queries: string[] = [];
   for (const s of sessions) {
     queries.push(s.query);
-    const r = safeParse(s.result_json);
-    if (!r) continue;
-    for (const src of r.sources || []) {
+    const parsed = safeParse(s.result_json) as { sources?: { url?: string; title?: string; topics?: unknown[] }[] } | null;
+    if (!parsed) continue;
+    for (const src of parsed.sources || []) {
       if (src.url && sources.length < 30) {
         sources.push({ url: src.url, title: src.title || '' });
       }
@@ -949,21 +1116,24 @@ export function digThemeContext(db, theme, { limit = 8 } = {}) {
   return { queries, topics: topTopics, sources };
 }
 
+export interface DigSessionForDate extends DigSessionRow {
+  result: unknown;
+  preview: unknown;
+}
+
 /** Dig sessions whose created_at falls on the given local date. */
-export function digSessionsForDate(db, dateStr) {
+export function digSessionsForDate(db: Db, dateStr: string): DigSessionForDate[] {
   const rows = db.prepare(`
     SELECT * FROM dig_sessions
     WHERE date(created_at, 'localtime') = ?
     ORDER BY created_at ASC
-  `).all(dateStr);
+  `).all(dateStr) as DigSessionRow[];
   return rows.map(r => ({
     ...r,
     result: r.result_json ? safeParse(r.result_json) : null,
     preview: r.preview_json ? safeParse(r.preview_json) : null,
   }));
 }
-
-function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
 // ── worklog browsing aggregations (per-date) ─────────────────────────────
 //
@@ -972,8 +1142,14 @@ function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 // にしか紐付かない (visit_events は per-event で残るが、 そちらは Legatus / SNI
 // 由来のものが混じるので、 ブクマ/履歴判定としては page_visits を主軸にする)。
 
+export interface PageVisitForDate extends PageVisitRow {
+  is_bookmarked: 0 | 1;
+  bookmark_id: number | null;
+  bookmark_title: string | null;
+}
+
 /** 当日 last_seen_at の page_visits、 ブックマーク済みかどうかも返す */
-export function pageVisitsForDate(db, dateStr, { limit = 200 } = {}) {
+export function pageVisitsForDate(db: Db, dateStr: string, { limit = 200 }: { limit?: number } = {}): PageVisitForDate[] {
   const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 200));
   return db.prepare(`
     SELECT v.url, v.title, v.first_seen_at, v.last_seen_at, v.visit_count,
@@ -984,11 +1160,21 @@ export function pageVisitsForDate(db, dateStr, { limit = 200 } = {}) {
     WHERE date(v.last_seen_at, 'localtime') = ?
     ORDER BY v.last_seen_at DESC
     LIMIT ?
-  `).all(dateStr, safeLimit);
+  `).all(dateStr, safeLimit) as PageVisitForDate[];
+}
+
+export interface RevisitedBookmarkRow {
+  id: number;
+  url: string;
+  title: string;
+  summary: string | null;
+  visit_count: number;
+  last_seen_at: string;
+  first_seen_at: string;
 }
 
 /** 当日に再訪が記録されたブックマーク (page_visits とブクマ url を JOIN) */
-export function revisitedBookmarksForDate(db, dateStr, { limit = 100 } = {}) {
+export function revisitedBookmarksForDate(db: Db, dateStr: string, { limit = 100 }: { limit?: number } = {}): RevisitedBookmarkRow[] {
   const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
   return db.prepare(`
     SELECT b.id, b.url, b.title, b.summary, v.visit_count, v.last_seen_at, v.first_seen_at
@@ -997,11 +1183,17 @@ export function revisitedBookmarksForDate(db, dateStr, { limit = 100 } = {}) {
     WHERE date(v.last_seen_at, 'localtime') = ?
     ORDER BY v.visit_count DESC, v.last_seen_at DESC
     LIMIT ?
-  `).all(dateStr, safeLimit);
+  `).all(dateStr, safeLimit) as RevisitedBookmarkRow[];
+}
+
+export interface BrowsingDomainStats {
+  top_domains: { domain: string; pages: number; visits: number }[];
+  total_pages: number;
+  total_visits: number;
 }
 
 /** 当日のドメイン別 visit_count 合計 + ページ閲覧総数 */
-export function browsingDomainStatsForDate(db, dateStr, { limit = 30 } = {}) {
+export function browsingDomainStatsForDate(db: Db, dateStr: string, { limit = 30 }: { limit?: number } = {}): BrowsingDomainStats {
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 30));
   const rows = db.prepare(`
     SELECT LOWER(SUBSTR(SUBSTR(url, INSTR(url, '://') + 3), 1,
@@ -1017,12 +1209,12 @@ export function browsingDomainStatsForDate(db, dateStr, { limit = 30 } = {}) {
      GROUP BY domain
      ORDER BY visits DESC, pages DESC
      LIMIT ?
-  `).all(dateStr, safeLimit);
+  `).all(dateStr, safeLimit) as { domain: string; pages: number; visits: number }[];
   const totals = db.prepare(`
     SELECT COUNT(*) AS pages, COALESCE(SUM(visit_count), 0) AS visits
       FROM page_visits
      WHERE date(last_seen_at, 'localtime') = ?
-  `).get(dateStr);
+  `).get(dateStr) as { pages: number; visits: number };
   return {
     top_domains: rows,
     total_pages: totals.pages,
@@ -1040,41 +1232,53 @@ export function browsingDomainStatsForDate(db, dateStr, { limit = 30 } = {}) {
 // Downloaded rows go the other way: they came from a multi server, so we set
 // owner_user_id / owner_user_name to the remote owner so the UI can render
 // "by <user>" without confusing them with rows the user authored locally.
-export function setBookmarkOwner(db, id, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }) {
+export interface OwnerInput {
+  ownerUserId: string | null;
+  ownerUserName: string | null;
+  sharedAt: string | null;
+  sharedOrigin: string | null;
+}
+
+export function setBookmarkOwner(db: Db, id: number, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }: OwnerInput): void {
   db.prepare(`UPDATE bookmarks SET owner_user_id = ?, owner_user_name = ?, shared_at = ?, shared_origin = ? WHERE id = ?`)
     .run(ownerUserId, ownerUserName, sharedAt, sharedOrigin, id);
 }
 
-export function setDigOwner(db, id, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }) {
+export function setDigOwner(db: Db, id: number, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }: OwnerInput): void {
   db.prepare(`UPDATE dig_sessions SET owner_user_id = ?, owner_user_name = ?, shared_at = ?, shared_origin = ? WHERE id = ?`)
     .run(ownerUserId, ownerUserName, sharedAt, sharedOrigin, id);
 }
 
-export function setDictionaryOwner(db, id, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }) {
+export function setDictionaryOwner(db: Db, id: number, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }: OwnerInput): void {
   db.prepare(`UPDATE dictionary_entries SET owner_user_id = ?, owner_user_name = ?, shared_at = ?, shared_origin = ? WHERE id = ?`)
     .run(ownerUserId, ownerUserName, sharedAt, sharedOrigin, id);
 }
 
-export function markBookmarkShared(db, id, { sharedAt, sharedOrigin }) {
+export interface SharedInput {
+  sharedAt: string | null;
+  sharedOrigin: string | null;
+}
+
+export function markBookmarkShared(db: Db, id: number, { sharedAt, sharedOrigin }: SharedInput): void {
   db.prepare(`UPDATE bookmarks SET shared_at = ?, shared_origin = ? WHERE id = ?`)
     .run(sharedAt, sharedOrigin, id);
 }
 
-export function markDigShared(db, id, { sharedAt, sharedOrigin }) {
+export function markDigShared(db: Db, id: number, { sharedAt, sharedOrigin }: SharedInput): void {
   db.prepare(`UPDATE dig_sessions SET shared_at = ?, shared_origin = ? WHERE id = ?`)
     .run(sharedAt, sharedOrigin, id);
 }
 
-export function markDictionaryShared(db, id, { sharedAt, sharedOrigin }) {
+export function markDictionaryShared(db: Db, id: number, { sharedAt, sharedOrigin }: SharedInput): void {
   db.prepare(`UPDATE dictionary_entries SET shared_at = ?, shared_origin = ? WHERE id = ?`)
     .run(sharedAt, sharedOrigin, id);
 }
 
 // ── app settings (key/value) ----------------------------------------------
 
-export function getAppSettings(db) {
-  const rows = db.prepare(`SELECT key, value FROM app_settings`).all();
-  const out = {};
+export function getAppSettings(db: Db): Record<string, string | null> {
+  const rows = db.prepare(`SELECT key, value FROM app_settings`).all() as { key: string; value: string | null }[];
+  const out: Record<string, string | null> = {};
   for (const r of rows) out[r.key] = r.value;
   return out;
 }
@@ -1085,14 +1289,14 @@ export function getAppSettings(db) {
 // empty string as an empty string so plain text fields like
 // `diary.global_memo` don't get auto-wiped when the user happens to
 // save the panel with the textarea empty for a moment.
-const DELETE_ON_EMPTY_KEYS = new Set([
+const DELETE_ON_EMPTY_KEYS = new Set<string>([
   'multi_jwt', 'multi_user_id', 'multi_user_name', 'multi_role',
   'multi_connected_at', 'multi_url',
   'llm.openai.api_key',
   'github_token',
 ]);
 
-export function setAppSettings(db, patch) {
+export function setAppSettings(db: Db, patch: Record<string, unknown>): void {
   const tx = db.transaction(() => {
     for (const [k, v] of Object.entries(patch)) {
       if (v == null || (v === '' && DELETE_ON_EMPTY_KEYS.has(k))) {
@@ -1110,8 +1314,16 @@ export function setAppSettings(db, patch) {
 
 // ── word clouds ------------------------------------------------------------
 
-export function insertWordCloud(db, { origin, originDigId, parentCloudId, parentWord, label }) {
-  return db.prepare(`
+export interface InsertWordCloudInput {
+  origin: string;
+  originDigId?: number | null;
+  parentCloudId?: number | null;
+  parentWord?: string | null;
+  label: string;
+}
+
+export function insertWordCloud(db: Db, { origin, originDigId, parentCloudId, parentWord, label }: InsertWordCloudInput): number {
+  const info = db.prepare(`
     INSERT INTO word_clouds (origin, origin_dig_id, parent_cloud_id, parent_word, label)
     VALUES (?, ?, ?, ?, ?)
   `).run(
@@ -1120,18 +1332,29 @@ export function insertWordCloud(db, { origin, originDigId, parentCloudId, parent
     parentCloudId ?? null,
     parentWord ?? null,
     label,
-  ).lastInsertRowid;
+  );
+  return Number(info.lastInsertRowid);
 }
 
-export function setWordCloudResult(db, id, { status, result, error }) {
+export interface SetWordCloudResultInput {
+  status: string;
+  result?: unknown;
+  error?: string | null;
+}
+
+export function setWordCloudResult(db: Db, id: number, { status, result, error }: SetWordCloudResultInput): void {
   db.prepare(`
     UPDATE word_clouds SET status = ?, result_json = ?, error = ?
     WHERE id = ?
   `).run(status, result ? JSON.stringify(result) : null, error ?? null, id);
 }
 
-export function getWordCloud(db, id) {
-  const row = db.prepare(`SELECT * FROM word_clouds WHERE id = ?`).get(id);
+export interface WordCloudParsed extends WordCloudRow {
+  result: unknown;
+}
+
+export function getWordCloud(db: Db, id: number): WordCloudParsed | null {
+  const row = db.prepare(`SELECT * FROM word_clouds WHERE id = ?`).get(id) as WordCloudRow | undefined;
   if (!row) return null;
   return {
     ...row,
@@ -1139,33 +1362,51 @@ export function getWordCloud(db, id) {
   };
 }
 
-export function listWordClouds(db, limit = 30) {
+export interface WordCloudListItem {
+  id: number;
+  origin: string;
+  origin_dig_id: number | null;
+  origin_bookmark_id: number | null;
+  parent_cloud_id: number | null;
+  parent_word: string | null;
+  label: string;
+  status: string;
+  created_at: string;
+}
+
+export function listWordClouds(db: Db, limit = 30): WordCloudListItem[] {
   return db.prepare(`
     SELECT id, origin, origin_dig_id, origin_bookmark_id, parent_cloud_id, parent_word,
            label, status, created_at
     FROM word_clouds ORDER BY id DESC LIMIT ?
-  `).all(limit);
+  `).all(limit) as WordCloudListItem[];
 }
 
 /** Latest 'done' word cloud for a single bookmark, or null. */
-export function getBookmarkWordCloud(db, bookmarkId) {
+export function getBookmarkWordCloud(db: Db, bookmarkId: number): WordCloudParsed | null {
   const row = db.prepare(`
     SELECT * FROM word_clouds
     WHERE origin = 'bookmark' AND origin_bookmark_id = ? AND status = 'done'
     ORDER BY id DESC LIMIT 1
-  `).get(bookmarkId);
+  `).get(bookmarkId) as WordCloudRow | undefined;
   if (!row) return null;
   return { ...row, result: row.result_json ? safeParse(row.result_json) : null };
 }
 
+export interface RecentBookmarkWordCloudItem {
+  bookmark_id: number | null;
+  label: string;
+  result: unknown;
+}
+
 /** Most recent 'done' bookmark clouds (for recommendation weighting). */
-export function recentBookmarkWordClouds(db, { limit = 50 } = {}) {
+export function recentBookmarkWordClouds(db: Db, { limit = 50 }: { limit?: number } = {}): RecentBookmarkWordCloudItem[] {
   const rows = db.prepare(`
     SELECT wc.* FROM word_clouds wc
     JOIN bookmarks b ON b.id = wc.origin_bookmark_id
     WHERE wc.origin = 'bookmark' AND wc.status = 'done'
     ORDER BY b.created_at DESC LIMIT ?
-  `).all(Number(limit) || 50);
+  `).all(Number(limit) || 50) as WordCloudRow[];
   return rows.map(r => ({
     bookmark_id: r.origin_bookmark_id,
     label: r.label,
@@ -1175,8 +1416,12 @@ export function recentBookmarkWordClouds(db, { limit = 50 } = {}) {
 
 // ── dictionary -------------------------------------------------------------
 
-export function listDictionaryEntries(db, { search } = {}) {
-  const args = [];
+export interface DictionaryEntryWithCount extends DictionaryEntryRow {
+  link_count: number;
+}
+
+export function listDictionaryEntries(db: Db, { search }: { search?: string } = {}): DictionaryEntryWithCount[] {
+  const args: unknown[] = [];
   let where = '';
   if (search) {
     where = `WHERE e.term LIKE ? OR e.definition LIKE ? OR e.notes LIKE ?`;
@@ -1192,36 +1437,52 @@ export function listDictionaryEntries(db, { search } = {}) {
     ) l ON l.entry_id = e.id
     ${where}
     ORDER BY e.updated_at DESC
-  `).all(...args);
+  `).all(...args) as DictionaryEntryWithCount[];
   return rows;
 }
 
-export function getDictionaryEntry(db, id) {
-  const row = db.prepare(`SELECT * FROM dictionary_entries WHERE id = ?`).get(id);
+export interface DictionaryEntryWithLinks extends DictionaryEntryRow {
+  links: Pick<DictionaryLinkRow, 'source_kind' | 'source_id' | 'added_at'>[];
+}
+
+export function getDictionaryEntry(db: Db, id: number): DictionaryEntryWithLinks | null {
+  const row = db.prepare(`SELECT * FROM dictionary_entries WHERE id = ?`).get(id) as DictionaryEntryRow | undefined;
   if (!row) return null;
   const links = db.prepare(`
     SELECT source_kind, source_id, added_at
     FROM dictionary_links WHERE entry_id = ?
     ORDER BY added_at DESC
-  `).all(id);
+  `).all(id) as Pick<DictionaryLinkRow, 'source_kind' | 'source_id' | 'added_at'>[];
   return { ...row, links };
 }
 
-export function findDictionaryEntryByTerm(db, term) {
-  return db.prepare(`SELECT * FROM dictionary_entries WHERE term = ?`).get(term) ?? null;
+export function findDictionaryEntryByTerm(db: Db, term: string): DictionaryEntryRow | null {
+  return (db.prepare(`SELECT * FROM dictionary_entries WHERE term = ?`).get(term) as DictionaryEntryRow | undefined) ?? null;
 }
 
-export function insertDictionaryEntry(db, { term, definition, notes }) {
+export interface InsertDictionaryEntryInput {
+  term: string;
+  definition?: string | null;
+  notes?: string | null;
+}
+
+export function insertDictionaryEntry(db: Db, { term, definition, notes }: InsertDictionaryEntryInput): number {
   const info = db.prepare(`
     INSERT INTO dictionary_entries (term, definition, notes)
     VALUES (?, ?, ?)
   `).run(String(term).trim(), definition ?? null, notes ?? null);
-  return info.lastInsertRowid;
+  return Number(info.lastInsertRowid);
 }
 
-export function updateDictionaryEntry(db, id, patch) {
-  const fields = [];
-  const args = [];
+export interface UpdateDictionaryEntryPatch {
+  term?: string;
+  definition?: string | null;
+  notes?: string | null;
+}
+
+export function updateDictionaryEntry(db: Db, id: number, patch: UpdateDictionaryEntryPatch): void {
+  const fields: string[] = [];
+  const args: unknown[] = [];
   if (typeof patch.term === 'string') { fields.push('term = ?'); args.push(patch.term.trim()); }
   if (typeof patch.definition === 'string' || patch.definition === null) {
     fields.push('definition = ?'); args.push(patch.definition);
@@ -1235,18 +1496,24 @@ export function updateDictionaryEntry(db, id, patch) {
   db.prepare(`UPDATE dictionary_entries SET ${fields.join(', ')} WHERE id = ?`).run(...args);
 }
 
-export function deleteDictionaryEntry(db, id) {
+export function deleteDictionaryEntry(db: Db, id: number): void {
   db.prepare(`DELETE FROM dictionary_entries WHERE id = ?`).run(id);
 }
 
-export function addDictionaryLink(db, { entryId, sourceKind, sourceId }) {
+export interface DictionaryLinkInput {
+  entryId: number;
+  sourceKind: string;
+  sourceId: number;
+}
+
+export function addDictionaryLink(db: Db, { entryId, sourceKind, sourceId }: DictionaryLinkInput): void {
   db.prepare(`
     INSERT OR IGNORE INTO dictionary_links (entry_id, source_kind, source_id)
     VALUES (?, ?, ?)
   `).run(entryId, sourceKind, sourceId);
 }
 
-export function removeDictionaryLink(db, { entryId, sourceKind, sourceId }) {
+export function removeDictionaryLink(db: Db, { entryId, sourceKind, sourceId }: DictionaryLinkInput): void {
   db.prepare(`
     DELETE FROM dictionary_links
     WHERE entry_id = ? AND source_kind = ? AND source_id = ?
@@ -1255,24 +1522,39 @@ export function removeDictionaryLink(db, { entryId, sourceKind, sourceId }) {
 
 // ── page metadata (per-URL) -----------------------------------------------
 
-export function getPageMetadata(db, url) {
-  return db.prepare(`SELECT * FROM page_metadata WHERE url = ?`).get(url) ?? null;
+export function getPageMetadata(db: Db, url: string): PageMetadataRow | null {
+  return (db.prepare(`SELECT * FROM page_metadata WHERE url = ?`).get(url) as PageMetadataRow | undefined) ?? null;
 }
 
-export function getPageMetadataMap(db, urls) {
+export function getPageMetadataMap(db: Db, urls: string[]): Map<string, PageMetadataRow> {
   if (!urls.length) return new Map();
   const placeholders = urls.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT * FROM page_metadata WHERE url IN (${placeholders})`).all(...urls);
+  const rows = db.prepare(`SELECT * FROM page_metadata WHERE url IN (${placeholders})`).all(...urls) as PageMetadataRow[];
   return new Map(rows.map(r => [r.url, r]));
 }
 
-export function insertPageMetadataPending(db, url) {
+export function insertPageMetadataPending(db: Db, url: string): void {
   db.prepare(`
     INSERT OR IGNORE INTO page_metadata (url, status) VALUES (?, 'pending')
   `).run(url);
 }
 
-export function setPageMetadata(db, url, patch) {
+export interface PageMetadataPatch {
+  title?: string | null;
+  meta_description?: string | null;
+  og_title?: string | null;
+  og_description?: string | null;
+  og_image?: string | null;
+  og_type?: string | null;
+  content_type?: string | null;
+  http_status?: number | null;
+  summary?: string | null;
+  kind?: string | null;
+  status?: string | null;
+  error?: string | null;
+}
+
+export function setPageMetadata(db: Db, url: string, patch: PageMetadataPatch): void {
   db.prepare(`
     UPDATE page_metadata
        SET title = COALESCE(?, title),
@@ -1306,39 +1588,49 @@ export function setPageMetadata(db, url, patch) {
   );
 }
 
-export function deletePageMetadata(db, url) {
+export function deletePageMetadata(db: Db, url: string): void {
   db.prepare(`DELETE FROM page_metadata WHERE url = ?`).run(url);
 }
 
 // ── domain catalog ---------------------------------------------------------
 
-export function getDomainCatalog(db, domain) {
-  return db.prepare(`SELECT * FROM domain_catalog WHERE domain = ?`).get(domain) ?? null;
+export function getDomainCatalog(db: Db, domain: string): DomainCatalogRow | null {
+  return (db.prepare(`SELECT * FROM domain_catalog WHERE domain = ?`).get(domain) as DomainCatalogRow | undefined) ?? null;
 }
 
-export function listDomainCatalog(db, { limit = 200 } = {}) {
+export function listDomainCatalog(db: Db, { limit = 200 }: { limit?: number } = {}): DomainCatalogRow[] {
   return db.prepare(`
     SELECT * FROM domain_catalog
     ORDER BY (status = 'done') DESC, fetched_at DESC
     LIMIT ?
-  `).all(limit);
+  `).all(limit) as DomainCatalogRow[];
 }
 
 /** Bulk fetch by domain set; returns { domain → row }. */
-export function getDomainCatalogMap(db, domains) {
+export function getDomainCatalogMap(db: Db, domains: string[]): Map<string, DomainCatalogRow> {
   if (!domains.length) return new Map();
   const placeholders = domains.map(() => '?').join(',');
-  const rows = db.prepare(`SELECT * FROM domain_catalog WHERE domain IN (${placeholders})`).all(...domains);
+  const rows = db.prepare(`SELECT * FROM domain_catalog WHERE domain IN (${placeholders})`).all(...domains) as DomainCatalogRow[];
   return new Map(rows.map(r => [r.domain, r]));
 }
 
-export function insertDomainPending(db, domain) {
+export function insertDomainPending(db: Db, domain: string): void {
   db.prepare(`
     INSERT OR IGNORE INTO domain_catalog (domain, status) VALUES (?, 'pending')
   `).run(domain);
 }
 
-export function setDomainCatalog(db, domain, patch) {
+export interface DomainCatalogPatch {
+  title?: string | null;
+  site_name?: string | null;
+  description?: string | null;
+  can_do?: string | null;
+  kind?: string | null;
+  status?: string | null;
+  error?: string | null;
+}
+
+export function setDomainCatalog(db: Db, domain: string, patch: DomainCatalogPatch): void {
   // Don't clobber user-edited columns. Caller should pass only the fields
   // it produced; we COALESCE so untouched columns keep their value.
   db.prepare(`
@@ -1364,14 +1656,24 @@ export function setDomainCatalog(db, domain, patch) {
   );
 }
 
-export function updateDomainCatalogUser(db, domain, patch) {
+export interface DomainCatalogUserPatch {
+  site_name?: string | null;
+  description?: string | null;
+  can_do?: string | null;
+  kind?: string | null;
+  notes?: string | null;
+  domain_private?: boolean | 0 | 1;
+}
+
+export function updateDomainCatalogUser(db: Db, domain: string, patch: DomainCatalogUserPatch): void {
   // User edit. Mark user_edited=1 so the auto-classifier won't overwrite.
-  const fields = [];
-  const args = [];
-  for (const k of ['site_name', 'description', 'can_do', 'kind', 'notes']) {
-    if (typeof patch[k] === 'string' || patch[k] === null) {
+  const fields: string[] = [];
+  const args: unknown[] = [];
+  for (const k of ['site_name', 'description', 'can_do', 'kind', 'notes'] as const) {
+    const v = patch[k];
+    if (typeof v === 'string' || v === null) {
       fields.push(`${k} = ?`);
-      args.push(patch[k] ?? null);
+      args.push(v ?? null);
     }
   }
   if (typeof patch.domain_private === 'boolean' || patch.domain_private === 0 || patch.domain_private === 1) {
@@ -1384,8 +1686,14 @@ export function updateDomainCatalogUser(db, domain, patch) {
   db.prepare(`UPDATE domain_catalog SET ${fields.join(', ')} WHERE domain = ?`).run(...args);
 }
 
-export function listDomainCatalogWithCounts(db, { limit = 500, search } = {}) {
-  const args = [];
+export interface DomainCatalogWithCounts extends DomainCatalogRow {
+  visits_today: number;
+  visits_week: number;
+  visits_total: number;
+}
+
+export function listDomainCatalogWithCounts(db: Db, { limit = 500, search }: { limit?: number; search?: string } = {}): DomainCatalogWithCounts[] {
+  const args: unknown[] = [];
   let where = '';
   if (search) {
     where = `WHERE c.domain LIKE ? OR c.site_name LIKE ? OR c.description LIKE ? OR c.can_do LIKE ?`;
@@ -1434,18 +1742,26 @@ export function listDomainCatalogWithCounts(db, { limit = 500, search } = {}) {
      ${where}
      ORDER BY visits_today DESC, visits_week DESC, c.domain ASC
      LIMIT ?
-  `).all(...args, Number(limit) || 500);
+  `).all(...args, Number(limit) || 500) as DomainCatalogWithCounts[];
   return rows;
 }
 
-export function deleteDomainCatalog(db, domain) {
+export function deleteDomainCatalog(db: Db, domain: string): void {
   db.prepare(`DELETE FROM domain_catalog WHERE domain = ?`).run(domain);
 }
 
 // ── server events (uptime / downtime / lifecycle) -------------------------
 
-export function insertServerEvent(db, { type, occurredAt, endedAt, durationMs, details }) {
-  return db.prepare(`
+export interface InsertServerEventInput {
+  type: string;
+  occurredAt: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  details?: unknown;
+}
+
+export function insertServerEvent(db: Db, { type, occurredAt, endedAt, durationMs, details }: InsertServerEventInput): number {
+  const info = db.prepare(`
     INSERT INTO server_events (type, occurred_at, ended_at, duration_ms, details_json)
     VALUES (?, ?, ?, ?, ?)
   `).run(
@@ -1454,35 +1770,41 @@ export function insertServerEvent(db, { type, occurredAt, endedAt, durationMs, d
     endedAt ?? null,
     durationMs ?? null,
     details ? JSON.stringify(details) : null,
-  ).lastInsertRowid;
+  );
+  return Number(info.lastInsertRowid);
 }
 
-export function listServerEvents(db, { limit = 200 } = {}) {
+export interface ServerEventParsed extends ServerEventRow {
+  details: unknown;
+}
+
+export function listServerEvents(db: Db, { limit = 200 }: { limit?: number } = {}): ServerEventParsed[] {
   const rows = db.prepare(`
     SELECT * FROM server_events
     ORDER BY id DESC LIMIT ?
-  `).all(Number(limit) || 200);
+  `).all(Number(limit) || 200) as ServerEventRow[];
   return rows.map(r => ({
     ...r,
     details: r.details_json ? safeParse(r.details_json) : null,
   }));
 }
 
-export function listServerEventsForDate(db, dateStr) {
+export function listServerEventsForDate(db: Db, dateStr: string): ServerEventParsed[] {
   // Any event that overlaps the local date window.
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT * FROM server_events
     WHERE date(occurred_at, 'localtime') = ?
        OR date(COALESCE(ended_at, occurred_at), 'localtime') = ?
     ORDER BY occurred_at ASC
-  `).all(dateStr, dateStr).map(r => ({
+  `).all(dateStr, dateStr) as ServerEventRow[];
+  return rows.map(r => ({
     ...r, details: r.details_json ? safeParse(r.details_json) : null,
   }));
 }
 
 // ── activity events (git commit / claude code prompt 等) ─────────────────
 
-const ACTIVITY_KINDS = new Set([
+const ACTIVITY_KINDS = new Set<ActivityKind>([
   'git_commit',
   'claude_code_prompt',
   'gemini_prompt',
@@ -1492,12 +1814,24 @@ const ACTIVITY_KINDS = new Set([
   'task_updated',
 ]);
 
+export interface RecordActivityEventInput {
+  kind: ActivityKind;
+  occurred_at?: string;
+  source?: string | null;
+  ref_id?: string | null;
+  content?: string | null;
+  metadata?: unknown;
+}
+
 /**
  * 活動イベントを 1 件記録する。
  * kind+ref_id の重複は INSERT OR IGNORE で吸収 (同じ commit sha / prompt id が
  * 二度送られても重複しない)。 戻り値は inserted=true|false + id。
  */
-export function recordActivityEvent(db, { kind, occurred_at, source, ref_id, content, metadata }) {
+export function recordActivityEvent(
+  db: Db,
+  { kind, occurred_at, source, ref_id, content, metadata }: RecordActivityEventInput,
+): { inserted: boolean; id: number } {
   if (!ACTIVITY_KINDS.has(kind)) {
     throw new Error(`unknown activity kind: ${kind}`);
   }
@@ -1514,7 +1848,12 @@ export function recordActivityEvent(db, { kind, occurred_at, source, ref_id, con
     content ?? null,
     metadata ? JSON.stringify(metadata) : null,
   );
-  return { inserted: info.changes > 0, id: info.lastInsertRowid };
+  return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
+}
+
+export interface ActivityEventParsed extends Omit<ActivityEventRow, 'ingested_at'> {
+  ingested_at?: string;
+  metadata: unknown;
 }
 
 /**
@@ -1522,16 +1861,24 @@ export function recordActivityEvent(db, { kind, occurred_at, source, ref_id, con
  * 内部集計 (hourly bucket / kind 別件数) で全部欲しい時用。
  * UI のリスト表示には activityEventsPage を使うこと。
  */
-export function activityEventsForDate(db, dateStr) {
-  return db.prepare(`
+export function activityEventsForDate(db: Db, dateStr: string): ActivityEventParsed[] {
+  const rows = db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
     FROM activity_events
     WHERE date(occurred_at, 'localtime') = ?
     ORDER BY occurred_at ASC
-  `).all(dateStr).map((r) => ({
+  `).all(dateStr) as Omit<ActivityEventRow, 'ingested_at'>[];
+  return rows.map((r) => ({
     ...r,
     metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
+}
+
+export interface ActivityEventsPage {
+  items: ActivityEventParsed[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 /**
@@ -1541,44 +1888,53 @@ export function activityEventsForDate(db, dateStr) {
  *   items   — 取得した行 (DESC、 最新が先頭)
  *   total   — 当日の全件数 (offset/limit 無関係)
  */
-export function activityEventsPage(db, dateStr, { limit = 100, offset = 0, kind = null } = {}) {
+export function activityEventsPage(
+  db: Db,
+  dateStr: string,
+  { limit = 100, offset = 0, kind = null }: { limit?: number; offset?: number; kind?: ActivityKind | null } = {},
+): ActivityEventsPage {
   const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 100));
   const safeOffset = Math.max(0, Number(offset) || 0);
   const kindClause = kind && ACTIVITY_KINDS.has(kind) ? 'AND kind = ?' : '';
-  const kindArgs = kindClause ? [kind] : [];
-  const total = db.prepare(`
+  const kindArgs: unknown[] = kindClause ? [kind] : [];
+  const totalRow = db.prepare(`
     SELECT COUNT(*) AS n FROM activity_events
     WHERE date(occurred_at, 'localtime') = ? ${kindClause}
-  `).get(dateStr, ...kindArgs).n;
-  const items = db.prepare(`
+  `).get(dateStr, ...kindArgs) as { n: number };
+  const rows = db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
     FROM activity_events
     WHERE date(occurred_at, 'localtime') = ? ${kindClause}
     ORDER BY occurred_at DESC
     LIMIT ? OFFSET ?
-  `).all(dateStr, ...kindArgs, safeLimit, safeOffset).map((r) => ({
+  `).all(dateStr, ...kindArgs, safeLimit, safeOffset) as Omit<ActivityEventRow, 'ingested_at'>[];
+  const items = rows.map((r) => ({
     ...r,
     metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
-  return { items, total, limit: safeLimit, offset: safeOffset };
+  return { items, total: totalRow.n, limit: safeLimit, offset: safeOffset };
 }
 
 /** 直近 limit 件 (新しい順)。 全期間 / 任意 kind フィルタつき。 */
-export function listActivityEvents(db, { limit = 200, kind = null } = {}) {
-  const args = [];
+export function listActivityEvents(
+  db: Db,
+  { limit = 200, kind = null }: { limit?: number; kind?: ActivityKind | null } = {},
+): ActivityEventParsed[] {
+  const args: unknown[] = [];
   let where = '';
   if (kind && ACTIVITY_KINDS.has(kind)) {
     where = 'WHERE kind = ?';
     args.push(kind);
   }
   args.push(Number(limit) || 200);
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json, ingested_at
     FROM activity_events
     ${where}
     ORDER BY occurred_at DESC
     LIMIT ?
-  `).all(...args).map((r) => ({
+  `).all(...args) as ActivityEventRow[];
+  return rows.map((r) => ({
     ...r,
     metadata: r.metadata_json ? safeParse(r.metadata_json) : null,
   }));
@@ -1586,11 +1942,24 @@ export function listActivityEvents(db, { limit = 200, kind = null } = {}) {
 
 // ── visit events / diary ---------------------------------------------------
 
-export function insertVisitEvent(db, { url, title }) {
+export interface InsertVisitEventInput {
+  url: string;
+  title?: string | null;
+}
+
+export function insertVisitEvent(db: Db, { url, title }: InsertVisitEventInput): void {
   const domain = extractDomain(url);
   db.prepare(`
     INSERT INTO visit_events (url, domain, title, source) VALUES (?, ?, ?, 'browser')
   `).run(url, domain, title ?? null);
+}
+
+export interface InsertExternalVisitEventInput {
+  domain: string;
+  visitedAt?: string | null;
+  source: 'dns' | 'sni';
+  deviceLabel?: string | null;
+  deviceOs?: string | null;
 }
 
 /**
@@ -1599,13 +1968,13 @@ export function insertVisitEvent(db, { url, title }) {
  * 受ける前提。 url は擬似形式 (`dns://<domain>` or `sni://<domain>`) で
  * 保存し、 既存の page_visits / bookmark テーブルとは衝突させない。
  */
-export function insertExternalVisitEvent(db, {
+export function insertExternalVisitEvent(db: Db, {
   domain,
   visitedAt,
   source,
   deviceLabel,
   deviceOs,
-}) {
+}: InsertExternalVisitEventInput): void {
   const url = `${source}://${domain}`;
   db.prepare(`
     INSERT INTO visit_events (url, domain, title, visited_at, device_label, device_os, source)
@@ -1614,13 +1983,13 @@ export function insertExternalVisitEvent(db, {
 }
 
 /** Visit events for a single local date (YYYY-MM-DD). */
-export function visitEventsForDate(db, dateStr) {
+export function visitEventsForDate(db: Db, dateStr: string): Pick<VisitEventRow, 'id' | 'url' | 'domain' | 'title' | 'visited_at'>[] {
   return db.prepare(`
     SELECT id, url, domain, title, visited_at
     FROM visit_events
     WHERE date(visited_at, 'localtime') = ?
     ORDER BY visited_at ASC
-  `).all(dateStr);
+  `).all(dateStr) as Pick<VisitEventRow, 'id' | 'url' | 'domain' | 'title' | 'visited_at'>[];
 }
 
 // ── Diary sidecar (太い JSON 列をファイル外出し) ────────────────────────
@@ -1639,37 +2008,42 @@ export function visitEventsForDate(db, dateStr) {
 // dataDir は index.js から setDiaryDataDir で注入する (db.js を fs から
 // 切り離さないために、 dir 未設定時は sidecar を no-op にして DB 列のみで動く)。
 
-let DIARY_DATA_DIR = null;
+let DIARY_DATA_DIR: string | null = null;
 
-export function setDiaryDataDir(dir) {
+export function setDiaryDataDir(dir: string | null): void {
   DIARY_DATA_DIR = dir || null;
 }
 
-function diarySidecarPath(dateStr) {
+function diarySidecarPath(dateStr: string): string | null {
   if (!DIARY_DATA_DIR) return null;
   return join(DIARY_DATA_DIR, 'diary', `${dateStr}.json`);
 }
 
-function readDiarySidecar(dateStr) {
+interface DiarySidecar {
+  metrics?: unknown;
+  github_commits?: unknown;
+}
+
+function readDiarySidecar(dateStr: string): DiarySidecar | null {
   const file = diarySidecarPath(dateStr);
   if (!file) return null;
   try {
     if (!existsSync(file)) return null;
-    return JSON.parse(readFileSync(file, 'utf8'));
+    return JSON.parse(readFileSync(file, 'utf8')) as DiarySidecar;
   } catch { return null; }
 }
 
-function writeDiarySidecar(dateStr, partial) {
+function writeDiarySidecar(dateStr: string, partial: DiarySidecar): boolean {
   const file = diarySidecarPath(dateStr);
   if (!file) return false;
   const dir = dirname(file);
   mkdirSync(dir, { recursive: true });
   // Merge with any existing sidecar so partial writes don't drop other keys.
-  let cur = {};
+  let cur: DiarySidecar = {};
   if (existsSync(file)) {
-    try { cur = JSON.parse(readFileSync(file, 'utf8')) || {}; } catch {}
+    try { cur = (JSON.parse(readFileSync(file, 'utf8')) as DiarySidecar) || {}; } catch { /* ignore */ }
   }
-  const next = { ...cur };
+  const next: DiarySidecar = { ...cur };
   if ('metrics' in partial) next.metrics = partial.metrics;
   if ('github_commits' in partial) next.github_commits = partial.github_commits;
   // Atomic-ish write: tmp + rename.
@@ -1679,16 +2053,21 @@ function writeDiarySidecar(dateStr, partial) {
   return true;
 }
 
-function deleteDiarySidecar(dateStr) {
+function deleteDiarySidecar(dateStr: string): void {
   const file = diarySidecarPath(dateStr);
   if (!file) return;
   try {
     if (existsSync(file)) unlinkSync(file);
-  } catch {}
+  } catch { /* ignore */ }
 }
 
-export function getDiary(db, dateStr) {
-  const row = db.prepare(`SELECT * FROM diary_entries WHERE date = ?`).get(dateStr);
+export interface DiaryEntryParsed extends DiaryEntryRow {
+  metrics: unknown;
+  github_commits: unknown;
+}
+
+export function getDiary(db: Db, dateStr: string): DiaryEntryParsed | null {
+  const row = db.prepare(`SELECT * FROM diary_entries WHERE date = ?`).get(dateStr) as DiaryEntryRow | undefined;
   if (!row) return null;
   const side = readDiarySidecar(dateStr);
   // Sidecar wins; DB columns are kept as fallback for un-migrated rows.
@@ -1707,20 +2086,33 @@ export function getDiary(db, dateStr) {
   };
 }
 
-export function listDiariesInRange(db, { start, end }) {
+export function listDiariesInRange(db: Db, { start, end }: { start: string; end: string }): Pick<DiaryEntryRow, 'date' | 'status' | 'summary' | 'notes' | 'updated_at'>[] {
   return db.prepare(`
     SELECT date, status, summary, notes, updated_at
     FROM diary_entries
     WHERE date >= ? AND date <= ?
     ORDER BY date ASC
-  `).all(start, end);
+  `).all(start, end) as Pick<DiaryEntryRow, 'date' | 'status' | 'summary' | 'notes' | 'updated_at'>[];
 }
 
-export function upsertDiary(db, { date, summary, workContent, workMinutes, highlights, notes, metrics, githubCommits, status, error }) {
+export interface UpsertDiaryInput {
+  date: string;
+  summary?: string | null;
+  workContent?: string | null;
+  workMinutes?: number | null;
+  highlights?: string | null;
+  notes?: string | null;
+  metrics?: unknown;
+  githubCommits?: unknown;
+  status?: string | null;
+  error?: string | null;
+}
+
+export function upsertDiary(db: Db, { date, summary, workContent, workMinutes, highlights, notes, metrics, githubCommits, status, error }: UpsertDiaryInput): void {
   // Persist heavy JSON to sidecar; DB columns are kept NULL going forward.
   // (Existing rows that still have *_json values continue to be served via
   // the fallback path in getDiary until migrateDiariesToSidecar runs.)
-  const sidecarPatch = {};
+  const sidecarPatch: DiarySidecar = {};
   if (metrics !== undefined) sidecarPatch.metrics = metrics ?? null;
   if (githubCommits !== undefined) sidecarPatch.github_commits = githubCommits ?? null;
   if (Object.keys(sidecarPatch).length > 0) {
@@ -1728,7 +2120,7 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
   }
 
   const tx = db.transaction(() => {
-    const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date);
+    const exists = db.prepare(`SELECT date FROM diary_entries WHERE date = ?`).get(date) as { date: string } | undefined;
     if (exists) {
       db.prepare(`
         UPDATE diary_entries
@@ -1744,7 +2136,7 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
       `).run(
         summary ?? null,
         workContent ?? null,
-        Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
+        Number.isFinite(workMinutes) ? Math.round(workMinutes as number) : null,
         highlights ?? null,
         notes ?? null,
         status ?? null,
@@ -1760,7 +2152,7 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
         date,
         summary ?? null,
         workContent ?? null,
-        Number.isFinite(workMinutes) ? Math.round(workMinutes) : null,
+        Number.isFinite(workMinutes) ? Math.round(workMinutes as number) : null,
         highlights ?? null,
         notes ?? null,
         status ?? 'pending',
@@ -1773,23 +2165,38 @@ export function upsertDiary(db, { date, summary, workContent, workMinutes, highl
 
 // ── weekly reports ---------------------------------------------------------
 
-export function getWeekly(db, weekStart) {
-  const row = db.prepare(`SELECT * FROM weekly_reports WHERE week_start = ?`).get(weekStart);
+export interface WeeklyReportParsed extends WeeklyReportRow {
+  github_summary: unknown;
+}
+
+export function getWeekly(db: Db, weekStart: string): WeeklyReportParsed | null {
+  const row = db.prepare(`SELECT * FROM weekly_reports WHERE week_start = ?`).get(weekStart) as WeeklyReportRow | undefined;
   if (!row) return null;
   return { ...row, github_summary: row.github_summary_json ? safeParse(row.github_summary_json) : null };
 }
 
-export function listWeeklyForMonth(db, monthStr) {
+export function listWeeklyForMonth(db: Db, monthStr: string): Pick<WeeklyReportRow, 'week_start' | 'week_end' | 'week_in_month' | 'status' | 'summary' | 'updated_at'>[] {
   return db.prepare(`
     SELECT week_start, week_end, week_in_month, status, summary, updated_at
     FROM weekly_reports
     WHERE month = ?
     ORDER BY week_start ASC
-  `).all(monthStr);
+  `).all(monthStr) as Pick<WeeklyReportRow, 'week_start' | 'week_end' | 'week_in_month' | 'status' | 'summary' | 'updated_at'>[];
 }
 
-export function upsertWeekly(db, { weekStart, weekEnd, month, weekInMonth, summary, githubSummary, status, error }) {
-  const exists = db.prepare(`SELECT week_start FROM weekly_reports WHERE week_start = ?`).get(weekStart);
+export interface UpsertWeeklyInput {
+  weekStart: string;
+  weekEnd?: string | null;
+  month?: string | null;
+  weekInMonth?: number | null;
+  summary?: string | null;
+  githubSummary?: unknown;
+  status?: string | null;
+  error?: string | null;
+}
+
+export function upsertWeekly(db: Db, { weekStart, weekEnd, month, weekInMonth, summary, githubSummary, status, error }: UpsertWeeklyInput): void {
+  const exists = db.prepare(`SELECT week_start FROM weekly_reports WHERE week_start = ?`).get(weekStart) as { week_start: string } | undefined;
   if (exists) {
     db.prepare(`
       UPDATE weekly_reports
@@ -1830,18 +2237,18 @@ export function upsertWeekly(db, { weekStart, weekEnd, month, weekInMonth, summa
   }
 }
 
-export function deleteWeekly(db, weekStart) {
+export function deleteWeekly(db: Db, weekStart: string): void {
   db.prepare(`DELETE FROM weekly_reports WHERE week_start = ?`).run(weekStart);
 }
 
-export function updateDiaryNotes(db, dateStr, notes) {
+export function updateDiaryNotes(db: Db, dateStr: string, notes: string | null): void {
   db.prepare(`
     UPDATE diary_entries SET notes = ?, updated_at = datetime('now')
     WHERE date = ?
   `).run(notes ?? '', dateStr);
 }
 
-export function deleteDiary(db, dateStr) {
+export function deleteDiary(db: Db, dateStr: string): void {
   db.prepare(`DELETE FROM diary_entries WHERE date = ?`).run(dateStr);
   deleteDiarySidecar(dateStr);
 }
@@ -1851,17 +2258,17 @@ export function deleteDiary(db, dateStr) {
  * `github_commits_json` に値があった行を sidecar ファイルに移し、 DB の
  * 列を NULL 化する。 idempotent。
  */
-export function migrateDiariesToSidecar(db) {
+export function migrateDiariesToSidecar(db: Db): { moved: number; reason?: string } {
   if (!DIARY_DATA_DIR) return { moved: 0, reason: 'no data dir' };
   const rows = db.prepare(`
     SELECT date, metrics_json, github_commits_json
     FROM diary_entries
     WHERE metrics_json IS NOT NULL OR github_commits_json IS NOT NULL
-  `).all();
+  `).all() as Pick<DiaryEntryRow, 'date' | 'metrics_json' | 'github_commits_json'>[];
   if (!rows.length) return { moved: 0 };
   const tx = db.transaction(() => {
     for (const r of rows) {
-      const patch = {};
+      const patch: DiarySidecar = {};
       if (r.metrics_json) patch.metrics = safeParse(r.metrics_json);
       if (r.github_commits_json) patch.github_commits = safeParse(r.github_commits_json);
       writeDiarySidecar(r.date, patch);
@@ -1876,14 +2283,14 @@ export function migrateDiariesToSidecar(db) {
   return { moved: rows.length };
 }
 
-export function getDiarySettings(db) {
-  const rows = db.prepare(`SELECT key, value FROM diary_settings`).all();
-  const out = {};
+export function getDiarySettings(db: Db): Record<string, string | null> {
+  const rows = db.prepare(`SELECT key, value FROM diary_settings`).all() as { key: string; value: string | null }[];
+  const out: Record<string, string | null> = {};
   for (const r of rows) out[r.key] = r.value;
   return out;
 }
 
-export function setDiarySettings(db, patch) {
+export function setDiarySettings(db: Db, patch: Record<string, unknown>): void {
   const tx = db.transaction(() => {
     for (const [k, v] of Object.entries(patch)) {
       if (v == null || v === '') {
@@ -1899,17 +2306,24 @@ export function setDiarySettings(db, patch) {
   tx();
 }
 
+export interface VisitDomainTally {
+  domain: string;
+  visits: number;
+  urls: number;
+  last_seen_at: string;
+}
+
 /**
  * Top domains across the page_visits log (URL-only history),
  * regardless of whether the URL is bookmarked.
  */
-export function trendsVisitDomains(db, { sinceDays = 30, limit = 12 } = {}) {
+export function trendsVisitDomains(db: Db, { sinceDays = 30, limit = 12 }: { sinceDays?: number; limit?: number } = {}): VisitDomainTally[] {
   const rows = db.prepare(`
     SELECT v.url, v.visit_count, v.last_seen_at
     FROM page_visits v
     WHERE v.last_seen_at >= datetime('now', ?)
-  `).all(`-${Number(sinceDays) || 30} days`);
-  const tally = new Map();
+  `).all(`-${Number(sinceDays) || 30} days`) as { url: string; visit_count: number; last_seen_at: string }[];
+  const tally = new Map<string, VisitDomainTally>();
   for (const r of rows) {
     const d = extractDomain(r.url);
     if (!d) continue;
@@ -1927,7 +2341,7 @@ export function trendsVisitDomains(db, { sinceDays = 30, limit = 12 } = {}) {
 // ── trends -----------------------------------------------------------------
 
 /** Top categories by save count within `sinceDays`. */
-export function trendsCategories(db, { sinceDays = 30, limit = 12 } = {}) {
+export function trendsCategories(db: Db, { sinceDays = 30, limit = 12 }: { sinceDays?: number; limit?: number } = {}): { category: string; count: number }[] {
   return db.prepare(`
     SELECT bc.category, COUNT(*) AS count
     FROM bookmark_categories bc
@@ -1936,14 +2350,21 @@ export function trendsCategories(db, { sinceDays = 30, limit = 12 } = {}) {
     GROUP BY bc.category
     ORDER BY count DESC
     LIMIT ?
-  `).all(`-${Number(sinceDays) || 30} days`, Number(limit) || 12);
+  `).all(`-${Number(sinceDays) || 30} days`, Number(limit) || 12) as { category: string; count: number }[];
+}
+
+export interface CategoryDiffRow {
+  category: string;
+  current: number;
+  previous: number;
+  delta: number;
 }
 
 /**
  * Compare category counts in the current window with the previous window of
  * the same length. Returns categories with the largest absolute delta.
  */
-export function trendsCategoryDiff(db, { sinceDays = 7, limit = 8 } = {}) {
+export function trendsCategoryDiff(db: Db, { sinceDays = 7, limit = 8 }: { sinceDays?: number; limit?: number } = {}): CategoryDiffRow[] {
   const days = Number(sinceDays) || 7;
   const cur = db.prepare(`
     SELECT bc.category, COUNT(*) AS n
@@ -1951,7 +2372,7 @@ export function trendsCategoryDiff(db, { sinceDays = 7, limit = 8 } = {}) {
     JOIN bookmarks b ON b.id = bc.bookmark_id
     WHERE b.created_at >= datetime('now', ?)
     GROUP BY bc.category
-  `).all(`-${days} days`);
+  `).all(`-${days} days`) as { category: string; n: number }[];
   const prev = db.prepare(`
     SELECT bc.category, COUNT(*) AS n
     FROM bookmark_categories bc
@@ -1959,15 +2380,15 @@ export function trendsCategoryDiff(db, { sinceDays = 7, limit = 8 } = {}) {
     WHERE b.created_at < datetime('now', ?)
       AND b.created_at >= datetime('now', ?)
     GROUP BY bc.category
-  `).all(`-${days} days`, `-${days * 2} days`);
-  const map = new Map();
+  `).all(`-${days} days`, `-${days * 2} days`) as { category: string; n: number }[];
+  const map = new Map<string, { current: number; previous: number }>();
   for (const r of cur) map.set(r.category, { current: r.n, previous: 0 });
   for (const r of prev) {
-    const cur = map.get(r.category) || { current: 0, previous: 0 };
-    cur.previous = r.n;
-    map.set(r.category, cur);
+    const c = map.get(r.category) || { current: 0, previous: 0 };
+    c.previous = r.n;
+    map.set(r.category, c);
   }
-  const rows = [...map.entries()].map(([category, v]) => ({
+  const rows: CategoryDiffRow[] = [...map.entries()].map(([category, v]) => ({
     category,
     current: v.current,
     previous: v.previous,
@@ -1977,28 +2398,33 @@ export function trendsCategoryDiff(db, { sinceDays = 7, limit = 8 } = {}) {
   return rows.slice(0, Number(limit) || 8);
 }
 
+export interface TimelineRow {
+  date: string;
+  saves: number;
+  accesses: number;
+}
+
 /** Daily save and access counts (per day, local time) in the window. */
-export function trendsTimeline(db, { sinceDays = 30 } = {}) {
+export function trendsTimeline(db: Db, { sinceDays = 30 }: { sinceDays?: number } = {}): TimelineRow[] {
   const days = Number(sinceDays) || 30;
   const saves = db.prepare(`
     SELECT date(created_at, 'localtime') AS d, COUNT(*) AS n
     FROM bookmarks
     WHERE created_at >= datetime('now', ?)
     GROUP BY d ORDER BY d ASC
-  `).all(`-${days} days`);
+  `).all(`-${days} days`) as { d: string; n: number }[];
   const accesses = db.prepare(`
     SELECT date(accessed_at, 'localtime') AS d, COUNT(*) AS n
     FROM accesses
     WHERE accessed_at >= datetime('now', ?)
     GROUP BY d ORDER BY d ASC
-  `).all(`-${days} days`);
+  `).all(`-${days} days`) as { d: string; n: number }[];
   // Build per-day series including zero-fill.
-  const out = [];
+  const out: TimelineRow[] = [];
   const today = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
     const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     out.push({
       date: local,
@@ -2010,15 +2436,15 @@ export function trendsTimeline(db, { sinceDays = 30 } = {}) {
 }
 
 /** Top accessed domains in window. Joins accesses with bookmarks to get URLs. */
-export function trendsDomains(db, { sinceDays = 30, limit = 12 } = {}) {
+export function trendsDomains(db: Db, { sinceDays = 30, limit = 12 }: { sinceDays?: number; limit?: number } = {}): { domain: string; hits: number }[] {
   const rows = db.prepare(`
     SELECT b.url, COUNT(a.id) AS hits
     FROM accesses a
     JOIN bookmarks b ON b.id = a.bookmark_id
     WHERE a.accessed_at >= datetime('now', ?)
     GROUP BY b.id
-  `).all(`-${Number(sinceDays) || 30} days`);
-  const tally = new Map();
+  `).all(`-${Number(sinceDays) || 30} days`) as { url: string; hits: number }[];
+  const tally = new Map<string, number>();
   for (const r of rows) {
     const d = extractDomain(r.url);
     if (!d) continue;
@@ -2028,6 +2454,11 @@ export function trendsDomains(db, { sinceDays = 30, limit = 12 } = {}) {
     .map(([domain, hits]) => ({ domain, hits }))
     .sort((a, b) => b.hits - a.hits)
     .slice(0, Number(limit) || 12);
+}
+
+export interface WorkHoursRow {
+  date: string;
+  minutes: number | null;
 }
 
 /**
@@ -2040,19 +2471,19 @@ export function trendsDomains(db, { sinceDays = 30, limit = 12 } = {}) {
  * Days without a generated diary (or where Sonnet declined to estimate)
  * report `null` minutes — the chart skips them rather than misleading with 0.
  */
-export function trendsWorkHours(db, { sinceDays = 30 } = {}) {
+export function trendsWorkHours(db: Db, { sinceDays = 30 }: { sinceDays?: number } = {}): WorkHoursRow[] {
   const days = Number(sinceDays) || 30;
-  function dateKeyLocal(d) {
+  function dateKeyLocal(d: Date): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
   const rows = db.prepare(`
     SELECT date, work_minutes FROM diary_entries
     WHERE date >= ? AND work_minutes IS NOT NULL
-  `).all(dateKeyLocal(new Date(Date.now() - (days - 1) * 86400_000)));
-  const perDay = new Map();
+  `).all(dateKeyLocal(new Date(Date.now() - (days - 1) * 86400_000))) as { date: string; work_minutes: number }[];
+  const perDay = new Map<string, number>();
   for (const r of rows) perDay.set(r.date, r.work_minutes);
 
-  const out = [];
+  const out: WorkHoursRow[] = [];
   const today = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const dt = new Date(today);
@@ -2060,10 +2491,17 @@ export function trendsWorkHours(db, { sinceDays = 30 } = {}) {
     const k = dateKeyLocal(dt);
     out.push({
       date: k,
-      minutes: perDay.has(k) ? perDay.get(k) : null,
+      minutes: perDay.has(k) ? (perDay.get(k) as number) : null,
     });
   }
   return out;
+}
+
+export interface GpsWalkingRow {
+  date: string;
+  distance_km: number;
+  walking_minutes: number;
+  travel_minutes: number;
 }
 
 /**
@@ -2076,17 +2514,17 @@ export function trendsWorkHours(db, { sinceDays = 30 } = {}) {
  *
  * 静止判定は速度ベース。停車中の jitter は accuracy で弾く。
  */
-export function trendsGpsWalking(db, { sinceDays = 30, userId = 'me' } = {}) {
+export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { sinceDays?: number; userId?: string } = {}): GpsWalkingRow[] {
   const days = Number(sinceDays) || 30;
-  function dateKeyLocal(d) {
+  function dateKeyLocal(d: Date): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
-  function parseUtc(s) {
+  function parseUtc(s: string): Date {
     return new Date(String(s).replace(' ', 'T') + 'Z');
   }
-  function haversineMeters(a, b) {
+  function haversineMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
     const R = 6_371_008;
-    const toRad = (deg) => (deg * Math.PI) / 180;
+    const toRad = (deg: number): number => (deg * Math.PI) / 180;
     const dLat = toRad(b.lat - a.lat);
     const dLon = toRad(b.lon - a.lon);
     const sa = Math.sin(dLat / 2);
@@ -2107,10 +2545,11 @@ export function trendsGpsWalking(db, { sinceDays = 30, userId = 'me' } = {}) {
     FROM gps_locations
     WHERE user_id = ? AND date(recorded_at, 'localtime') >= ?
     ORDER BY recorded_at ASC
-  `).all(userId, startKey);
+  `).all(userId, startKey) as { recorded_at: string; lat: number; lon: number; accuracy_m: number | null }[];
 
-  const perDay = new Map();
-  function bucket(key) {
+  interface DayBucket { distance_m: number; walking_ms: number; travel_ms: number }
+  const perDay = new Map<string, DayBucket>();
+  function bucket(key: string): DayBucket {
     let b = perDay.get(key);
     if (!b) {
       b = { distance_m: 0, walking_ms: 0, travel_ms: 0 };
@@ -2118,7 +2557,7 @@ export function trendsGpsWalking(db, { sinceDays = 30, userId = 'me' } = {}) {
     }
     return b;
   }
-  let prev = null;
+  let prev: { ts: number; key: string; lat: number; lon: number; accOk: boolean } | null = null;
   for (const r of rows) {
     const d = parseUtc(r.recorded_at);
     const ts = d.getTime();
@@ -2139,7 +2578,7 @@ export function trendsGpsWalking(db, { sinceDays = 30, userId = 'me' } = {}) {
     prev = { ts, key, lat: r.lat, lon: r.lon, accOk };
   }
 
-  const out = [];
+  const out: GpsWalkingRow[] = [];
   const today = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const dt = new Date(today);
@@ -2156,14 +2595,14 @@ export function trendsGpsWalking(db, { sinceDays = 30, userId = 'me' } = {}) {
   return out;
 }
 
-const KEYWORD_STOPWORDS = new Set([
+const KEYWORD_STOPWORDS = new Set<string>([
   'the','and','for','with','from','that','this','your','you','our','have','has','was','were','will','what','when','where','which','who','about','into','than','then','also','but','not','are','can','use','using','how','why','etc',
   'について','として','による','によって','などの','する','して','です','ます','ない','ある','こと','もの','よう','これ','それ','ため','など','とは','では','での','さん','さま','様','記事','ページ','こちら','そして','しかし','ただし','ここ','以下','以上',
 ]);
 
-function tokenize(text) {
+function tokenize(text: string | null | undefined): string[] {
   const t = String(text || '').toLowerCase();
-  const out = [];
+  const out: string[] = [];
   // ASCII / Latin words ≥ 3 chars.
   for (const m of t.matchAll(/[a-z][a-z0-9_+#.-]{2,}/g)) out.push(m[0]);
   // Japanese-ish runs ≥ 2 chars (CJK + katakana/hiragana lump).
@@ -2176,28 +2615,28 @@ function tokenize(text) {
  * queries. Crude tokeniser: ASCII words ≥3 chars + JP runs ≥2 chars,
  * minus stopwords.
  */
-export function trendsKeywords(db, { sinceDays = 30, limit = 25 } = {}) {
+export function trendsKeywords(db: Db, { sinceDays = 30, limit = 25 }: { sinceDays?: number; limit?: number } = {}): { word: string; count: number }[] {
   const days = Number(sinceDays) || 30;
   const ago = `-${days} days`;
-  const sources = [];
+  const sources: (string | null)[] = [];
   for (const r of db.prepare(`
     SELECT title FROM page_visits WHERE last_seen_at >= datetime('now', ?)
-  `).all(ago)) sources.push(r.title);
+  `).all(ago) as { title: string | null }[]) sources.push(r.title);
   for (const r of db.prepare(`
     SELECT title FROM bookmarks WHERE created_at >= datetime('now', ?)
-  `).all(ago)) sources.push(r.title);
+  `).all(ago) as { title: string | null }[]) sources.push(r.title);
   for (const r of db.prepare(`
     SELECT query FROM dig_sessions WHERE created_at >= datetime('now', ?)
-  `).all(ago)) sources.push(r.query);
+  `).all(ago) as { query: string | null }[]) sources.push(r.query);
   // Dictionary terms also reflect what the user is studying.
   for (const r of db.prepare(`
     SELECT term FROM dictionary_entries WHERE updated_at >= datetime('now', ?)
-  `).all(ago)) sources.push(r.term);
+  `).all(ago) as { term: string | null }[]) sources.push(r.term);
 
-  const tally = new Map();
+  const tally = new Map<string, number>();
   for (const text of sources) {
     if (!text) continue;
-    const seen = new Set();  // count each source once per word
+    const seen = new Set<string>();  // count each source once per word
     for (const w of tokenize(text)) {
       if (seen.has(w)) continue;
       seen.add(w);
@@ -2210,17 +2649,7 @@ export function trendsKeywords(db, { sinceDays = 30, limit = 25 } = {}) {
     .slice(0, Number(limit) || 25);
 }
 
-function extractDomain(url) {
-  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
-}
-function firstPathSegment(url) {
-  try {
-    const segs = new URL(url).pathname.split('/').filter(Boolean);
-    return segs[0] || null;
-  } catch { return null; }
-}
-
-export function recordAccess(db, bookmarkId) {
+export function recordAccess(db: Db, bookmarkId: number): void {
   const tx = db.transaction(() => {
     db.prepare(`INSERT INTO accesses (bookmark_id) VALUES (?)`).run(bookmarkId);
     db.prepare(`
@@ -2233,21 +2662,38 @@ export function recordAccess(db, bookmarkId) {
   tx();
 }
 
-export function listAccesses(db, bookmarkId, limit = 50) {
+export function listAccesses(db: Db, bookmarkId: number, limit = 50): { id: number; accessed_at: string }[] {
   return db.prepare(`
     SELECT id, accessed_at FROM accesses
     WHERE bookmark_id = ? ORDER BY accessed_at DESC LIMIT ?
-  `).all(bookmarkId, limit);
+  `).all(bookmarkId, limit) as { id: number; accessed_at: string }[];
 }
 
-export function deleteBookmark(db, id) {
-  const row = db.prepare(`SELECT html_path FROM bookmarks WHERE id = ?`).get(id);
+export function deleteBookmark(db: Db, id: number): string | null {
+  const row = db.prepare(`SELECT html_path FROM bookmarks WHERE id = ?`).get(id) as { html_path: string } | undefined;
   db.prepare(`DELETE FROM bookmarks WHERE id = ?`).run(id);
   return row?.html_path ?? null;
 }
 
+export interface ImportedBookmarkInput {
+  url: string;
+  title?: string | null;
+  html_path?: string | null;
+  summary?: string | null;
+  memo?: string | null;
+  created_at?: string | null;
+  last_accessed_at?: string | null;
+  access_count?: number | null;
+  categories?: string[];
+}
+
+export interface InsertImportedBookmarkResult {
+  skipped: boolean;
+  id: number;
+}
+
 /** Insert a bookmark from an export bundle. Skips if URL already exists. */
-export function insertImportedBookmark(db, b) {
+export function insertImportedBookmark(db: Db, b: ImportedBookmarkInput): InsertImportedBookmarkResult {
   const existing = findBookmarkByUrl(db, b.url);
   if (existing) return { skipped: true, id: existing.id };
   const info = db.prepare(`
@@ -2263,7 +2709,7 @@ export function insertImportedBookmark(db, b) {
     b.last_accessed_at ?? null,
     b.access_count ?? 0,
   );
-  const id = info.lastInsertRowid;
+  const id = Number(info.lastInsertRowid);
   if (Array.isArray(b.categories)) {
     const ins = db.prepare(`INSERT OR IGNORE INTO bookmark_categories (bookmark_id, category) VALUES (?, ?)`);
     for (const cat of b.categories) {
@@ -2285,9 +2731,9 @@ export const GPS_STATIONARY_THRESHOLD_M = 50;
 /**
  * Haversine 距離 (m)。地球半径 6371008 (mean)。db.js 内専用ヘルパ。
  */
-function gpsHaversine(a, b) {
+function gpsHaversine(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
   const R = 6_371_008;
-  const t = (d) => (d * Math.PI) / 180;
+  const t = (d: number): number => (d * Math.PI) / 180;
   const dLat = t(b.lat - a.lat);
   const dLon = t(b.lon - a.lon);
   const sa = Math.sin(dLat / 2);
@@ -2295,6 +2741,27 @@ function gpsHaversine(a, b) {
   const h = sa * sa + Math.cos(t(a.lat)) * Math.cos(t(b.lat)) * so * so;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
+
+export interface GpsLocationInput {
+  userId?: string;
+  deviceId?: string | null;
+  recordedAt?: string;
+  tst?: number;
+  lat: number;
+  lon: number;
+  accuracy?: number | null;
+  altitude?: number | null;
+  velocity?: number | null;
+  course?: number | null;
+  battery?: number | null;
+  conn?: string | null;
+  rawJson?: string | null;
+}
+
+export type InsertGpsLocationResult =
+  | { skipped: true; id: number }
+  | { merged: true; id: number }
+  | { inserted: true; id: number };
 
 /**
  * 1 点の GPS 位置を挿入する。同一 (user_id, device_id, recorded_at) は無視 (重複防止)。
@@ -2311,7 +2778,7 @@ function gpsHaversine(a, b) {
  *   { merged: true, id }    — 圧縮 (UPDATE LAST → NEW)
  *   { inserted: true, id }  — 通常挿入
  */
-export function insertGpsLocation(db, loc) {
+export function insertGpsLocation(db: Db, loc: GpsLocationInput): InsertGpsLocationResult {
   const userId = loc.userId || 'me';
   const recordedAt = loc.recordedAt
     ? loc.recordedAt
@@ -2324,7 +2791,7 @@ export function insertGpsLocation(db, loc) {
     SELECT id FROM gps_locations
     WHERE user_id = ? AND IFNULL(device_id, '') = IFNULL(?, '') AND recorded_at = ?
     LIMIT 1
-  `).get(userId, loc.deviceId ?? null, recordedAt);
+  `).get(userId, loc.deviceId ?? null, recordedAt) as { id: number } | undefined;
   if (dupCheck) return { skipped: true, id: dupCheck.id };
 
   // 圧縮判定: 直近 2 行を確認
@@ -2334,7 +2801,7 @@ export function insertGpsLocation(db, loc) {
     WHERE user_id = ? AND IFNULL(device_id, '') = IFNULL(?, '')
     ORDER BY recorded_at DESC
     LIMIT 2
-  `).all(userId, loc.deviceId ?? null);
+  `).all(userId, loc.deviceId ?? null) as { id: number; lat: number; lon: number; recorded_at: string; samples_count: number; samples_first_at: string | null }[];
 
   if (recent.length === 2) {
     const LAST = recent[0];
@@ -2396,16 +2863,22 @@ export function insertGpsLocation(db, loc) {
     loc.conn ?? null,
     loc.rawJson ?? null,
   );
-  return { inserted: true, id: info.lastInsertRowid };
+  return { inserted: true, id: Number(info.lastInsertRowid) };
 }
 
 // ── 位置照合 (place name/address) 関連 helpers ──────────────────────────────
+
+export interface NearbyPlace {
+  place_name: string | null;
+  place_address: string | null;
+  place_source: GpsLocationRow['place_source'];
+}
 
 /**
  * 近接 (約 gridM 以内) で既に place_name が解決済の点を 1 件返す.
  * 数百件規模の DB なら full scan で十分速い (lat/lon 範囲条件で枝刈り).
  */
-export function findNearbyResolvedPlace(db, lat, lon, gridM = 10) {
+export function findNearbyResolvedPlace(db: Db, lat: number, lon: number, gridM = 10): NearbyPlace | null {
   // 1 度 ≈ 111,320m → 10m なら 0.00009 度. 緯度方向は固定、 経度は cos 補正.
   const dLat = gridM / 111_320;
   const dLon = gridM / (111_320 * Math.max(0.1, Math.cos((lat * Math.PI) / 180)));
@@ -2418,12 +2891,18 @@ export function findNearbyResolvedPlace(db, lat, lon, gridM = 10) {
        AND lon BETWEEN ? AND ?
      ORDER BY place_resolved_at DESC
      LIMIT 1
-  `).get(lat - dLat, lat + dLat, lon - dLon, lon + dLon);
+  `).get(lat - dLat, lat + dLat, lon - dLon, lon + dLon) as NearbyPlace | undefined;
   return row ?? null;
 }
 
+export interface SetGpsPlaceInput {
+  name?: string | null;
+  address?: string | null;
+  source?: GpsLocationRow['place_source'];
+}
+
 /** id の行に place 結果を書き込む. resolved_at は now (unix sec). */
-export function setGpsPlace(db, id, { name, address, source }) {
+export function setGpsPlace(db: Db, id: number, { name, address, source }: SetGpsPlaceInput): void {
   const now = Math.floor(Date.now() / 1000);
   db.prepare(`
     UPDATE gps_locations
@@ -2432,23 +2911,45 @@ export function setGpsPlace(db, id, { name, address, source }) {
   `).run(name ?? null, address ?? null, source ?? 'failed', now, id);
 }
 
+export interface UnresolvedGpsLocation {
+  id: number;
+  lat: number;
+  lon: number;
+  recorded_at: string;
+  device_id: string | null;
+}
+
 /**
  * 未解決の点 (place_resolved_at IS NULL) を新しい順に N 件返す.
  * バックフィルジョブ用.
  */
-export function listUnresolvedGpsLocations(db, limit = 50) {
+export function listUnresolvedGpsLocations(db: Db, limit = 50): UnresolvedGpsLocation[] {
   return db.prepare(`
     SELECT id, lat, lon, recorded_at, device_id
       FROM gps_locations
      WHERE place_resolved_at IS NULL
      ORDER BY id DESC
      LIMIT ?
-  `).all(limit);
+  `).all(limit) as UnresolvedGpsLocation[];
 }
 
 /** 1 行を id 指定で読む (resolver の race 防止用). */
-export function findGpsLocationById(db, id) {
-  return db.prepare(`SELECT id, lat, lon, place_resolved_at FROM gps_locations WHERE id = ?`).get(id) ?? null;
+export function findGpsLocationById(db: Db, id: number): { id: number; lat: number; lon: number; place_resolved_at: number | null } | null {
+  return (db.prepare(`SELECT id, lat, lon, place_resolved_at FROM gps_locations WHERE id = ?`)
+    .get(id) as { id: number; lat: number; lon: number; place_resolved_at: number | null } | undefined) ?? null;
+}
+
+export interface CompressGpsHistoryInput {
+  userId?: string;
+  deviceId?: string | null;
+  threshold?: number;
+}
+
+export interface CompressGpsHistorySummary {
+  devices: { device_id: string | null; before: number; after: number; deleted: number; segments: number }[];
+  total_deleted: number;
+  total_segments: number;
+  total_kept: number;
 }
 
 /**
@@ -2466,17 +2967,17 @@ export function findGpsLocationById(db, id) {
  *
  * 戻り値: { devices: [{device_id, before, after, deleted, segments}], total_deleted, total_segments }
  */
-export function compressGpsHistory(db, { userId = 'me', deviceId = null, threshold = GPS_STATIONARY_THRESHOLD_M } = {}) {
+export function compressGpsHistory(db: Db, { userId = 'me', deviceId = null, threshold = GPS_STATIONARY_THRESHOLD_M }: CompressGpsHistoryInput = {}): CompressGpsHistorySummary {
   const T = threshold;
 
   // 対象デバイスを列挙
-  const deviceRows = deviceId
+  const deviceRows: { device_id: string | null }[] = deviceId
     ? [{ device_id: deviceId }]
-    : db.prepare(`
+    : (db.prepare(`
         SELECT DISTINCT device_id FROM gps_locations WHERE user_id = ?
-      `).all(userId);
+      `).all(userId) as { device_id: string | null }[]);
 
-  const summary = { devices: [], total_deleted: 0, total_segments: 0, total_kept: 0 };
+  const summary: CompressGpsHistorySummary = { devices: [], total_deleted: 0, total_segments: 0, total_kept: 0 };
 
   for (const { device_id } of deviceRows) {
     const rows = db.prepare(`
@@ -2484,7 +2985,7 @@ export function compressGpsHistory(db, { userId = 'me', deviceId = null, thresho
       FROM gps_locations
       WHERE user_id = ? AND IFNULL(device_id, '') = IFNULL(?, '')
       ORDER BY recorded_at ASC
-    `).all(userId, device_id);
+    `).all(userId, device_id) as { id: number; recorded_at: string; lat: number; lon: number; samples_count: number; samples_first_at: string | null }[];
 
     const before = rows.length;
     if (rows.length < 3) {
@@ -2548,13 +3049,27 @@ export function compressGpsHistory(db, { userId = 'me', deviceId = null, thresho
   return summary;
 }
 
+export interface ListGpsLocationsInRangeInput {
+  from?: string;
+  to?: string;
+  userId?: string;
+  deviceId?: string | null;
+}
+
+export type GpsLocationInRangeRow = Pick<
+  GpsLocationRow,
+  | 'id' | 'user_id' | 'device_id' | 'recorded_at' | 'lat' | 'lon'
+  | 'accuracy_m' | 'altitude_m' | 'velocity_kmh' | 'course_deg' | 'battery_pct' | 'conn'
+  | 'samples_count' | 'samples_first_at'
+>;
+
 /**
  * 期間内の位置点を時系列順で返す。`from` / `to` は ISO 8601。
  * device_id を絞り込みたい場合は `deviceId` を渡す。
  */
-export function listGpsLocationsInRange(db, { from, to, userId = 'me', deviceId } = {}) {
+export function listGpsLocationsInRange(db: Db, { from, to, userId = 'me', deviceId }: ListGpsLocationsInRangeInput = {}): GpsLocationInRangeRow[] {
   const where = ['user_id = ?'];
-  const params = [userId];
+  const params: unknown[] = [userId];
   if (from) { where.push('recorded_at >= ?'); params.push(from); }
   if (to)   { where.push('recorded_at <= ?'); params.push(to); }
   if (deviceId) { where.push('device_id = ?'); params.push(deviceId); }
@@ -2565,14 +3080,21 @@ export function listGpsLocationsInRange(db, { from, to, userId = 'me', deviceId 
     FROM gps_locations
     WHERE ${where.join(' AND ')}
     ORDER BY recorded_at ASC
-  `).all(...params);
+  `).all(...params) as GpsLocationInRangeRow[];
+}
+
+export interface GpsLocationDay {
+  day: string;
+  points: number;
+  first_at: string;
+  last_at: string;
 }
 
 /**
  * 位置情報を持っている日付 (YYYY-MM-DD, local TZ) と件数を新しい順で返す。
  * UI の date picker / カレンダー表示用。
  */
-export function listGpsLocationDays(db, { userId = 'me', limit = 365 } = {}) {
+export function listGpsLocationDays(db: Db, { userId = 'me', limit = 365 }: { userId?: string; limit?: number } = {}): GpsLocationDay[] {
   return db.prepare(`
     SELECT date(recorded_at, 'localtime') AS day,
            COUNT(*)                       AS points,
@@ -2583,25 +3105,33 @@ export function listGpsLocationDays(db, { userId = 'me', limit = 365 } = {}) {
     GROUP BY day
     ORDER BY day DESC
     LIMIT ?
-  `).all(userId, limit);
+  `).all(userId, limit) as GpsLocationDay[];
 }
 
 /**
  * 当日 (local TZ) の点件数。日記 / metrics 用の安価な取得。
  */
-export function gpsLocationCountForDate(db, dateStr, { userId = 'me' } = {}) {
+export function gpsLocationCountForDate(db: Db, dateStr: string, { userId = 'me' }: { userId?: string } = {}): number {
   const row = db.prepare(`
     SELECT COUNT(*) AS n
     FROM gps_locations
     WHERE user_id = ? AND date(recorded_at, 'localtime') = ?
-  `).get(userId, dateStr);
+  `).get(userId, dateStr) as { n: number } | undefined;
   return row ? row.n : 0;
 }
+
+export type GpsLocationForDateRow = Pick<
+  GpsLocationRow,
+  | 'id' | 'device_id' | 'recorded_at' | 'lat' | 'lon'
+  | 'accuracy_m' | 'altitude_m' | 'velocity_kmh' | 'course_deg'
+  | 'samples_count' | 'samples_first_at'
+  | 'place_name' | 'place_address' | 'place_source'
+>;
 
 /**
  * 指定日 (local TZ) の点を時系列で返す。日記の metrics + Maps overlay 共用。
  */
-export function listGpsLocationsForDate(db, dateStr, { userId = 'me' } = {}) {
+export function listGpsLocationsForDate(db: Db, dateStr: string, { userId = 'me' }: { userId?: string } = {}): GpsLocationForDateRow[] {
   return db.prepare(`
     SELECT id, device_id, recorded_at, lat, lon,
            accuracy_m, altitude_m, velocity_kmh, course_deg,
@@ -2610,13 +3140,13 @@ export function listGpsLocationsForDate(db, dateStr, { userId = 'me' } = {}) {
     FROM gps_locations
     WHERE user_id = ? AND date(recorded_at, 'localtime') = ?
     ORDER BY recorded_at ASC
-  `).all(userId, dateStr);
+  `).all(userId, dateStr) as GpsLocationForDateRow[];
 }
 
 /**
  * 古い点を削除する (retention)。`olderThan` は ISO 8601。
  */
-export function deleteGpsLocationsOlderThan(db, olderThan, { userId = 'me' } = {}) {
+export function deleteGpsLocationsOlderThan(db: Db, olderThan: string, { userId = 'me' }: { userId?: string } = {}): number {
   const info = db.prepare(`
     DELETE FROM gps_locations
     WHERE user_id = ? AND recorded_at < ?
@@ -2626,8 +3156,16 @@ export function deleteGpsLocationsOlderThan(db, olderThan, { userId = 'me' } = {
 
 // ─── meals ────────────────────────────────────────────────
 
+export interface NearestGpsResult {
+  id: number;
+  recorded_at: string;
+  lat: number;
+  lon: number;
+  accuracy_m: number | null;
+}
+
 /** Find the GPS point closest to `at` (ISO8601), within `windowMs`. */
-export function findNearestGpsLocation(db, at, { windowMs = 5 * 60 * 1000, userId = 'me' } = {}) {
+export function findNearestGpsLocation(db: Db, at: string, { windowMs = 5 * 60 * 1000, userId = 'me' }: { windowMs?: number; userId?: string } = {}): NearestGpsResult | null {
   const center = new Date(at);
   if (isNaN(center.getTime())) return null;
   const from = new Date(center.getTime() - windowMs).toISOString();
@@ -2637,7 +3175,7 @@ export function findNearestGpsLocation(db, at, { windowMs = 5 * 60 * 1000, userI
     FROM gps_locations
     WHERE user_id = ? AND recorded_at BETWEEN ? AND ?
     ORDER BY recorded_at
-  `).all(userId, from, to);
+  `).all(userId, from, to) as NearestGpsResult[];
   if (rows.length === 0) return null;
   let best = rows[0];
   let bestDiff = Math.abs(new Date(best.recorded_at).getTime() - center.getTime());
@@ -2651,7 +3189,25 @@ export function findNearestGpsLocation(db, at, { windowMs = 5 * 60 * 1000, userI
   return best;
 }
 
-export function insertMeal(db, m) {
+export interface InsertMealInput {
+  photo_path: string;
+  eaten_at: string;
+  eaten_at_source?: MealRow['eaten_at_source'];
+  lat?: number | null;
+  lon?: number | null;
+  location_label?: string | null;
+  location_source?: string | null;
+  description?: string | null;
+  calories?: number | null;
+  items_json?: string | null;
+  ai_status?: MealRow['ai_status'];
+  ai_error?: string | null;
+  user_note?: string | null;
+  user_corrected_description?: string | null;
+  user_corrected_calories?: number | null;
+}
+
+export function insertMeal(db: Db, m: InsertMealInput): number {
   const info = db.prepare(`
     INSERT INTO meals (
       photo_path, eaten_at, eaten_at_source,
@@ -2670,13 +3226,20 @@ export function insertMeal(db, m) {
   return Number(info.lastInsertRowid);
 }
 
-export function getMeal(db, id) {
-  return db.prepare(`SELECT * FROM meals WHERE id = ?`).get(id);
+export function getMeal(db: Db, id: number): MealRow | undefined {
+  return db.prepare(`SELECT * FROM meals WHERE id = ?`).get(id) as MealRow | undefined;
 }
 
-export function listMeals(db, { from, to, limit = 100, offset = 0 } = {}) {
-  const where = [];
-  const args = [];
+export interface ListMealsOptions {
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function listMeals(db: Db, { from, to, limit = 100, offset = 0 }: ListMealsOptions = {}): MealRow[] {
+  const where: string[] = [];
+  const args: unknown[] = [];
   if (from) { where.push(`eaten_at >= ?`); args.push(from); }
   if (to)   { where.push(`eaten_at <= ?`); args.push(to);   }
   const sql = `
@@ -2686,21 +3249,22 @@ export function listMeals(db, { from, to, limit = 100, offset = 0 } = {}) {
     LIMIT ? OFFSET ?
   `;
   args.push(limit, offset);
-  return db.prepare(sql).all(...args);
+  return db.prepare(sql).all(...args) as MealRow[];
 }
 
-export function countMeals(db, { from, to } = {}) {
-  const where = [];
-  const args = [];
+export function countMeals(db: Db, { from, to }: { from?: string; to?: string } = {}): number {
+  const where: string[] = [];
+  const args: unknown[] = [];
   if (from) { where.push(`eaten_at >= ?`); args.push(from); }
   if (to)   { where.push(`eaten_at <= ?`); args.push(to);   }
   const sql = `SELECT COUNT(*) AS c FROM meals ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
-  return db.prepare(sql).get(...args).c;
+  const row = db.prepare(sql).get(...args) as { c: number };
+  return row.c;
 }
 
-export function updateMeal(db, id, patch) {
-  const cols = [];
-  const args = [];
+export function updateMeal(db: Db, id: number, patch: Record<string, unknown>): void {
+  const cols: string[] = [];
+  const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     cols.push(`${k} = ?`);
     args.push(v);
@@ -2711,24 +3275,24 @@ export function updateMeal(db, id, patch) {
   db.prepare(`UPDATE meals SET ${cols.join(', ')} WHERE id = ?`).run(...args);
 }
 
-export function deleteMeal(db, id) {
+export function deleteMeal(db: Db, id: number): void {
   db.prepare(`DELETE FROM meals WHERE id = ?`).run(id);
 }
 
-export function listPendingMeals(db, { limit = 20 } = {}) {
+export function listPendingMeals(db: Db, { limit = 20 }: { limit?: number } = {}): MealRow[] {
   return db.prepare(`
     SELECT * FROM meals WHERE ai_status = 'pending'
     ORDER BY id ASC LIMIT ?
-  `).all(limit);
+  `).all(limit) as MealRow[];
 }
 
 /** 指定日 (ローカル YYYY-MM-DD) の食事を eaten_at 昇順で返す。 */
-export function listMealsForDate(db, dateStr) {
+export function listMealsForDate(db: Db, dateStr: string): MealRow[] {
   return db.prepare(`
     SELECT * FROM meals
     WHERE date(eaten_at, 'localtime') = ?
     ORDER BY eaten_at ASC
-  `).all(dateStr);
+  `).all(dateStr) as MealRow[];
 }
 
 // ─── user stopwords (ユーザカスタムの語彙除外) ─────────────────
@@ -2739,9 +3303,15 @@ export function listMealsForDate(db, dateStr) {
 
 // ---- implementation notes -------------------------------------------------
 
-export function listImplementationNotes(db, { limit = 100, offset = 0, shareable = null } = {}) {
-  const where = [];
-  const args = [];
+export interface ListImplementationNotesOptions {
+  limit?: number;
+  offset?: number;
+  shareable?: boolean | 0 | 1 | null;
+}
+
+export function listImplementationNotes(db: Db, { limit = 100, offset = 0, shareable = null }: ListImplementationNotesOptions = {}): ImplementationNoteRow[] {
+  const where: string[] = [];
+  const args: unknown[] = [];
   if (shareable != null) {
     where.push('shareable = ?');
     args.push(shareable ? 1 : 0);
@@ -2752,14 +3322,24 @@ export function listImplementationNotes(db, { limit = 100, offset = 0, shareable
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
-  `).all(...args);
+  `).all(...args) as ImplementationNoteRow[];
 }
 
-export function getImplementationNote(db, id) {
-  return db.prepare(`SELECT * FROM implementation_notes WHERE id = ?`).get(id);
+export function getImplementationNote(db: Db, id: number): ImplementationNoteRow | undefined {
+  return db.prepare(`SELECT * FROM implementation_notes WHERE id = ?`).get(id) as ImplementationNoteRow | undefined;
 }
 
-export function insertImplementationNote(db, note) {
+export interface InsertImplementationNoteInput {
+  product?: string | null;
+  title: string;
+  good_points?: string | null;
+  bad_points?: string | null;
+  attachment_type?: string | null;
+  attachment_value?: string | null;
+  shareable?: boolean | 0 | 1;
+}
+
+export function insertImplementationNote(db: Db, note: InsertImplementationNoteInput): number {
   const info = db.prepare(`
     INSERT INTO implementation_notes
       (product, title, good_points, bad_points, attachment_type, attachment_value, shareable)
@@ -2776,14 +3356,14 @@ export function insertImplementationNote(db, note) {
   return Number(info.lastInsertRowid);
 }
 
-export function updateImplementationNote(db, id, patch) {
+export function updateImplementationNote(db: Db, id: number, patch: Record<string, unknown>): void {
   const allowed = new Set([
     'product', 'title', 'good_points', 'bad_points',
     'attachment_type', 'attachment_value',
     'shareable', 'shared_at', 'shared_origin',
   ]);
-  const cols = [];
-  const args = [];
+  const cols: string[] = [];
+  const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) continue;
     cols.push(`${k} = ?`);
@@ -2795,21 +3375,28 @@ export function updateImplementationNote(db, id, patch) {
   db.prepare(`UPDATE implementation_notes SET ${cols.join(', ')} WHERE id = ?`).run(...args);
 }
 
-export function deleteImplementationNote(db, id) {
+export function deleteImplementationNote(db: Db, id: number): void {
   db.prepare(`DELETE FROM implementation_notes WHERE id = ?`).run(id);
 }
 
 // ---- agent projects + runs (AI 実装委託) ----------------------------------
 
-export function listAgentProjects(db) {
-  return db.prepare(`SELECT * FROM agent_projects ORDER BY created_at ASC`).all();
+export function listAgentProjects(db: Db): AgentProjectRow[] {
+  return db.prepare(`SELECT * FROM agent_projects ORDER BY created_at ASC`).all() as AgentProjectRow[];
 }
 
-export function getAgentProject(db, id) {
-  return db.prepare(`SELECT * FROM agent_projects WHERE id = ?`).get(id);
+export function getAgentProject(db: Db, id: number): AgentProjectRow | undefined {
+  return db.prepare(`SELECT * FROM agent_projects WHERE id = ?`).get(id) as AgentProjectRow | undefined;
 }
 
-export function insertAgentProject(db, p) {
+export interface InsertAgentProjectInput {
+  name: string;
+  path: string;
+  rules?: string | null;
+  default_agent?: AgentProjectRow['default_agent'];
+}
+
+export function insertAgentProject(db: Db, p: InsertAgentProjectInput): number {
   const info = db.prepare(`
     INSERT INTO agent_projects (name, path, rules, default_agent)
     VALUES (?, ?, ?, ?)
@@ -2822,10 +3409,10 @@ export function insertAgentProject(db, p) {
   return Number(info.lastInsertRowid);
 }
 
-export function updateAgentProject(db, id, patch) {
+export function updateAgentProject(db: Db, id: number, patch: Record<string, unknown>): void {
   const allowed = new Set(['name', 'path', 'rules', 'default_agent']);
-  const cols = [];
-  const args = [];
+  const cols: string[] = [];
+  const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) continue;
     cols.push(`${k} = ?`);
@@ -2837,13 +3424,20 @@ export function updateAgentProject(db, id, patch) {
   db.prepare(`UPDATE agent_projects SET ${cols.join(', ')} WHERE id = ?`).run(...args);
 }
 
-export function deleteAgentProject(db, id) {
+export function deleteAgentProject(db: Db, id: number): void {
   db.prepare(`DELETE FROM agent_projects WHERE id = ?`).run(id);
 }
 
-export function listAgentRuns(db, { taskId = null, projectId = null, limit = 100, offset = 0 } = {}) {
-  const where = [];
-  const args = [];
+export interface ListAgentRunsOptions {
+  taskId?: number | null;
+  projectId?: number | null;
+  limit?: number;
+  offset?: number;
+}
+
+export function listAgentRuns(db: Db, { taskId = null, projectId = null, limit = 100, offset = 0 }: ListAgentRunsOptions = {}): AgentRunRow[] {
+  const where: string[] = [];
+  const args: unknown[] = [];
   if (taskId != null) { where.push('task_id = ?'); args.push(Number(taskId)); }
   if (projectId != null) { where.push('project_id = ?'); args.push(Number(projectId)); }
   args.push(Number(limit) || 100, Number(offset) || 0);
@@ -2852,14 +3446,24 @@ export function listAgentRuns(db, { taskId = null, projectId = null, limit = 100
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY started_at DESC
     LIMIT ? OFFSET ?
-  `).all(...args);
+  `).all(...args) as AgentRunRow[];
 }
 
-export function getAgentRun(db, id) {
-  return db.prepare(`SELECT * FROM agent_runs WHERE id = ?`).get(id);
+export function getAgentRun(db: Db, id: number): AgentRunRow | undefined {
+  return db.prepare(`SELECT * FROM agent_runs WHERE id = ?`).get(id) as AgentRunRow | undefined;
 }
 
-export function insertAgentRun(db, r) {
+export interface InsertAgentRunInput {
+  task_id?: number | null;
+  project_id?: number | null;
+  agent: AgentRunRow['agent'];
+  model?: string | null;
+  prompt?: string | null;
+  status?: AgentRunRow['status'];
+  log_path?: string | null;
+}
+
+export function insertAgentRun(db: Db, r: InsertAgentRunInput): number {
   const info = db.prepare(`
     INSERT INTO agent_runs (task_id, project_id, agent, model, prompt, status, log_path)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -2875,10 +3479,10 @@ export function insertAgentRun(db, r) {
   return Number(info.lastInsertRowid);
 }
 
-export function updateAgentRun(db, id, patch) {
+export function updateAgentRun(db: Db, id: number, patch: Record<string, unknown>): void {
   const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at', 'model']);
-  const cols = [];
-  const args = [];
+  const cols: string[] = [];
+  const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) continue;
     cols.push(`${k} = ?`);
@@ -2891,19 +3495,30 @@ export function updateAgentRun(db, id, patch) {
 
 // ---- work locations -------------------------------------------------------
 
-export function listWorkLocations(db, { limit = 200, offset = 0 } = {}) {
+export function listWorkLocations(db: Db, { limit = 200, offset = 0 }: { limit?: number; offset?: number } = {}): WorkLocationRow[] {
   return db.prepare(`
     SELECT * FROM work_locations
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
-  `).all(Number(limit) || 200, Number(offset) || 0);
+  `).all(Number(limit) || 200, Number(offset) || 0) as WorkLocationRow[];
 }
 
-export function getWorkLocation(db, id) {
-  return db.prepare(`SELECT * FROM work_locations WHERE id = ?`).get(id);
+export function getWorkLocation(db: Db, id: number): WorkLocationRow | undefined {
+  return db.prepare(`SELECT * FROM work_locations WHERE id = ?`).get(id) as WorkLocationRow | undefined;
 }
 
-export function insertWorkLocation(db, loc) {
+export interface InsertWorkLocationInput {
+  name: string;
+  address?: string | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  description?: string | null;
+  url?: string | null;
+  tags?: string | null;
+  shareable?: boolean | 0 | 1;
+}
+
+export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number {
   const info = db.prepare(`
     INSERT INTO work_locations
       (name, address, latitude, longitude, description, url, tags, shareable)
@@ -2921,14 +3536,14 @@ export function insertWorkLocation(db, loc) {
   return Number(info.lastInsertRowid);
 }
 
-export function updateWorkLocation(db, id, patch) {
+export function updateWorkLocation(db: Db, id: number, patch: Record<string, unknown>): void {
   const allowed = new Set([
     'name', 'address', 'latitude', 'longitude', 'description', 'url', 'tags',
     'shareable', 'shared_at', 'shared_origin',
     'owner_user_id', 'owner_user_name',
   ]);
-  const cols = [];
-  const args = [];
+  const cols: string[] = [];
+  const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) continue;
     cols.push(`${k} = ?`);
@@ -2942,11 +3557,11 @@ export function updateWorkLocation(db, id, patch) {
   db.prepare(`UPDATE work_locations SET ${cols.join(', ')} WHERE id = ?`).run(...args);
 }
 
-export function deleteWorkLocation(db, id) {
+export function deleteWorkLocation(db: Db, id: number): void {
   db.prepare(`DELETE FROM work_locations WHERE id = ?`).run(id);
 }
 
-export function setWorkLocationOwner(db, id, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }) {
+export function setWorkLocationOwner(db: Db, id: number, { ownerUserId, ownerUserName, sharedAt, sharedOrigin }: OwnerInput): void {
   db.prepare(`
     UPDATE work_locations
        SET owner_user_id = ?, owner_user_name = ?, shared_at = ?, shared_origin = ?,
@@ -2957,9 +3572,15 @@ export function setWorkLocationOwner(db, id, { ownerUserId, ownerUserName, share
 
 // ---- tasks ----------------------------------------------------------------
 
-export function listTasks(db, { status = null, limit = 100, offset = 0 } = {}) {
-  const where = [];
-  const args = [];
+export interface ListTasksOptions {
+  status?: TaskRow['status'] | null;
+  limit?: number;
+  offset?: number;
+}
+
+export function listTasks(db: Db, { status = null, limit = 100, offset = 0 }: ListTasksOptions = {}): TaskRow[] {
+  const where: string[] = [];
+  const args: unknown[] = [];
   if (status) {
     where.push('status = ?');
     args.push(status);
@@ -2973,14 +3594,24 @@ export function listTasks(db, { status = null, limit = 100, offset = 0 } = {}) {
       COALESCE(due_at, '9999-12-31') ASC,
       created_at DESC
     LIMIT ? OFFSET ?
-  `).all(...args);
+  `).all(...args) as TaskRow[];
 }
 
-export function getTask(db, id) {
-  return db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
+export function getTask(db: Db, id: number): TaskRow | undefined {
+  return db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as TaskRow | undefined;
 }
 
-export function insertTask(db, task) {
+export interface InsertTaskInput {
+  title: string;
+  details?: string | null;
+  status?: TaskRow['status'];
+  creator_type?: TaskRow['creator_type'];
+  due_at?: string | null;
+  share_actio?: boolean | 0 | 1;
+  category?: string | null;
+}
+
+export function insertTask(db: Db, task: InsertTaskInput): number {
   const info = db.prepare(`
     INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio, category)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -3005,39 +3636,39 @@ export function insertTask(db, task) {
  * 1 タスクは複数カテゴリを持てる。 `tasks.category` カラムには **カンマ区切り**
  * で保存する (`"開発, 学習"` のように)。 ここでは split + flatten + 重複排除する。
  */
-export function listTaskCategories(db) {
+export function listTaskCategories(db: Db): string[] {
   const rows = db.prepare(`
     SELECT category
     FROM tasks
     WHERE category IS NOT NULL AND category != ''
-  `).all();
-  const fromTasks = new Set();
+  `).all() as { category: string | null }[];
+  const fromTasks = new Set<string>();
   for (const row of rows) {
     for (const c of String(row.category || '').split(',')) {
       const t = c.trim();
       if (t) fromTasks.add(t);
     }
   }
-  let registered = [];
+  let registered: string[] = [];
   try {
     const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
-      .get('task.categories.registered');
-    if (raw?.value) registered = JSON.parse(raw.value) || [];
-  } catch {}
-  const all = new Set([...fromTasks]);
+      .get('task.categories.registered') as { value: string | null } | undefined;
+    if (raw?.value) registered = (JSON.parse(raw.value) as string[]) || [];
+  } catch { /* ignore */ }
+  const all = new Set<string>([...fromTasks]);
   for (const c of registered) if (c) all.add(c);
   return [...all].sort((a, b) => a.localeCompare(b));
 }
 
-export function registerTaskCategory(db, name) {
+export function registerTaskCategory(db: Db, name: string): void {
   const n = String(name || '').trim();
   if (!n) return;
-  let registered = [];
+  let registered: string[] = [];
   try {
     const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
-      .get('task.categories.registered');
-    if (raw?.value) registered = JSON.parse(raw.value) || [];
-  } catch {}
+      .get('task.categories.registered') as { value: string | null } | undefined;
+    if (raw?.value) registered = (JSON.parse(raw.value) as string[]) || [];
+  } catch { /* ignore */ }
   if (!registered.includes(n)) {
     registered.push(n);
     db.prepare(`
@@ -3047,15 +3678,15 @@ export function registerTaskCategory(db, name) {
   }
 }
 
-export function unregisterTaskCategory(db, name) {
+export function unregisterTaskCategory(db: Db, name: string): void {
   const n = String(name || '').trim();
   if (!n) return;
-  let registered = [];
+  let registered: string[] = [];
   try {
     const raw = db.prepare(`SELECT value FROM app_settings WHERE key = ?`)
-      .get('task.categories.registered');
-    if (raw?.value) registered = JSON.parse(raw.value) || [];
-  } catch {}
+      .get('task.categories.registered') as { value: string | null } | undefined;
+    if (raw?.value) registered = (JSON.parse(raw.value) as string[]) || [];
+  } catch { /* ignore */ }
   const next = registered.filter(c => c !== n);
   db.prepare(`
     INSERT INTO app_settings (key, value) VALUES (?, ?)
@@ -3063,10 +3694,10 @@ export function unregisterTaskCategory(db, name) {
   `).run('task.categories.registered', JSON.stringify(next));
 }
 
-export function updateTask(db, id, patch) {
+export function updateTask(db: Db, id: number, patch: Record<string, unknown>): void {
   const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin', 'category']);
-  const cols = [];
-  const args = [];
+  const cols: string[] = [];
+  const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) continue;
     cols.push(`${k} = ?`);
@@ -3078,13 +3709,21 @@ export function updateTask(db, id, patch) {
   db.prepare(`UPDATE tasks SET ${cols.join(', ')} WHERE id = ?`).run(...args);
 }
 
-export function deleteTask(db, id) {
+export function deleteTask(db: Db, id: number): void {
   db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
 }
 
 // ---- external chat messages ----------------------------------------------
 
-export function insertExternalChatMessage(db, msg) {
+export interface InsertExternalChatMessageInput {
+  source: string;
+  conversation_id?: string | null;
+  role?: string | null;
+  content: string;
+  metadata?: unknown;
+}
+
+export function insertExternalChatMessage(db: Db, msg: InsertExternalChatMessageInput): number {
   const info = db.prepare(`
     INSERT INTO external_chat_messages (source, conversation_id, role, content, metadata_json)
     VALUES (?, ?, ?, ?, ?)
@@ -3098,9 +3737,15 @@ export function insertExternalChatMessage(db, msg) {
   return Number(info.lastInsertRowid);
 }
 
-export function listExternalChatMessages(db, { source = null, limit = 100, offset = 0 } = {}) {
-  const where = [];
-  const args = [];
+export interface ListExternalChatMessagesOptions {
+  source?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export function listExternalChatMessages(db: Db, { source = null, limit = 100, offset = 0 }: ListExternalChatMessagesOptions = {}): ExternalChatMessageRow[] {
+  const where: string[] = [];
+  const args: unknown[] = [];
   if (source) {
     where.push('source = ?');
     args.push(source);
@@ -3111,10 +3756,10 @@ export function listExternalChatMessages(db, { source = null, limit = 100, offse
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY received_at DESC
     LIMIT ? OFFSET ?
-  `).all(...args);
+  `).all(...args) as ExternalChatMessageRow[];
 }
 
-export function ensureUserStopwordsTable(db) {
+export function ensureUserStopwordsTable(db: Db): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_stopwords (
       word        TEXT PRIMARY KEY,
@@ -3125,21 +3770,25 @@ export function ensureUserStopwordsTable(db) {
   `);
 }
 
-export function listUserStopwords(db) {
-  return db.prepare(`SELECT word, lower, created_at FROM user_stopwords ORDER BY created_at DESC`).all();
+export interface UserStopwordWithLower extends UserStopwordRow {
+  lower: string;
+  word: string;
 }
 
-export function addUserStopword(db, word) {
+export function listUserStopwords(db: Db): UserStopwordWithLower[] {
+  return db.prepare(`SELECT word, lower, created_at FROM user_stopwords ORDER BY created_at DESC`).all() as UserStopwordWithLower[];
+}
+
+export function addUserStopword(db: Db, word: string): boolean {
   const w = String(word ?? '').trim();
   if (!w) return false;
   db.prepare(`INSERT OR IGNORE INTO user_stopwords (word, lower) VALUES (?, ?)`).run(w, w.toLowerCase());
   return true;
 }
 
-export function removeUserStopword(db, word) {
+export function removeUserStopword(db: Db, word: string): boolean {
   const w = String(word ?? '').trim();
   if (!w) return false;
   const info = db.prepare(`DELETE FROM user_stopwords WHERE lower = ?`).run(w.toLowerCase());
   return info.changes > 0;
 }
-
