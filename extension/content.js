@@ -93,6 +93,61 @@
     return out;
   }
 
+  // ── Notion DOM scraper (best-effort: クラス名は変わりやすいので安全側) ──
+
+  function extractNotionTitle() {
+    const t = document.querySelector('h1.notion-page-title-text')
+      || document.querySelector('[placeholder="Untitled"]');
+    return ((t?.textContent || '').trim()) || document.title;
+  }
+
+  function extractNotionPageId() {
+    const m = location.pathname.match(/([0-9a-f]{32})/i);
+    return m ? m[1] : null;
+  }
+
+  function extractNotionBlocks() {
+    const blocks = [];
+    const root = document.querySelector('.notion-page-content')
+      || document.querySelector('main')
+      || document.body;
+    if (!root) return blocks;
+
+    const els = root.querySelectorAll('[data-block-id]');
+    for (const el of els) {
+      const cls = el.className || '';
+      let kind = null;
+      const extra = {};
+
+      const editable = el.querySelector('[contenteditable="true"]');
+      const text = ((editable?.textContent ?? el.textContent ?? '')).trim();
+
+      if (cls.includes('notion-header-block')) kind = 'heading_1';
+      else if (cls.includes('notion-sub_header-block')) kind = 'heading_2';
+      else if (cls.includes('notion-sub_sub_header-block')) kind = 'heading_3';
+      else if (cls.includes('notion-quote-block')) kind = 'quote';
+      else if (cls.includes('notion-bulleted_list-block')) kind = 'bullet_list';
+      else if (cls.includes('notion-numbered_list-block')) kind = 'numbered_list';
+      else if (cls.includes('notion-to_do-block')) {
+        kind = 'todo';
+        const cb = el.querySelector('input[type="checkbox"]');
+        extra.checked = cb ? cb.checked : false;
+      } else if (cls.includes('notion-code-block')) {
+        kind = 'code';
+      } else if (cls.includes('notion-divider-block')) {
+        kind = 'divider';
+      } else if (cls.includes('notion-text-block')) {
+        kind = 'text';
+      }
+
+      if (!kind) continue;
+      if (kind === 'divider') { blocks.push({ kind }); continue; }
+      if (!text) continue;
+      blocks.push({ kind, text, ...extra });
+    }
+    return blocks;
+  }
+
   // ── dispatch detection (asks background for current rules + match) ──
 
   async function detectDispatch() {
@@ -155,7 +210,9 @@
         .btn.busy { filter: grayscale(0.8); cursor: progress; }
         .btn.bookmark { background: #2a6df4; }
         .btn.bookmark.chat-tinted { background: #7b3ff2; }
+        .btn.bookmark.notion-tinted { background: #1d2230; }
         .btn.chat { background: #7b3ff2; }
+        .btn.notion { background: #1d2230; }
         .btn.impl { background: #f6b73c; color: #1d2230; }
         .btn.shopping { background: #3ac26a; }
         .btn svg { width: 20px; height: 20px; pointer-events: none; }
@@ -280,6 +337,9 @@
       if (d.kind === 'chat') {
         btn.classList.add('chat-tinted');
         addDispatchButton('chat', '🧠', `${d.source} のチャットを Note 化`, () => ingestChat(d.source));
+      } else if (d.kind === 'notion') {
+        btn.classList.add('notion-tinted');
+        addDispatchButton('notion', '📒', 'Notion ページを Note 化', () => ingestNotion());
       } else if (d.kind === 'impl') {
         addDispatchButton('impl', '🚀', `実装自慢として展開 (${d.label})`, () => expandImpl());
       } else if (d.kind === 'shopping') {
@@ -365,6 +425,33 @@
         showToast(`エラー: ${noteRes?.error ?? '不明'}`, 'err');
       }
       void bmRes;
+    }
+
+    async function ingestNotion() {
+      showToast('Notion ページを取り込み中...');
+      const blocks = extractNotionBlocks();
+      if (blocks.length === 0) {
+        showToast('Notion ブロックを抽出できませんでした (DOM 構造が変わった可能性)', 'err');
+        return;
+      }
+      const title = extractNotionTitle();
+      const pageId = extractNotionPageId();
+      const res = await chrome.runtime.sendMessage({
+        type: 'memoria.saveNotion',
+        payload: {
+          url: location.href,
+          page_id: pageId,
+          title,
+          blocks,
+          also_bookmark: true,
+        },
+      });
+      if (res?.ok) {
+        const n = blocks.length;
+        showToast(`Note 化完了 (${n} ブロック取り込み)`, 'ok');
+      } else {
+        showToast(`エラー: ${res?.error ?? '不明'}`, 'err');
+      }
     }
 
     async function expandImpl() {

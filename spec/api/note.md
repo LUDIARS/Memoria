@@ -49,8 +49,36 @@
 | method | path | req | res |
 |---|---|---|---|
 | POST | `/api/notes/from-chat` | `NoteFromChatRequest` | `NoteFromChatResponse` |
+| POST | `/api/notes/from-notion` | `NoteFromNotionRequest` | `NoteFromNotionResponse` |
 
-`NoteFromChatResponse.note.id` は UUID。
+`NoteFromChatResponse.note.id` / `NoteFromNotionResponse.note.id` は UUID。
+
+### Notion 取り込み
+
+```ts
+type NotionExtractedBlock =
+  | { kind: 'heading_1' | 'heading_2' | 'heading_3' | 'text' | 'quote' | 'todo'; text: string; checked?: boolean }
+  | { kind: 'bullet_list' | 'numbered_list'; text: string; indent?: number }
+  | { kind: 'code'; text: string; lang?: string }
+  | { kind: 'divider' };
+
+interface NoteFromNotionRequest {
+  url: string;                                 // notion ページ URL
+  page_id?: string | null;                     // notion 内部 ID (有効なら conv 用 source_ref)
+  title: string;
+  blocks: NotionExtractedBlock[];              // extension が DOM scrape したブロック列
+  memo?: string;                               // ユーザ追加メモ (1 つ目の text ブロック前に挿入)
+  also_bookmark?: boolean;                     // true なら同 URL を bookmark にも保存して embed する (default: false)
+}
+
+interface NoteFromNotionResponse {
+  note: NoteRow;
+  blocks_inserted: number;
+  bookmark_id?: number | null;                 // also_bookmark 時に作成された bookmark の id
+}
+```
+
+note は `kind='doc'` で作成 (= 通常ノート)、 `source_kind='notion'`、 `source_ref=page_id ?? url`。 `also_bookmark=true` の場合は note 末尾に `bookmark_embed` ブロックを 1 つ追加する (= 元 Notion ページへのリンクカード)。
 
 ## 型
 

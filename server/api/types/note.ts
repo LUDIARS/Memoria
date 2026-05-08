@@ -97,6 +97,36 @@ export interface CommentUpdateRequest {
   data?: Record<string, unknown> | null;
 }
 
+// ── Notion 取り込み ──────────────────────────────────────────────────
+
+export type NotionBlockKind =
+  | 'heading_1' | 'heading_2' | 'heading_3'
+  | 'text' | 'quote' | 'todo'
+  | 'bullet_list' | 'numbered_list'
+  | 'code' | 'divider';
+
+export type NotionExtractedBlock =
+  | { kind: 'heading_1' | 'heading_2' | 'heading_3' | 'text' | 'quote'; text: string }
+  | { kind: 'todo'; text: string; checked?: boolean }
+  | { kind: 'bullet_list' | 'numbered_list'; text: string; indent?: number }
+  | { kind: 'code'; text: string; lang?: string }
+  | { kind: 'divider' };
+
+export interface NoteFromNotionRequest {
+  url: string;
+  page_id?: string | null;
+  title: string;
+  blocks: NotionExtractedBlock[];
+  memo?: string;
+  also_bookmark?: boolean;
+}
+
+export interface NoteFromNotionResponse {
+  note: import('../../db/types/note.js').NoteRow;
+  blocks_inserted: number;
+  bookmark_id?: number | null;
+}
+
 // ── 拡張からのチャット取り込み (既存) ─────────────────────────────────
 
 export type ChatExtractionSource = 'chatgpt' | 'claude' | 'gemini';
@@ -143,10 +173,16 @@ export interface ExtensionShoppingDomain {
   enabled: boolean;
 }
 
+export interface ExtensionNotionDomain {
+  host: string;
+  enabled: boolean;
+}
+
 export interface ExtensionRules {
   chat_domains: ExtensionChatDomain[];
   impl_rules: ExtensionImplRule[];
   shopping_domains: ExtensionShoppingDomain[];
+  notion_domains: ExtensionNotionDomain[];
 }
 
 export type ExtensionRulesUpdateRequest = Partial<ExtensionRules>;

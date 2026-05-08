@@ -34,7 +34,9 @@ export type NoteBlockType =
   | 'numbered_list'
   | 'todo'
   | 'divider'
-  | 'floating_text';
+  | 'floating_text'
+  | 'bookmark_embed'
+  | 'note_link';
 
 export const NOTE_BLOCK_TYPES: readonly NoteBlockType[] = [
   'text',
@@ -50,6 +52,8 @@ export const NOTE_BLOCK_TYPES: readonly NoteBlockType[] = [
   'todo',
   'divider',
   'floating_text',
+  'bookmark_embed',
+  'note_link',
 ] as const;
 
 export interface NoteBlockRow {
@@ -81,6 +85,14 @@ export interface NoteBlockData {
   height?: number;
   color?: string;
   anchor?: FloatingAnchor;
+  // bookmark_embed
+  bookmark_id?: number;
+  bookmark_url?: string;
+  // note_link
+  note_id?: string;
+  // shared by bookmark_embed & note_link (キャッシュ)
+  title?: string;
+  summary?: string;
 }
 
 export type FloatingAnchor =

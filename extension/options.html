@@ -45,6 +45,14 @@
   </table>
   <button class="add-btn" id="addImpl">+ ルール追加</button>
 
+  <h2>📒 Notion ドメイン (Notion → Note 取り込み)</h2>
+  <p class="help">これらのドメインで黒いボタンが追加表示され、 押下するとページの DOM をブロック単位で scrape して通常 Note として取り込みます。 同時に bookmark も保存され、 末尾に bookmark_embed カードが付きます。</p>
+  <table>
+    <thead><tr><th>ホスト</th><th>有効</th><th class="col-narrow"></th></tr></thead>
+    <tbody id="notionRows"></tbody>
+  </table>
+  <button class="add-btn" id="addNotion">+ ドメイン追加</button>
+
   <h2>🛒 ショッピングドメイン (買い物タスク)</h2>
   <p class="help">これらのドメインで緑の「タスク (ほしいものリスト) に追加」 ボタンが出ます。 押すと <code>category=買い物</code> のタスクが登録されます。</p>
   <table>

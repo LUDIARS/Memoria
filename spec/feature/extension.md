@@ -6,6 +6,7 @@
 | 種別 | 検出条件 | ボタン色 | 追加アクション |
 |---|---|---|---|
 | AI chat | `chatgpt.com` / `chat.openai.com` / `claude.ai` / `gemini.google.com` | 紫 (`#7b3ff2`) | (1) ブックマーク + 会話を `external_chat_messages` に message 単位保存、 (2) 会話を md にまとめて Note 作成 |
+| Notion | `notion.so` / `notion.site` | 黒 (`#1d2230`) | ページの DOM をブロック単位で scrape → `POST /api/notes/from-notion` で通常ノートに変換 |
 | 実装自慢候補 | 設定で許可されたドメイン + キーワード一致 (例: `github.com` × `LUDIARS`) | 黄 (`#f6b73c`) | 「実装自慢として展開」 ボタンを bookmark ボタンと並列表示 |
 | ショッピング | `amazon.co.jp` / `amazon.com` / `rakuten.co.jp` 等 | 緑 (`#3ac26a`) | 「タスク (ほしいものリスト) に追加」 ボタンを bookmark ボタンと並列表示。 押下で `tasks` に `category='買い物'` で insert |
 

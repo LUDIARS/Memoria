@@ -5,8 +5,9 @@ const msg = document.getElementById('msg');
 const chatRows = document.getElementById('chatRows');
 const implRows = document.getElementById('implRows');
 const shoppingRows = document.getElementById('shoppingRows');
+const notionRows = document.getElementById('notionRows');
 
-let rules = { chat_domains: [], impl_rules: [], shopping_domains: [] };
+let rules = { chat_domains: [], impl_rules: [], shopping_domains: [], notion_domains: [] };
 
 async function getServer() {
   const { server } = await chrome.storage.sync.get({ server: DEFAULT_SERVER });
@@ -78,6 +79,18 @@ function renderShopping() {
   bindRowEvents(shoppingRows, rules.shopping_domains);
 }
 
+function renderNotion() {
+  if (!notionRows) return;
+  notionRows.innerHTML = (rules.notion_domains || []).map((d, i) => `
+    <tr data-i="${i}">
+      <td><input type="text" data-k="host" value="${escapeAttr(d.host)}" /></td>
+      <td><input type="checkbox" data-k="enabled"${d.enabled ? ' checked' : ''} /></td>
+      <td><button class="danger" data-act="del-notion">削除</button></td>
+    </tr>
+  `).join('');
+  bindRowEvents(notionRows, rules.notion_domains);
+}
+
 function bindRowEvents(container, list, transformers = {}) {
   container.querySelectorAll('tr').forEach((tr) => {
     const i = Number(tr.dataset.i);
@@ -100,7 +113,7 @@ function bindRowEvents(container, list, transformers = {}) {
   });
 }
 
-function renderAll() { renderChat(); renderImpl(); renderShopping(); }
+function renderAll() { renderChat(); renderImpl(); renderShopping(); renderNotion(); }
 
 document.getElementById('addChat').addEventListener('click', () => {
   rules.chat_domains.push({ host: '', source: 'chatgpt', enabled: true });
@@ -113,6 +126,11 @@ document.getElementById('addImpl').addEventListener('click', () => {
 document.getElementById('addShopping').addEventListener('click', () => {
   rules.shopping_domains.push({ host: '', label: '', enabled: true });
   renderShopping();
+});
+document.getElementById('addNotion')?.addEventListener('click', () => {
+  if (!Array.isArray(rules.notion_domains)) rules.notion_domains = [];
+  rules.notion_domains.push({ host: '', enabled: true });
+  renderNotion();
 });
 
 document.getElementById('save').addEventListener('click', async () => {

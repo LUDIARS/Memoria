@@ -66,6 +66,11 @@ async function getExtensionRules() {
           { host: 'amazon.co.jp', label: 'Amazon (JP)', enabled: true },
           { host: 'amazon.com', label: 'Amazon (US)', enabled: true },
         ],
+        notion_domains: [
+          { host: 'notion.so', enabled: true },
+          { host: 'www.notion.so', enabled: true },
+          { host: 'notion.site', enabled: true },
+        ],
       };
     }
   }
@@ -86,6 +91,13 @@ function detectDispatch({ url, host, title, bodyText }) {
       if (!d.enabled) continue;
       if (hostMatches(host, d.host)) {
         dispatches.push({ kind: 'chat', source: d.source, host: d.host });
+      }
+    }
+    // notion
+    for (const d of rules.notion_domains || []) {
+      if (!d.enabled) continue;
+      if (hostMatches(host, d.host)) {
+        dispatches.push({ kind: 'notion', host: d.host });
       }
     }
     // impl
@@ -153,6 +165,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'memoria.saveNotion') {
+    handleSaveNotion(msg.payload || {}).then(sendResponse);
+    return true;
+  }
+
   if (msg.type === 'memoria.expandImpl') {
     handleExpandImpl(msg.payload || {}).then(sendResponse);
     return true;
@@ -170,6 +187,25 @@ async function handleSave(payload) {
   try {
     const server = await getServer();
     const res = await fetch(`${server}/api/bookmark`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status} ${text.slice(0, 120)}`);
+    }
+    const data = await res.json();
+    return { ok: true, ...data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function handleSaveNotion(payload) {
+  try {
+    const server = await getServer();
+    const res = await fetch(`${server}/api/notes/from-notion`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

@@ -61,6 +61,8 @@ const BLOCK_TYPE_OPTIONS: ReadonlyArray<{ type: NoteBlockType; label: string; ic
   { type: 'mermaid', label: 'Mermaid 図', icon: '⤵' },
   { type: 'table', label: 'テーブル', icon: '⊞' },
   { type: 'divider', label: '区切り', icon: '—' },
+  { type: 'bookmark_embed', label: 'Bookmark を挿入', icon: '🔖' },
+  { type: 'note_link', label: 'Note を挿入', icon: '📓' },
 ];
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -297,6 +299,8 @@ function buildBlockBody(block: NoteBlockRow): HTMLElement {
     case 'mermaid':    return buildMermaidBlock(block);
     case 'table':      return buildTableBlock(block);
     case 'divider':    return buildDividerBlock(block);
+    case 'bookmark_embed': return buildBookmarkEmbed(block);
+    case 'note_link':      return buildNoteLink(block);
     case 'floating_text': {
       // 通常ブロック流に floating が混入している (本来 bookmark note の overlay でレンダリング)。
       // フォールバック: 内容を一行で表示し「これは floating です」 と注記。
@@ -510,6 +514,51 @@ function buildDividerBlock(_block: NoteBlockRow): HTMLElement {
   return hr;
 }
 
+function buildBookmarkEmbed(block: NoteBlockRow): HTMLElement {
+  const data = parseData(block);
+  const card = document.createElement('div');
+  card.className = 'note-embed-card note-embed-bookmark';
+  const bid = data.bookmark_id ?? null;
+  const url = data.bookmark_url ?? '';
+  const title = data.title ?? url;
+  const summary = data.summary ?? '';
+  card.innerHTML = `
+    <div class="ne-icon">🔖</div>
+    <div class="ne-body">
+      <div class="ne-title">${escapeHtml(title)}</div>
+      ${summary ? `<div class="ne-summary muted">${escapeHtml(summary)}</div>` : ''}
+      <div class="ne-meta">
+        <span class="ne-url muted">${escapeHtml(url)}</span>
+        ${bid != null ? `<a class="ne-action" href="/api/bookmarks/${bid}/html" target="_blank" rel="noopener noreferrer">📂 キャッシュを開く</a>` : ''}
+        ${url ? `<a class="ne-action" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">🌐 元のページ</a>` : ''}
+      </div>
+    </div>
+  `;
+  return card;
+}
+
+function buildNoteLink(block: NoteBlockRow): HTMLElement {
+  const data = parseData(block);
+  const card = document.createElement('div');
+  card.className = 'note-embed-card note-embed-note';
+  const nid = data.note_id ?? '';
+  const title = data.title ?? '無題';
+  card.innerHTML = `
+    <div class="ne-icon">📓</div>
+    <div class="ne-body">
+      <div class="ne-title">${escapeHtml(title)}</div>
+      <div class="ne-meta muted">note ${nid ? nid.slice(0, 8) + '…' : '?'}</div>
+    </div>
+    <button class="ne-open" data-note-id="${escapeHtml(nid)}">→ 開く</button>
+  `;
+  card.querySelector<HTMLButtonElement>('.ne-open')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (nid) void openNote(nid);
+  });
+  card.addEventListener('dblclick', () => { if (nid) void openNote(nid); });
+  return card;
+}
+
 function parseData(block: NoteBlockRow): BlockData {
   if (!block.data_json) return {};
   try { return JSON.parse(block.data_json) as BlockData; } catch { return {}; }
@@ -627,7 +676,9 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
       const t = btn.dataset.type as NoteBlockType | undefined;
       const a = btn.dataset.action;
       closeBlockMenu();
-      if (t) void changeBlockType(blockUuid, t);
+      if (t === 'bookmark_embed') openBookmarkPickerForBlock(blockUuid);
+      else if (t === 'note_link') openNotePickerForBlock(blockUuid);
+      else if (t) void changeBlockType(blockUuid, t);
       else if (a === 'delete') void removeBlock(blockUuid);
       else if (a === 'comment') void quickComment(blockUuid);
     });
@@ -851,6 +902,123 @@ function openBookmarkPicker(): void {
           close();
           await openNote(n.id);
           await refreshList();
+        });
+      });
+    });
+  };
+  search.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refresh, 200);
+  });
+  void refresh();
+  search.focus();
+}
+
+// ── Picker (block 内へ bookmark / note を埋め込む用) ───────────────────────
+
+function openBookmarkPickerForBlock(blockUuid: string): void {
+  if (!state.current || state.bookmarkPickerOpen) return;
+  state.bookmarkPickerOpen = true;
+  const overlay = document.createElement('div');
+  overlay.className = 'note-bm-picker-overlay';
+  overlay.innerHTML = `
+    <div class="note-bm-picker">
+      <div class="note-bm-picker-head">
+        <h3>埋め込む bookmark を選択</h3>
+        <button class="modal-close" id="bmpClose">×</button>
+      </div>
+      <input type="search" id="bmpSearch" placeholder="タイトル / URL で検索" />
+      <ul id="bmpList" class="note-bm-list"></ul>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = (): void => { overlay.remove(); state.bookmarkPickerOpen = false; };
+  overlay.querySelector<HTMLButtonElement>('#bmpClose')!.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  const search = overlay.querySelector<HTMLInputElement>('#bmpSearch')!;
+  const listEl = overlay.querySelector<HTMLUListElement>('#bmpList')!;
+  let timer = 0;
+  const refresh = async (): Promise<void> => {
+    const items: BookmarkSummary[] = await api.searchBookmarks(search.value, 30);
+    listEl.innerHTML = items.map((b) => `
+      <li class="note-bm-row" data-id="${b.id}">
+        <div class="note-bm-title">${escapeHtml(b.title || b.url)}</div>
+        <div class="note-bm-url muted">${escapeHtml(b.url)}</div>
+      </li>
+    `).join('');
+    listEl.querySelectorAll<HTMLLIElement>('.note-bm-row').forEach((li) => {
+      li.addEventListener('click', () => {
+        const bid = Number(li.dataset.id);
+        if (!Number.isFinite(bid) || !state.current) return;
+        void api.patchBlock(state.current.id, blockUuid, {
+          block_type: 'bookmark_embed',
+          data: { bookmark_id: bid },
+        }).then(async () => {
+          close();
+          if (state.current) {
+            state.current = await api.getNote(state.current.id);
+            renderAllBlocks();
+          }
+        }).catch((e: unknown) => {
+          alert(`bookmark embed 失敗: ${e instanceof Error ? e.message : String(e)}`);
+        });
+      });
+    });
+  };
+  search.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refresh, 200);
+  });
+  void refresh();
+  search.focus();
+}
+
+function openNotePickerForBlock(blockUuid: string): void {
+  if (!state.current) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'note-bm-picker-overlay';
+  overlay.innerHTML = `
+    <div class="note-bm-picker">
+      <div class="note-bm-picker-head">
+        <h3>リンク先 note を選択</h3>
+        <button class="modal-close" id="npClose">×</button>
+      </div>
+      <input type="search" id="npSearch" placeholder="タイトル / 本文で検索" />
+      <ul id="npList" class="note-bm-list"></ul>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = (): void => { overlay.remove(); };
+  overlay.querySelector<HTMLButtonElement>('#npClose')!.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  const search = overlay.querySelector<HTMLInputElement>('#npSearch')!;
+  const listEl = overlay.querySelector<HTMLUListElement>('#npList')!;
+  const currentNoteId = state.current.id;
+  let timer = 0;
+  const refresh = async (): Promise<void> => {
+    const res = await api.listNotes(search.value, 30);
+    const items = res.items.filter((n) => n.id !== currentNoteId);
+    listEl.innerHTML = items.map((n) => `
+      <li class="note-bm-row" data-id="${escapeHtml(n.id)}">
+        <div class="note-bm-title">${escapeHtml(n.title || '無題')}</div>
+        <div class="note-bm-url muted">${escapeHtml((n.preview || '').slice(0, 80))}</div>
+      </li>
+    `).join('');
+    listEl.querySelectorAll<HTMLLIElement>('.note-bm-row').forEach((li) => {
+      li.addEventListener('click', () => {
+        const nid = li.dataset.id || '';
+        if (!nid || !state.current) return;
+        void api.patchBlock(state.current.id, blockUuid, {
+          block_type: 'note_link',
+          data: { note_id: nid },
+        }).then(async () => {
+          close();
+          if (state.current) {
+            state.current = await api.getNote(state.current.id);
+            renderAllBlocks();
+          }
+        }).catch((e: unknown) => {
+          alert(`note link 失敗: ${e instanceof Error ? e.message : String(e)}`);
         });
       });
     });

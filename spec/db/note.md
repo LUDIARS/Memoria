@@ -46,6 +46,8 @@ Index: `idx_note_blocks_note_position` (note_id, position) / `idx_note_blocks_uu
 ### `block_type` enum
 - `text` — Markdown 段落 (markdown インライン: `**bold**`, `*italic*`, `` `code` ``, `[link](url)`, `<span style="color:#hex">…</span>`)。 **通常ノート (kind='doc' / 'chat' / …)** で使用するインラインフロー型ブロック
 - `floating_text` — **フローティングテキスト**。 自由位置 (x, y) を持ち、 座標で配置される。 **ブックマークノート (kind='bookmark') の canvas 専用**: 描画した bookmark HTML 上にオーバーレイ表示され、 注釈 / コメントとして機能する。 通常ノートでは UI 上挿入できない (schema レベルでは block_type は許可されているが、 フロントエンドのスラッシュメニューが bookmark-note でのみ表示)
+- `bookmark_embed` — **ブックマーク埋め込みカード**。 通常ノート内に既存 bookmark を Notion 風カードで挿入。 `data_json.bookmark_id` で参照、 `bookmark_url` / `title` / `summary` をキャッシュ。 表示時は Web アーカイブキャッシュ (`/api/bookmarks/:id/html`) へのリンクを提供。 **挿入対象 bookmark が `bookmarks` テーブルに存在しない場合は 400 エラー**
+- `note_link` — **ノート間内部リンクカード**。 `data_json.note_id` で他 note を参照、 `title` をキャッシュ表示。 クリックで対象 note へ navigate
 - `heading_1` / `heading_2` / `heading_3` — 見出し
 - `quote` — 引用
 - `code` — コードブロック (`data_json.lang: string`)
@@ -54,6 +56,28 @@ Index: `idx_note_blocks_note_position` (note_id, position) / `idx_note_blocks_uu
 - `bullet_list` / `numbered_list` — リスト (`data_json.indent: number`)
 - `todo` — チェックボックス (`data_json.checked: boolean`)
 - `divider` — 水平線
+
+### `bookmark_embed` の data_json shape
+```ts
+{
+  bookmark_id: number;       // bookmarks.id (必須、 INSERT 時に存在確認)
+  bookmark_url: string;      // bookmarks.url の冗長保存 (Hub download 時の解決用)
+  title?: string;            // bookmarks.title のキャッシュ
+  summary?: string;          // bookmarks.summary のキャッシュ (先頭 200 文字)
+}
+```
+
+カード自体の本文 (`text`) は通常空。 表示はキャッシュ値を使う。 マルチサーバ download 時、 受信側に同 URL の bookmark が無ければ Hub から bookmark 本体も同梱して取得する仕様 (Phase 2)。
+
+### `note_link` の data_json shape
+```ts
+{
+  note_id: string;           // 他 note の UUID (必須)
+  title?: string;            // 対象 note の title のキャッシュ (高速描画用)
+}
+```
+
+リンク先 note が削除されている場合、 UI は「(削除済)」 表示にする (DB レコード自体は残す)。
 
 ### `floating_text` の data_json shape
 ```ts

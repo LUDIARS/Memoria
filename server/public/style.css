@@ -5645,3 +5645,44 @@ dialog.loc-edit-modal[open] {
   line-height: 1;
 }
 .note-floating .nf-del:hover { background: #c33; color: #fff; }
+
+/* ─── note embed cards (bookmark / note) ─── */
+.note-embed-card {
+  display: flex; align-items: stretch;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fafbfc;
+  transition: background 0.15s, border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+.note-embed-card:hover { background: #f3f6fc; border-color: var(--accent); }
+.note-embed-card .ne-icon { font-size: 22px; line-height: 1; padding-top: 4px; }
+.note-embed-card .ne-body { flex: 1; min-width: 0; }
+.note-embed-card .ne-title { font-weight: 600; font-size: 14px; margin-bottom: 2px; word-break: break-word; }
+.note-embed-card .ne-summary { font-size: 12px; line-height: 1.4; margin: 4px 0; max-height: 3em; overflow: hidden; }
+.note-embed-card .ne-meta {
+  display: flex; gap: 12px; align-items: center;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.note-embed-card .ne-url { word-break: break-all; flex: 1; min-width: 100px; }
+.note-embed-card .ne-action { color: var(--accent); white-space: nowrap; }
+.note-embed-card .ne-action:hover { text-decoration: underline; }
+.note-embed-card .ne-open {
+  border: 1px solid var(--accent);
+  background: #fff;
+  color: var(--accent);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  height: fit-content;
+}
+.note-embed-card .ne-open:hover { background: var(--accent-bg); }
+
+/* color tweak */
+.note-embed-bookmark { border-left: 3px solid #f6b73c; }
+.note-embed-note { border-left: 3px solid var(--accent); }

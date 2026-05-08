@@ -39,6 +39,14 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
   - 新規 (bookmark ベース): 「🔖 bookmark から」 → ピッカーで bookmark 選択 → `kind='bookmark'` で生成
   - bookmark 詳細画面 (将来) の「📝 このページにノート」 ボタン → 既存 bookmark note があれば開く / なければ新規
   - extension chat 取り込み: `/api/notes/from-chat` で生成 → 自動でエディタを開く
+  - extension Notion 取り込み: `notion.so` / `notion.site` で 黒いボタン → ページ scrape → `/api/notes/from-notion` で生成
+
+## bookmark / note 埋め込み (Notion 風)
+通常ノートのスラッシュメニューから:
+- **🔖 Bookmark を挿入** → bookmark picker → `bookmark_embed` ブロックがカード表示で挿入。 「📂 キャッシュを開く」 リンクで `/api/bookmarks/:id/html` (Web アーカイブ) を別タブで表示。 挿入時に対象 bookmark の `bookmarks` 行が必須 (= note 経由でも常にローカル bookmark が存在する保証)
+- **📓 Note を挿入** → note picker → `note_link` ブロックがカード表示で挿入。 クリックで対象 note にナビゲート
+
+マルチサーバ download 時 (Phase 2): `bookmark_embed` を含む note を受信したら、 `bookmark_url` で受信側 DB を検索 → 既に bookmark 済ならその local id に置換、 未保存なら **Hub から bookmark 本体も同時に download** して bookmark + URL HTML を取得し、 新しく付与された local id で `data_json.bookmark_id` を更新する。 これにより note を共有しても embed 表示が常にローカルキャッシュで成立する。
 
 ## データ
 - [notes](../db/note.md) — ヘッダ (UUID PK, bookmark_id 紐付け, Hub 連携カラム)
@@ -64,6 +72,8 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 | `todo` | チェックボックス | 通常ノート | `text` + `data_json.checked` |
 | `divider` | 水平線 | 通常ノート | (空) |
 | `floating_text` | **フローティングテキスト** (canvas 上の自由配置注釈) | **ブックマークノート** | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
+| `bookmark_embed` | **bookmark 埋め込みカード** (Notion 風) | 通常ノート | `data_json.bookmark_id/bookmark_url/title?/summary?` |
+| `note_link` | **note→note 内部リンクカード** | 通常ノート | `data_json.note_id/title?` |
 
 ## コメント仕様
 - 1 (note × user) で 1 set。 set 自体が UUID を持つ (`note_comment_sets.id`)

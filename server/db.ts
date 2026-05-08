@@ -4303,10 +4303,16 @@ export interface ExtensionShoppingDomain {
   enabled: boolean;
 }
 
+export interface ExtensionNotionDomain {
+  host: string;
+  enabled: boolean;
+}
+
 export interface ExtensionRules {
   chat_domains: ExtensionChatDomain[];
   impl_rules: ExtensionImplRule[];
   shopping_domains: ExtensionShoppingDomain[];
+  notion_domains: ExtensionNotionDomain[];
 }
 
 const DEFAULT_EXTENSION_RULES: ExtensionRules = {
@@ -4324,6 +4330,11 @@ const DEFAULT_EXTENSION_RULES: ExtensionRules = {
     { host: 'amazon.com', label: 'Amazon (US)', enabled: true },
     { host: 'rakuten.co.jp', label: '楽天市場', enabled: true },
   ],
+  notion_domains: [
+    { host: 'notion.so', enabled: true },
+    { host: 'www.notion.so', enabled: true },
+    { host: 'notion.site', enabled: true },
+  ],
 };
 
 export function getExtensionRules(db: Db): ExtensionRules {
@@ -4338,6 +4349,7 @@ export function getExtensionRules(db: Db): ExtensionRules {
       chat_domains: parsed.chat_domains ?? DEFAULT_EXTENSION_RULES.chat_domains,
       impl_rules: parsed.impl_rules ?? DEFAULT_EXTENSION_RULES.impl_rules,
       shopping_domains: parsed.shopping_domains ?? DEFAULT_EXTENSION_RULES.shopping_domains,
+      notion_domains: parsed.notion_domains ?? DEFAULT_EXTENSION_RULES.notion_domains,
     };
   } catch {
     return DEFAULT_EXTENSION_RULES;

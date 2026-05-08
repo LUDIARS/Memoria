@@ -8,13 +8,14 @@ import type BetterSqlite3 from 'better-sqlite3';
 import {
   listNotes, getNote, listNoteBlocks, insertNote, updateNote, deleteNote,
   insertBlock, updateBlock, deleteBlock, reorderBlocks, getBlockByUuid,
-  insertExternalChatMessage, getBookmark,
+  insertExternalChatMessage, getBookmark, findBookmarkByUrl, insertBookmark,
   getOrCreateCommentSet, listCommentSets, getCommentSet, deleteCommentSet,
   listComments, insertComment, updateComment, deleteComment,
   getExtensionRules, setExtensionRules,
 } from '../db.js';
 import type {
   ExtensionRules, ExtensionChatDomain, ExtensionImplRule, ExtensionShoppingDomain,
+  ExtensionNotionDomain,
 } from '../db.js';
 import type { NoteRow, NoteBlockRow, NoteBlockType, NoteKind } from '../db/types/note.js';
 import { NOTE_BLOCK_TYPES } from '../db/types/note.js';
@@ -23,6 +24,7 @@ import type {
   ChatExtractedMessage, ChatExtractionSource,
   ExtensionRulesUpdateRequest,
   CommentSetWithComments,
+  NotionExtractedBlock,
 } from '../api/types/note.js';
 
 type Db = BetterSqlite3.Database;
@@ -97,6 +99,42 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     if (typeof body.text === 'string' && body.text.length > TEXT_MAX) return `text exceeds ${TEXT_MAX}`;
     if (body.data != null && JSON.stringify(body.data).length > DATA_MAX) return `data exceeds ${DATA_MAX}`;
     return null;
+  }
+
+  /**
+   * bookmark_embed / note_link の data_json を検証 + キャッシュ値で enrich する。
+   * - bookmark_embed: bookmark_id が `bookmarks` に存在することを確認、 title / url / summary を埋める
+   * - note_link: note_id が `notes` に存在することを確認、 title を埋める
+   * - その他: data をそのまま返す
+   */
+  function enrichEmbedData(
+    blockType: NoteBlockType,
+    data: Record<string, unknown> | null | undefined,
+  ): { ok: true; data: Record<string, unknown> | null } | { ok: false; error: string } {
+    if (blockType === 'bookmark_embed') {
+      const d = (data ?? {}) as Record<string, unknown>;
+      const bid = Number(d.bookmark_id);
+      if (!Number.isFinite(bid)) return { ok: false, error: 'bookmark_id required for bookmark_embed' };
+      const bm = getBookmark(db, bid);
+      if (!bm) return { ok: false, error: `bookmark ${bid} not found` };
+      const enriched = {
+        bookmark_id: bm.id,
+        bookmark_url: bm.url,
+        title: bm.title || bm.url,
+        summary: (bm.summary ?? '').slice(0, 200),
+      };
+      return { ok: true, data: enriched };
+    }
+    if (blockType === 'note_link') {
+      const d = (data ?? {}) as Record<string, unknown>;
+      const nid = typeof d.note_id === 'string' ? d.note_id : '';
+      if (!nid) return { ok: false, error: 'note_id required for note_link' };
+      const target = getNote(db, nid);
+      if (!target) return { ok: false, error: `note ${nid} not found` };
+      const enriched = { note_id: nid, title: target.title || '無題' };
+      return { ok: true, data: enriched };
+    }
+    return { ok: true, data: data ?? null };
   }
 
   // ---- notes (header) -------------------------------------------------------
@@ -232,11 +270,13 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     const body = await c.req.json().catch(() => ({})) as BlockCreateRequest & { after_block_uuid?: unknown };
     const err = validateBlockPayload(body);
     if (err) return c.json({ error: err }, 400);
+    const enriched = enrichEmbedData(body.block_type, body.data ?? null);
+    if (!enriched.ok) return c.json({ error: enriched.error }, 400);
     try {
       const block = insertBlock(db, noteId, {
         block_type: body.block_type,
         text: typeof body.text === 'string' ? body.text : '',
-        data: body.data ?? null,
+        data: enriched.data,
         after_block_uuid: typeof body.after_block_uuid === 'string' ? body.after_block_uuid : null,
       });
       return c.json(block, 201);
@@ -253,6 +293,15 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     const err = validateBlockPayload(body as unknown as BlockCreateRequest, true);
     if (err) return c.json({ error: err }, 400);
+    // embed 系は data 変更時に enrich + 検証
+    if ('data' in body) {
+      const targetType = (typeof body.block_type === 'string' && isValidBlockType(body.block_type))
+        ? body.block_type
+        : (getBlockByUuid(db, noteId, blockUuid)?.block_type ?? 'text');
+      const enriched = enrichEmbedData(targetType, body.data as Record<string, unknown> | null | undefined);
+      if (!enriched.ok) return c.json({ error: enriched.error }, 400);
+      body.data = enriched.data;
+    }
     try {
       const block = updateBlock(db, noteId, blockUuid, body);
       if (!block) return c.json({ error: 'block not found' }, 404);
@@ -469,6 +518,92 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     return c.json({ note, messages_saved: savedCount }, 201);
   });
 
+  // ---- extension Notion ingest ---------------------------------------------
+
+  function notionKindToBlockType(kind: string): NoteBlockType | null {
+    switch (kind) {
+      case 'heading_1': case 'heading_2': case 'heading_3':
+      case 'text': case 'quote': case 'todo':
+      case 'bullet_list': case 'numbered_list':
+      case 'code': case 'divider':
+        return kind;
+      default: return null;
+    }
+  }
+
+  r.post('/api/notes/from-notion', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as {
+      url?: unknown; page_id?: unknown; title?: unknown;
+      blocks?: unknown; memo?: unknown; also_bookmark?: unknown;
+    } | null;
+    if (!body) return c.json({ error: 'body required' }, 400);
+    const url = typeof body.url === 'string' ? body.url : '';
+    const title = typeof body.title === 'string' ? body.title.slice(0, TITLE_MAX) : '';
+    const pageId = typeof body.page_id === 'string' ? body.page_id : null;
+    const memo = typeof body.memo === 'string' ? body.memo : '';
+    const alsoBookmark = body.also_bookmark === true;
+    if (!url || !title) return c.json({ error: 'url + title required' }, 400);
+    const blocks = Array.isArray(body.blocks) ? body.blocks as NotionExtractedBlock[] : [];
+
+    const noteId = insertNote(db, {
+      title,
+      kind: 'doc',
+      source_kind: 'notion',
+      source_ref: pageId ?? url,
+      tags: ['notion'],
+    });
+
+    if (memo.trim()) {
+      insertBlock(db, noteId, { block_type: 'quote', text: memo.trim() });
+    }
+
+    let inserted = 0;
+    for (const b of blocks) {
+      if (!b || typeof b !== 'object') continue;
+      const blockType = notionKindToBlockType(String((b as { kind?: unknown }).kind ?? ''));
+      if (!blockType) continue;
+      const text = typeof (b as { text?: unknown }).text === 'string' ? (b as { text: string }).text : '';
+      const data: Record<string, unknown> = {};
+      const bb = b as Record<string, unknown>;
+      if (blockType === 'todo' && typeof bb.checked === 'boolean') data.checked = bb.checked;
+      if ((blockType === 'bullet_list' || blockType === 'numbered_list') && typeof bb.indent === 'number') data.indent = bb.indent;
+      if (blockType === 'code' && typeof bb.lang === 'string') data.lang = bb.lang;
+      try {
+        insertBlock(db, noteId, {
+          block_type: blockType,
+          text,
+          data: Object.keys(data).length ? data : null,
+        });
+        inserted++;
+      } catch { /* skip */ }
+    }
+
+    let createdBookmarkId: number | null = null;
+    if (alsoBookmark && url) {
+      // 既存 bookmark を探す → 無ければ最小限の bookmark 行を作る (HTML スナップショット
+      // は extension 経由の通常 /api/bookmark で取得される。 ここでは url + title のみ
+      // 登録し、 html_path は空 — HTML キャッシュは別途必要なら summary キューが処理)。
+      const existing = findBookmarkByUrl(db, url);
+      const bid = existing ? existing.id : insertBookmark(db, { url, title, htmlPath: '' });
+      createdBookmarkId = bid;
+      try {
+        insertBlock(db, noteId, {
+          block_type: 'bookmark_embed',
+          text: '',
+          data: {
+            bookmark_id: bid,
+            bookmark_url: url,
+            title,
+            summary: '',
+          },
+        });
+      } catch { /* skip */ }
+    }
+
+    const note = getNote(db, noteId)!;
+    return c.json({ note, blocks_inserted: inserted, bookmark_id: createdBookmarkId }, 201);
+  });
+
   // ---- extension dispatch rules --------------------------------------------
 
   r.get('/api/extension/rules', (c: Context) => {
@@ -491,6 +626,10 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
         ? body.shopping_domains.filter((d): d is ExtensionShoppingDomain =>
             !!d && typeof d.host === 'string')
         : cur.shopping_domains,
+      notion_domains: Array.isArray((body as { notion_domains?: unknown }).notion_domains)
+        ? ((body as { notion_domains: unknown[] }).notion_domains).filter((d): d is ExtensionNotionDomain =>
+            !!d && typeof (d as { host?: unknown }).host === 'string')
+        : cur.notion_domains,
     };
     setExtensionRules(db, next);
     return c.json(next);

@@ -14,7 +14,9 @@ export type NoteBlockType =
   | 'numbered_list'
   | 'todo'
   | 'divider'
-  | 'floating_text';
+  | 'floating_text'
+  | 'bookmark_embed'
+  | 'note_link';
 
 export interface NoteBlockRow {
   id: number;            // DB internal (server only — frontend は uuid を使う)
@@ -83,6 +85,14 @@ export interface BlockData {
   height?: number;
   color?: string;
   anchor?: FloatingAnchor;
+  // bookmark_embed
+  bookmark_id?: number;
+  bookmark_url?: string;
+  // note_link
+  note_id?: string;
+  // shared
+  title?: string;
+  summary?: string;
 }
 
 export type FloatingAnchor =
