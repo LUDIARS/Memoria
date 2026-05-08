@@ -8,7 +8,7 @@ import { runLlm } from './llm.js';
 
 const SKIP_HOST = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|\[::1\])$/i;
 
-export function shouldSkipDomain(domain) {
+export function shouldSkipDomain(domain: string | null | undefined): boolean {
   if (!domain) return true;
   if (SKIP_HOST.test(domain)) return true;
   // Bare IPs (v4) and intranet-style hosts often 404; we still try them but
@@ -16,7 +16,14 @@ export function shouldSkipDomain(domain) {
   return false;
 }
 
-const CLASSIFY_PROMPT = ({ domain, title, metaDescription, bodySample }) => [
+interface ClassifyPromptArgs {
+  domain: string;
+  title: string;
+  metaDescription: string;
+  bodySample: string;
+}
+
+const CLASSIFY_PROMPT = ({ domain, title, metaDescription, bodySample }: ClassifyPromptArgs): string => [
   'あなたは Web サイトを辞書化する係です。次の情報からこのドメインを JSON 1 オブジェクトのみで出力してください (前置き不要、コードフェンス禁止)。',
   '',
   '**4 つのフィールドはすべて必須**。情報が乏しくても推測で埋めること (空文字列・null・"unknown" 禁止)。',
@@ -37,18 +44,32 @@ const CLASSIFY_PROMPT = ({ domain, title, metaDescription, bodySample }) => [
   bodySample,
 ].join('\n');
 
+export type ClassifyDomainResult =
+  | { skip: true }
+  | { dropRow: true; error: string }
+  | { ok: false; error: string; title?: string; metaDescription?: string }
+  | {
+      ok: true;
+      title: string;
+      site_name: string;
+      description: string;
+      can_do: string;
+      kind: string;
+    };
+
 /**
- * Fetch + classify a single domain. Returns one of:
- *   { skip: true }            — host blacklisted (e.g. localhost)
- *   { dropRow: true, ... }    — fetch failed in a way that means we should
- *                                forget about the domain (404, DNS error, etc.)
- *   { ok: true, ...fields }   — classification succeeded
- *   { ok: false, error }      — claude or HTML parse failed (keep row, mark error)
+ * Fetch + classify a single domain.
  */
-export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
+export async function classifyDomain({
+  domain,
+  timeoutMs = 60_000,
+}: {
+  domain: string;
+  timeoutMs?: number;
+}): Promise<ClassifyDomainResult> {
   if (shouldSkipDomain(domain)) return { skip: true };
 
-  let res;
+  let res: Response;
   try {
     res = await fetch(`https://${domain}/`, {
       redirect: 'follow',
@@ -59,8 +80,8 @@ export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
       },
       signal: AbortSignal.timeout(15_000),
     });
-  } catch (e) {
-    return { dropRow: true, error: `fetch: ${e.message}` };
+  } catch (e: unknown) {
+    return { dropRow: true, error: `fetch: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   if (res.status === 404 || !res.ok) {
@@ -72,11 +93,11 @@ export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
     return { ok: false, error: `non-html (${ct})` };
   }
 
-  let html;
+  let html: string;
   try {
     html = await res.text();
-  } catch (e) {
-    return { ok: false, error: `body: ${e.message}` };
+  } catch (e: unknown) {
+    return { ok: false, error: `body: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   const root = parseHtml(html, { lowerCaseTagName: false });
@@ -91,12 +112,13 @@ export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
   const bodySample = root.text.replace(/\s+/g, ' ').trim().slice(0, 2000);
 
   const prompt = CLASSIFY_PROMPT({ domain, title, metaDescription, bodySample });
-  let parsed;
+  let parsed: { site_name: string; description: string; can_do: string; kind: string };
   try {
     const stdout = await runLlm({ task: 'domain_classify', prompt, timeoutMs });
     parsed = parseClassifyJson(stdout);
-  } catch (e) {
-    return { ok: false, error: `claude: ${e.message}`, title, metaDescription };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `claude: ${msg}`, title, metaDescription };
   }
 
   // Defensive fallbacks: if the LLM somehow returns blank fields, fall
@@ -113,16 +135,20 @@ export async function classifyDomain({ domain, timeoutMs = 60_000 }) {
   };
 }
 
-function parseClassifyJson(raw) {
+function parseClassifyJson(raw: string): { site_name: string; description: string; can_do: string; kind: string } {
   let text = raw.trim();
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) text = fence[1].trim();
   const first = text.indexOf('{');
   const last = text.lastIndexOf('}');
   if (first >= 0 && last > first) text = text.slice(first, last + 1);
-  let obj;
-  try { obj = JSON.parse(text); }
-  catch (e) { throw new Error(`json parse: ${e.message}`); }
+  let obj: { site_name?: unknown; description?: unknown; can_do?: unknown; kind?: unknown };
+  try {
+    obj = JSON.parse(text);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`json parse: ${msg}`);
+  }
   return {
     site_name: String(obj.site_name ?? '').trim().slice(0, 120),
     description: String(obj.description ?? '').trim().slice(0, 400),
@@ -130,4 +156,3 @@ function parseClassifyJson(raw) {
     kind: String(obj.kind ?? '').trim().slice(0, 40),
   };
 }
-
