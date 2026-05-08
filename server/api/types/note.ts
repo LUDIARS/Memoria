@@ -1,13 +1,18 @@
-// note API request/response types
+// note API request/response types (rev2)
 // Spec: spec/api/note.md
 
-import type { NoteRow, NoteBlockRow, NoteBlockType, NoteKind } from '../../db/types/note.js';
+import type {
+  NoteRow, NoteBlockRow, NoteBlockType, NoteKind,
+  NoteCommentSetRow, NoteCommentRow,
+} from '../../db/types/note.js';
 
 export interface NoteSummary {
-  id: number;
+  id: string;                  // UUID
   title: string;
   kind: NoteKind;
   tags: string[];
+  bookmark_id: number | null;
+  bookmark_url: string | null;
   source_kind: string | null;
   source_ref: string | null;
   block_count: number;
@@ -22,7 +27,7 @@ export interface NoteListResponse {
 }
 
 export interface NoteWithBlocks extends NoteRow {
-  tags: string[];          // tags_json をパース済
+  tags: string[];
   blocks: NoteBlockRow[];
 }
 
@@ -30,9 +35,10 @@ export interface NoteCreateRequest {
   title?: string;
   kind?: NoteKind;
   tags?: string[];
+  bookmark_id?: number | null;
+  bookmark_url?: string | null;
   source_kind?: string | null;
   source_ref?: string | null;
-  // 初期ブロック (空でも note は作れる)
   initial_blocks?: BlockCreateRequest[];
 }
 
@@ -40,14 +46,15 @@ export interface NoteUpdateRequest {
   title?: string;
   kind?: NoteKind;
   tags?: string[];
+  bookmark_id?: number | null;
+  bookmark_url?: string | null;
 }
 
 export interface BlockCreateRequest {
   block_type: NoteBlockType;
   text?: string;
   data?: Record<string, unknown> | null;
-  // 挿入位置: 末尾なら省略 (= 現在 max position + 1)、 中間挿入なら after_block_id を指定
-  after_block_id?: number | null;
+  after_block_uuid?: string | null;
 }
 
 export interface BlockUpdateRequest {
@@ -57,8 +64,8 @@ export interface BlockUpdateRequest {
 }
 
 export interface BlockReorderRequest {
-  // note 配下のすべての block id を含む順序列。 1.0, 2.0, … で再採番
-  order: number[];
+  // 全 block UUID を含む順序列。 1.0, 2.0, … で再採番
+  order: string[];
 }
 
 export interface BlockReorderResponse {
@@ -66,7 +73,32 @@ export interface BlockReorderResponse {
   blocks: NoteBlockRow[];
 }
 
-// extension からのチャット取り込み
+// ── コメント ──────────────────────────────────────────────────────────
+
+export interface CommentSetWithComments extends NoteCommentSetRow {
+  comments: NoteCommentRow[];
+}
+
+export interface CommentSetCreateRequest {
+  owner_user_id?: string | null;
+  owner_user_name?: string | null;
+}
+
+export interface CommentCreateRequest {
+  text: string;
+  target_block_uuid?: string | null;
+  data?: Record<string, unknown> | null;
+  position?: number;
+}
+
+export interface CommentUpdateRequest {
+  text?: string;
+  target_block_uuid?: string | null;
+  data?: Record<string, unknown> | null;
+}
+
+// ── 拡張からのチャット取り込み (既存) ─────────────────────────────────
+
 export type ChatExtractionSource = 'chatgpt' | 'claude' | 'gemini';
 
 export interface ChatExtractedMessage {
@@ -86,11 +118,11 @@ export interface NoteFromChatRequest {
 }
 
 export interface NoteFromChatResponse {
-  note: NoteRow | null;     // also_create_note=false なら null
+  note: NoteRow | null;
   messages_saved: number;
 }
 
-// 拡張ルール (extension dispatch 設定)
+// ── 拡張ルール (extension dispatch 設定 — 既存) ────────────────────────
 
 export interface ExtensionChatDomain {
   host: string;

@@ -1,4 +1,4 @@
-// Frontend types — mirror server/api/types/note.ts (subset).
+// Frontend types — mirror server/api/types/note.ts (rev2)
 // Spec: spec/api/note.md
 
 export type NoteBlockType =
@@ -16,8 +16,9 @@ export type NoteBlockType =
   | 'divider';
 
 export interface NoteBlockRow {
-  id: number;
-  note_id: number;
+  id: number;            // DB internal (server only — frontend は uuid を使う)
+  uuid: string;          // portable UUID
+  note_id: string;       // notes.id (UUID)
   position: number;
   block_type: NoteBlockType;
   text: string;
@@ -27,10 +28,12 @@ export interface NoteBlockRow {
 }
 
 export interface NoteRow {
-  id: number;
+  id: string;            // UUID
   title: string;
   kind: string;
   tags_json: string | null;
+  bookmark_id: number | null;
+  bookmark_url: string | null;
   source_kind: string | null;
   source_ref: string | null;
   created_at: string;
@@ -38,10 +41,12 @@ export interface NoteRow {
 }
 
 export interface NoteSummary {
-  id: number;
+  id: string;
   title: string;
   kind: string;
   tags: string[];
+  bookmark_id: number | null;
+  bookmark_url: string | null;
   source_kind: string | null;
   source_ref: string | null;
   block_count: number;
@@ -66,4 +71,43 @@ export interface BlockData {
   rows?: string[][];
   indent?: number;
   checked?: boolean;
+}
+
+// ── コメント ──────────────────────────────────────────────────────────
+
+export interface CommentSetRow {
+  id: string;                       // UUID
+  note_id: string;                  // notes.id (UUID)
+  owner_user_id: string | null;
+  owner_user_name: string | null;
+  created_at: string;
+  updated_at: string;
+  shared_at: string | null;
+  shared_origin: string | null;
+}
+
+export interface CommentRow {
+  id: string;                       // UUID
+  set_id: string;
+  target_block_uuid: string | null;
+  position: number;
+  text: string;
+  data_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommentSetWithComments extends CommentSetRow {
+  comments: CommentRow[];
+}
+
+// ── bookmark picker 用 ───────────────────────────────────────────────
+
+export interface BookmarkSummary {
+  id: number;
+  url: string;
+  title: string;
+  summary: string | null;
+  categories: string[] | null;
+  created_at: string;
 }

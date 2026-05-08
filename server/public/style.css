@@ -5457,3 +5457,105 @@ dialog.loc-edit-modal[open] {
   .notes-pane { padding: 12px; }
   .note-mermaid-wrap { grid-template-columns: 1fr; }
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   📓 Notes rev2 — bookmark banner + comment panel + bookmark picker
+   ───────────────────────────────────────────────────────────────── */
+
+.notes-layout {
+  grid-template-columns: 280px 1fr 320px;
+}
+.notes-comments {
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  padding: 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.note-bookmark-banner {
+  display: flex; align-items: center; gap: 8px;
+  background: #f3eaff; border: 1px solid #c8b3ee;
+  border-radius: 6px; padding: 8px 12px;
+  margin: 8px 0 16px 0;
+  font-size: 13px;
+}
+.note-bookmark-banner.empty { background: transparent; border: 1px dashed var(--border); justify-content: center; }
+.note-bookmark-banner .bm-icon { font-size: 16px; }
+.note-bookmark-banner .bm-link { color: #5b22b8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-bookmark-banner .bm-unlink, .note-bookmark-banner .bm-attach { font-size: 11px; padding: 4px 10px; }
+
+/* ─── notes-kind-bm badge ─── */
+.notes-kind-bm { background: #f3eaff; color: #7b3ff2; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+
+/* ─── comment panel ─── */
+.nc-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+.nc-head h3 { font-size: 14px; margin: 0; }
+.nc-list { list-style: none; padding: 0; margin: 0 0 12px 0; display: flex; flex-direction: column; gap: 8px; }
+.nc-empty { padding: 20px 0; text-align: center; }
+.nc-item {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.nc-text { line-height: 1.5; word-break: break-word; }
+.nc-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 10px; color: var(--muted); }
+.nc-anchor { font-size: 12px; }
+.nc-del { margin-left: auto; padding: 2px 6px; font-size: 11px; color: var(--muted); }
+.nc-del:hover { color: #c33; }
+
+.nc-add { display: flex; flex-direction: column; gap: 6px; }
+.nc-add textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: vertical;
+  font-family: inherit; font-size: 13px;
+  box-sizing: border-box;
+}
+.nc-add button { align-self: flex-end; padding: 6px 14px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+.nc-add button:hover { filter: brightness(0.92); }
+
+/* ─── bookmark picker overlay ─── */
+.note-bm-picker-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 9000;
+  display: flex; align-items: center; justify-content: center;
+}
+.note-bm-picker {
+  background: #fff;
+  border-radius: 8px;
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.2);
+}
+.note-bm-picker-head { display: flex; padding: 12px 16px; border-bottom: 1px solid var(--border); align-items: center; }
+.note-bm-picker-head h3 { flex: 1; margin: 0; font-size: 15px; }
+.note-bm-picker input[type="search"] {
+  border: 0; border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+  font-size: 14px;
+  outline: none;
+}
+.note-bm-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; }
+.note-bm-row { padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.note-bm-row:hover { background: var(--accent-bg); }
+.note-bm-title { font-weight: 600; font-size: 13px; line-height: 1.3; }
+.note-bm-url { font-size: 11px; line-height: 1.3; margin-top: 2px; word-break: break-all; }
+
+@media (max-width: 1100px) {
+  .notes-layout { grid-template-columns: 280px 1fr; }
+  .notes-comments { display: none; }
+}
+@media (max-width: 760px) {
+  .notes-layout { grid-template-columns: 1fr; }
+  .notes-sidebar { max-height: 240px; }
+  .notes-pane { padding: 12px; }
+  .note-mermaid-wrap { grid-template-columns: 1fr; }
+}

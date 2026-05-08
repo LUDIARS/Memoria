@@ -1,7 +1,9 @@
-// Note API client.
+// Note API client (rev2 — UUID + bookmark + comments)
 import type {
   NoteRow, NoteWithBlocks, NoteListResponse, NoteBlockRow,
   NoteBlockType, BlockData,
+  CommentSetRow, CommentRow, CommentSetWithComments,
+  BookmarkSummary,
 } from './types.js';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -21,53 +23,110 @@ function asJson(body: unknown): RequestInit {
   };
 }
 
-export function listNotes(query: string, limit = 50): Promise<NoteListResponse> {
+// ── notes ───────────────────────────────────────────────────────────
+
+export function listNotes(query: string, limit = 50, bookmarkId?: number | null): Promise<NoteListResponse> {
   const p = new URLSearchParams();
   if (query) p.set('q', query);
   p.set('limit', String(limit));
+  if (bookmarkId != null) p.set('bookmark_id', String(bookmarkId));
   return api<NoteListResponse>(`/api/notes?${p.toString()}`);
 }
 
-export function getNote(id: number): Promise<NoteWithBlocks> {
-  return api<NoteWithBlocks>(`/api/notes/${id}`);
+export function getNote(uuid: string): Promise<NoteWithBlocks> {
+  return api<NoteWithBlocks>(`/api/notes/${encodeURIComponent(uuid)}`);
 }
 
 export function createNote(input: {
   title?: string;
   kind?: string;
   tags?: string[];
+  bookmark_id?: number | null;
+  bookmark_url?: string | null;
   initial_blocks?: Array<{ block_type: NoteBlockType; text?: string; data?: BlockData | null }>;
 }): Promise<NoteRow> {
   return api<NoteRow>('/api/notes', asJson(input));
 }
 
-export function patchNote(id: number, patch: { title?: string; kind?: string; tags?: string[] }): Promise<NoteRow> {
-  return api<NoteRow>(`/api/notes/${id}`, { ...asJson(patch), method: 'PATCH' });
+export function patchNote(uuid: string, patch: { title?: string; kind?: string; tags?: string[]; bookmark_id?: number | null; bookmark_url?: string | null }): Promise<NoteRow> {
+  return api<NoteRow>(`/api/notes/${encodeURIComponent(uuid)}`, { ...asJson(patch), method: 'PATCH' });
 }
 
-export function deleteNote(id: number): Promise<{ ok: true }> {
-  return api<{ ok: true }>(`/api/notes/${id}`, { method: 'DELETE' });
+export function deleteNote(uuid: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/api/notes/${encodeURIComponent(uuid)}`, { method: 'DELETE' });
 }
+
+// ── blocks ──────────────────────────────────────────────────────────
 
 export function createBlock(
-  noteId: number,
-  body: { block_type: NoteBlockType; text?: string; data?: BlockData | null; after_block_id?: number | null },
+  noteUuid: string,
+  body: { block_type: NoteBlockType; text?: string; data?: BlockData | null; after_block_uuid?: string | null },
 ): Promise<NoteBlockRow> {
-  return api<NoteBlockRow>(`/api/notes/${noteId}/blocks`, asJson(body));
+  return api<NoteBlockRow>(`/api/notes/${encodeURIComponent(noteUuid)}/blocks`, asJson(body));
 }
 
 export function patchBlock(
-  noteId: number,
-  blockId: number,
+  noteUuid: string,
+  blockUuid: string,
   body: { block_type?: NoteBlockType; text?: string; data?: BlockData | null },
 ): Promise<NoteBlockRow> {
-  return api<NoteBlockRow>(`/api/notes/${noteId}/blocks/${blockId}`, { ...asJson(body), method: 'PATCH' });
+  return api<NoteBlockRow>(`/api/notes/${encodeURIComponent(noteUuid)}/blocks/${encodeURIComponent(blockUuid)}`, { ...asJson(body), method: 'PATCH' });
 }
 
-export function deleteBlock(noteId: number, blockId: number): Promise<{ ok: true }> {
-  return api<{ ok: true }>(`/api/notes/${noteId}/blocks/${blockId}`, { method: 'DELETE' });
+export function deleteBlock(noteUuid: string, blockUuid: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/api/notes/${encodeURIComponent(noteUuid)}/blocks/${encodeURIComponent(blockUuid)}`, { method: 'DELETE' });
 }
 
-export function reorderBlocks(noteId: number, order: number[]): Promise<{ ok: true; blocks: NoteBlockRow[] }> {
-  return api<{ ok: true; blocks: NoteBlockRow[] }>(`/api/notes/${noteId}/blocks/reorder`, asJson({ order }));
+export function reorderBlocks(noteUuid: string, order: string[]): Promise<{ ok: true; blocks: NoteBlockRow[] }> {
+  return api<{ ok: true; blocks: NoteBlockRow[] }>(`/api/notes/${encodeURIComponent(noteUuid)}/blocks/reorder`, asJson({ order }));
+}
+
+// ── comments ────────────────────────────────────────────────────────
+
+export function listCommentSets(noteUuid: string, ownerUserId?: string | null): Promise<{ items: CommentSetWithComments[] }> {
+  const p = new URLSearchParams();
+  if (ownerUserId !== undefined) p.set('owner_user_id', ownerUserId === null ? 'null' : ownerUserId);
+  const qs = p.toString() ? `?${p}` : '';
+  return api<{ items: CommentSetWithComments[] }>(`/api/notes/${encodeURIComponent(noteUuid)}/comment-sets${qs}`);
+}
+
+export function getOrCreateCommentSet(noteUuid: string, ownerUserId: string | null = null): Promise<CommentSetRow> {
+  return api<CommentSetRow>(`/api/notes/${encodeURIComponent(noteUuid)}/comment-sets`, asJson({ owner_user_id: ownerUserId }));
+}
+
+export function createComment(
+  noteUuid: string,
+  setUuid: string,
+  body: { text: string; target_block_uuid?: string | null },
+): Promise<CommentRow> {
+  return api<CommentRow>(`/api/notes/${encodeURIComponent(noteUuid)}/comment-sets/${encodeURIComponent(setUuid)}/comments`, asJson(body));
+}
+
+export function patchComment(
+  noteUuid: string,
+  setUuid: string,
+  commentUuid: string,
+  body: { text?: string; target_block_uuid?: string | null },
+): Promise<CommentRow> {
+  return api<CommentRow>(
+    `/api/notes/${encodeURIComponent(noteUuid)}/comment-sets/${encodeURIComponent(setUuid)}/comments/${encodeURIComponent(commentUuid)}`,
+    { ...asJson(body), method: 'PATCH' },
+  );
+}
+
+export function deleteComment(noteUuid: string, setUuid: string, commentUuid: string): Promise<{ ok: true }> {
+  return api<{ ok: true }>(
+    `/api/notes/${encodeURIComponent(noteUuid)}/comment-sets/${encodeURIComponent(setUuid)}/comments/${encodeURIComponent(commentUuid)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// ── bookmark picker ─────────────────────────────────────────────────
+
+export async function searchBookmarks(query: string, limit = 20): Promise<BookmarkSummary[]> {
+  const p = new URLSearchParams();
+  if (query) p.set('q', query);
+  p.set('limit', String(limit));
+  const res = await api<{ items: BookmarkSummary[] }>(`/api/bookmarks?${p.toString()}`);
+  return res.items;
 }

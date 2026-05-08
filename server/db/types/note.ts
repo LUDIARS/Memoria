@@ -1,14 +1,16 @@
-// note domain — notes / note_blocks
+// note domain — notes / note_blocks / note_comment_sets / note_comments
 // Spec: spec/db/note.md
 
-export type NoteKind = 'doc' | 'chat' | 'meeting' | string;
+export type NoteKind = 'doc' | 'chat' | 'bookmark' | 'meeting' | string;
 
 export interface NoteRow {
-  id: number;
+  id: string;                   // UUID
   title: string;
   kind: NoteKind;
-  tags_json: string | null;     // JSON string[]
-  source_kind: string | null;   // 'chat' | …
+  tags_json: string | null;
+  bookmark_id: number | null;   // ベース bookmark (NULL = フリーノート)
+  bookmark_url: string | null;  // 冗長保存 (Hub 同期 / bookmark 削除耐性)
+  source_kind: string | null;
   source_ref: string | null;
   created_at: string;
   updated_at: string;
@@ -49,8 +51,9 @@ export const NOTE_BLOCK_TYPES: readonly NoteBlockType[] = [
 ] as const;
 
 export interface NoteBlockRow {
-  id: number;
-  note_id: number;
+  id: number;                  // DB 内部 (join 用)
+  uuid: string;                // portable UUID — comment が target にする
+  note_id: string;             // notes.id (UUID)
   position: number;
   block_type: NoteBlockType;
   text: string;
@@ -59,15 +62,34 @@ export interface NoteBlockRow {
   updated_at: string;
 }
 
-// data_json の中身 (パース後の型)。 type ごとに optional フィールドが異なる。
 export interface NoteBlockData {
-  // code
   lang?: string;
-  // table
   header?: boolean;
   rows?: string[][];
-  // bullet_list / numbered_list
   indent?: number;
-  // todo
   checked?: boolean;
+}
+
+// ── コメント (per note × user) ──────────────────────────────────────────
+
+export interface NoteCommentSetRow {
+  id: string;                       // UUID
+  note_id: string;                  // notes.id (UUID)
+  owner_user_id: string | null;     // NULL = ローカル自分
+  owner_user_name: string | null;
+  created_at: string;
+  updated_at: string;
+  shared_at: string | null;
+  shared_origin: string | null;
+}
+
+export interface NoteCommentRow {
+  id: string;                       // UUID
+  set_id: string;                   // FK → note_comment_sets.id
+  target_block_uuid: string | null; // NULL = note 全体宛て
+  position: number;
+  text: string;
+  data_json: string | null;
+  created_at: string;
+  updated_at: string;
 }

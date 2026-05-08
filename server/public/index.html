@@ -75,6 +75,9 @@
     <section class="content">
       <nav class="tabs">
         <div class="tabs-scroll">
+          <button class="tab" data-tab="notes">
+            <span class="tab-label" data-full="📓 ノート" data-short="📓 ノート">📓 ノート</span>
+          </button>
           <button class="tab active" data-tab="database">
             <span class="tab-label" data-full="🗄 データベース" data-short="🗄 DB">🗄 データベース</span>
           </button>
@@ -97,9 +100,6 @@
           </button>
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
-          </button>
-          <button class="tab" data-tab="notes">
-            <span class="tab-label" data-full="📓 ノート" data-short="📓 ノート">📓 ノート</span>
           </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
@@ -597,11 +597,12 @@
         <div id="mealsList" class="meals-list"></div>
       </div>
 
-      <!-- 📓 ノート — esa / DocBase 風 WYSIWYG ブロックエディタ。 spec/feature/note.md -->
+      <!-- 📓 ノート — esa / DocBase 風 WYSIWYG ブロックエディタ + bookmark base + comment sets。 spec/feature/note.md -->
       <div id="notesView" class="hidden">
         <div class="notes-toolbar">
           <input id="notesSearch" type="search" placeholder="ノート検索 (タイトル / 本文)" />
           <span class="grow"></span>
+          <button id="notesFromBookmarkBtn" type="button" class="ghost">🔖 bookmark から</button>
           <button id="notesNewBtn" type="button">+ 新規ノート</button>
         </div>
         <div class="notes-layout">
@@ -611,6 +612,9 @@
           <section class="notes-pane" id="noteEditor">
             <div class="notes-empty muted">左のリストから選択するか「+ 新規ノート」 で作成してください</div>
           </section>
+          <aside class="notes-comments" id="notesComments">
+            <div class="muted">ノートを選択するとコメントが表示されます</div>
+          </aside>
         </div>
       </div>
 

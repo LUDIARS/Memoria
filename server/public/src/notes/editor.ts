@@ -1,46 +1,50 @@
-// Note エディタ — ブロックベース WYSIWYG。
+// Note エディタ (rev2) — UUID + bookmark base + per-user comment sets。
 //
 // DOM 構造 (notesView 内):
 //   .notes-layout
-//     .notes-sidebar    ← ノート一覧 + 新規作成 + 検索
-//     .notes-pane       ← 詳細 (タイトル + ブロック群)
+//     .notes-sidebar       ← ノート一覧 + 検索 + 新規 (空 / from-bookmark)
+//     .notes-pane          ← タイトル + bookmark banner + ブロック群
+//     .notes-comments      ← コメントパネル (右サイド)
 //
-// 各ブロックは contenteditable で、 blur で auto-save。
-// `/` 入力 (空行) で slash menu (ブロック種別切替) が出る。
-// テキスト選択時は floating toolbar (B / I / 🎨色 / link)。
+// 各ブロックは contenteditable で blur で auto-save。 / で slash menu。
 
 import * as api from './api.js';
 import type {
   NoteBlockRow, NoteBlockType, NoteSummary, NoteWithBlocks, BlockData,
+  CommentSetWithComments, CommentRow, BookmarkSummary,
 } from './types.js';
 import { renderInline } from './markdown.js';
 import { sanitizeInlineHtml, escapeHtml } from './sanitize.js';
+
+interface MermaidLib {
+  initialize: (o: unknown) => void;
+  render: (id: string, src: string) => Promise<{ svg: string }>;
+}
 
 interface EditorState {
   list: NoteSummary[];
   search: string;
   current: NoteWithBlocks | null;
-  saveTimers: Map<number, number>;
+  currentSet: { id: string; comments: CommentRow[] } | null;
+  saveTimers: Map<string, number>;
   loadingMermaid: Promise<MermaidLib> | null;
-}
-
-interface MermaidLib {
-  render: (id: string, src: string) => Promise<{ svg: string }>;
+  bookmarkPickerOpen: boolean;
 }
 
 const state: EditorState = {
   list: [],
   search: '',
   current: null,
+  currentSet: null,
   saveTimers: new Map(),
   loadingMermaid: null,
+  bookmarkPickerOpen: false,
 };
 
 const SAVE_DEBOUNCE_MS = 600;
 
 const COLOR_PALETTE = [
-  '', // clear
-  '#e6553a', '#f6b73c', '#3ac26a', '#2a6df4', '#7b3ff2',
+  '', '#e6553a', '#f6b73c', '#3ac26a', '#2a6df4', '#7b3ff2',
   '#222222', '#888888',
 ];
 
@@ -77,7 +81,9 @@ export function initNotes(): void {
   const newBtn = byId<HTMLButtonElement>('notesNewBtn');
   if (newBtn) newBtn.addEventListener('click', () => void createBlankNote());
 
-  // Selection toolbar
+  const fromBookmarkBtn = byId<HTMLButtonElement>('notesFromBookmarkBtn');
+  if (fromBookmarkBtn) fromBookmarkBtn.addEventListener('click', () => openBookmarkPicker());
+
   document.addEventListener('selectionchange', updateSelectionToolbar);
   document.addEventListener('mousedown', (e) => {
     const t = e.target as HTMLElement | null;
@@ -108,9 +114,10 @@ function renderSidebar(): void {
   ul.innerHTML = state.list.map((n) => {
     const active = state.current?.id === n.id ? ' active' : '';
     const tags = n.tags.length ? `<span class="notes-tags">${n.tags.map((t) => `#${escapeHtml(t)}`).join(' ')}</span>` : '';
-    const kindBadge = n.kind === 'chat' ? `<span class="notes-kind notes-kind-chat">💬 chat</span>` : '';
+    const kindBadge = n.kind === 'chat' ? `<span class="notes-kind notes-kind-chat">💬 chat</span>`
+                  : n.kind === 'bookmark' ? `<span class="notes-kind notes-kind-bm">🔖 bookmark</span>` : '';
     return `
-      <li class="notes-item${active}" data-note-id="${n.id}">
+      <li class="notes-item${active}" data-note-id="${escapeHtml(n.id)}">
         <div class="notes-item-title">${escapeHtml(n.title || '無題')}</div>
         <div class="notes-item-meta">${kindBadge}${tags}<span class="notes-item-date">${formatDate(n.updated_at)}</span></div>
         <div class="notes-item-preview">${escapeHtml((n.preview || '').slice(0, 80))}</div>
@@ -119,8 +126,8 @@ function renderSidebar(): void {
   }).join('');
   ul.querySelectorAll<HTMLLIElement>('.notes-item').forEach((li) => {
     li.addEventListener('click', () => {
-      const id = Number(li.dataset.noteId);
-      if (Number.isFinite(id)) void openNote(id);
+      const id = li.dataset.noteId || '';
+      if (id) void openNote(id);
     });
   });
 }
@@ -142,11 +149,13 @@ async function createBlankNote(): Promise<void> {
   await refreshList();
 }
 
-export async function openNote(id: number): Promise<void> {
-  const note = await api.getNote(id);
+export async function openNote(uuid: string): Promise<void> {
+  const note = await api.getNote(uuid);
   state.current = note;
+  state.currentSet = null;
   renderEditor();
   renderSidebar();
+  void loadOwnCommentSet();
 }
 
 function renderEditor(): void {
@@ -157,6 +166,15 @@ function renderEditor(): void {
     return;
   }
   const note = state.current;
+  const bookmarkBanner = note.bookmark_id || note.bookmark_url
+    ? `<div class="note-bookmark-banner">
+         <span class="bm-icon">🔖</span>
+         <a href="${escapeHtml(note.bookmark_url ?? '#')}" target="_blank" rel="noopener noreferrer" class="bm-link">${escapeHtml(note.bookmark_url ?? '')}</a>
+         ${note.bookmark_id ? `<button class="ghost bm-unlink" id="bmUnlinkBtn" title="このノートのベース bookmark を解除">解除</button>` : ''}
+       </div>`
+    : `<div class="note-bookmark-banner empty">
+         <button class="ghost bm-attach" id="bmAttachBtn">🔖 ベース bookmark を選択…</button>
+       </div>`;
   pane.innerHTML = `
     <div class="note-header">
       <input class="note-title" id="noteTitle" value="${escapeHtml(note.title)}" placeholder="無題のノート" />
@@ -166,6 +184,7 @@ function renderEditor(): void {
         <button id="noteDeleteBtn" class="ghost danger" title="削除">🗑 削除</button>
       </div>
     </div>
+    ${bookmarkBanner}
     <div class="note-blocks" id="noteBlocks"></div>
     <div class="note-add-block">
       <button class="ghost" id="noteAddBlockBtn">+ ブロックを追加</button>
@@ -195,7 +214,18 @@ function renderEditor(): void {
   if (delBtn) delBtn.addEventListener('click', () => void confirmDelete());
   const addBtn = byId<HTMLButtonElement>('noteAddBlockBtn');
   if (addBtn) addBtn.addEventListener('click', () => void appendBlock('text'));
+  const bmAttach = byId<HTMLButtonElement>('bmAttachBtn');
+  if (bmAttach) bmAttach.addEventListener('click', () => openBookmarkPicker(note.id));
+  const bmUnlink = byId<HTMLButtonElement>('bmUnlinkBtn');
+  if (bmUnlink) bmUnlink.addEventListener('click', () => void unlinkBookmark());
   renderAllBlocks();
+}
+
+async function unlinkBookmark(): Promise<void> {
+  if (!state.current) return;
+  await api.patchNote(state.current.id, { bookmark_id: null });
+  state.current = await api.getNote(state.current.id);
+  renderEditor();
 }
 
 async function confirmDelete(): Promise<void> {
@@ -204,8 +234,10 @@ async function confirmDelete(): Promise<void> {
   const id = state.current.id;
   await api.deleteNote(id);
   state.current = null;
+  state.currentSet = null;
   await refreshList();
   renderEditor();
+  renderCommentPanel();
 }
 
 // ── Block rendering ────────────────────────────────────────────────────────
@@ -222,7 +254,7 @@ function renderAllBlocks(): void {
 function buildBlockElement(block: NoteBlockRow): HTMLElement {
   const el = document.createElement('div');
   el.className = `note-block nb-${block.block_type}`;
-  el.dataset.blockId = String(block.id);
+  el.dataset.blockUuid = block.uuid;
   el.dataset.blockType = block.block_type;
   el.innerHTML = `
     <div class="nb-side">
@@ -235,34 +267,23 @@ function buildBlockElement(block: NoteBlockRow): HTMLElement {
   el.querySelector<HTMLButtonElement>('.nb-handle')!
     .addEventListener('click', (ev) => {
       ev.stopPropagation();
-      openBlockMenu(block.id, ev.currentTarget as HTMLElement);
+      openBlockMenu(block.uuid, ev.currentTarget as HTMLElement);
     });
   return el;
 }
 
 function buildBlockBody(block: NoteBlockRow): HTMLElement {
   switch (block.block_type) {
-    case 'text':
-    case 'heading_1':
-    case 'heading_2':
-    case 'heading_3':
-    case 'quote':
+    case 'text': case 'heading_1': case 'heading_2': case 'heading_3': case 'quote':
       return buildContentEditable(block);
-    case 'bullet_list':
-    case 'numbered_list':
+    case 'bullet_list': case 'numbered_list':
       return buildListBlock(block);
-    case 'todo':
-      return buildTodoBlock(block);
-    case 'code':
-      return buildCodeBlock(block);
-    case 'mermaid':
-      return buildMermaidBlock(block);
-    case 'table':
-      return buildTableBlock(block);
-    case 'divider':
-      return buildDividerBlock(block);
-    default:
-      return buildContentEditable(block);
+    case 'todo':       return buildTodoBlock(block);
+    case 'code':       return buildCodeBlock(block);
+    case 'mermaid':    return buildMermaidBlock(block);
+    case 'table':      return buildTableBlock(block);
+    case 'divider':    return buildDividerBlock(block);
+    default:           return buildContentEditable(block);
   }
 }
 
@@ -271,7 +292,7 @@ function tagForBlock(block: NoteBlockRow): string {
     case 'heading_1': return 'h1';
     case 'heading_2': return 'h2';
     case 'heading_3': return 'h3';
-    case 'quote': return 'blockquote';
+    case 'quote':     return 'blockquote';
     default: return 'div';
   }
 }
@@ -292,7 +313,7 @@ function placeholderFor(t: NoteBlockType): string {
     case 'heading_1': return '見出し 1';
     case 'heading_2': return '見出し 2';
     case 'heading_3': return '見出し 3';
-    case 'quote': return '引用…';
+    case 'quote':     return '引用…';
     default: return 'テキストを入力 (/ でブロック切替)';
   }
 }
@@ -374,7 +395,6 @@ function buildMermaidBlock(block: NoteBlockRow): HTMLElement {
   };
   attachAutoSave(editor, block, { plainText: true, onSave: () => renderPreview() });
   wrap.append(editor, preview);
-  // 初回プレビュー
   void renderMermaid(editor.textContent || '', preview);
   return wrap;
 }
@@ -384,9 +404,7 @@ const MERMAID_URL = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.mi
 async function loadMermaid(): Promise<MermaidLib> {
   if (state.loadingMermaid) return state.loadingMermaid;
   state.loadingMermaid = (async () => {
-    // 動的 ESM import — TS は string literal でない URL を import できないので
-    // Function コンストラクタ越しに動的インポートする (esbuild は解決しない)。
-    const dyn = new Function('u', 'return import(u)') as (u: string) => Promise<{ default: { initialize: (o: unknown) => void; render: (id: string, src: string) => Promise<{ svg: string }> } }>;
+    const dyn = new Function('u', 'return import(u)') as (u: string) => Promise<{ default: MermaidLib }>;
     const mod = await dyn(MERMAID_URL);
     mod.default.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
     return mod.default;
@@ -486,77 +504,73 @@ function attachAutoSave(
     const text = opts.plainText ? (el.textContent ?? '') : htmlToStorageText(el);
     if (text === block.text) { opts.onSave?.(); return; }
     block.text = text;
-    void api.patchBlock(block.note_id, block.id, { text }).then(() => {
+    void api.patchBlock(block.note_id, block.uuid, { text }).then(() => {
       opts.onSave?.();
     });
   };
   el.addEventListener('blur', flush);
   el.addEventListener('input', () => {
-    if (state.saveTimers.has(block.id)) window.clearTimeout(state.saveTimers.get(block.id));
-    state.saveTimers.set(block.id, window.setTimeout(flush, SAVE_DEBOUNCE_MS));
+    if (state.saveTimers.has(block.uuid)) window.clearTimeout(state.saveTimers.get(block.uuid));
+    state.saveTimers.set(block.uuid, window.setTimeout(flush, SAVE_DEBOUNCE_MS));
   });
   el.addEventListener('keydown', (ev) => handleEditorKey(ev, block));
 }
 
 function htmlToStorageText(el: HTMLElement): string {
-  // sanitize → return innerHTML (fragment safe)
-  const sanitized = sanitizeInlineHtml(el.innerHTML);
-  return sanitized;
+  return sanitizeInlineHtml(el.innerHTML);
 }
 
 async function saveBlockData(block: NoteBlockRow, data: BlockData): Promise<void> {
   block.data_json = JSON.stringify(data);
-  await api.patchBlock(block.note_id, block.id, { data });
+  await api.patchBlock(block.note_id, block.uuid, { data });
 }
 
-// ── Editor key handling (Enter / Backspace / slash menu) ──────────────────
+// ── Editor key handling ──────────────────────────────────────────────────
 
 function handleEditorKey(ev: KeyboardEvent, block: NoteBlockRow): void {
   if (ev.key === 'Enter' && !ev.shiftKey) {
-    if (block.block_type === 'code' || block.block_type === 'mermaid') return; // allow newlines
+    if (block.block_type === 'code' || block.block_type === 'mermaid') return;
     ev.preventDefault();
-    void appendBlock('text', block.id);
+    void appendBlock('text', block.uuid);
     return;
   }
   if (ev.key === 'Backspace') {
     const target = ev.currentTarget as HTMLElement;
     if (target.textContent === '' && state.current && state.current.blocks.length > 1) {
       ev.preventDefault();
-      void removeBlock(block.id);
+      void removeBlock(block.uuid);
     }
     return;
   }
   if (ev.key === '/' && (ev.currentTarget as HTMLElement).textContent === '') {
     ev.preventDefault();
-    openBlockMenu(block.id, ev.currentTarget as HTMLElement, true);
+    openBlockMenu(block.uuid, ev.currentTarget as HTMLElement, true);
     return;
   }
 }
 
-async function appendBlock(type: NoteBlockType, afterBlockId?: number): Promise<void> {
+async function appendBlock(type: NoteBlockType, afterBlockUuid?: string): Promise<void> {
   if (!state.current) return;
   const newBlock = await api.createBlock(state.current.id, {
     block_type: type,
-    after_block_id: afterBlockId ?? null,
+    after_block_uuid: afterBlockUuid ?? null,
   });
-  // refresh blocks
   state.current = await api.getNote(state.current.id);
   renderAllBlocks();
-  // focus new block's editable
-  const el = document.querySelector<HTMLElement>(`[data-block-id="${newBlock.id}"] .note-block-content`);
+  const el = document.querySelector<HTMLElement>(`[data-block-uuid="${newBlock.uuid}"] .note-block-content`);
   if (el) el.focus();
 }
 
-async function removeBlock(blockId: number): Promise<void> {
+async function removeBlock(blockUuid: string): Promise<void> {
   if (!state.current) return;
-  await api.deleteBlock(state.current.id, blockId);
+  await api.deleteBlock(state.current.id, blockUuid);
   state.current = await api.getNote(state.current.id);
   renderAllBlocks();
 }
 
-async function changeBlockType(blockId: number, newType: NoteBlockType): Promise<void> {
+async function changeBlockType(blockUuid: string, newType: NoteBlockType): Promise<void> {
   if (!state.current) return;
-  await api.patchBlock(state.current.id, blockId, { block_type: newType });
+  await api.patchBlock(state.current.id, blockUuid, { block_type: newType });
   state.current = await api.getNote(state.current.id);
   renderAllBlocks();
 }
@@ -565,7 +579,7 @@ async function changeBlockType(blockId: number, newType: NoteBlockType): Promise
 
 let openMenu: HTMLElement | null = null;
 
-function openBlockMenu(blockId: number, anchor: HTMLElement, _slashMode = false): void {
+function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = false): void {
   closeBlockMenu();
   const menu = document.createElement('div');
   menu.className = 'note-block-menu';
@@ -575,6 +589,7 @@ function openBlockMenu(blockId: number, anchor: HTMLElement, _slashMode = false)
       <button class="nbm-item" data-type="${o.type}"><span class="nbm-icon">${o.icon}</span>${o.label}</button>
     `).join('')}
     <div class="nbm-section">操作</div>
+    <button class="nbm-item nbm-action" data-action="comment">💬 このブロックにコメント</button>
     <button class="nbm-item nbm-danger" data-action="delete">🗑 削除</button>
   `;
   document.body.appendChild(menu);
@@ -587,8 +602,9 @@ function openBlockMenu(blockId: number, anchor: HTMLElement, _slashMode = false)
       const t = btn.dataset.type as NoteBlockType | undefined;
       const a = btn.dataset.action;
       closeBlockMenu();
-      if (t) void changeBlockType(blockId, t);
-      else if (a === 'delete') void removeBlock(blockId);
+      if (t) void changeBlockType(blockUuid, t);
+      else if (a === 'delete') void removeBlock(blockUuid);
+      else if (a === 'comment') void quickComment(blockUuid);
     });
   });
   setTimeout(() => {
@@ -664,10 +680,10 @@ function applyToolbarCmd(cmd: string): void {
   if (cmd === 'link') {
     const url = prompt('リンク URL を入力してください:');
     if (url && /^(https?:|mailto:|\/|#)/i.test(url)) {
-      wrapRangeWith(range, (sel) => {
+      wrapRangeWith(range, (s) => {
         const a = document.createElement('a');
         a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
-        a.textContent = sel;
+        a.textContent = s;
         return a;
       });
     }
@@ -686,7 +702,6 @@ function wrapRangeWith(range: Range, makeNode: (text: string) => HTMLElement): v
   const node = makeNode(text);
   range.deleteContents();
   range.insertNode(node);
-  // place caret after
   const r2 = document.createRange();
   r2.setStartAfter(node);
   r2.collapse(true);
@@ -735,7 +750,6 @@ function showColorPicker(range: Range): void {
 
 function applyColor(range: Range, color: string): void {
   if (!color) {
-    // unwrap span style
     const text = range.toString();
     range.deleteContents();
     range.insertNode(document.createTextNode(text));
@@ -755,15 +769,175 @@ function triggerSaveForSelection(range: Range): void {
   while (parent && parent.nodeType !== Node.ELEMENT_NODE) parent = parent.parentNode;
   if (!parent) return;
   const blockEl = (parent as Element).closest('.note-block') as HTMLElement | null;
-  if (!blockEl?.dataset.blockId) return;
-  const id = Number(blockEl.dataset.blockId);
+  if (!blockEl?.dataset.blockUuid) return;
+  const blockUuid = blockEl.dataset.blockUuid;
   const editable = blockEl.querySelector<HTMLElement>('.note-block-content');
   if (!editable || !state.current) return;
-  const block = state.current.blocks.find((b) => b.id === id);
+  const block = state.current.blocks.find((b) => b.uuid === blockUuid);
   if (!block) return;
   const text = htmlToStorageText(editable);
   block.text = text;
-  void api.patchBlock(state.current.id, id, { text });
+  void api.patchBlock(state.current.id, blockUuid, { text });
+}
+
+// ── Bookmark picker (新規 from-bookmark / 既存 note への bookmark 紐付け) ────
+
+function openBookmarkPicker(attachToNoteId?: string): void {
+  if (state.bookmarkPickerOpen) return;
+  state.bookmarkPickerOpen = true;
+  const overlay = document.createElement('div');
+  overlay.className = 'note-bm-picker-overlay';
+  overlay.innerHTML = `
+    <div class="note-bm-picker">
+      <div class="note-bm-picker-head">
+        <h3>${attachToNoteId ? 'ベース bookmark を選択' : 'bookmark をベースにノート作成'}</h3>
+        <button class="modal-close" id="bmpClose">×</button>
+      </div>
+      <input type="search" id="bmpSearch" placeholder="タイトル / URL で検索" />
+      <ul id="bmpList" class="note-bm-list"></ul>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = (): void => {
+    overlay.remove();
+    state.bookmarkPickerOpen = false;
+  };
+  overlay.querySelector<HTMLButtonElement>('#bmpClose')!.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  const search = overlay.querySelector<HTMLInputElement>('#bmpSearch')!;
+  const listEl = overlay.querySelector<HTMLUListElement>('#bmpList')!;
+  let timer = 0;
+  const refresh = async (): Promise<void> => {
+    const items: BookmarkSummary[] = await api.searchBookmarks(search.value, 30);
+    listEl.innerHTML = items.map((b) => `
+      <li class="note-bm-row" data-id="${b.id}">
+        <div class="note-bm-title">${escapeHtml(b.title || b.url)}</div>
+        <div class="note-bm-url muted">${escapeHtml(b.url)}</div>
+      </li>
+    `).join('');
+    listEl.querySelectorAll<HTMLLIElement>('.note-bm-row').forEach((li) => {
+      li.addEventListener('click', () => {
+        const bid = Number(li.dataset.id);
+        if (!Number.isFinite(bid)) return;
+        if (attachToNoteId) {
+          void api.patchNote(attachToNoteId, { bookmark_id: bid }).then(async () => {
+            close();
+            state.current = await api.getNote(attachToNoteId);
+            renderEditor();
+          });
+        } else {
+          void api.createNote({ bookmark_id: bid, initial_blocks: [{ block_type: 'text', text: '' }] }).then(async (n) => {
+            close();
+            await openNote(n.id);
+            await refreshList();
+          });
+        }
+      });
+    });
+  };
+  search.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refresh, 200);
+  });
+  void refresh();
+  search.focus();
+}
+
+// ── Comment panel ────────────────────────────────────────────────────────
+
+async function loadOwnCommentSet(): Promise<void> {
+  if (!state.current) return;
+  const set = await api.getOrCreateCommentSet(state.current.id, null);
+  const all = await api.listCommentSets(state.current.id, null);
+  const ours = all.items.find((s) => s.id === set.id);
+  state.currentSet = { id: set.id, comments: ours?.comments ?? [] };
+  renderCommentPanel();
+}
+
+function renderCommentPanel(): void {
+  const panel = byId<HTMLElement>('notesComments');
+  if (!panel) return;
+  if (!state.current || !state.currentSet) {
+    panel.innerHTML = '<div class="muted">ノートを選択するとコメントが表示されます</div>';
+    return;
+  }
+  const set = state.currentSet;
+  panel.innerHTML = `
+    <div class="nc-head">
+      <h3>💬 コメント</h3>
+      <span class="muted" style="font-size:11px">自分の set (UUID: ${set.id.slice(0, 8)}…)</span>
+    </div>
+    <ul class="nc-list" id="ncList"></ul>
+    <div class="nc-add">
+      <textarea id="ncInput" placeholder="コメント追加 (Ctrl+Enter で送信)"></textarea>
+      <button id="ncAddBtn" class="primary">追加</button>
+    </div>
+  `;
+  renderCommentList();
+  const ta = byId<HTMLTextAreaElement>('ncInput');
+  const addBtn = byId<HTMLButtonElement>('ncAddBtn');
+  if (addBtn) addBtn.addEventListener('click', () => void submitComment());
+  if (ta) {
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        void submitComment();
+      }
+    });
+  }
+}
+
+function renderCommentList(): void {
+  const ul = byId<HTMLUListElement>('ncList');
+  if (!ul || !state.currentSet) return;
+  if (state.currentSet.comments.length === 0) {
+    ul.innerHTML = '<li class="muted nc-empty">まだコメントはありません</li>';
+    return;
+  }
+  ul.innerHTML = state.currentSet.comments.map((c) => `
+    <li class="nc-item" data-id="${escapeHtml(c.id)}">
+      <div class="nc-text">${renderInline(c.text)}</div>
+      <div class="nc-meta">
+        ${c.target_block_uuid ? `<span class="nc-anchor" title="block ${c.target_block_uuid.slice(0,8)}…">📌</span>` : ''}
+        <span class="muted">${formatDate(c.updated_at)}</span>
+        <button class="ghost nc-del" data-id="${escapeHtml(c.id)}" title="削除">×</button>
+      </div>
+    </li>
+  `).join('');
+  ul.querySelectorAll<HTMLButtonElement>('.nc-del').forEach((b) => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.id || '';
+      void deleteCommentLocal(id);
+    });
+  });
+}
+
+async function submitComment(): Promise<void> {
+  if (!state.current || !state.currentSet) return;
+  const ta = byId<HTMLTextAreaElement>('ncInput');
+  if (!ta) return;
+  const text = ta.value.trim();
+  if (!text) return;
+  const c = await api.createComment(state.current.id, state.currentSet.id, { text });
+  state.currentSet.comments.push(c);
+  ta.value = '';
+  renderCommentList();
+}
+
+async function deleteCommentLocal(commentId: string): Promise<void> {
+  if (!state.current || !state.currentSet) return;
+  await api.deleteComment(state.current.id, state.currentSet.id, commentId);
+  state.currentSet.comments = state.currentSet.comments.filter((c) => c.id !== commentId);
+  renderCommentList();
+}
+
+async function quickComment(blockUuid: string): Promise<void> {
+  if (!state.current || !state.currentSet) return;
+  const text = prompt('このブロックへのコメント:');
+  if (!text?.trim()) return;
+  const c = await api.createComment(state.current.id, state.currentSet.id, { text: text.trim(), target_block_uuid: blockUuid });
+  state.currentSet.comments.push(c);
+  renderCommentList();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -772,8 +946,7 @@ function byId<T extends HTMLElement = HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
 }
 
-// 拡張から呼ぶ用 — 外部チャットを Note に取り込んだ後にエディタを開く。
-export async function openNoteByIdIfPresent(noteId: number): Promise<void> {
-  if (!Number.isFinite(noteId)) return;
+export async function openNoteByIdIfPresent(noteId: string): Promise<void> {
+  if (!noteId) return;
   await openNote(noteId);
 }
