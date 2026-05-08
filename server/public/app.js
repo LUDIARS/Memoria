@@ -471,20 +471,20 @@ async function refreshQueue() {
     if (totalDepth === 0) totalDepth = snap.depth || 0;
     const badge = $('queueBadge');
     const tabCount = $('tabQueueCount');
-    const wlBadge = $('wlQueueBadge');
+    const dbBadge = $('dbQueueBadge');
     if (totalDepth > 0) {
       badge.classList.remove('hidden');
       tabCount?.classList.remove('hidden');
-      wlBadge?.classList.remove('hidden');
+      dbBadge?.classList.remove('hidden');
       $('queueCount').textContent = totalDepth;
       if (tabCount) tabCount.textContent = totalDepth;
-      if (wlBadge) wlBadge.textContent = totalDepth;
+      if (dbBadge) dbBadge.textContent = totalDepth;
     } else {
       badge.classList.add('hidden');
       tabCount?.classList.add('hidden');
-      wlBadge?.classList.add('hidden');
+      dbBadge?.classList.add('hidden');
     }
-    if (state.tab === 'worklog' && state.worklog?.sub === 'queue') renderQueue();
+    if (state.tab === 'database' && state.database?.sub === 'queue') renderQueue();
     return totalDepth;
   } catch { return 0; }
 }
@@ -602,10 +602,11 @@ function jobLabel(item) {
   return kindHint + `seq #${item.seq}`;
 }
 
-// queue / tracks / external は worklog の sub-tab として畳み込む。
-// bookmarks / dict / domain / workplace は database タブの sub-tab として畳み込む。
-const WORKLOG_REDIRECT_TABS = new Set(['queue', 'tracks', 'external']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace']);
+// tracks のみ worklog 配下。
+// 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
+// meals は top-level タブ。
+const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
 
 function switchTab(tab) {
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
@@ -4139,6 +4140,76 @@ $('domainRecatalogBtn')?.addEventListener('click', () => recatalogAllDomains({ f
 $('recatalogAllBtn')?.addEventListener('click', () => recatalogAllDomains({ force: false }));
 $('recatalogAllForceBtn')?.addEventListener('click', () => recatalogAllDomains({ force: true }));
 
+// ── ブックマーク追加 (URL → fetch + 要約キュー) ───────────────────────────
+async function addBookmarkFromUrl() {
+  const inp = $('bookmarkAddUrl');
+  const status = $('bookmarkAddStatus');
+  const btn = $('bookmarkAddBtn');
+  const url = (inp?.value || '').trim();
+  if (!url) {
+    if (status) status.textContent = 'URL を入力してください';
+    inp?.focus();
+    return;
+  }
+  if (status) status.textContent = '取得中…';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/bookmarks/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (r.duplicate) {
+      if (status) status.textContent = '既に登録済み (id=' + r.id + ')';
+    } else {
+      if (status) status.textContent = `追加 → 要約キュー投入 (id=${r.id})`;
+      inp.value = '';
+    }
+    await load();
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${e.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+$('bookmarkAddBtn')?.addEventListener('click', addBookmarkFromUrl);
+$('bookmarkAddUrl')?.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); addBookmarkFromUrl(); }
+});
+
+// ── ドメイン追加 (URL/host → 分類キュー) ──────────────────────────────────
+async function addDomainFromUrl() {
+  const inp = $('domainAddUrl');
+  const status = $('domainAddStatus');
+  const btn = $('domainAddBtn');
+  const url = (inp?.value || '').trim();
+  if (!url) {
+    if (status) status.textContent = 'URL or hostname を入力してください';
+    inp?.focus();
+    return;
+  }
+  if (status) status.textContent = '登録中…';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/domains/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (status) status.textContent = (r.duplicate ? '既存を再分類: ' : '追加: ') + r.domain;
+    inp.value = '';
+    await loadDomainCatalog();
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${e.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+$('domainAddBtn')?.addEventListener('click', addDomainFromUrl);
+$('domainAddUrl')?.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); addDomainFromUrl(); }
+});
+
 // ── modal panels (dict + domain edit) ─────────────────────────────────────
 function showModal(panelId) {
   $(panelId).classList.remove('hidden');
@@ -4194,7 +4265,7 @@ setInterval(async () => {
   const depth = await refreshQueue();
   await refreshVisitsBadge();
   if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
-  if (state.tab === 'worklog' && state.worklog?.sub === 'queue') renderQueue();
+  if (state.tab === 'database' && state.database?.sub === 'queue') renderQueue();
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
@@ -5247,12 +5318,13 @@ async function savePrivacySettings() {
 }
 
 function applyFeatureVisibility(s) {
-  const tracksTab = document.querySelector('.tab[data-tab="tracks"]');
+  // tracks は worklog のサブタブ、 meals は top-level タブ。
+  const tracksSub = document.querySelector('#worklogSubtabs [data-sub="tracks"]');
   const mealsTab = document.querySelector('.tab[data-tab="meals"]');
-  if (tracksTab) tracksTab.hidden = s.tracks_visible === false;
+  if (tracksSub) tracksSub.hidden = s.tracks_visible === false;
   if (mealsTab) mealsTab.hidden = s.meals_visible === false;
-  if (state.tab === 'worklog' && state.worklog?.sub === 'tracks' && s.tracks_visible === false) switchTab('bookmarks');
-  if (state.tab === 'meals' && s.meals_visible === false) switchTab('bookmarks');
+  if (state.tab === 'worklog' && state.worklog?.sub === 'tracks' && s.tracks_visible === false) switchTab('database');
+  if (state.tab === 'meals' && s.meals_visible === false) switchTab('database');
   reflowTabsForViewport();
 }
 
@@ -6965,10 +7037,7 @@ const WL_SUB_VIEWS = {
   codex: 'wlCodexView',
   browsing: 'wlBrowsingView',
   dig: 'wlDigView',
-  // 旧トップタブから移植してきた sub
-  queue: 'queueView',
   tracks: 'tracksView',
-  external: 'externalView',
 };
 
 // データベースタブのサブビュー一覧
@@ -6977,19 +7046,21 @@ const DB_SUB_VIEWS = {
   dict: 'dictView',
   domain: 'domainView',
   workplace: 'workplaceView',
+  queue: 'queueView',
+  external: 'externalView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
 
 function migrateDatabaseSubViews() {
-  const db = $('databaseView');
-  if (!db) return;
+  const dbv = $('databaseView');
+  if (!dbv) return;
   for (const id of Object.values(DB_SUB_VIEWS)) {
     const v = $(id);
-    if (v && v.parentNode !== db) {
+    if (v && v.parentNode !== dbv) {
       v.classList.add('hidden');
       v.classList.add('wl-sub');
-      db.appendChild(v);
+      dbv.appendChild(v);
     }
   }
 }
@@ -7009,10 +7080,12 @@ function switchDatabaseSub(sub) {
   if (sub === 'dict') loadDictionary();
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
+  if (sub === 'queue') renderQueue();
+  if (sub === 'external') loadExternalConfig();
 }
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
-const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig']);
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -7025,13 +7098,20 @@ const WL_KIND_BY_SUB = {
 function migrateWorklogSubViews() {
   const wl = $('worklogView');
   if (!wl) return;
-  for (const id of ['queueView', 'domainView', 'tracksView', 'externalView']) {
+  for (const id of ['tracksView']) {
     const v = $(id);
     if (v && v.parentNode !== wl) {
       v.classList.add('hidden');
       v.classList.add('wl-sub');
       wl.appendChild(v);
     }
+  }
+  // mealsView は top-level に戻す (前 PR で worklogView 内に移していたら拾い戻す)
+  const meals = $('mealsView');
+  const content = document.querySelector('.content');
+  if (meals && content && meals.parentNode === wl) {
+    content.appendChild(meals);
+    meals.classList.remove('wl-sub');
   }
 }
 migrateWorklogSubViews();
@@ -7063,10 +7143,7 @@ async function loadWorklog() {
   if (sub === 'schedule') return loadWorklogSchedule(date);
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
-  if (sub === 'queue') return renderQueue();
-  if (sub === 'domain') return loadDomainCatalog();
   if (sub === 'tracks') return loadTracks();
-  if (sub === 'external') return loadExternalConfig();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
@@ -7713,15 +7790,19 @@ function todayLocalIso() {
   return `${y}-${m}-${day}`;
 }
 
-async function loadTracks() {
-  const dateInput = $('tracksDate');
-  if (dateInput && !dateInput.value) dateInput.value = todayLocalIso();
+// tracks サブタブは作業ログ共通の wlDate を参照する (自前の date input は廃止)。
+function currentTracksDate() {
+  return $('wlDate')?.value || $('tracksDate')?.value || todayLocalIso();
+}
 
+async function loadTracks() {
   // bind controls (one-time)
   if (!tracksState._bound) {
     tracksState._bound = true;
-    dateInput?.addEventListener('change', renderTracksForCurrentDate);
-    $('tracksRefresh')?.addEventListener('click', renderTracksForCurrentDate);
+    // 作業ログの日付ナビ (wlDate / wlPrev/Next/Today) が変われば軌跡も再描画
+    $('wlDate')?.addEventListener('change', () => {
+      if (state.tab === 'worklog' && state.worklog?.sub === 'tracks') renderTracksForCurrentDate();
+    });
     $('tracksRecentRefresh')?.addEventListener('click', refreshTracksRecent);
     $('tracksKeyToggle')?.addEventListener('click', () => {
       $('tracksKeyPanel').classList.toggle('hidden');
@@ -7849,7 +7930,7 @@ function handleLivePoint(point) {
   // 最新リストには 日付関係なく即時 prepend (live 通知が一番大事)
   prependTracksRecent(point);
 
-  const dateStr = $('tracksDate')?.value;
+  const dateStr = currentTracksDate();
   if (!dateStr) return;
   const localDay = isoToLocalYmd(point.recorded_at);
   if (localDay !== dateStr) {
@@ -8094,11 +8175,11 @@ function renderTracksDaysList(days) {
   ).join('');
   ul.querySelectorAll('button[data-tracks-day]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const dateInput = $('tracksDate');
-      if (dateInput) {
-        dateInput.value = btn.dataset.tracksDay;
-        renderTracksForCurrentDate();
-      }
+      // 「記録のある日」リストから日付クリックで wlDate を切替 → tracks 再描画
+      const wl = $('wlDate');
+      if (wl) wl.value = btn.dataset.tracksDay;
+      if (state.worklog) state.worklog.date = btn.dataset.tracksDay;
+      renderTracksForCurrentDate();
     });
   });
 }
@@ -8173,7 +8254,7 @@ async function recenterMapOnLatestOrCurrent() {
 
 async function renderTracksForCurrentDate() {
   if (!tracksState.map) return;
-  const date = $('tracksDate')?.value;
+  const date = currentTracksDate();
   if (!date) return;
   try {
     const { points } = await api(`/api/locations?date=${encodeURIComponent(date)}`);
