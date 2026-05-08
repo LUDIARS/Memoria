@@ -6,10 +6,21 @@
  * (既定 'me') を全レコードに付ける。
  */
 
-/**
- * @returns {OwntracksConfig}
- */
-export function loadOwntracksConfig(env = process.env) {
+export interface OwntracksConfig {
+  mqtt: {
+    url: string;
+    username: string;
+    password: string;
+    topic: string;
+    clientId: string;
+  };
+  /** 単一ユーザ前提。 multi-tenant 化したくなったら mapping を導入する。 */
+  userId: string;
+  /** SQLite path。 server/index.js と同じ既定を使う。 */
+  dbPath: string;
+}
+
+export function loadOwntracksConfig(env: NodeJS.ProcessEnv = process.env): OwntracksConfig {
   return {
     mqtt: {
       url:      env.MEMORIA_MQTT_URL      ?? 'mqtt://localhost:1884',
@@ -18,16 +29,7 @@ export function loadOwntracksConfig(env = process.env) {
       topic:    env.MEMORIA_MQTT_TOPIC    ?? 'owntracks/+/+',
       clientId: env.MEMORIA_MQTT_CLIENT_ID ?? `memoria-owntracks-${process.pid}`,
     },
-    /** 単一ユーザ前提。multi-tenant 化したくなったら mapping を導入する。 */
     userId: env.MEMORIA_USER_ID ?? 'me',
-    /** SQLite path。server/index.js と同じ既定を使う。 */
     dbPath: env.MEMORIA_DB_PATH ?? './data/memoria.db',
   };
 }
-
-/**
- * @typedef {Object} OwntracksConfig
- * @property {{ url: string, username: string, password: string, topic: string, clientId: string }} mqtt
- * @property {string} userId
- * @property {string} dbPath
- */

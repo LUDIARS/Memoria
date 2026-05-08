@@ -1,19 +1,49 @@
 /**
- * OwnTracks payload / topic パーサ。Iv (Imperativus) の TypeScript 実装を
- * Memoria 用に plain JS で port した。
+ * OwnTracks payload / topic パーサ。
  *
  * topic: `owntracks/<user>/<device>`
  * payload (`_type='location'`):
  *   { lat, lon, tst, acc?, alt?, batt?, vel?, cog?, tid?, conn? }
  */
 
+export interface OwntracksTopic {
+  user: string;
+  device: string;
+}
+
+export interface OwntracksLocation {
+  _type: 'location';
+  lat: number;
+  lon: number;
+  tst: number;            // Unix epoch (秒)
+  acc?: number;           // 精度 (m)
+  alt?: number;           // 標高 (m)
+  batt?: number;          // バッテリー (%)
+  vel?: number;           // 速度 (km/h)
+  cog?: number;           // コンパス方位 (deg)
+  tid?: string;           // track id ("iP" 等)
+  conn?: string;          // "w" | "m" | "o"
+}
+
+export interface OwntracksDbRecord {
+  userId: string;
+  deviceId: string;
+  tst: number;
+  lat: number;
+  lon: number;
+  accuracy?: number;
+  altitude?: number;
+  velocity?: number;
+  course?: number;
+  battery?: number;
+  conn?: string;
+  rawJson: string | null;
+}
+
 /**
  * `owntracks/<user>/<device>` を分解。 prefix 違反 / parts 不足は null。
- *
- * @param {string} topic
- * @returns {{ user: string, device: string } | null}
  */
-export function parseOwntracksTopic(topic) {
+export function parseOwntracksTopic(topic: string): OwntracksTopic | null {
   if (typeof topic !== 'string') return null;
   const parts = topic.split('/');
   if (parts.length < 3) return null;
@@ -26,14 +56,11 @@ export function parseOwntracksTopic(topic) {
 
 /**
  * OwnTracks `_type='location'` payload を narrow + 必須 field を検証。
- * 不正なら null。lat / lon / tst のみ必須、それ以外は省略可。
- *
- * @param {unknown} input
- * @returns {OwntracksLocation | null}
+ * 不正なら null。 lat / lon / tst のみ必須、 それ以外は省略可。
  */
-export function parseOwntracksLocation(input) {
+export function parseOwntracksLocation(input: unknown): OwntracksLocation | null {
   if (typeof input !== 'object' || input === null) return null;
-  const o = /** @type {Record<string, unknown>} */ (input);
+  const o = input as Record<string, unknown>;
   if (o._type !== 'location') return null;
   if (typeof o.lat !== 'number' || !Number.isFinite(o.lat)) return null;
   if (typeof o.lon !== 'number' || !Number.isFinite(o.lon)) return null;
@@ -58,13 +85,12 @@ export function parseOwntracksLocation(input) {
 
 /**
  * OwnTracks Location → DB insert 用 record にマップする。
- * 呼び出し側は user_id を userMapping (env) から resolve した上で渡す。
- *
- * @param {{ user: string, device: string }} topic
- * @param {OwntracksLocation} loc
- * @param {{ userId: string, rawJson?: string }} ctx
  */
-export function locationToDbRecord(topic, loc, ctx) {
+export function locationToDbRecord(
+  topic: OwntracksTopic,
+  loc: OwntracksLocation,
+  ctx: { userId: string; rawJson?: string },
+): OwntracksDbRecord {
   return {
     userId: ctx.userId,
     deviceId: topic.device,
@@ -80,18 +106,3 @@ export function locationToDbRecord(topic, loc, ctx) {
     rawJson: ctx.rawJson ?? null,
   };
 }
-
-/**
- * @typedef {Object} OwntracksLocation
- * @property {'location'} _type
- * @property {number} lat
- * @property {number} lon
- * @property {number} tst                Unix epoch (秒)
- * @property {number=} acc               精度 (m)
- * @property {number=} alt               標高 (m)
- * @property {number=} batt              バッテリー (%)
- * @property {number=} vel               速度 (km/h)
- * @property {number=} cog               コンパス方位 (deg)
- * @property {string=} tid               track id ("iP" 等)
- * @property {string=} conn              "w"|"m"|"o"
- */
