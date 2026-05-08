@@ -79,7 +79,7 @@
             <span class="tab-label" data-full="🗄 データベース" data-short="🗄 DB">🗄 データベース</span>
           </button>
           <button class="tab" data-tab="worklog">
-            <span class="tab-label" data-full="📝 作業ログ" data-short="📝 ログ">📝 作業ログ</span>
+            <span class="tab-label" data-full="📝 ログ" data-short="📝 ログ">📝 ログ</span>
             <span id="tabQueueCount" class="tab-count hidden">0</span>
           </button>
           <button class="tab" data-tab="trends">
@@ -116,6 +116,10 @@
             <option value="title_asc">タイトル (A→Z)</option>
           </select>
           <input id="search" type="search" placeholder="検索 (タイトル・URL・要約)" />
+          <span class="grow"></span>
+          <input id="bookmarkAddUrl" type="url" placeholder="URL を貼り付けて追加…" style="min-width:240px" />
+          <button id="bookmarkAddBtn" type="button">+ 追加</button>
+          <span id="bookmarkAddStatus" class="muted" style="font-size:11px"></span>
         </div>
         <div id="bulkBar" class="bulkbar hidden">
           <span id="bulkCount">0</span> 件選択中
@@ -292,6 +296,10 @@
         <div class="dict-bar">
           <input id="domainSearch" type="search" placeholder="ドメイン・サイト名・概要で検索" />
           <button id="domainRecatalogBtn" class="ghost" title="アクセス記録に出てきた全ドメインのうち、まだ辞書に無いものを fetch + 分類キューに積む">🔄 全走査</button>
+          <span class="grow"></span>
+          <input id="domainAddUrl" type="text" placeholder="URL or hostname を入力…" style="min-width:220px" />
+          <button id="domainAddBtn" type="button">+ 追加</button>
+          <span id="domainAddStatus" class="muted" style="font-size:11px"></span>
         </div>
         <ul id="domainList" class="dict-list pin-grid"></ul>
       </div>
@@ -417,6 +425,8 @@
           <button class="wl-subtab" data-db-sub="dict">📖 辞書</button>
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
+          <button class="wl-subtab" data-db-sub="queue">⚙ キュー <span id="dbQueueBadge" class="tab-count hidden">0</span></button>
+          <button class="wl-subtab" data-db-sub="external">🔌 外部設定</button>
         </nav>
       </div>
 
@@ -438,9 +448,7 @@
           <button class="wl-subtab" data-sub="codex">📜 Codex</button>
           <button class="wl-subtab" data-sub="browsing">🌐 ブラウジング</button>
           <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
-          <button class="wl-subtab" data-sub="queue">⚙ キュー <span id="wlQueueBadge" class="tab-count hidden">0</span></button>
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
-          <button class="wl-subtab" data-sub="external">🔌 外部</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">
@@ -514,11 +522,10 @@
 
       <div id="tracksView" class="hidden">
         <div class="tracks-bar">
-          <input id="tracksDate" type="date" />
-          <button id="tracksRefresh" class="ghost">更新</button>
+          <!-- 日付絞り込みは作業ログ共通の wlDate を使う。 ここには live indicator + stats のみ。 -->
           <span id="tracksLive" class="tracks-live" title="WebSocket ライブ更新の状態">●</span>
-          <span class="grow"></span>
           <span id="tracksStats" class="tracks-stats"></span>
+          <span class="grow"></span>
           <button id="tracksKeyToggle" class="ghost" title="ingest key (HTTP モード用)">🔑 key</button>
         </div>
         <div id="tracksKeyPanel" class="tracks-key-panel hidden">
@@ -1193,6 +1200,6 @@ bogus-priv</code></pre>
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260508a"></script>
+  <script src="app.js?v=20260508e"></script>
 </body>
 </html>
