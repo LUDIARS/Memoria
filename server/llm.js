@@ -171,7 +171,7 @@ export function settingsPatchFromConfig(patch) {
  *                 by providers that support it (claude)
  *   timeoutMs
  */
-export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }) {
+export async function runLlm({ task, prompt, tools = undefined, timeoutMs = 180_000 }) {
   const taskCfg = cfg.tasks[task] || { provider: 'claude' };
   let provider = taskCfg.provider || 'claude';
   // Fallback: OpenAI without a key drops back to claude.

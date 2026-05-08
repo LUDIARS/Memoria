@@ -574,6 +574,16 @@ export function listPushSubscriptions(db) {
  * (used to re-enable a revoked endpoint without losing its label).
  * Returns the row id.
  */
+/**
+ * @param {object} arg
+ * @param {number|null|undefined} [arg.id]
+ * @param {string} arg.endpoint
+ * @param {string} arg.p256dh
+ * @param {string} arg.auth
+ * @param {string|null|undefined} [arg.label]
+ * @param {string|null|undefined} [arg.userAgent]
+ * @param {string|null|undefined} [arg.revokedAt]
+ */
 export function insertPushSubscription(db, { id, endpoint, p256dh, auth, label, userAgent, revokedAt }) {
   if (id) {
     db.prepare(`

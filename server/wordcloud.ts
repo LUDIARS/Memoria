@@ -5,7 +5,25 @@
 
 import { runLlm } from './llm.js';
 
-const CLOUD_PROMPT = (label, docs) => [
+export interface CloudWord {
+  word: string;
+  weight: number;        // 1-100
+  sources: number;       // ≥1
+  kept: boolean;
+  reason: string;
+}
+
+export interface ExtractCloudResult {
+  summary: string;
+  words: CloudWord[];
+}
+
+export interface ValidateWordResult {
+  related: boolean;
+  reason: string;
+}
+
+const CLOUD_PROMPT = (label: string, docs: string): string => [
   'You are extracting a word cloud from the provided documents.',
   '',
   'Return STRICTLY one JSON object and nothing else (no prose, no code fences):',
@@ -35,7 +53,7 @@ const CLOUD_PROMPT = (label, docs) => [
   docs,
 ].join('\n');
 
-const VALIDATE_PROMPT = (word, context) => [
+const VALIDATE_PROMPT = (word: string, context: string): string => [
   'Decide whether the WORD is meaningfully related to the CONTEXT.',
   'Return STRICTLY one JSON object and nothing else: {"related": true|false, "reason": "<短い理由>"}.',
   '',
@@ -43,18 +61,34 @@ const VALIDATE_PROMPT = (word, context) => [
   `CONTEXT: ${context}`,
 ].join('\n');
 
-export async function extractWordCloud({ label, docs, timeoutMs = 300_000 }) {
+export async function extractWordCloud({
+  label,
+  docs,
+  timeoutMs = 300_000,
+}: {
+  label: string;
+  docs: string;
+  timeoutMs?: number;
+}): Promise<ExtractCloudResult> {
   if (!docs || !docs.trim()) throw new Error('no documents to extract from');
   const stdout = await runLlm({ task: 'cloud_extract', prompt: CLOUD_PROMPT(label, docs), timeoutMs });
   return parseCloud(stdout);
 }
 
-export async function validateWordRelevance({ word, context, timeoutMs = 60_000 }) {
+export async function validateWordRelevance({
+  word,
+  context,
+  timeoutMs = 60_000,
+}: {
+  word: string;
+  context: string;
+  timeoutMs?: number;
+}): Promise<ValidateWordResult> {
   const stdout = await runLlm({ task: 'cloud_validate', prompt: VALIDATE_PROMPT(word, context), timeoutMs });
   return parseValidate(stdout);
 }
 
-function extractJsonObject(raw) {
+function extractJsonObject(raw: string): unknown {
   let text = raw.trim();
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) text = fence[1].trim();
@@ -64,37 +98,52 @@ function extractJsonObject(raw) {
   return JSON.parse(text);
 }
 
-function parseCloud(raw) {
-  let obj;
-  try { obj = extractJsonObject(raw); }
-  catch (e) { throw new Error(`Failed to parse claude output as JSON: ${e.message}\nRaw: ${raw.slice(0, 400)}`); }
+interface RawCloudWord {
+  word?: unknown;
+  weight?: unknown;
+  sources?: unknown;
+  kept?: unknown;
+  reason?: unknown;
+}
+
+function parseCloud(raw: string): ExtractCloudResult {
+  let obj: { summary?: unknown; words?: unknown };
+  try {
+    obj = extractJsonObject(raw) as { summary?: unknown; words?: unknown };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to parse claude output as JSON: ${msg}\nRaw: ${raw.slice(0, 400)}`);
+  }
   if (!Array.isArray(obj.words)) throw new Error('claude output missing words[]');
-  const words = obj.words
-    .map(w => ({
+  const words: CloudWord[] = (obj.words as RawCloudWord[])
+    .map((w) => ({
       word: String(w.word ?? '').trim(),
       weight: clampWeight(Number(w.weight)),
       sources: Math.max(1, Math.floor(Number(w.sources) || 1)),
       kept: w.kept !== false,
       reason: String(w.reason ?? '').trim(),
     }))
-    .filter(w => w.word.length > 0);
+    .filter((w) => w.word.length > 0);
   return {
     summary: String(obj.summary ?? '').trim(),
     words,
   };
 }
 
-function parseValidate(raw) {
-  let obj;
-  try { obj = extractJsonObject(raw); }
-  catch { return { related: false, reason: 'parse error' }; }
+function parseValidate(raw: string): ValidateWordResult {
+  let obj: { related?: unknown; reason?: unknown };
+  try {
+    obj = extractJsonObject(raw) as { related?: unknown; reason?: unknown };
+  } catch {
+    return { related: false, reason: 'parse error' };
+  }
   return {
     related: !!obj.related,
     reason: String(obj.reason ?? '').trim(),
   };
 }
 
-function clampWeight(n) {
+function clampWeight(n: number): number {
   if (!Number.isFinite(n)) return 1;
   return Math.max(1, Math.min(100, Math.round(n)));
 }
