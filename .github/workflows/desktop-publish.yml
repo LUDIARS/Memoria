@@ -1,0 +1,120 @@
+name: Desktop Publish (electron-builder)
+
+# electron-builder の `--publish=always` を使い、 .exe / .dmg / AppImage と
+# auto-updater 用の `latest*.yml` を GitHub Release に直接アップする。
+#
+# `desktop-release.yml` (zip ラッパー版) と並列実装。 こちらは:
+#   - 解凍不要でクリック実行可能な .exe / .dmg / AppImage が Release に並ぶ
+#   - electron-updater (将来導入) の差分配信に必要な latest.yml が同梱される
+#
+# Trigger:
+#   - Push a tag matching v*
+#   - workflow_dispatch (任意の tag を入力)
+#
+# Outputs (Release attachments):
+#   Memoria Setup <version>.exe         + latest.yml          (Windows)
+#   Memoria-<version>-arm64.dmg         + latest-mac.yml      (macOS)
+#   Memoria-<version>.AppImage / .deb   + latest-linux.yml    (Linux)
+
+on:
+  # 既存 desktop-release.yml (zip ラッパー) と同じ tag で動かすと GitHub
+  # Release のアセット衝突が起きるので、 こちらは **workflow_dispatch のみ**。
+  # 「電子署名つきネイティブ publish + auto-update メタ込みで配りたい」 と
+  # きにユーザが手動でトリガする想定。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (例: v0.1.0). 既存 Release があれば追記、 なければ作成。'
+        required: true
+        default: 'v0.0.0-dev'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            bundle_target: win-x64
+            builder_flag: --win
+          - os: macos-14
+            label: macos-arm64
+            bundle_target: darwin-arm64
+            builder_flag: --mac
+          - os: ubuntu-latest
+            label: linux-x64
+            bundle_target: linux-x64
+            builder_flag: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Compile TypeScript (Electron main / preload)
+        working-directory: desktop
+        run: npm run build:ts
+
+      - name: Generate placeholder icons
+        working-directory: desktop
+        run: npx --no-install tsx scripts/generate-icons.ts
+
+      - name: Bundle Memoria server + Node runtime
+        working-directory: desktop
+        run: npx --no-install tsx scripts/bundle-server.ts --node-version=22.11.0 --platform=${{ matrix.bundle_target }}
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        env:
+          TAG_INPUT: ${{ github.event.inputs.tag }}
+        run: echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          if ! git rev-parse "$tag" >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "$tag"
+            git push origin "$tag"
+          fi
+
+      - name: electron-builder publish
+        working-directory: desktop
+        env:
+          # GH_TOKEN は electron-builder 内部で github provider を呼び出すのに必須。
+          # GITHUB_TOKEN だと一部のリポ設定で permission 不足になるため、
+          # PAT を secrets.RELEASE_PAT として渡している場合はそちらを優先。
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+          # macOS の codesign auto-discovery は CI で証明書がないので無効化
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # publish 先の tag を明示 (workflow_dispatch でも tag push でも同じ値)
+          EP_PRE_RELEASE: 'false'
+        shell: bash
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          # version は package.json の "version" を採用、 Release tag は CLI で固定
+          npx --no-install electron-builder ${{ matrix.builder_flag }} \
+            --publish=always \
+            -c.publish.provider=github \
+            -c.publish.releaseType=release \
+            -c.releaseInfo.releaseName="Memoria $tag"
