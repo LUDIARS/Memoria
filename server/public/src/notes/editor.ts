@@ -166,14 +166,26 @@ function renderEditor(): void {
     return;
   }
   const note = state.current;
-  const bookmarkBanner = note.bookmark_id || note.bookmark_url
+  const isBookmark = note.kind === 'bookmark' && !!note.bookmark_id;
+  const bookmarkBanner = isBookmark
     ? `<div class="note-bookmark-banner">
          <span class="bm-icon">🔖</span>
          <a href="${escapeHtml(note.bookmark_url ?? '#')}" target="_blank" rel="noopener noreferrer" class="bm-link">${escapeHtml(note.bookmark_url ?? '')}</a>
-         ${note.bookmark_id ? `<button class="ghost bm-unlink" id="bmUnlinkBtn" title="このノートのベース bookmark を解除">解除</button>` : ''}
+         <button class="ghost bm-unlink" id="bmUnlinkBtn" title="bookmark を解除して通常ノートに戻す">解除</button>
        </div>`
-    : `<div class="note-bookmark-banner empty">
-         <button class="ghost bm-attach" id="bmAttachBtn">🔖 ベース bookmark を選択…</button>
+    : '';
+  const body = isBookmark
+    ? `<div class="note-canvas-toolbar">
+         <button id="addFloatingBtn" class="ghost">📍 フローティングコメント追加</button>
+         <span class="muted" style="font-size:11px">canvas をクリック → 注釈を挿入 / ドラッグで移動</span>
+       </div>
+       <div class="note-canvas-wrap" id="noteCanvasWrap">
+         <iframe id="noteCanvasFrame" sandbox="allow-same-origin allow-popups" title="bookmark snapshot"></iframe>
+         <div class="note-canvas-overlay" id="noteCanvasOverlay"></div>
+       </div>`
+    : `<div class="note-blocks" id="noteBlocks"></div>
+       <div class="note-add-block">
+         <button class="ghost" id="noteAddBlockBtn">+ ブロックを追加</button>
        </div>`;
   pane.innerHTML = `
     <div class="note-header">
@@ -185,10 +197,7 @@ function renderEditor(): void {
       </div>
     </div>
     ${bookmarkBanner}
-    <div class="note-blocks" id="noteBlocks"></div>
-    <div class="note-add-block">
-      <button class="ghost" id="noteAddBlockBtn">+ ブロックを追加</button>
-    </div>
+    ${body}
   `;
   const titleInp = byId<HTMLInputElement>('noteTitle');
   if (titleInp) {
@@ -212,17 +221,22 @@ function renderEditor(): void {
   }
   const delBtn = byId<HTMLButtonElement>('noteDeleteBtn');
   if (delBtn) delBtn.addEventListener('click', () => void confirmDelete());
-  const addBtn = byId<HTMLButtonElement>('noteAddBlockBtn');
-  if (addBtn) addBtn.addEventListener('click', () => void appendBlock('text'));
-  const bmAttach = byId<HTMLButtonElement>('bmAttachBtn');
-  if (bmAttach) bmAttach.addEventListener('click', () => openBookmarkPicker(note.id));
   const bmUnlink = byId<HTMLButtonElement>('bmUnlinkBtn');
   if (bmUnlink) bmUnlink.addEventListener('click', () => void unlinkBookmark());
-  renderAllBlocks();
+  if (isBookmark) {
+    initBookmarkCanvas(note.id);
+    const addFloatBtn = byId<HTMLButtonElement>('addFloatingBtn');
+    if (addFloatBtn) addFloatBtn.addEventListener('click', () => void insertFloatingBlock());
+  } else {
+    const addBtn = byId<HTMLButtonElement>('noteAddBlockBtn');
+    if (addBtn) addBtn.addEventListener('click', () => void appendBlock('text'));
+    renderAllBlocks();
+  }
 }
 
 async function unlinkBookmark(): Promise<void> {
   if (!state.current) return;
+  if (!confirm('このノートから bookmark を切り離して通常ノートに戻しますか? (canvas + floating コメントは取り除かれます)')) return;
   await api.patchNote(state.current.id, { bookmark_id: null });
   state.current = await api.getNote(state.current.id);
   renderEditor();
@@ -283,6 +297,14 @@ function buildBlockBody(block: NoteBlockRow): HTMLElement {
     case 'mermaid':    return buildMermaidBlock(block);
     case 'table':      return buildTableBlock(block);
     case 'divider':    return buildDividerBlock(block);
+    case 'floating_text': {
+      // 通常ブロック流に floating が混入している (本来 bookmark note の overlay でレンダリング)。
+      // フォールバック: 内容を一行で表示し「これは floating です」 と注記。
+      const div = document.createElement('div');
+      div.className = 'note-block-content muted';
+      div.textContent = `📍 floating block (bookmark note でのみ表示): ${block.text.slice(0, 40)}`;
+      return div;
+    }
     default:           return buildContentEditable(block);
   }
 }
@@ -528,13 +550,14 @@ async function saveBlockData(block: NoteBlockRow, data: BlockData): Promise<void
 // ── Editor key handling ──────────────────────────────────────────────────
 
 function handleEditorKey(ev: KeyboardEvent, block: NoteBlockRow): void {
-  if (ev.key === 'Enter' && !ev.shiftKey) {
-    if (block.block_type === 'code' || block.block_type === 'mermaid') return;
+  // floating / code / mermaid は Enter で新ブロックを作らない (本文に改行を許す)
+  const skipEnter = block.block_type === 'code' || block.block_type === 'mermaid' || block.block_type === 'floating_text';
+  if (ev.key === 'Enter' && !ev.shiftKey && !skipEnter) {
     ev.preventDefault();
     void appendBlock('text', block.uuid);
     return;
   }
-  if (ev.key === 'Backspace') {
+  if (ev.key === 'Backspace' && block.block_type !== 'floating_text') {
     const target = ev.currentTarget as HTMLElement;
     if (target.textContent === '' && state.current && state.current.blocks.length > 1) {
       ev.preventDefault();
@@ -542,7 +565,7 @@ function handleEditorKey(ev: KeyboardEvent, block: NoteBlockRow): void {
     }
     return;
   }
-  if (ev.key === '/' && (ev.currentTarget as HTMLElement).textContent === '') {
+  if (ev.key === '/' && block.block_type !== 'floating_text' && (ev.currentTarget as HTMLElement).textContent === '') {
     ev.preventDefault();
     openBlockMenu(block.uuid, ev.currentTarget as HTMLElement, true);
     return;
@@ -583,9 +606,11 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
   closeBlockMenu();
   const menu = document.createElement('div');
   menu.className = 'note-block-menu';
+  // 通常ノートのブロックメニューでは floating_text を除外 (= bookmark canvas 専用)
+  const typeOptions = BLOCK_TYPE_OPTIONS.filter((o) => o.type !== 'floating_text');
   menu.innerHTML = `
     <div class="nbm-section">ブロック種別</div>
-    ${BLOCK_TYPE_OPTIONS.map((o) => `
+    ${typeOptions.map((o) => `
       <button class="nbm-item" data-type="${o.type}"><span class="nbm-icon">${o.icon}</span>${o.label}</button>
     `).join('')}
     <div class="nbm-section">操作</div>
@@ -780,9 +805,12 @@ function triggerSaveForSelection(range: Range): void {
   void api.patchBlock(state.current.id, blockUuid, { text });
 }
 
-// ── Bookmark picker (新規 from-bookmark / 既存 note への bookmark 紐付け) ────
+// ── Bookmark picker (新規 bookmark note 作成のみ) ────────────────────────
+//
+// 通常ノートに後から bookmark を紐付ける機能はない (spec: 通常ノートに
+// bookmark を挟まない方針)。 このピッカーは常に「+ 新規 bookmark note」 を作る。
 
-function openBookmarkPicker(attachToNoteId?: string): void {
+function openBookmarkPicker(): void {
   if (state.bookmarkPickerOpen) return;
   state.bookmarkPickerOpen = true;
   const overlay = document.createElement('div');
@@ -790,7 +818,7 @@ function openBookmarkPicker(attachToNoteId?: string): void {
   overlay.innerHTML = `
     <div class="note-bm-picker">
       <div class="note-bm-picker-head">
-        <h3>${attachToNoteId ? 'ベース bookmark を選択' : 'bookmark をベースにノート作成'}</h3>
+        <h3>bookmark をベースにノート作成</h3>
         <button class="modal-close" id="bmpClose">×</button>
       </div>
       <input type="search" id="bmpSearch" placeholder="タイトル / URL で検索" />
@@ -819,19 +847,11 @@ function openBookmarkPicker(attachToNoteId?: string): void {
       li.addEventListener('click', () => {
         const bid = Number(li.dataset.id);
         if (!Number.isFinite(bid)) return;
-        if (attachToNoteId) {
-          void api.patchNote(attachToNoteId, { bookmark_id: bid }).then(async () => {
-            close();
-            state.current = await api.getNote(attachToNoteId);
-            renderEditor();
-          });
-        } else {
-          void api.createNote({ bookmark_id: bid, initial_blocks: [{ block_type: 'text', text: '' }] }).then(async (n) => {
-            close();
-            await openNote(n.id);
-            await refreshList();
-          });
-        }
+        void api.createNote({ bookmark_id: bid }).then(async (n) => {
+          close();
+          await openNote(n.id);
+          await refreshList();
+        });
       });
     });
   };
@@ -841,6 +861,129 @@ function openBookmarkPicker(attachToNoteId?: string): void {
   });
   void refresh();
   search.focus();
+}
+
+// ── Bookmark canvas (iframe + floating overlay) ──────────────────────────
+
+function initBookmarkCanvas(noteId: string): void {
+  const wrap = byId<HTMLDivElement>('noteCanvasWrap');
+  const frame = byId<HTMLIFrameElement>('noteCanvasFrame');
+  const overlay = byId<HTMLDivElement>('noteCanvasOverlay');
+  if (!wrap || !frame || !overlay) return;
+
+  frame.src = `/api/notes/${encodeURIComponent(noteId)}/bookmark-html`;
+  frame.addEventListener('load', () => {
+    try {
+      const doc = frame.contentDocument;
+      if (doc) {
+        const h = Math.max(doc.body?.scrollHeight ?? 800, 800);
+        frame.style.height = `${h}px`;
+        overlay.style.height = `${h}px`;
+        overlay.style.width = `${frame.clientWidth}px`;
+      }
+    } catch { /* cross-origin or empty doc — fall back to default height */ }
+    renderFloatingBlocks();
+  });
+}
+
+function renderFloatingBlocks(): void {
+  const overlay = byId<HTMLDivElement>('noteCanvasOverlay');
+  if (!overlay || !state.current) return;
+  overlay.innerHTML = '';
+  const floats = state.current.blocks.filter((b) => b.block_type === 'floating_text');
+  for (const fb of floats) {
+    overlay.appendChild(buildFloatingElement(fb));
+  }
+}
+
+function buildFloatingElement(block: NoteBlockRow): HTMLElement {
+  const data = parseData(block);
+  const el = document.createElement('div');
+  el.className = 'note-floating';
+  el.dataset.blockUuid = block.uuid;
+  el.style.left = `${data.x ?? 40}px`;
+  el.style.top = `${data.y ?? 40}px`;
+  if (data.width) el.style.width = `${data.width}px`;
+  if (data.color) el.style.borderColor = data.color;
+  el.innerHTML = `
+    <div class="nf-handle" title="ドラッグで移動">⋮⋮</div>
+    <div class="note-block-content nf-body" contenteditable="true" data-placeholder="コメントを入力">${renderInline(block.text)}</div>
+    <button class="nf-del" title="削除">×</button>
+  `;
+  const body = el.querySelector<HTMLElement>('.nf-body')!;
+  attachAutoSave(body, block);
+  el.querySelector<HTMLButtonElement>('.nf-del')!.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    void removeBlock(block.uuid).then(() => renderFloatingBlocks());
+  });
+  setupFloatingDrag(el, block);
+  return el;
+}
+
+function setupFloatingDrag(el: HTMLElement, block: NoteBlockRow): void {
+  const handle = el.querySelector<HTMLElement>('.nf-handle');
+  if (!handle) return;
+  let drag: { startX: number; startY: number; origX: number; origY: number; pointerId: number } | null = null;
+  handle.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+    const data = parseData(block);
+    drag = {
+      startX: e.clientX, startY: e.clientY,
+      origX: data.x ?? (parseFloat(el.style.left) || 0),
+      origY: data.y ?? (parseFloat(el.style.top) || 0),
+      pointerId: e.pointerId,
+    };
+    el.classList.add('dragging');
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    const x = Math.max(0, drag.origX + dx);
+    const y = Math.max(0, drag.origY + dy);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  });
+  const finish = async (): Promise<void> => {
+    if (!drag) return;
+    try { handle.releasePointerCapture(drag.pointerId); } catch {}
+    el.classList.remove('dragging');
+    const x = parseFloat(el.style.left) || 0;
+    const y = parseFloat(el.style.top) || 0;
+    drag = null;
+    const cur = parseData(block);
+    if (cur.x === x && cur.y === y) return;
+    await saveBlockData(block, { ...cur, x, y });
+  };
+  handle.addEventListener('pointerup', () => { void finish(); });
+  handle.addEventListener('pointercancel', () => { void finish(); });
+}
+
+async function insertFloatingBlock(): Promise<void> {
+  if (!state.current) return;
+  // canvas の表示中央にデフォルト配置
+  const wrap = byId<HTMLDivElement>('noteCanvasWrap');
+  const overlay = byId<HTMLDivElement>('noteCanvasOverlay');
+  let x = 60, y = 60;
+  if (wrap && overlay) {
+    x = Math.max(20, Math.round(wrap.clientWidth / 2 - 100));
+    y = Math.max(20, wrap.scrollTop + 80);
+  }
+  await api.createBlock(state.current.id, {
+    block_type: 'floating_text',
+    text: '',
+    data: { x, y, anchor: { kind: 'point' } },
+  });
+  state.current = await api.getNote(state.current.id);
+  renderFloatingBlocks();
+  // 新規 floating の本文に focus
+  const last = state.current.blocks.filter((b) => b.block_type === 'floating_text').pop();
+  if (last) {
+    const fb = document.querySelector<HTMLElement>(`.note-floating[data-block-uuid="${last.uuid}"] .nf-body`);
+    if (fb) fb.focus();
+  }
 }
 
 // ── Comment panel ────────────────────────────────────────────────────────

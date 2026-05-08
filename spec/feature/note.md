@@ -3,7 +3,18 @@
 ## 概要
 esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 = 1 ブロックのブロックベース構造で、 markdown 書式 + フォントの色変え + テーブル + Mermaid に対応。
 
-ノート ID は **UUID** で管理し、 マルチサーバ間で同じ note を一意に識別できる。 ノートには **ベースとして bookmark を選択でき**、 bookmark したページに対するコメント / 補足 / 思考メモを書き込める。 コメントは「ノートに対する 1 ユーザの集合」 を 1 単位 (set) として別 UUID 名前空間で管理する。
+ノート ID は **UUID** で管理し、 マルチサーバ間で同じ note を一意に識別できる。 ノートには 2 種類ある:
+
+- **通常ノート** (`kind='doc'` / `'chat'` / `'meeting'` / …)
+  - markdown ブロックの線形フロー (text / heading / quote / list / code / mermaid / table / todo / divider)
+  - bookmark との紐付けは **無し** (後から付けることもできない)
+- **ブックマークノート** (`kind='bookmark'`)
+  - 元 bookmark の HTML スナップショットを `<iframe sandbox>` でレンダリング (= canvas)
+  - canvas 上に **フローティングテキストブロック** (`block_type='floating_text'`) をオーバーレイ配置
+  - 各フローティングは座標 (x, y) + (任意で) HTML 内テキスト範囲アンカーを持つ
+  - これらが「ブックマークしたページに対するコメント / 注釈」 として機能する
+
+コメントは「ノートに対する 1 ユーザの集合」 を 1 単位 (set) として別 UUID 名前空間で管理する (Phase 1 はローカル自分の set のみ、 Phase 2 でマルチユーザ)。
 
 ## ユースケース
 - 作業ログ / 議事録 / 思考整理 / 設計メモを WYSIWYG で書く
@@ -13,13 +24,21 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 
 ## 画面 / 入口
 - **PC 表示の左端タブ「📓 ノート」**
-- ノート一覧 (左サイドバー) + 詳細 (右ペイン)
-- 詳細ペインの構成:
-  - 上: タイトル + タグ + ベース bookmark (あれば URL / タイトル表示) + 削除ボタン
-  - 中央: ブロックエディタ
-  - 右: コメントパネル (自分の set / 他者の set 切替)
-- bookmark 詳細画面の「📝 ノートを書く」 ボタン → 既存 note があれば開く、 なければ新規作成
-- extension chat 取り込み: `/api/notes/from-chat` で生成 → 自動でエディタを開く
+- ノート一覧 (左サイドバー) + 詳細 (中央) + コメント (右ペイン)
+- 通常ノートの詳細:
+  - 上: タイトル + タグ + 削除ボタン
+  - 中央: 線形ブロックエディタ (markdown 系のみ — floating_text は挿入できない)
+  - 右: コメントパネル (テキスト形式のコメント、 自分の set / 他者の set 切替)
+- ブックマークノートの詳細:
+  - 上: タイトル + タグ + 元 URL バッジ + 削除ボタン
+  - 中央: `<iframe sandbox>` で bookmark HTML を canvas として表示 + その上に floating_text ブロックを絶対配置オーバーレイ
+  - 操作: canvas クリックで現在位置に floating_text 挿入 / floating ブロックをドラッグで再配置 / 削除 / 編集
+  - 右: コメントパネル (canvas 上 floating の一覧 + 通常ノートの set コメントと統合表示)
+- 入口:
+  - 新規 (空の通常ノート): 「+ 新規ノート」 ボタン
+  - 新規 (bookmark ベース): 「🔖 bookmark から」 → ピッカーで bookmark 選択 → `kind='bookmark'` で生成
+  - bookmark 詳細画面 (将来) の「📝 このページにノート」 ボタン → 既存 bookmark note があれば開く / なければ新規
+  - extension chat 取り込み: `/api/notes/from-chat` で生成 → 自動でエディタを開く
 
 ## データ
 - [notes](../db/note.md) — ヘッダ (UUID PK, bookmark_id 紐付け, Hub 連携カラム)
@@ -33,17 +52,18 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 - 関連: [external-chat.md](external-chat.md) (`/api/notes/from-chat` 副作用)
 
 ## ブロック種別
-| type | 用途 | データ |
-|---|---|---|
-| `text` | 段落 | `text` (markdown インライン) |
-| `heading_1..3` | 見出し | `text` |
-| `quote` | 引用 | `text` |
-| `code` | コードブロック | `text` + `data_json.lang` |
-| `mermaid` | Mermaid 図 | `text` |
-| `table` | テーブル | `data_json.rows` + `data_json.header` |
-| `bullet_list` / `numbered_list` | リスト | `text` + `data_json.indent` |
-| `todo` | チェックボックス | `text` + `data_json.checked` |
-| `divider` | 水平線 | (空) |
+| type | 用途 | 使える場所 | データ |
+|---|---|---|---|
+| `text` | Markdown 段落 | 通常ノート | `text` (markdown インライン) |
+| `heading_1..3` | 見出し | 通常ノート | `text` |
+| `quote` | 引用 | 通常ノート | `text` |
+| `code` | コードブロック | 通常ノート | `text` + `data_json.lang` |
+| `mermaid` | Mermaid 図 | 通常ノート | `text` |
+| `table` | テーブル | 通常ノート | `data_json.rows` + `data_json.header` |
+| `bullet_list` / `numbered_list` | リスト | 通常ノート | `text` + `data_json.indent` |
+| `todo` | チェックボックス | 通常ノート | `text` + `data_json.checked` |
+| `divider` | 水平線 | 通常ノート | (空) |
+| `floating_text` | **フローティングテキスト** (canvas 上の自由配置注釈) | **ブックマークノート** | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
 
 ## コメント仕様
 - 1 (note × user) で 1 set。 set 自体が UUID を持つ (`note_comment_sets.id`)
@@ -51,6 +71,16 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 - コメントは **note 全体宛て** (`target_block_uuid = NULL`) または **特定 block 宛て** (`target_block_uuid = <block.uuid>`) のどちらか
 - ローカル単独運用では set は 1 個 (= 自分の set)
 - マルチサーバでは複数 user 分の set が並列で存在し、 横断クエリで全員のコメントが取れる
+
+### bookmark canvas との関係
+ブックマークノートでは canvas 上の **floating_text ブロック**が「ブックマーク済ページに対する注釈 / コメント」 として機能する。 これらは note のブロック (`note_blocks`) として保存され、 note を共有する全ユーザに見える共通の注釈となる。
+
+一方、 **per-user の comment_set / note_comments** は別レイヤーで、 「他人のノートに自分のコメントを乗せる」 用途で使う (Phase 2)。 多人数で同じブックマークノートを共有する場合:
+
+- floating_text ブロック = ノート所有者の注釈 (= 「公式」)
+- note_comments の floating コメント (Phase 2) = 各個人の注釈 (= 「私見」)
+
+どちらも canvas 上にオーバーレイ表示するが、 編集権限とライフサイクルが異なる。
 
 ### マルチサーバ表示モード
 - **自分のコメントのみ**: 自 user_id の set だけ表示 (デフォルト)

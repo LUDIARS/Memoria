@@ -2,6 +2,8 @@
 // Spec: spec/api/note.md / spec/feature/note.md / spec/feature/extension.md
 
 import { Hono, type Context } from 'hono';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   listNotes, getNote, listNoteBlocks, insertNote, updateNote, deleteNote,
@@ -34,10 +36,11 @@ const COMMENT_TEXT_MAX = 16 * 1024;
 
 export interface NoteRouterDeps {
   db: Db;
+  htmlDir: string;
 }
 
 export function makeNoteRouter(deps: NoteRouterDeps): Hono {
-  const { db } = deps;
+  const { db, htmlDir } = deps;
   const r = new Hono();
 
   // ---- helpers --------------------------------------------------------------
@@ -178,18 +181,40 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
 
   r.patch('/api/notes/:uuid', async (c: Context) => {
     const id = c.req.param('uuid') ?? '';
-    if (!getNote(db, id)) return c.json({ error: 'not found' }, 404);
+    const cur = getNote(db, id);
+    if (!cur) return c.json({ error: 'not found' }, 404);
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
     if (typeof body.title === 'string') patch.title = body.title.slice(0, TITLE_MAX);
     if (typeof body.kind === 'string' && body.kind.trim()) patch.kind = body.kind.trim();
     if (Array.isArray(body.tags)) patch.tags = sanitizeTags(body.tags);
-    if (typeof body.bookmark_id === 'number' || body.bookmark_id === null) patch.bookmark_id = body.bookmark_id;
-    if (typeof body.bookmark_url === 'string' || body.bookmark_url === null) patch.bookmark_url = body.bookmark_url;
+    // bookmark_id は null への解除のみ許可 (= bookmark を切り離す → kind を doc に戻す)。
+    // 通常ノートに後から bookmark を貼り付けることはできない (spec: 通常ノートには bookmark を挟まない)。
+    if (body.bookmark_id === null) {
+      patch.bookmark_id = null;
+      patch.bookmark_url = null;
+      if (cur.kind === 'bookmark') patch.kind = 'doc';
+    } else if (typeof body.bookmark_id === 'number') {
+      return c.json({ error: 'bookmark_id can only be unset (null), not changed; create a new bookmark note instead' }, 400);
+    }
     if (typeof body.source_kind === 'string' || body.source_kind === null) patch.source_kind = body.source_kind;
     if (typeof body.source_ref === 'string' || body.source_ref === null) patch.source_ref = body.source_ref;
     updateNote(db, id, patch);
     return c.json(getNote(db, id));
+  });
+
+  r.get('/api/notes/:uuid/bookmark-html', (c: Context) => {
+    const id = c.req.param('uuid') ?? '';
+    const note = getNote(db, id);
+    if (!note) return c.text('not found', 404);
+    if (note.kind !== 'bookmark' || note.bookmark_id == null) {
+      return c.text('not a bookmark note', 404);
+    }
+    const bm = getBookmark(db, note.bookmark_id);
+    if (!bm) return c.text('bookmark deleted', 404);
+    const p = join(htmlDir, bm.html_path);
+    if (!existsSync(p)) return c.text('html missing', 404);
+    return c.body(readFileSync(p), 200, { 'Content-Type': 'text/html; charset=utf-8' });
   });
 
   r.delete('/api/notes/:uuid', (c: Context) => {

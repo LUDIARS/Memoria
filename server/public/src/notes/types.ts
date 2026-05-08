@@ -13,7 +13,8 @@ export type NoteBlockType =
   | 'bullet_list'
   | 'numbered_list'
   | 'todo'
-  | 'divider';
+  | 'divider'
+  | 'floating_text';
 
 export interface NoteBlockRow {
   id: number;            // DB internal (server only — frontend は uuid を使う)
@@ -66,12 +67,27 @@ export interface NoteWithBlocks extends NoteRow {
 }
 
 export interface BlockData {
+  // code
   lang?: string;
+  // table
   header?: boolean;
   rows?: string[][];
+  // bullet_list / numbered_list
   indent?: number;
+  // todo
   checked?: boolean;
+  // floating_text
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  color?: string;
+  anchor?: FloatingAnchor;
 }
+
+export type FloatingAnchor =
+  | { kind: 'point' }
+  | { kind: 'text'; selector: string; startOffset: number; endOffset: number };
 
 // ── コメント ──────────────────────────────────────────────────────────
 

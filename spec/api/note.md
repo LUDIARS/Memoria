@@ -8,11 +8,16 @@
 |---|---|---|---|
 | GET | `/api/notes` | `?q=&limit=&offset=&kind=&bookmark_id=` | `{ items: NoteSummary[]; total: number }` |
 | GET | `/api/notes/:uuid` | — | `NoteWithBlocks` |
+| GET | `/api/notes/:uuid/bookmark-html` | — | `text/html` (sandboxed iframe 用) |
 | POST | `/api/notes` | `NoteCreateRequest` | `NoteRow` |
 | PATCH | `/api/notes/:uuid` | `NoteUpdateRequest` | `NoteRow` |
 | DELETE | `/api/notes/:uuid` | — | `{ ok: true }` |
 
-`POST /api/notes` の body に `bookmark_id` を含めると、 そのブックマークをベースとした note が作成される (`kind='bookmark'`、 `title` 未指定なら bookmark のタイトルを継承)。
+`POST /api/notes` の body に `bookmark_id` を含めると、 そのブックマークをベースとした note が作成される (`kind='bookmark'` 強制、 `title` 未指定なら bookmark のタイトルを継承)。 通常ノート (`kind != 'bookmark'`) には `bookmark_id` を設定できない (サーバ側で無視)。
+
+`PATCH /api/notes/:uuid` で `bookmark_id` を変更できるのは **null への解除のみ** (= bookmark を切り離す)。 通常ノートに後から bookmark_id を貼り付けることはできない。
+
+`GET /api/notes/:uuid/bookmark-html` は `kind='bookmark'` ノートでのみ 200 を返す (それ以外は 404)。 `<iframe sandbox="allow-same-origin allow-popups allow-forms">` での読み込みを想定。
 
 ## ブロック
 

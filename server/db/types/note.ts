@@ -33,7 +33,8 @@ export type NoteBlockType =
   | 'bullet_list'
   | 'numbered_list'
   | 'todo'
-  | 'divider';
+  | 'divider'
+  | 'floating_text';
 
 export const NOTE_BLOCK_TYPES: readonly NoteBlockType[] = [
   'text',
@@ -48,6 +49,7 @@ export const NOTE_BLOCK_TYPES: readonly NoteBlockType[] = [
   'numbered_list',
   'todo',
   'divider',
+  'floating_text',
 ] as const;
 
 export interface NoteBlockRow {
@@ -63,12 +65,27 @@ export interface NoteBlockRow {
 }
 
 export interface NoteBlockData {
+  // code
   lang?: string;
+  // table
   header?: boolean;
   rows?: string[][];
+  // bullet_list / numbered_list
   indent?: number;
+  // todo
   checked?: boolean;
+  // floating_text (bookmark canvas)
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  color?: string;
+  anchor?: FloatingAnchor;
 }
+
+export type FloatingAnchor =
+  | { kind: 'point' }
+  | { kind: 'text'; selector: string; startOffset: number; endOffset: number };
 
 // ── コメント (per note × user) ──────────────────────────────────────────
 

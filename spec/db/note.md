@@ -13,8 +13,8 @@ esa / DocBase 風の WYSIWYG ノート。 Notion 同様 1 ノート = ヘッダ 
 | `title` | TEXT | ✓ | `''` | タイトル (空文字許容) |
 | `kind` | TEXT | ✓ | `'doc'` | `doc` (汎用) / `chat` (拡張取り込み) / `bookmark` (ブクマ起点) / 等 |
 | `tags_json` | TEXT |  | NULL | JSON `string[]` |
-| `bookmark_id` | INTEGER |  | NULL | このノートのベース bookmark (NULL = フリーノート)。 SET NULL on bookmark 削除 |
-| `bookmark_url` | TEXT |  | NULL | bookmark.url の冗長保存 (Hub 同期時の便宜 / ブックマーク削除後も URL は残す) |
+| `bookmark_id` | INTEGER |  | NULL | ベース bookmark。 **`kind='bookmark'` のノートでのみ設定**。 通常ノート (`kind='doc'` 等) では NULL 固定。 SET NULL on bookmark 削除 |
+| `bookmark_url` | TEXT |  | NULL | bookmark.url の冗長保存 (Hub 同期時 / ブックマーク削除後の URL 保持)。 `kind='bookmark'` でのみ意味を持つ |
 | `source_kind` | TEXT |  | NULL | 取り込み元種別 (`chat` / 等) |
 | `source_ref` | TEXT |  | NULL | 取り込み元参照 |
 | `created_at` | TEXT | ✓ | UTC | |
@@ -44,7 +44,8 @@ Index: `idx_notes_updated` (updated_at DESC) / `idx_notes_kind` / `idx_notes_boo
 Index: `idx_note_blocks_note_position` (note_id, position) / `idx_note_blocks_uuid` (uuid)
 
 ### `block_type` enum
-- `text` — 段落 (markdown インライン: `**bold**`, `*italic*`, `` `code` ``, `[link](url)`, `<span style="color:#hex">…</span>`)
+- `text` — Markdown 段落 (markdown インライン: `**bold**`, `*italic*`, `` `code` ``, `[link](url)`, `<span style="color:#hex">…</span>`)。 **通常ノート (kind='doc' / 'chat' / …)** で使用するインラインフロー型ブロック
+- `floating_text` — **フローティングテキスト**。 自由位置 (x, y) を持ち、 座標で配置される。 **ブックマークノート (kind='bookmark') の canvas 専用**: 描画した bookmark HTML 上にオーバーレイ表示され、 注釈 / コメントとして機能する。 通常ノートでは UI 上挿入できない (schema レベルでは block_type は許可されているが、 フロントエンドのスラッシュメニューが bookmark-note でのみ表示)
 - `heading_1` / `heading_2` / `heading_3` — 見出し
 - `quote` — 引用
 - `code` — コードブロック (`data_json.lang: string`)
@@ -53,6 +54,28 @@ Index: `idx_note_blocks_note_position` (note_id, position) / `idx_note_blocks_uu
 - `bullet_list` / `numbered_list` — リスト (`data_json.indent: number`)
 - `todo` — チェックボックス (`data_json.checked: boolean`)
 - `divider` — 水平線
+
+### `floating_text` の data_json shape
+```ts
+{
+  x: number;              // canvas / iframe 内の絶対 px (left)
+  y: number;              // 同 (top)
+  width?: number;         // optional (default: auto)
+  height?: number;        // optional
+  color?: string;         // 枠色 / 文字色のヒント (#hex)
+  // bookmark canvas に貼った場合のアンカー (optional)
+  anchor?: {
+    kind: 'point';        // 単純な座標固定
+  } | {
+    kind: 'text';         // bookmark HTML 内のテキスト範囲を指す (Range API ベース)
+    selector: string;     // 起点要素の CSS セレクタ
+    startOffset: number;  // 起点要素内の文字オフセット
+    endOffset: number;    // 終点 (selector が同一前提の MVP)
+  };
+}
+```
+
+floating ブロックは `position` (REAL) を **z-order**として使う (大きいほど手前)。 通常ブロックの sort 順とは別系統で扱うため、 inline ブロックと混在させて取得する場合はクライアント側で `block_type` で振り分ける。
 
 ## `note_comment_sets`
 **1 (note × user) = 1 set**。 ノートに対する 1 ユーザのコメント集合。 マルチサーバでは別ユーザの set が複数並ぶ。

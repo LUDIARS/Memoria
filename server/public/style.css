@@ -5559,3 +5559,89 @@ dialog.loc-edit-modal[open] {
   .notes-pane { padding: 12px; }
   .note-mermaid-wrap { grid-template-columns: 1fr; }
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   📓 Notes rev3 — bookmark canvas + floating text overlay
+   ───────────────────────────────────────────────────────────────── */
+
+.note-canvas-toolbar {
+  display: flex; gap: 8px; align-items: center;
+  margin: 8px 0;
+  padding: 6px 8px;
+  background: #f3eaff;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.note-canvas-toolbar button { padding: 4px 12px; font-size: 12px; }
+
+.note-canvas-wrap {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 75vh;
+  background: #fff;
+}
+.note-canvas-wrap iframe {
+  width: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+.note-canvas-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  pointer-events: none;
+  /* height は JS で iframe コンテンツ高さに合わせる */
+}
+
+/* floating text block — overlay 上の絶対配置注釈 */
+.note-floating {
+  position: absolute;
+  pointer-events: auto;
+  background: #fffbe6;
+  border: 1.5px solid #f6b73c;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  padding: 8px 28px 8px 24px;
+  min-width: 140px;
+  max-width: 360px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.note-floating.dragging { opacity: 0.85; cursor: grabbing; }
+.note-floating .nf-handle {
+  position: absolute;
+  left: 4px; top: 4px;
+  width: 16px; height: 100%;
+  cursor: grab;
+  color: var(--muted);
+  font-size: 14px;
+  user-select: none;
+  display: flex; align-items: flex-start; padding-top: 6px;
+}
+.note-floating .nf-body {
+  outline: none;
+  min-height: 1.4em;
+  word-break: break-word;
+}
+.note-floating .nf-body:empty:before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+}
+.note-floating .nf-del {
+  position: absolute;
+  top: 2px; right: 4px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+}
+.note-floating .nf-del:hover { background: #c33; color: #fff; }
