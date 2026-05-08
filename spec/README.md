@@ -9,7 +9,8 @@
 ```
 spec/
 ├── db/         ← SQLite テーブル定義 (列・index・制約)
-└── api/        ← HTTP API 契約 (request / response)
+├── api/        ← HTTP API 契約 (request / response)
+└── feature/    ← 機能仕様 (シェア可能性 + プライバシー注記付き)
 ```
 
 ## ルール
