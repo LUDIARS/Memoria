@@ -1302,6 +1302,72 @@ app.post('/api/dig/:id/save', async (c) => {
   return c.json({ results: await bulkSaveUrls(body.urls) });
 });
 
+// ---- ブックマーク: 単一 URL から fetch + 要約キュー投入 -------------------
+//
+// UI の「+ ブックマーク追加」用 endpoint。 内容取得失敗ならエラーを返す。
+app.post('/api/bookmarks/from-url', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const url = String(body?.url || '').trim();
+  if (!url || !/^https?:\/\//i.test(url)) return c.json({ error: 'url (http/https) required' }, 400);
+  const existing = findBookmarkByUrl(db, url);
+  if (existing) return c.json({ duplicate: true, id: existing.id });
+  try {
+    const fetched = await fetchPageHtml(url);
+    const title = (fetched.title || url).slice(0, 500);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const safe = ts + '_' + Math.random().toString(36).slice(2, 8) + '.html';
+    writeFileSync(join(HTML_DIR, safe), fetched.html, 'utf8');
+    const id = insertBookmark(db, { url, title, htmlPath: safe });
+    recordAccess(db, id);
+    enqueueSummary(id);
+    return c.json({ id, title, queued: true, queueDepth: summaryQueue.depth }, 201);
+  } catch (e) {
+    return c.json({ error: `fetch / save failed: ${e.message}` }, 502);
+  }
+});
+
+// ---- ドメイン辞書: URL から domain 抽出して登録キューへ -------------------
+app.post('/api/domains/from-url', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const url = String(body?.url || '').trim();
+  if (!url) return c.json({ error: 'url required' }, 400);
+  let domain;
+  try {
+    // bare host も許容: "example.com" → URL parse で失敗 → そのまま domain 扱い
+    if (/^https?:\/\//i.test(url)) {
+      domain = new URL(url).hostname.toLowerCase();
+    } else if (/^[a-z0-9.-]+\.[a-z]{2,}/i.test(url)) {
+      domain = url.toLowerCase().split('/')[0];
+    } else {
+      return c.json({ error: 'url or hostname required' }, 400);
+    }
+  } catch (e) {
+    return c.json({ error: `invalid url: ${e.message}` }, 400);
+  }
+  if (shouldSkipDomain(domain)) return c.json({ error: 'localhost / loopback はスキップされます' }, 400);
+  const existing = getDomainCatalog(db, domain);
+  // 既存でも regenerate ルートと同じく再分類キューに積む
+  insertDomainPending(db, domain);
+  domainCatalogQueue.enqueue(async () => {
+    const result = await classifyDomain({ domain });
+    if (result.skip) { deleteDomainCatalog(db, domain); return; }
+    if (result.dropRow) {
+      setDomainCatalog(db, domain, { title: null, description: null, status: 'error', error: result.error ?? 'fetch failed' });
+      return;
+    }
+    if (!result.ok) {
+      setDomainCatalog(db, domain, { status: 'error', error: result.error });
+      return;
+    }
+    setDomainCatalog(db, domain, {
+      title: result.title, site_name: result.site_name,
+      description: result.description, can_do: result.can_do,
+      kind: result.kind, status: 'done', error: null,
+    });
+  }, { kind: 'domain', domain, title: domain });
+  return c.json({ domain, queued: true, duplicate: !!existing }, 201);
+});
+
 // ---- word clouds ---------------------------------------------------------
 
 const BOOKMARK_DOC_LIMIT = 80;

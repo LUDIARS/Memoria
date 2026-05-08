@@ -602,9 +602,10 @@ function jobLabel(item) {
   return kindHint + `seq #${item.seq}`;
 }
 
-// 日付ベースの sub (tracks / meals) は worklog 配下。
+// tracks のみ worklog 配下。
 // 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
-const WORKLOG_REDIRECT_TABS = new Set(['tracks', 'meals']);
+// meals は top-level タブ。
+const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
 const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
 
 function switchTab(tab) {
@@ -635,6 +636,7 @@ function switchTab(tab) {
   $('recommendView').classList.toggle('hidden', tab !== 'recommend');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
+  $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
@@ -648,6 +650,7 @@ function switchTab(tab) {
   if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
+  if (tab === 'meals') loadMeals();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
@@ -4137,6 +4140,76 @@ $('domainRecatalogBtn')?.addEventListener('click', () => recatalogAllDomains({ f
 $('recatalogAllBtn')?.addEventListener('click', () => recatalogAllDomains({ force: false }));
 $('recatalogAllForceBtn')?.addEventListener('click', () => recatalogAllDomains({ force: true }));
 
+// ── ブックマーク追加 (URL → fetch + 要約キュー) ───────────────────────────
+async function addBookmarkFromUrl() {
+  const inp = $('bookmarkAddUrl');
+  const status = $('bookmarkAddStatus');
+  const btn = $('bookmarkAddBtn');
+  const url = (inp?.value || '').trim();
+  if (!url) {
+    if (status) status.textContent = 'URL を入力してください';
+    inp?.focus();
+    return;
+  }
+  if (status) status.textContent = '取得中…';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/bookmarks/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (r.duplicate) {
+      if (status) status.textContent = '既に登録済み (id=' + r.id + ')';
+    } else {
+      if (status) status.textContent = `追加 → 要約キュー投入 (id=${r.id})`;
+      inp.value = '';
+    }
+    await load();
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${e.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+$('bookmarkAddBtn')?.addEventListener('click', addBookmarkFromUrl);
+$('bookmarkAddUrl')?.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); addBookmarkFromUrl(); }
+});
+
+// ── ドメイン追加 (URL/host → 分類キュー) ──────────────────────────────────
+async function addDomainFromUrl() {
+  const inp = $('domainAddUrl');
+  const status = $('domainAddStatus');
+  const btn = $('domainAddBtn');
+  const url = (inp?.value || '').trim();
+  if (!url) {
+    if (status) status.textContent = 'URL or hostname を入力してください';
+    inp?.focus();
+    return;
+  }
+  if (status) status.textContent = '登録中…';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/domains/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (status) status.textContent = (r.duplicate ? '既存を再分類: ' : '追加: ') + r.domain;
+    inp.value = '';
+    await loadDomainCatalog();
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${e.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+$('domainAddBtn')?.addEventListener('click', addDomainFromUrl);
+$('domainAddUrl')?.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); addDomainFromUrl(); }
+});
+
 // ── modal panels (dict + domain edit) ─────────────────────────────────────
 function showModal(panelId) {
   $(panelId).classList.remove('hidden');
@@ -5245,13 +5318,13 @@ async function savePrivacySettings() {
 }
 
 function applyFeatureVisibility(s) {
-  // tracks / meals とも worklog のサブタブ。
+  // tracks は worklog のサブタブ、 meals は top-level タブ。
   const tracksSub = document.querySelector('#worklogSubtabs [data-sub="tracks"]');
-  const mealsSub = document.querySelector('#worklogSubtabs [data-sub="meals"]');
+  const mealsTab = document.querySelector('.tab[data-tab="meals"]');
   if (tracksSub) tracksSub.hidden = s.tracks_visible === false;
-  if (mealsSub) mealsSub.hidden = s.meals_visible === false;
+  if (mealsTab) mealsTab.hidden = s.meals_visible === false;
   if (state.tab === 'worklog' && state.worklog?.sub === 'tracks' && s.tracks_visible === false) switchTab('database');
-  if (state.tab === 'worklog' && state.worklog?.sub === 'meals' && s.meals_visible === false) switchTab('database');
+  if (state.tab === 'meals' && s.meals_visible === false) switchTab('database');
   reflowTabsForViewport();
 }
 
@@ -6965,7 +7038,6 @@ const WL_SUB_VIEWS = {
   browsing: 'wlBrowsingView',
   dig: 'wlDigView',
   tracks: 'tracksView',
-  meals: 'mealsView',
 };
 
 // データベースタブのサブビュー一覧
@@ -7013,7 +7085,7 @@ function switchDatabaseSub(sub) {
 }
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
-const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'meals']);
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -7026,13 +7098,20 @@ const WL_KIND_BY_SUB = {
 function migrateWorklogSubViews() {
   const wl = $('worklogView');
   if (!wl) return;
-  for (const id of ['tracksView', 'mealsView']) {
+  for (const id of ['tracksView']) {
     const v = $(id);
     if (v && v.parentNode !== wl) {
       v.classList.add('hidden');
       v.classList.add('wl-sub');
       wl.appendChild(v);
     }
+  }
+  // mealsView は top-level に戻す (前 PR で worklogView 内に移していたら拾い戻す)
+  const meals = $('mealsView');
+  const content = document.querySelector('.content');
+  if (meals && content && meals.parentNode === wl) {
+    content.appendChild(meals);
+    meals.classList.remove('wl-sub');
   }
 }
 migrateWorklogSubViews();
@@ -7065,7 +7144,6 @@ async function loadWorklog() {
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
   if (sub === 'tracks') return loadTracks();
-  if (sub === 'meals') return loadMeals();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
