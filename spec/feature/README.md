@@ -36,6 +36,8 @@
 | LLM プロバイダ設定 | [llm-config.md](llm-config.md) | 🏠 | OpenAI API key 等を含む |
 | プライバシー設定 | [privacy-settings.md](privacy-settings.md) | 🏠 | feature flag 集中管理 |
 | ストップワード | [stopwords.md](stopwords.md) | 🏠 | wordcloud 除外語 |
+| ノート (WYSIWYG) | [note.md](note.md) | 🏠 | esa / DocBase 風ブロックベースエディタ。 markdown + 文字色 + テーブル + Mermaid |
+| Chrome 拡張 dispatch | [extension.md](extension.md) | 🏠 | chat / impl / shopping ドメインで追加ボタンを出し分け |
 
 ## 凡例 (項目)
 各 feature ファイルは以下のセクションを順序固定で持つ:

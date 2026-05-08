@@ -154,6 +154,10 @@ declare global {
   }
 }
 
+// notes module — esa / DocBase 風 WYSIWYG エディタ。
+// switchTab('notes') で loadNotes() を呼ぶ。
+import { loadNotes as notesLoad } from './notes/index.js';
+
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
 // `as Loose[]` `as string` などに cast する。
@@ -1017,6 +1021,7 @@ function switchTab(tab) {
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
+  $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
@@ -1031,6 +1036,7 @@ function switchTab(tab) {
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
+  if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
@@ -1054,7 +1060,7 @@ function bumpTabUsage(tab) {
 // よう、 default score は 1 click 未満に収めている。
 const TAB_DEFAULT_PRIORITY = [
   'bookmarks', 'dig', 'diary', 'tracks', 'dict', 'domain',
-  'visits', 'trends', 'recommend', 'queue', 'events', 'multi',
+  'notes', 'visits', 'trends', 'recommend', 'queue', 'events', 'multi',
 ];
 function tabDefaultScore(name) {
   const idx = TAB_DEFAULT_PRIORITY.indexOf(name);

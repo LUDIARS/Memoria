@@ -21,3 +21,4 @@ export * from './settings.js';
 export * from './push.js';
 export * from './wordcloud.js';
 export * from './stopwords.js';
+export * from './note.js';
