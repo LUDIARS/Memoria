@@ -1,36 +1,33 @@
-// agent-dispatch.js — Memoria task → AI agent (Claude Code / Codex / Gemini) を
+// agent-dispatch.ts — Memoria task → AI agent (Claude Code / Codex / Gemini) を
 // プロジェクトディレクトリで non-interactive に走らせ、stdout/stderr を log
 // ファイルにストリーム保存しながら DB の `agent_runs` 行を更新する。
-//
-// 既存の `runLlm` (server/llm.js) は短い LLM 質問用 (タイムアウト 3 分、結果を
-// 文字列で返す) なのでこちらの長尺・1 ショット実装用とは分けて持つ。
-//
-// Usage:
-//   const runId = startAgentRun(db, { task, project, agent });
-//   // returns immediately. The child runs in the background and updates
-//   // agent_runs by id when it exits.
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
+import type BetterSqlite3 from 'better-sqlite3';
 import {
-  insertAgentRun, updateAgentRun, getAgentRun, getTask, recordActivityEvent,
+  insertAgentRun, updateAgentRun, recordActivityEvent,
 } from './db.js';
+import type { AgentKind, AgentRunRow } from './db/types/agent.js';
+import type { TaskRow } from './db/types/task.js';
+import type { AgentProjectRow } from './db/types/agent.js';
 
-const SUPPORTED_AGENTS = new Set(['claude_code', 'codex', 'gemini']);
+type Db = BetterSqlite3.Database;
 
-// Track running children by run id so cancel() can find them.
-const _running = new Map();
+const SUPPORTED_AGENTS = new Set<AgentKind>(['claude_code', 'codex', 'gemini']);
 
-function ensureLogDir(dataDir) {
+const _running = new Map<number, ChildProcessWithoutNullStreams>();
+
+function ensureLogDir(dataDir: string): string {
   const dir = join(dataDir, 'agent_logs');
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function buildPrompt({ task, project }) {
+function buildPrompt({ task, project }: { task: TaskRow; project: AgentProjectRow }): string {
   const rules = (project.rules || '').trim();
-  const lines = [
+  const lines: string[] = [
     `あなたはこのプロジェクトのコードを 1 ショットで実装するエージェントです。`,
     `止まらず最後まで実装し、完了したらサマリを 1 行出力して終了してください。`,
     '',
@@ -59,17 +56,16 @@ function buildPrompt({ task, project }) {
   return lines.join('\n');
 }
 
-// 各エージェントのデフォルトモデル (model 未指定時に使う)
-const AGENT_DEFAULT_MODEL = {
+const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   claude_code: 'sonnet',
   codex:       '5.3-codex',
   gemini:      'gemini-2.5-flash',
 };
 
-function buildArgs(agent, model) {
+function buildArgs(agent: AgentKind, model: string | null | undefined): string[] {
   const m = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[agent] || '';
   if (agent === 'codex') {
-    const args = [
+    const args: string[] = [
       'exec',
       '--json',
       '--color', 'never',
@@ -81,41 +77,45 @@ function buildArgs(agent, model) {
     return args;
   }
   if (agent === 'gemini') {
-    const args = [];
+    const args: string[] = [];
     if (m) args.push('-m', m);
     args.push('-p');
     return args;
   }
   // claude_code (default)
-  const args = ['-p', '--dangerously-skip-permissions'];
+  const args: string[] = ['-p', '--dangerously-skip-permissions'];
   if (m) args.push('--model', m);
   return args;
 }
 
-function binaryFor(agent, settings) {
+function binaryFor(agent: AgentKind, settings: Record<string, string | null | undefined>): string {
   if (agent === 'codex') return settings['llm.bin.codex'] || 'codex';
   if (agent === 'gemini') return settings['llm.bin.gemini'] || 'gemini';
   return settings['llm.bin.claude'] || 'claude';
 }
 
+export interface StartAgentRunArgs {
+  dataDir: string;
+  settings?: Record<string, string | null | undefined>;
+  task: TaskRow;
+  project: AgentProjectRow;
+  agent?: AgentKind;
+  model?: string | null;
+  gitBashPath?: string | null;
+  timeoutMs?: number;
+}
+
 /**
  * Start an agent run. Returns the new run id immediately. The child process
  * runs in the background and updates the DB row when it exits.
- *
- * Args:
- *   db          — better-sqlite3 instance
- *   dataDir     — base data directory (logs go to dataDir/agent_logs/)
- *   settings    — getAppSettings(db) result; used for `llm.bin.*` overrides
- *   task        — { id, title, details, due_at }
- *   project     — { id, name, path, rules, default_agent }
- *   agent       — 'claude_code' | 'codex' | 'gemini'  (overrides project.default_agent)
- *   gitBashPath — optional CLAUDE_CODE_GIT_BASH_PATH override
- *   timeoutMs   — kill the child after this many ms (default 30 min)
  */
-export function startAgentRun(db, { dataDir, settings, task, project, agent, model, gitBashPath, timeoutMs = 30 * 60 * 1000 }) {
+export function startAgentRun(
+  db: Db,
+  { dataDir, settings, task, project, agent, model, gitBashPath, timeoutMs = 30 * 60 * 1000 }: StartAgentRunArgs,
+): number {
   if (!task) throw new Error('task required');
   if (!project) throw new Error('project required');
-  const a = agent || project.default_agent || 'claude_code';
+  const a: AgentKind = (agent || project.default_agent || 'claude_code') as AgentKind;
   if (!SUPPORTED_AGENTS.has(a)) throw new Error(`unsupported agent: ${a}`);
   if (!project.path || !isAbsolute(project.path)) {
     throw new Error('project.path must be an absolute path');
@@ -140,12 +140,13 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, mod
   });
 
   // Spawn after row exists so we always have a record even if spawn fails.
-  let child;
-  const bin = binaryFor(a, settings || {});
+  let child: ChildProcessWithoutNullStreams;
+  const settingsObj = settings || {};
+  const bin = binaryFor(a, settingsObj);
   const args = buildArgs(a, effectiveModel);
-  const env = { ...process.env };
-  if (a === 'claude_code' && (gitBashPath || settings?.['runtime.git_bash_path'])) {
-    env.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath || settings['runtime.git_bash_path'];
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (a === 'claude_code' && (gitBashPath || settingsObj['runtime.git_bash_path'])) {
+    env.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath || settingsObj['runtime.git_bash_path'] || '';
   }
   const stream = createWriteStream(logPath, { flags: 'a' });
   stream.write(`# agent: ${a}\n# model: ${effectiveModel || '(default)'}\n# bin: ${bin}\n# args: ${JSON.stringify(args)}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n# task: ${task.title}\n\n----- prompt -----\n${prompt}\n----- output -----\n`);
@@ -157,13 +158,14 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, mod
       shell: false,
       env,
     });
-  } catch (e) {
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
     updateAgentRun(db, runId, {
       status: 'failed',
       finished_at: new Date().toISOString(),
-      summary: `spawn failed: ${e.message}`,
+      summary: `spawn failed: ${msg}`,
     });
-    stream.write(`\n----- spawn error -----\n${e.message}\n`);
+    stream.write(`\n----- spawn error -----\n${msg}\n`);
     stream.end();
     return runId;
   }
@@ -173,23 +175,26 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, mod
 
   recordActivityEvent(db, {
     kind: 'task_updated',
+    occurred_at: undefined,
+    source: undefined,
+    ref_id: undefined,
     content: `[AI実装開始] ${task.title} (${a}${effectiveModel ? `:${effectiveModel}` : ''})`,
     metadata: { agent_run_id: runId, agent: a, model: effectiveModel || null, project: project.name },
   });
 
-  let timer = setTimeout(() => {
-    try { child.kill('SIGKILL'); } catch {}
+  const timer = setTimeout(() => {
+    try { child.kill('SIGKILL'); } catch { /* ignore */ }
   }, timeoutMs);
 
-  child.stdout.on('data', (d) => stream.write(d));
-  child.stderr.on('data', (d) => {
+  child.stdout.on('data', (d: Buffer) => stream.write(d));
+  child.stderr.on('data', (d: Buffer) => {
     stream.write(`[stderr] `);
     stream.write(d);
   });
-  child.on('error', (err) => {
+  child.on('error', (err: Error) => {
     stream.write(`\n----- error -----\n${err.message}\n`);
   });
-  child.on('close', (code) => {
+  child.on('close', (code: number | null) => {
     clearTimeout(timer);
     _running.delete(runId);
     const finishedAt = new Date().toISOString();
@@ -198,7 +203,7 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, mod
       const tail = readFileSync(logPath, 'utf8').slice(-2000);
       const lines = tail.split('\n').filter(l => l.trim()).slice(-6);
       summary = lines.join('\n').slice(-600);
-    } catch {}
+    } catch { /* ignore */ }
     stream.write(`\n----- finished -----\nexit: ${code}\nat: ${finishedAt}\n`);
     stream.end();
     updateAgentRun(db, runId, {
@@ -209,21 +214,25 @@ export function startAgentRun(db, { dataDir, settings, task, project, agent, mod
     });
     recordActivityEvent(db, {
       kind: code === 0 ? 'task_done' : 'task_updated',
+      occurred_at: undefined,
+      source: undefined,
+      ref_id: undefined,
       content: `[AI実装${code === 0 ? '完了' : '失敗'}] ${task.title}`,
       metadata: { agent_run_id: runId, exit_code: code },
     });
   });
 
-  // long prompt is passed via stdin (per Windows ENAMETOOLONG handling).
   child.stdin.end(prompt, 'utf8');
   return runId;
 }
 
-export function cancelAgentRun(db, runId) {
+export function cancelAgentRun(db: Db, runId: number): { ok: true } | { ok: false; error: string } {
   const child = _running.get(runId);
   if (!child) return { ok: false, error: 'not_running' };
-  try { child.kill('SIGKILL'); } catch (e) {
-    return { ok: false, error: e.message };
+  try {
+    child.kill('SIGKILL');
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
   updateAgentRun(db, runId, {
     status: 'cancelled',
@@ -236,7 +245,11 @@ export function cancelAgentRun(db, runId) {
  * Read the log file for a run. `tail` controls how many bytes from the end
  * to return (default 64KiB).
  */
-export function readAgentRunLog(dataDir, run, { tail = 64 * 1024 } = {}) {
+export function readAgentRunLog(
+  dataDir: string,
+  run: AgentRunRow | null | undefined,
+  { tail = 64 * 1024 }: { tail?: number } = {},
+): string {
   if (!run?.log_path) return '';
   const path = join(dataDir, 'agent_logs', run.log_path);
   if (!existsSync(path)) return '';
@@ -246,6 +259,6 @@ export function readAgentRunLog(dataDir, run, { tail = 64 * 1024 } = {}) {
   return buf.subarray(buf.length - len).toString('utf8');
 }
 
-export function isRunning(runId) {
+export function isRunning(runId: number): boolean {
   return _running.has(runId);
 }
