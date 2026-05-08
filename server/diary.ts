@@ -4,8 +4,21 @@
 // Hourly buckets, top domains, and active hours are computed locally;
 // claude is asked only to narrate.
 
-import { visitEventsForDate, getDiary, getDomainCatalogMap, digSessionsForDate, listServerEventsForDate, listGpsLocationsForDate, listMealsForDate, getAppSettings, activityEventsForDate } from './db.js';
+import type BetterSqlite3 from 'better-sqlite3';
+import {
+  visitEventsForDate, getDomainCatalogMap, digSessionsForDate,
+  listServerEventsForDate, listGpsLocationsForDate, listMealsForDate,
+  getAppSettings, activityEventsForDate,
+} from './db.js';
 import { runLlm } from './llm.js';
+import type { VisitEventRow } from './db/types/visit.js';
+import type { ActivityKind } from './db/types/activity.js';
+import type { DomainCatalogRow } from './db/types/page.js';
+import type { GpsLocationRow } from './db/types/gps.js';
+import type { MealRow } from './db/types/meal.js';
+import type { DigSessionRow } from './db/types/dig.js';
+
+type Db = BetterSqlite3.Database;
 
 // Downtimes >5 min make it into the diary; shorter gaps are treated as
 // restarts (e.g. process kill + npm start) and silently ignored.
@@ -17,7 +30,7 @@ const DIARY_DOWNTIME_THRESHOLD_MS = 5 * 60 * 1000;
 
 const MIN_VISITS_FOR_REPORT = 1;
 
-function extractDomain(url) {
+function extractDomain(url: string | null | undefined): string | null {
   try { return new URL(String(url)).hostname.toLowerCase(); } catch { return null; }
 }
 
@@ -26,12 +39,220 @@ function extractDomain(url) {
 // time — wrong by the local TZ offset. Append `Z` so JS parses it as UTC,
 // then standard accessors (getHours(), toLocaleString(), etc.) return the
 // correct LOCAL values.
-function parseSqliteUtc(s) {
+function parseSqliteUtc(s: string | null | undefined): Date | null {
   if (!s) return null;
   const iso = String(s).replace(' ', 'T');
   // Already has TZ info — leave it alone.
   if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) return new Date(iso);
   return new Date(iso + 'Z');
+}
+
+// ─── shared row / metric shapes ──────────────────────────────────────────
+
+/** Row returned by db.digSessionsForDate (DigSessionRow + parsed result/preview). */
+interface DigSessionWithResult extends DigSessionRow {
+  result: DigResultJson | null;
+  preview: unknown;
+}
+
+interface DigResultJson {
+  summary?: string;
+  sources?: { url?: string; title?: string; snippet?: string }[];
+}
+
+/** Row returned by db.listServerEventsForDate (ServerEventRow + parsed details). */
+interface ServerEventWithDetails {
+  id: number;
+  type: 'start' | 'stop' | 'downtime' | 'restart';
+  occurred_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  details_json: string | null;
+  details: unknown;
+}
+
+/** Row returned by db.activityEventsForDate (subset cols + parsed metadata). */
+interface ActivityEventWithMetadata {
+  id: number;
+  kind: ActivityKind;
+  occurred_at: string;
+  source: string | null;
+  ref_id: string | null;
+  content: string | null;
+  metadata_json: string | null;
+  metadata: unknown;
+}
+
+/** GPS row subset returned by db.listGpsLocationsForDate (cols selected by query). */
+type GpsPointRow = Pick<
+  GpsLocationRow,
+  'id' | 'device_id' | 'recorded_at' | 'lat' | 'lon'
+  | 'accuracy_m' | 'altitude_m' | 'velocity_kmh' | 'course_deg'
+  | 'samples_count' | 'samples_first_at'
+  | 'place_name' | 'place_address' | 'place_source'
+>;
+
+/** Stored shape of meal `additions_json`. */
+interface MealAddition {
+  name: string;
+  calories: number | null;
+  added_at?: string | null;
+}
+
+/** Stored shape of meal `nutrients_json`. */
+interface MealNutrients {
+  protein_g?: number | null;
+  fat_g?: number | null;
+  carbs_g?: number | null;
+  fiber_g?: number | null;
+  sugar_g?: number | null;
+  sodium_mg?: number | null;
+}
+
+interface MealSummary {
+  id: number;
+  eaten_at: string;
+  description: string | null;
+  base_calories: number | null;
+  addition_calories: number;
+  total_calories: number | null;
+  nutrients: MealNutrients | null;
+  additions: { name: string; calories: number | null; added_at: string | null }[];
+  location_label: string | null;
+  ai_status: MealRow['ai_status'];
+  user_note: string | null;
+}
+
+interface TopDomain {
+  domain: string;
+  count: number;
+  active_hours: number[];
+  site_name?: string | null;
+  description?: string | null;
+  can_do?: string | null;
+  kind?: string | null;
+  catalog_title?: string | null;
+  domain_private?: boolean;
+}
+
+interface DigSummary {
+  id: number;
+  query: string;
+  status: DigSessionRow['status'];
+  created_at: string;
+  summary: string;
+  source_count: number;
+  sources: { url: string; title: string; snippet: string }[];
+}
+
+interface DowntimeBlock {
+  from: string;
+  to: string | null;
+  duration_ms: number | null;
+}
+
+export interface GpsSummary {
+  points: number;
+  raw_publishes: number;
+  compressed_segments: number;
+  devices: string[];
+  distance_meters: number;
+  bbox: { lat: [number, number]; lon: [number, number] } | null;
+  midpoint: { lat: number; lon: number } | null;
+  hours: number[];
+  first_at: string | null;
+  last_at: string | null;
+  /** alias used by formatGpsBlock — kept for legacy callers */
+  distance_m?: number;
+}
+
+interface UserProfile {
+  age: number;
+  sex: 'male' | 'female';
+  weight_kg: number;
+  height_cm: number;
+  activity_level: string;
+}
+
+interface CaloricBalance {
+  profile: UserProfile;
+  bmr: number;
+  tdee: number;
+  walking_kcal: number;
+  intake: number | null;
+  expenditure_total: number;
+  diff_vs_target: number | null;
+  diff_vs_expenditure: number | null;
+}
+
+interface ActivityItem {
+  id: number;
+  kind: ActivityKind;
+  occurred_at: string;
+  source: string | null;
+  ref_id: string | null;
+  content: string | null;
+  metadata: unknown;
+}
+
+interface ActivitySummary {
+  total: number;
+  kinds: Partial<Record<ActivityKind, number>>;
+  hourly: Partial<Record<ActivityKind, number[]>>;
+  items: ActivityItem[];
+  page: { limit: number | null; offset: number; returned: number };
+}
+
+interface BookmarksForDateResult {
+  created: BookmarkCreatedRow[];
+  accessed: BookmarkAccessedRow[];
+  created_total: number;
+  accessed_total: number;
+}
+
+interface BookmarkCreatedRow {
+  id: number;
+  url: string;
+  title: string;
+  summary: string | null;
+  created_at: string;
+}
+
+interface BookmarkAccessedRow {
+  id: number;
+  url: string;
+  title: string;
+  first_accessed_at: string;
+  last_accessed_at: string;
+  access_count: number;
+}
+
+export interface AggregatedDay {
+  date: string;
+  total_events: number;
+  unique_domains: number;
+  hourly_visits: number[];
+  top_domains: TopDomain[];
+  active_hours: number[];
+  first_event_at: string | null;
+  last_event_at: string | null;
+  bookmarks: BookmarksForDateResult;
+  digs: DigSummary[];
+  digs_total: number;
+  downtimes: DowntimeBlock[];
+  total_downtime_ms: number;
+  gps: GpsSummary;
+  meals: MealSummary[];
+  meals_total_calories: number | null;
+  meals_nutrients: Record<string, number> | null;
+  meals_pfc_label: string | null;
+  caloric_balance: CaloricBalance | null;
+  activity: ActivitySummary;
+  sources: {
+    visit_events: number;
+    page_visits: number;
+    activity_events: number;
+  };
 }
 
 /**
@@ -50,25 +271,34 @@ const DIARY_LIST_INITIAL = 10;
 // 初期表示は別途 100 件まで。 古い側は API ページングで取得 (more ▽)。
 const ACTIVITY_LIST_INITIAL = 100;
 
-export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, activityLimit = ACTIVITY_LIST_INITIAL } = {}) {
-  const hourlyVisits = new Array(24).fill(0);
-  const domainTally = new Map();
-  const domainHours = new Map(); // domain -> Set of hour buckets seen
-  let firstSeen = null;
-  let lastSeen = null;
+interface AggregateDayOptions {
+  listLimit?: number | null;
+  activityLimit?: number | null;
+}
+
+export function aggregateDay(
+  db: Db,
+  dateStr: string,
+  { listLimit = DIARY_LIST_INITIAL, activityLimit = ACTIVITY_LIST_INITIAL }: AggregateDayOptions = {},
+): AggregatedDay {
+  const hourlyVisits: number[] = new Array(24).fill(0);
+  const domainTally = new Map<string, number>();
+  const domainHours = new Map<string, Set<number>>(); // domain -> Set of hour buckets seen
+  let firstSeen: string | null = null;
+  let lastSeen: string | null = null;
 
   // 1) Per-event log
-  const events = visitEventsForDate(db, dateStr);
+  const events = visitEventsForDate(db, dateStr) as VisitEventRow[];
   for (const e of events) {
     const localHour = parseSqliteUtc(e.visited_at)?.getHours();
-    const hour = Number.isFinite(localHour) ? localHour : 0;
+    const hour = Number.isFinite(localHour) ? (localHour as number) : 0;
     hourlyVisits[hour] += 1;
     if (!firstSeen || e.visited_at < firstSeen) firstSeen = e.visited_at;
     if (!lastSeen || e.visited_at > lastSeen) lastSeen = e.visited_at;
     if (e.domain) {
       domainTally.set(e.domain, (domainTally.get(e.domain) || 0) + 1);
-      if (!domainHours.has(e.domain)) domainHours.set(e.domain, new Set());
-      domainHours.get(e.domain).add(hour);
+      if (!domainHours.has(e.domain)) domainHours.set(e.domain, new Set<number>());
+      domainHours.get(e.domain)!.add(hour);
     }
   }
 
@@ -77,26 +307,26 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
     SELECT v.url, v.last_seen_at
     FROM page_visits v
     WHERE date(v.last_seen_at, 'localtime') = ?
-  `).all(dateStr);
+  `).all(dateStr) as { url: string; last_seen_at: string }[];
   let pageVisitsContribution = 0;
   for (const v of visits) {
     const domain = extractDomain(v.url);
     if (!domain) continue;
     let hour = 0;
     try {
-      hour = parseSqliteUtc(v.last_seen_at)?.getHours();
-      if (!Number.isFinite(hour)) hour = 0;
-    } catch {}
+      const h = parseSqliteUtc(v.last_seen_at)?.getHours();
+      hour = Number.isFinite(h) ? (h as number) : 0;
+    } catch { /* ignore */ }
     hourlyVisits[hour] += 1;
     pageVisitsContribution += 1;
     domainTally.set(domain, (domainTally.get(domain) || 0) + 1);
-    if (!domainHours.has(domain)) domainHours.set(domain, new Set());
-    domainHours.get(domain).add(hour);
+    if (!domainHours.has(domain)) domainHours.set(domain, new Set<number>());
+    domainHours.get(domain)!.add(hour);
     if (!firstSeen || v.last_seen_at < firstSeen) firstSeen = v.last_seen_at;
     if (!lastSeen || v.last_seen_at > lastSeen) lastSeen = v.last_seen_at;
   }
 
-  const topDomainList = [...domainTally.entries()]
+  const topDomainList: TopDomain[] = [...domainTally.entries()]
     .map(([domain, count]) => ({
       domain,
       count,
@@ -104,8 +334,8 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
     }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 20);
-  const catalog = getDomainCatalogMap(db, topDomainList.map(d => d.domain));
-  const topDomains = topDomainList.map(d => {
+  const catalog = getDomainCatalogMap(db, topDomainList.map(d => d.domain)) as Map<string, DomainCatalogRow>;
+  const topDomains: TopDomain[] = topDomainList.map(d => {
     const cat = catalog.get(d.domain);
     return cat ? {
       ...d,
@@ -130,27 +360,30 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
   // so claude still sees the full picture.
   const bookmarks = bookmarksForDate(db, dateStr,
     listLimit == null ? {} : { limit: listLimit, offset: 0 });
-  const allDigs = digSessionsForDate(db, dateStr);
+  const allDigs = digSessionsForDate(db, dateStr) as DigSessionWithResult[];
   const digsTotal = allDigs.length;
   const digSlice = listLimit == null ? allDigs : allDigs.slice(0, listLimit);
-  const digs = digSlice.map(d => {
+  const digs: DigSummary[] = digSlice.map(d => {
     const r = d.result || {};
+    const sources = Array.isArray(r.sources) ? r.sources : [];
     return {
       id: d.id,
       query: d.query,
       status: d.status,
       created_at: d.created_at,
       summary: (r.summary || '').slice(0, 600),
-      source_count: (r.sources || []).length,
-      sources: (r.sources || []).slice(0, 8).map(s => ({
-        url: s.url, title: s.title, snippet: (s.snippet || '').slice(0, 200),
+      source_count: sources.length,
+      sources: sources.slice(0, 8).map(s => ({
+        url: s.url || '',
+        title: s.title || '',
+        snippet: (s.snippet || '').slice(0, 200),
       })),
     };
   });
 
   // Surface significant server downtimes so claude knows the data is partial.
-  const serverEvents = listServerEventsForDate(db, dateStr);
-  const downtimes = serverEvents
+  const serverEvents = listServerEventsForDate(db, dateStr) as ServerEventWithDetails[];
+  const downtimes: DowntimeBlock[] = serverEvents
     .filter(e => e.type === 'downtime' && (e.duration_ms || 0) > DIARY_DOWNTIME_THRESHOLD_MS)
     .map(e => ({
       from: e.occurred_at,
@@ -163,15 +396,15 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
   // ポイント数と概算距離 + bbox + アクティブ時間帯を出す。
   // クラスタリング (場所推定) はやらない (静止判定が難しく、誤推定すると
   // 日記の根拠が壊れるため)。代わりに raw 距離 + 中央付近の代表点で示す。
-  const gpsPoints = listGpsLocationsForDate(db, dateStr);
+  const gpsPoints = listGpsLocationsForDate(db, dateStr) as GpsPointRow[];
   const gps = summarizeGpsForDate(gpsPoints);
 
   // 食事ログ — eaten_at がその日に該当する meal をすべて拾う。
   // 総カロリーは「base (user_corrected_calories ?? calories) + sum(additions[].calories)」 を
   // 各レコードで計算した合計。 calories null 値は 0 として扱う (ユーザが
   // 不明としたものを過大計上しないため、 集計上は欠損扱い)。
-  const mealsRows = listMealsForDate(db, dateStr);
-  const meals = mealsRows.map((m) => {
+  const mealsRows = listMealsForDate(db, dateStr) as MealRow[];
+  const meals: MealSummary[] = mealsRows.map((m) => {
     const additions = parseMealAdditions(m.additions_json);
     const baseCal = (typeof m.user_corrected_calories === 'number') ? m.user_corrected_calories
       : (typeof m.calories === 'number') ? m.calories : null;
@@ -203,8 +436,8 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
     (s, m) => s + (typeof m.total_calories === 'number' ? m.total_calories : 0), 0,
   );
   // 栄養素合計 — null は 0 として加算しない (= 計上しない)、 ある食事のみ合計
-  const nutrientKeys = ['protein_g', 'fat_g', 'carbs_g', 'fiber_g', 'sugar_g', 'sodium_mg'];
-  const nutrientsSum = Object.fromEntries(nutrientKeys.map((k) => [k, 0]));
+  const nutrientKeys = ['protein_g', 'fat_g', 'carbs_g', 'fiber_g', 'sugar_g', 'sodium_mg'] as const;
+  const nutrientsSum: Record<string, number> = Object.fromEntries(nutrientKeys.map((k) => [k, 0]));
   let nutrientsAnyMeal = false;
   for (const m of meals) {
     if (!m.nutrients) continue;
@@ -215,7 +448,7 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
     }
   }
   // PFC バランスの簡易ラベル (3 大栄養素 g → kcal 比換算)
-  let pfcLabel = null;
+  let pfcLabel: string | null = null;
   if (nutrientsAnyMeal) {
     const pCal = (nutrientsSum.protein_g || 0) * 4;
     const fCal = (nutrientsSum.fat_g || 0) * 9;
@@ -233,8 +466,8 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
   // 拾えない作業をカバーする。 hourly + 集計は全件から、 items は最新
   // activityLimit 件 (DESC、 新しい順) にして UI 側でページングできるよう
   // total を渡す。
-  const allActivity = activityEventsForDate(db, dateStr);
-  const activity = summarizeActivityForDate(allActivity, activityLimit);
+  const allActivity = activityEventsForDate(db, dateStr) as ActivityEventWithMetadata[];
+  const activity = summarizeActivityForDate(allActivity, activityLimit ?? null);
 
   return {
     date: dateStr,
@@ -257,7 +490,7 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
     meals_pfc_label: pfcLabel,
     caloric_balance: computeCaloricBalance(db, {
       intake: meals.length > 0 ? mealsCalories : null,
-      gpsDistanceM: gps?.distance_m ?? 0,
+      gpsDistanceM: gps?.distance_meters ?? 0,
     }),
     activity,
     sources: {
@@ -280,20 +513,23 @@ export function aggregateDay(db, dateStr, { listLimit = DIARY_LIST_INITIAL, acti
  *
  * 入力 rows は時刻昇順 (activityEventsForDate の出力) を想定。
  */
-function summarizeActivityForDate(rows, listLimit) {
-  const kinds = {};
-  const hourly = {};
+function summarizeActivityForDate(
+  rows: ActivityEventWithMetadata[],
+  listLimit: number | null,
+): ActivitySummary {
+  const kinds: Partial<Record<ActivityKind, number>> = {};
+  const hourly: Partial<Record<ActivityKind, number[]>> = {};
   for (const r of rows) {
     kinds[r.kind] = (kinds[r.kind] || 0) + 1;
     if (!hourly[r.kind]) hourly[r.kind] = new Array(24).fill(0);
     const h = parseSqliteUtc(r.occurred_at)?.getHours();
-    if (Number.isFinite(h)) hourly[r.kind][h] += 1;
+    if (Number.isFinite(h)) hourly[r.kind]![h as number] += 1;
   }
   // 最新 listLimit 件 = rows の末尾から listLimit 件、 reverse して DESC に
   const sliced = listLimit == null
     ? [...rows].reverse()
     : rows.slice(-Math.max(0, listLimit)).reverse();
-  const items = sliced.map((r) => ({
+  const items: ActivityItem[] = sliced.map((r) => ({
     id: r.id,
     kind: r.kind,
     occurred_at: r.occurred_at,
@@ -316,21 +552,23 @@ function summarizeActivityForDate(rows, listLimit) {
   };
 }
 
-function parseMealAdditions(json) {
+function parseMealAdditions(json: string | null): MealAddition[] {
   if (!json) return [];
   try {
-    const arr = JSON.parse(json);
-    return Array.isArray(arr) ? arr : [];
+    const arr: unknown = JSON.parse(json);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((v): v is MealAddition => !!v && typeof v === 'object'
+      && typeof (v as { name?: unknown }).name === 'string');
   } catch {
     return [];
   }
 }
 
-function parseMealNutrients(json) {
+function parseMealNutrients(json: string | null): MealNutrients | null {
   if (!json) return null;
   try {
-    const o = JSON.parse(json);
-    return (o && typeof o === 'object') ? o : null;
+    const o: unknown = JSON.parse(json);
+    return (o && typeof o === 'object') ? (o as MealNutrients) : null;
   } catch {
     return null;
   }
@@ -343,7 +581,7 @@ function parseMealNutrients(json) {
 //
 // プロファイル未設定の場合は null を返し、 UI 側で「設定してください」 と促す。
 
-const ACTIVITY_FACTORS = {
+const ACTIVITY_FACTORS: Record<string, number> = {
   sedentary: 1.2,
   light: 1.375,
   moderate: 1.55,
@@ -351,12 +589,12 @@ const ACTIVITY_FACTORS = {
   very_active: 1.9,
 };
 
-function loadUserProfile(db) {
-  const s = getAppSettings(db);
-  const age = parseFloat(s['user.age']);
+function loadUserProfile(db: Db): UserProfile | null {
+  const s = getAppSettings(db) as Record<string, string | null | undefined>;
+  const age = parseFloat(s['user.age'] || '');
   const sex = (s['user.sex'] || '').trim().toLowerCase();
-  const weight = parseFloat(s['user.weight_kg']);
-  const height = parseFloat(s['user.height_cm']);
+  const weight = parseFloat(s['user.weight_kg'] || '');
+  const height = parseFloat(s['user.height_cm'] || '');
   const activity = (s['user.activity_level'] || 'moderate').trim().toLowerCase();
   if (!isFinite(age) || !isFinite(weight) || !isFinite(height) || (sex !== 'male' && sex !== 'female')) {
     return null;
@@ -364,13 +602,16 @@ function loadUserProfile(db) {
   return { age, sex, weight_kg: weight, height_cm: height, activity_level: activity };
 }
 
-function computeBmrMifflin(profile) {
+function computeBmrMifflin(profile: UserProfile): number {
   // Mifflin-St Jeor
   const base = 10 * profile.weight_kg + 6.25 * profile.height_cm - 5 * profile.age;
   return profile.sex === 'male' ? base + 5 : base - 161;
 }
 
-function computeCaloricBalance(db, { intake, gpsDistanceM }) {
+function computeCaloricBalance(
+  db: Db,
+  { intake, gpsDistanceM }: { intake: number | null; gpsDistanceM: number },
+): CaloricBalance | null {
   const profile = loadUserProfile(db);
   if (!profile) return null;
   const bmr = Math.round(computeBmrMifflin(profile));
@@ -394,9 +635,12 @@ function computeCaloricBalance(db, { intake, gpsDistanceM }) {
 }
 
 // Haversine 距離 (m)。地球半径 6371008 m (mean)。短距離では誤差は数 cm 以下。
-function haversineMeters(a, b) {
+function haversineMeters(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): number {
   const R = 6_371_008;
-  const toRad = (d) => (d * Math.PI) / 180;
+  const toRad = (d: number): number => (d * Math.PI) / 180;
   const dLat = toRad(b.lat - a.lat);
   const dLon = toRad(b.lon - a.lon);
   const sa = Math.sin(dLat / 2);
@@ -420,7 +664,7 @@ function haversineMeters(a, b) {
  * 距離は連続する 2 点間 haversine の和。jitter 込みなので「歩いた距離」より
  * やや大きめになるが、概算用途なら十分。
  */
-export function summarizeGpsForDate(points) {
+export function summarizeGpsForDate(points: GpsPointRow[] | null | undefined): GpsSummary {
   if (!points || points.length === 0) {
     return {
       points: 0,
@@ -435,8 +679,8 @@ export function summarizeGpsForDate(points) {
       last_at: null,
     };
   }
-  const devices = new Set();
-  const hourSet = new Set();
+  const devices = new Set<string>();
+  const hourSet = new Set<number>();
   let minLat = +Infinity, maxLat = -Infinity;
   let minLon = +Infinity, maxLon = -Infinity;
   let rawPublishes = 0;
@@ -445,7 +689,7 @@ export function summarizeGpsForDate(points) {
   // 時系列でつないで haversine を取ると、 端末間で 100km 級の幻 jump が
   // 「移動」 として加算されてしまう (例: test-dev と iphone を混ぜた時の
   // 107km 誤計上)。 device ごとに run を分ければこの誤計上は起きない。
-  const byDevice = new Map();
+  const byDevice = new Map<string, GpsPointRow[]>();
   for (const p of points) {
     const dev = p.device_id || '(none)';
     if (p.device_id) devices.add(p.device_id);
@@ -454,15 +698,15 @@ export function summarizeGpsForDate(points) {
     if (p.lon < minLon) minLon = p.lon;
     if (p.lon > maxLon) maxLon = p.lon;
     const h = parseSqliteUtc(p.recorded_at)?.getHours();
-    if (Number.isFinite(h)) hourSet.add(h);
+    if (Number.isFinite(h)) hourSet.add(h as number);
     rawPublishes += Number.isFinite(p.samples_count) && p.samples_count > 0 ? p.samples_count : 1;
     if ((p.samples_count || 1) > 1) compressedSegments++;
     if (!byDevice.has(dev)) byDevice.set(dev, []);
-    byDevice.get(dev).push(p);
+    byDevice.get(dev)!.push(p);
   }
   let dist = 0;
   for (const list of byDevice.values()) {
-    let prev = null;
+    let prev: GpsPointRow | null = null;
     for (const p of list) {
       if (prev) {
         // accuracy なし or > 200m の点は連続性を信頼しない
@@ -492,6 +736,49 @@ export function summarizeGpsForDate(points) {
   };
 }
 
+// ─── GitHub API 連携 ──────────────────────────────────────────────
+
+interface GithubCommit {
+  repo: string;
+  sha: string;
+  message: string;
+  author: string;
+  created_at: string;
+  url: string;
+}
+
+export interface GithubActivityResult {
+  commits?: GithubCommit[];
+  errors?: string[];
+  fetched_at?: string;
+  error?: string;
+}
+
+interface GithubApiCommit {
+  sha?: string;
+  html_url?: string;
+  commit?: {
+    message?: string;
+    author?: { name?: string; date?: string };
+    committer?: { date?: string };
+  };
+  author?: { login?: string };
+  repository?: { full_name?: string };
+  _repo?: string;
+}
+
+interface GithubSearchResponse {
+  items?: GithubApiCommit[];
+}
+
+export interface FetchGithubActivityArgs {
+  token?: string | null;
+  user?: string | null;
+  repos?: string[] | null;
+  dateStr: string;
+  timeoutMs?: number;
+}
+
 /**
  * Fetch a user's commits authored on `dateStr`.
  * - If `repos` is supplied: per-repo commits API (works for public repos
@@ -501,10 +788,12 @@ export function summarizeGpsForDate(points) {
  * The events API was avoided because /users/{user}/events does not include
  * commit lists in its payload (only ref/head/before SHAs).
  */
-export async function fetchGithubActivity({ token, user, repos, dateStr, timeoutMs = 30_000 }) {
+export async function fetchGithubActivity({
+  token, user, repos, dateStr, timeoutMs = 30_000,
+}: FetchGithubActivityArgs): Promise<GithubActivityResult | null> {
   if (!user) return null;
 
-  const headers = {
+  const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'Memoria-diary/0.1',
@@ -515,8 +804,8 @@ export async function fetchGithubActivity({ token, user, repos, dateStr, timeout
   const until = `${dateStr}T23:59:59Z`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
-  const commits = [];
-  const errors = [];
+  const commits: GithubCommit[] = [];
+  const errors: string[] = [];
 
   try {
     if (repos && repos.length > 0) {
@@ -531,7 +820,7 @@ export async function fetchGithubActivity({ token, user, repos, dateStr, timeout
           errors.push(`${repo}: ${res.status} ${res.statusText}`);
           continue;
         }
-        const arr = await res.json();
+        const arr = await res.json() as GithubApiCommit[];
         for (const c of arr) {
           commits.push(formatCommit({ ...c, _repo: repo }));
         }
@@ -545,7 +834,7 @@ export async function fetchGithubActivity({ token, user, repos, dateStr, timeout
         const body = (await res.text()).slice(0, 300);
         return { error: `github API ${res.status}: ${body}` };
       }
-      const data = await res.json();
+      const data = await res.json() as GithubSearchResponse;
       for (const c of (data.items || [])) {
         commits.push(formatCommit({ ...c, _repo: c.repository?.full_name }));
       }
@@ -555,14 +844,14 @@ export async function fetchGithubActivity({ token, user, repos, dateStr, timeout
       errors: errors.length ? errors : undefined,
       fetched_at: new Date().toISOString(),
     };
-  } catch (e) {
-    return { error: e.message };
+  } catch (e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
   } finally {
     clearTimeout(timer);
   }
 }
 
-function formatCommit(c) {
+function formatCommit(c: GithubApiCommit): GithubCommit {
   const fullMsg = c.commit?.message || '';
   return {
     repo: c._repo || c.repository?.full_name || '',
@@ -574,13 +863,47 @@ function formatCommit(c) {
   };
 }
 
+interface GithubProbe {
+  name: string;
+  url: string;
+  status?: number;
+  ok?: boolean;
+  body?: string;
+  error?: string;
+}
+
+interface TokenFormat {
+  classic: boolean;
+  fine_grained: boolean;
+  length: number;
+}
+
+export interface PingGithubResult {
+  ok: boolean;
+  status?: number;
+  login?: string;
+  scopes?: string;
+  hint?: string;
+  error?: string;
+  token_format: TokenFormat;
+  probes: GithubProbe[];
+}
+
+export interface PingGithubArgs {
+  token?: string | null;
+  user?: string | null;
+  timeoutMs?: number;
+}
+
 /**
  * Probe a few GitHub endpoints to figure out *why* a PAT is failing — a single
  * /user call can return 401 simply because a fine-grained PAT lacks Account
  * permissions, even though the token itself is valid.
  */
-export async function pingGithub({ token, user, timeoutMs = 12_000 }) {
-  const headers = {
+export async function pingGithub({
+  token, user, timeoutMs = 12_000,
+}: PingGithubArgs): Promise<PingGithubResult> {
+  const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'Memoria-diary/0.1',
@@ -589,22 +912,22 @@ export async function pingGithub({ token, user, timeoutMs = 12_000 }) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
 
-  const fmt = {
+  const fmt: TokenFormat = {
     classic: !!(token && /^gh[pousr]_/.test(token)),
     fine_grained: !!(token && /^github_pat_/.test(token)),
     length: token ? token.length : 0,
   };
 
-  const probes = [];
-  async function tryProbe(name, url) {
+  const probes: GithubProbe[] = [];
+  async function tryProbe(name: string, url: string): Promise<Response | null> {
     try {
       const res = await fetch(url, { headers, signal: ac.signal });
       let body = '';
       if (!res.ok) body = (await res.text()).slice(0, 200);
       probes.push({ name, url, status: res.status, ok: res.ok, body });
       return res;
-    } catch (e) {
-      probes.push({ name, url, error: e.message });
+    } catch (e: unknown) {
+      probes.push({ name, url, error: e instanceof Error ? e.message : String(e) });
       return null;
     }
   }
@@ -617,7 +940,7 @@ export async function pingGithub({ token, user, timeoutMs = 12_000 }) {
     }
 
     if (userRes?.ok) {
-      const data = await userRes.json();
+      const data = await userRes.json() as { login?: string };
       return {
         ok: true,
         login: data.login,
@@ -630,14 +953,19 @@ export async function pingGithub({ token, user, timeoutMs = 12_000 }) {
     // Build a diagnostic hint based on what failed.
     const hint = inferAuthHint({ probes, fmt });
     return { ok: false, status: userRes?.status, hint, token_format: fmt, probes };
-  } catch (e) {
-    return { ok: false, error: e.message, token_format: fmt, probes };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+      token_format: fmt,
+      probes,
+    };
   } finally {
     clearTimeout(timer);
   }
 }
 
-function inferAuthHint({ probes, fmt }) {
+function inferAuthHint({ probes, fmt }: { probes: GithubProbe[]; fmt: TokenFormat }): string {
   const userProbe = probes.find(p => p.name === 'user');
   const rate = probes.find(p => p.name === 'rate_limit');
   const userPub = probes.find(p => p.name === 'user_public');
@@ -663,27 +991,33 @@ function inferAuthHint({ probes, fmt }) {
 // Per-day bookmark lists used by the diary view. `limit/offset` paginate;
 // `null` limit returns everything (used by the highlights prompt builder
 // inside aggregateDay so claude still sees the full picture).
-export function bookmarksForDate(db, dateStr, { limit = null, offset = 0 } = {}) {
+export function bookmarksForDate(
+  db: Db,
+  dateStr: string,
+  { limit = null, offset = 0 }: { limit?: number | null; offset?: number } = {},
+): BookmarksForDateResult {
   const limitClause = limit == null ? '' : ' LIMIT ? OFFSET ?';
-  const args = limit == null ? [dateStr] : [dateStr, Number(limit) || 0, Number(offset) || 0];
+  const args: (string | number)[] = limit == null
+    ? [dateStr]
+    : [dateStr, Number(limit) || 0, Number(offset) || 0];
 
-  const createdTotal = db.prepare(`
+  const createdTotal = (db.prepare(`
     SELECT COUNT(*) AS n FROM bookmarks WHERE date(created_at, 'localtime') = ?
-  `).get(dateStr).n;
+  `).get(dateStr) as { n: number }).n;
   const created = db.prepare(`
     SELECT id, url, title, summary, created_at
     FROM bookmarks
     WHERE date(created_at, 'localtime') = ?
     ORDER BY created_at ASC
     ${limitClause}
-  `).all(...args);
+  `).all(...args) as BookmarkCreatedRow[];
 
-  const accessedTotal = db.prepare(`
+  const accessedTotal = (db.prepare(`
     SELECT COUNT(DISTINCT b.id) AS n
     FROM accesses a
     JOIN bookmarks b ON b.id = a.bookmark_id
     WHERE date(a.accessed_at, 'localtime') = ?
-  `).get(dateStr).n;
+  `).get(dateStr) as { n: number }).n;
   const accessedRows = db.prepare(`
     SELECT b.id, b.url, b.title,
            MIN(a.accessed_at) AS first_accessed_at,
@@ -695,7 +1029,7 @@ export function bookmarksForDate(db, dateStr, { limit = null, offset = 0 } = {})
     GROUP BY b.id
     ORDER BY access_count DESC, last_accessed_at DESC
     ${limitClause}
-  `).all(...args);
+  `).all(...args) as BookmarkAccessedRow[];
 
   return {
     created, accessed: accessedRows,
@@ -704,14 +1038,19 @@ export function bookmarksForDate(db, dateStr, { limit = null, offset = 0 } = {})
   };
 }
 
+export interface GithubByRepo {
+  repos: { repo: string; count: number; samples: { sha: string; message: string }[] }[];
+  total: number;
+}
+
 /** GitHub commits grouped by repository: { byRepo: {repo: count}, total, repos: [...] }. */
-export function summarizeGithubByRepo(github) {
+export function summarizeGithubByRepo(github: { commits?: GithubCommit[] } | null | undefined): GithubByRepo {
   const commits = github?.commits || [];
-  const byRepo = new Map();
+  const byRepo = new Map<string, { count: number; samples: { sha: string; message: string }[] }>();
   for (const c of commits) {
     const r = c.repo || '(unknown)';
     if (!byRepo.has(r)) byRepo.set(r, { count: 0, samples: [] });
-    const cur = byRepo.get(r);
+    const cur = byRepo.get(r)!;
     cur.count += 1;
     if (cur.samples.length < 3) cur.samples.push({ sha: c.sha, message: c.message });
   }
@@ -721,7 +1060,16 @@ export function summarizeGithubByRepo(github) {
   return { repos, total: commits.length };
 }
 
-const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts }) => [
+interface WorkContentPromptArgs {
+  dateStr: string;
+  urlList: string;
+  activityList: string;
+  totalEvents: number;
+  totalDomains: number;
+  activityCounts: string | null;
+}
+
+const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts }: WorkContentPromptArgs): string => [
   `あなたは ${dateStr} の「作業内容」セクションを書きます。`,
   'ブラウザ閲覧履歴 (URL + 時刻) と開発活動 (git commit / Claude Code への指示) を両方読み、',
   '**大まかな時間帯**で何をしていたかを 1 文でまとめ、',
@@ -784,13 +1132,18 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, tota
   activityList || '(なし)',
 ].join('\n');
 
+export interface WorkMinutesExtraction {
+  content: string;
+  workMinutes: number | null;
+}
+
 /**
  * Pull `WORK_MINUTES: <int>` off the tail of the Sonnet output and return both
  * the cleaned narrative and the parsed minutes. Sonnet is asked to put this
  * line at the very end with a blank line before it; we tolerate any trailing
  * whitespace and missing blank line. Anything outside [0, 1440] is dropped.
  */
-export function extractWorkMinutes(raw) {
+export function extractWorkMinutes(raw: string | null | undefined): WorkMinutesExtraction {
   if (!raw) return { content: '', workMinutes: null };
   const text = String(raw);
   // Match the last WORK_MINUTES line (case-insensitive, allow whitespace).
@@ -807,7 +1160,7 @@ export function extractWorkMinutes(raw) {
   return { content: cleaned, workMinutes: valid ? minutes : null };
 }
 
-function formatGpsBlock(metrics) {
+function formatGpsBlock(metrics: AggregatedDay | null | undefined): string {
   const g = metrics?.gps;
   if (!g || !g.points) return '(GPS 記録なし)';
   const km = (g.distance_meters / 1000).toFixed(2);
@@ -830,7 +1183,7 @@ function formatGpsBlock(metrics) {
   return lines.join('\n');
 }
 
-function formatDowntimeBlock(metrics) {
+function formatDowntimeBlock(metrics: AggregatedDay | null | undefined): string {
   const dts = metrics?.downtimes || [];
   if (!dts.length) return '(なし)';
   return dts.map(d => {
@@ -841,11 +1194,11 @@ function formatDowntimeBlock(metrics) {
   }).join('\n');
 }
 
-function formatCaloricBalanceBlock(metrics) {
+function formatCaloricBalanceBlock(metrics: AggregatedDay | null | undefined): string {
   const cb = metrics?.caloric_balance;
   if (!cb) return '(ユーザプロファイル未設定 — 設定 → AI / 連携 で年齢 / 性別 / 体重 / 身長 / 活動レベルを入れてください)';
   const p = cb.profile;
-  const lines = [];
+  const lines: string[] = [];
   lines.push(`プロファイル: ${p.sex === 'male' ? '男性' : '女性'} / ${p.age}歳 / ${p.weight_kg}kg / ${p.height_cm}cm / 活動 ${p.activity_level}`);
   lines.push(`基礎代謝 (BMR): 約 ${cb.bmr} kcal`);
   lines.push(`適正カロリー (TDEE = BMR × 活動係数): 約 ${cb.tdee} kcal`);
@@ -855,18 +1208,18 @@ function formatCaloricBalanceBlock(metrics) {
     lines.push(`摂取カロリー (食事合計): 約 ${cb.intake} kcal`);
     const diffT = cb.diff_vs_target;
     const diffE = cb.diff_vs_expenditure;
-    lines.push(`摂取 - 適正: ${diffT > 0 ? '+' : ''}${diffT} kcal`);
-    lines.push(`摂取 - 消費 (収支): ${diffE > 0 ? '+' : ''}${diffE} kcal (プラス = 余剰、 マイナス = 不足)`);
+    lines.push(`摂取 - 適正: ${(diffT ?? 0) > 0 ? '+' : ''}${diffT} kcal`);
+    lines.push(`摂取 - 消費 (収支): ${(diffE ?? 0) > 0 ? '+' : ''}${diffE} kcal (プラス = 余剰、 マイナス = 不足)`);
   } else {
     lines.push('摂取カロリー: (食事の記録なし)');
   }
   return lines.join('\n');
 }
 
-function formatMealsBlock(metrics) {
+function formatMealsBlock(metrics: AggregatedDay | null | undefined): string {
   const meals = metrics?.meals || [];
   if (!meals.length) return '(食事の記録なし)';
-  const lines = meals.map((m) => {
+  const lines: string[] = meals.map((m) => {
     const t = formatLocalHm(m.eaten_at); // localtime HH:MM (UTC ISO を local 化)
     const desc = m.description || '(未記入)';
     const cal = (typeof m.total_calories === 'number') ? `${m.total_calories} kcal` : '— kcal';
@@ -880,22 +1233,22 @@ function formatMealsBlock(metrics) {
     const addsLine = adds ? ` (追加: ${adds})` : '';
     return `- ${t} ${desc} — ${cal}${loc}${addsLine}`;
   });
-  const total = (typeof metrics.meals_total_calories === 'number') ? metrics.meals_total_calories : null;
+  const total = (typeof metrics?.meals_total_calories === 'number') ? metrics.meals_total_calories : null;
   if (total != null) lines.push(`総カロリー (推定): 約 ${total} kcal`);
-  const nut = metrics.meals_nutrients;
+  const nut = metrics?.meals_nutrients;
   if (nut) {
-    const fmt = (k, unit) => (typeof nut[k] === 'number' && isFinite(nut[k]))
+    const fmt = (k: string, unit: string): string => (typeof nut[k] === 'number' && isFinite(nut[k]))
       ? `${Math.round(nut[k] * 10) / 10}${unit}` : '—';
     lines.push(`栄養素合計 (推定): P ${fmt('protein_g', 'g')} / F ${fmt('fat_g', 'g')} / C ${fmt('carbs_g', 'g')} / 食物繊維 ${fmt('fiber_g', 'g')} / 糖質 ${fmt('sugar_g', 'g')} / 塩分 ${fmt('sodium_mg', 'mg')}`);
-    if (metrics.meals_pfc_label) lines.push(`PFC バランス: ${metrics.meals_pfc_label}`);
+    if (metrics?.meals_pfc_label) lines.push(`PFC バランス: ${metrics.meals_pfc_label}`);
     lines.push('※ 栄養素は写真 + 食品名から AI が推定した概数。 厳密な値ではない。');
   }
   return lines.join('\n');
 }
 
-function formatActivityBlock(activity) {
+function formatActivityBlock(activity: ActivitySummary | null | undefined): string {
   if (!activity || !activity.total) return '(なし)';
-  const lines = [];
+  const lines: string[] = [];
   const counts = formatActivityCounts(activity);
   if (counts) lines.push(`- 合計: ${counts}`);
   // 最大 30 件まで時刻昇順で並べる (highlights プロンプトのサイズ管理)。
@@ -919,14 +1272,30 @@ function formatActivityBlock(activity) {
   return lines.join('\n');
 }
 
-function formatLocalHm(iso) {
+function formatLocalHm(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso).slice(11, 16);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics }) => [
+interface BookmarkSummary {
+  created: number;
+  accessed: number;
+  topDomains: string[];
+}
+
+interface HighlightsPromptArgs {
+  dateStr: string;
+  workContent: string;
+  githubByRepo: GithubByRepo;
+  bookmarkSummary: BookmarkSummary;
+  digs: DigSummary[];
+  notes: string | null | undefined;
+  metrics: AggregatedDay;
+}
+
+const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics }: HighlightsPromptArgs): string => [
   `あなたは ${dateStr} の「ハイライト」セクションを書きます。`,
   '以下の情報を統合し、その日の重要なポイントを箇条書きで 3〜6 個。',
   '事実ベース。憶測や創作はしない。重要度の高い順。',
@@ -981,108 +1350,22 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   '- ハイライト2',
 ].join('\n');
 
-// Legacy single-prompt template — retained for fallback if a stage fails so we
-// can still return some narrative.
-const DIARY_PROMPT_TEMPLATE = ({ dateStr, metrics, github, notes }) => {
-  const hourlyTable = metrics.hourly_visits
-    .map((n, h) => `${String(h).padStart(2, '0')}:00 → ${n}`)
-    .filter((_, h) => metrics.hourly_visits[h] > 0)
-    .join(', ');
-  const domainTable = metrics.top_domains
-    .map(d => {
-      const display = d.site_name ? `${d.site_name} (${d.domain})` : d.domain;
-      const desc = d.description ? ` — ${d.description}` : '';
-      return `${display} ${d.count}件 [時間帯 ${d.active_hours.join(',')}]${desc}`;
-    })
-    .join('\n');
-  const githubBlock = github?.commits?.length
-    ? github.commits.map(c => `- [${c.repo} ${c.sha}] ${c.message}`).join('\n')
-    : github?.error
-      ? `(GitHub 取得失敗: ${github.error})`
-      : '(GitHub commit なし)';
-  const created = metrics.bookmarks?.created || [];
-  const accessed = metrics.bookmarks?.accessed || [];
-  const totalBookmarks = created.length + accessed.length;
-  // When bookmark count balloons, the prompt becomes too long and the per-item
-  // detail dilutes the narrative — fall back to a domain-only summary.
-  const BOOKMARK_DETAIL_THRESHOLD = 10;
-  let bookmarkSection;
-  if (totalBookmarks === 0) {
-    bookmarkSection = '新規・再訪したブックマーク: (なし)';
-  } else if (totalBookmarks > BOOKMARK_DETAIL_THRESHOLD) {
-    const allDomains = new Map();
-    for (const b of [...created, ...accessed]) {
-      try {
-        const dom = new URL(b.url).hostname.toLowerCase();
-        allDomains.set(dom, (allDomains.get(dom) || 0) + (b.access_count || 1));
-      } catch {}
-    }
-    const domLines = [...allDomains.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12)
-      .map(([d, n]) => `- ${d} (${n} 件)`)
-      .join('\n');
-    bookmarkSection = [
-      `ブックマーク総数: 新規 ${created.length} 件 + 再訪 ${accessed.length} 件 = ${totalBookmarks} 件`,
-      '(個別タイトルは省略。ドメイン分布から作業内容を推察してください)',
-      domLines,
-    ].join('\n');
-  } else {
-    const createdBlock = created.length
-      ? created.map(b => `- ${b.title} (${b.url})${b.summary ? '\n  ' + b.summary.slice(0, 200) : ''}`).join('\n')
-      : '(新規ブックマークなし)';
-    const accessedBlock = accessed.length
-      ? accessed.map(b => `- ${b.title} ×${b.access_count} (${b.url})`).join('\n')
-      : '(再訪したブックマークなし)';
-    bookmarkSection = `新規ブックマーク:\n${createdBlock}\n\n再訪したブックマーク:\n${accessedBlock}`;
-  }
-  const notesBlock = notes ? `\nUSER NOTES (反映してください):\n${notes}\n` : '';
-  return [
-    `あなたは ${dateStr} の活動データから 1 日の日報を書きます。`,
-    '事実だけを淡々と。憶測や創作はせず、データから読み取れる活動のみを書きます。',
-    '',
-    '出力フォーマット (markdown):',
-    '## 全体像',
-    '一段落で「何時頃から何時頃まで何をしていた風」かをまとめる。',
-    '## 時間帯別',
-    '- HH:00 〜 HH:00: ドメインから推測される作業',
-    '## ブックマーク',
-    '- 新規追加・再訪したブックマークから読み取れる関心',
-    '## ハイライト',
-    '- GitHub commit、印象的な調査、ニュース等',
-    '',
-    `日付: ${dateStr}`,
-    `総アクセス: ${metrics.total_events}`,
-    `ユニークドメイン: ${metrics.unique_domains}`,
-    `アクティブ時間帯: ${hourlyTable || '(なし)'}`,
-    '',
-    'TOP DOMAINS:',
-    domainTable || '(なし)',
-    '',
-    bookmarkSection,
-    '',
-    'GITHUB COMMITS:',
-    githubBlock,
-    notesBlock,
-  ].join('\n');
-};
-
 /**
  * Build the URL list for the work-content prompt. Format: "HH:MM <url>" per line,
  * deduped consecutively (collapse runs of the same URL within 2 minutes).
  */
-function buildUrlList(db, dateStr) {
-  const events = visitEventsForDate(db, dateStr);
+function buildUrlList(db: Db, dateStr: string): string {
+  const events = visitEventsForDate(db, dateStr) as VisitEventRow[];
   if (events.length === 0) {
     // Fall back to page_visits where last_seen is the date.
     const visits = db.prepare(`
       SELECT v.url, v.last_seen_at FROM page_visits v
       WHERE date(v.last_seen_at, 'localtime') = ?
       ORDER BY v.last_seen_at ASC
-    `).all(dateStr);
+    `).all(dateStr) as { url: string; last_seen_at: string }[];
     return visits.map(v => formatUrlLine(v.last_seen_at, v.url)).join('\n');
   }
-  const lines = [];
+  const lines: string[] = [];
   let lastUrl = '';
   let lastTs = 0;
   for (const e of events) {
@@ -1096,7 +1379,7 @@ function buildUrlList(db, dateStr) {
   return lines.slice(-800).join('\n');
 }
 
-function formatUrlLine(ts, url) {
+function formatUrlLine(ts: string, url: string): string {
   // ts is a SQLite UTC datetime ('YYYY-MM-DD HH:MM:SS'). Parse as UTC then
   // emit the local HH:MM so claude sees the user's wall-clock time, not
   // UTC offset by the local timezone.
@@ -1107,8 +1390,11 @@ function formatUrlLine(ts, url) {
   return `${hh}:${mm} ${url}`;
 }
 
-function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
-  const tail = [];
+function appendMemoAndImprove(
+  prompt: string,
+  { globalMemo, improve }: { globalMemo?: string | null; improve?: string | null } = {},
+): string {
+  const tail: string[] = [];
   if (globalMemo && globalMemo.trim()) {
     tail.push('', '## ユーザの常設メモ (毎回参照)', globalMemo.trim());
   }
@@ -1116,6 +1402,15 @@ function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
     tail.push('', '## このターンだけの改善指示 (最優先)', improve.trim());
   }
   return tail.length > 0 ? `${prompt}\n${tail.join('\n')}` : prompt;
+}
+
+export interface GenerateWorkContentArgs {
+  db: Db;
+  dateStr: string;
+  metrics: AggregatedDay;
+  globalMemo?: string | null;
+  improve?: string | null;
+  timeoutMs?: number;
 }
 
 /**
@@ -1128,7 +1423,9 @@ function appendMemoAndImprove(prompt, { globalMemo, improve } = {}) {
  * 時系列で渡し、 ブラウザ履歴が薄い日 (スマホ開発等) でも作業時間が
  * 適切に推定されるようにする。
  */
-export async function generateWorkContent({ db, dateStr, metrics, globalMemo, improve, timeoutMs = 180_000 }) {
+export async function generateWorkContent({
+  db, dateStr, metrics, globalMemo, improve, timeoutMs = 180_000,
+}: GenerateWorkContentArgs): Promise<WorkMinutesExtraction> {
   const urlList = buildUrlList(db, dateStr);
   const activityList = buildActivityList(metrics.activity);
   // どちらか片方でもシグナルがあれば走らせる (スマホ開発日などは URL が空でも commit がある)。
@@ -1152,7 +1449,7 @@ export async function generateWorkContent({ db, dateStr, metrics, globalMemo, im
  * 形式: "HH:MM [git/cc] <短い content>" を時刻昇順で並べる。
  * 上限 800 行 (URL 側と揃える) でトリム — 直近側を残す。
  */
-function buildActivityList(activity) {
+function buildActivityList(activity: ActivitySummary | null | undefined): string {
   if (!activity || !activity.items || activity.items.length === 0) return '';
   // items は listLimit 切り取り済 (frontend 用) なので、 prompt 用には全件欲しい。
   // ただし aggregateDay の listLimit=null 経路 (highlights 用) でないと不足する場合あり。
@@ -1176,16 +1473,32 @@ function buildActivityList(activity) {
   return lines.slice(-800).join('\n');
 }
 
-function formatActivityCounts(activity) {
+function formatActivityCounts(activity: ActivitySummary | null | undefined): string | null {
   if (!activity || !activity.total) return null;
-  const parts = [];
+  const parts: string[] = [];
   if (activity.kinds.git_commit) parts.push(`git commit ${activity.kinds.git_commit} 件`);
   if (activity.kinds.claude_code_prompt) parts.push(`Claude Code 指示 ${activity.kinds.claude_code_prompt} 件`);
   return parts.join(' / ') || `${activity.total} 件`;
 }
 
+export interface GenerateHighlightsArgs {
+  dateStr: string;
+  workContent: string;
+  githubByRepo: GithubByRepo;
+  bookmarkSummary: BookmarkSummary;
+  digs: DigSummary[];
+  notes: string | null | undefined;
+  metrics: AggregatedDay;
+  globalMemo?: string | null;
+  improve?: string | null;
+  timeoutMs?: number;
+}
+
 /** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits + dig into highlights. */
-export async function generateHighlights({ dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics, globalMemo, improve, timeoutMs = 240_000 }) {
+export async function generateHighlights({
+  dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
+  globalMemo, improve, timeoutMs = 240_000,
+}: GenerateHighlightsArgs): Promise<string> {
   const base = HIGHLIGHTS_PROMPT({
     dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
   });
@@ -1193,11 +1506,30 @@ export async function generateHighlights({ dateStr, workContent, githubByRepo, b
   return await runLlm({ task: 'diary_highlights', prompt, timeoutMs });
 }
 
+export interface GenerateDiaryArgs {
+  db: Db;
+  dateStr: string;
+  metrics: AggregatedDay;
+  github?: GithubActivityResult | null;
+  notes?: string | null;
+}
+
+export interface GenerateDiaryResult {
+  workContent: string;
+  workMinutes?: number | null;
+  githubByRepo: GithubByRepo;
+  highlights: string;
+  summary: string;
+  digs?: DigSummary[];
+}
+
 /**
  * Top-level diary generator orchestrating the three stages. Returns the
  * structured pieces; the caller persists them.
  */
-export async function generateDiary({ db, dateStr, metrics, github, notes }) {
+export async function generateDiary({
+  db, dateStr, metrics, github, notes,
+}: GenerateDiaryArgs): Promise<GenerateDiaryResult> {
   const githubByRepo = summarizeGithubByRepo(github);
   const bookmarkSummary = buildBookmarkSummary(metrics);
 
@@ -1224,12 +1556,12 @@ export async function generateDiary({ db, dateStr, metrics, github, notes }) {
   return { workContent, workMinutes, githubByRepo, highlights, summary, digs };
 }
 
-function buildBookmarkSummary(metrics) {
+function buildBookmarkSummary(metrics: AggregatedDay): BookmarkSummary {
   const created = metrics.bookmarks?.created || [];
   const accessed = metrics.bookmarks?.accessed || [];
-  const domSet = new Set();
+  const domSet = new Set<string>();
   for (const b of [...created, ...accessed]) {
-    try { domSet.add(new URL(b.url).hostname); } catch {}
+    try { domSet.add(new URL(b.url).hostname); } catch { /* ignore */ }
   }
   return {
     created: created.length,
@@ -1238,8 +1570,18 @@ function buildBookmarkSummary(metrics) {
   };
 }
 
-function composeSummary({ workContent, githubByRepo, highlights, digs, activity }) {
-  const parts = [];
+interface ComposeSummaryArgs {
+  workContent: string;
+  githubByRepo: GithubByRepo;
+  highlights: string;
+  digs: DigSummary[];
+  activity: ActivitySummary;
+}
+
+function composeSummary({
+  workContent, githubByRepo, highlights, digs, activity,
+}: ComposeSummaryArgs): string {
+  const parts: string[] = [];
   if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
   if (digs && digs.length > 0) {
     const digLines = digs.map(d => {
@@ -1283,7 +1625,14 @@ function composeSummary({ workContent, githubByRepo, highlights, digs, activity 
 
 // ── weekly --------------------------------------------------------------
 
-const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }) => [
+interface WeeklyPromptArgs {
+  weekStart: string;
+  weekEnd: string;
+  dailyBlock: string;
+  githubBlock: string;
+}
+
+const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }: WeeklyPromptArgs): string => [
   `あなたは ${weekStart} から ${weekEnd} までの「週報」を書きます。`,
   '7 日分の日報と GitHub コミットヒストリから、週全体での実作業を統合してください。',
   '',
@@ -1309,11 +1658,27 @@ const WEEKLY_PROMPT = ({ weekStart, weekEnd, dailyBlock, githubBlock }) => [
   githubBlock,
 ].join('\n');
 
+export interface DailyDiaryEntry {
+  date: string;
+  summary?: string | null;
+  work_content?: string | null;
+}
+
+export interface GenerateWeeklyArgs {
+  weekStart: string;
+  weekEnd: string;
+  dailyDiaries: DailyDiaryEntry[];
+  githubByRepo: GithubByRepo;
+  timeoutMs?: number;
+}
+
 /**
  * Generate a weekly narrative from 7 daily diaries + commits.
  * The caller pre-fetches both via the GitHub API (per-repo commits API).
  */
-export async function generateWeekly({ weekStart, weekEnd, dailyDiaries, githubByRepo, timeoutMs = 360_000 }) {
+export async function generateWeekly({
+  weekStart, weekEnd, dailyDiaries, githubByRepo, timeoutMs = 360_000,
+}: GenerateWeeklyArgs): Promise<string> {
   const dailyBlock = dailyDiaries.map(d => {
     const head = d.summary || d.work_content || '(日報なし)';
     return `### ${d.date}\n${(head || '').slice(0, 1500)}`;
@@ -1328,10 +1693,25 @@ export async function generateWeekly({ weekStart, weekEnd, dailyDiaries, githubB
   return await runLlm({ task: 'diary_weekly', prompt, timeoutMs });
 }
 
+export interface FetchGithubRangeArgs {
+  token?: string | null;
+  user?: string | null;
+  repos?: string[] | null;
+  since: string;
+  until: string;
+  timeoutMs?: number;
+}
+
+export interface FetchGithubRangeResult extends GithubByRepo {
+  commits: GithubCommit[];
+}
+
 /** Fetch a user's commits across `repos` in a date range, grouped by repo. */
-export async function fetchGithubRange({ token, user, repos, since, until, timeoutMs = 30_000 }) {
-  if (!user || !repos?.length) return { commits: [], repos: [] };
-  const headers = {
+export async function fetchGithubRange({
+  token, user, repos, since, until, timeoutMs = 30_000,
+}: FetchGithubRangeArgs): Promise<FetchGithubRangeResult> {
+  if (!user || !repos?.length) return { commits: [], repos: [], total: 0 };
+  const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'Memoria-diary/0.1',
@@ -1339,7 +1719,7 @@ export async function fetchGithubRange({ token, user, repos, since, until, timeo
   if (token) headers.Authorization = `Bearer ${token}`;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
-  const all = [];
+  const all: GithubCommit[] = [];
   try {
     for (const repo of repos) {
       const url = `https://api.github.com/repos/${repo}/commits`
@@ -1349,7 +1729,7 @@ export async function fetchGithubRange({ token, user, repos, since, until, timeo
         + `&per_page=100`;
       const res = await fetch(url, { headers, signal: ac.signal });
       if (!res.ok) continue;
-      const arr = await res.json();
+      const arr = await res.json() as GithubApiCommit[];
       for (const c of arr) all.push(formatCommit({ ...c, _repo: repo }));
     }
     return { commits: all, ...summarizeGithubByRepo({ commits: all }) };
@@ -1359,7 +1739,7 @@ export async function fetchGithubRange({ token, user, repos, since, until, timeo
 }
 
 /** YYYY-MM-DD in local time for a given Date instance (or now). */
-export function formatLocalDate(d = new Date()) {
+export function formatLocalDate(d: Date = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -1367,14 +1747,14 @@ export function formatLocalDate(d = new Date()) {
 }
 
 /** Date string for "yesterday" relative to the supplied moment. */
-export function yesterdayLocal(now = new Date()) {
+export function yesterdayLocal(now: Date = new Date()): string {
   const d = new Date(now);
   d.setDate(d.getDate() - 1);
   return formatLocalDate(d);
 }
 
 /** Monday → Sunday inclusive range that contains `dateStr`. */
-export function weekRangeFor(dateStr) {
+export function weekRangeFor(dateStr: string): { start: string; end: string } {
   const d = new Date(dateStr + 'T00:00:00');
   // Mon=1,...,Sun=7 (ISO). JS getDay: Sun=0,Mon=1,...
   const dow = d.getDay();
@@ -1387,7 +1767,7 @@ export function weekRangeFor(dateStr) {
 }
 
 /** Which week-of-month does `weekStart` fall in (1-based, by Mon). */
-export function weekOfMonth(weekStart) {
+export function weekOfMonth(weekStart: string): { month: string; weekInMonth: number } {
   const d = new Date(weekStart + 'T00:00:00');
   const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   // Find first Monday in the month containing weekStart's Monday.
@@ -1395,7 +1775,7 @@ export function weekOfMonth(weekStart) {
   const dow = firstDay.getDay();
   const firstMon = new Date(firstDay);
   firstMon.setDate(1 + ((dow === 0 ? 1 : (8 - dow) % 7)));
-  const diffDays = Math.round((d - firstMon) / 86400000);
+  const diffDays = Math.round((d.getTime() - firstMon.getTime()) / 86400000);
   const idx = Math.floor(diffDays / 7) + 1;
   return { month, weekInMonth: idx };
 }
