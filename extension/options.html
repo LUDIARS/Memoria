@@ -4,22 +4,59 @@
   <meta charset="utf-8" />
   <title>Memoria Options</title>
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 480px; margin: 24px auto; padding: 0 16px; color: #222; }
-    h1 { font-size: 18px; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 20px; }
+    h2 { font-size: 15px; margin: 24px 0 8px 0; padding-top: 8px; border-top: 1px solid #e3e5ea; }
+    p.help { font-size: 12px; color: #666; margin: 4px 0 12px 0; }
     label { display: block; margin: 12px 0 4px; font-size: 13px; }
-    input { width: 100%; padding: 8px; box-sizing: border-box; font-size: 14px; }
-    button { margin-top: 12px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
+    input[type="url"], input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { background: #f6f8fa; text-align: left; padding: 6px 8px; }
+    td { padding: 4px 8px; border-top: 1px solid #e3e5ea; vertical-align: middle; }
+    td input[type="text"] { padding: 4px 6px; font-size: 12px; }
+    .row-controls { display: flex; gap: 6px; }
+    button { padding: 8px 16px; font-size: 13px; cursor: pointer; border: 1px solid #ccd; background: #fff; border-radius: 4px; }
+    button.primary { background: #2a6df4; color: #fff; border-color: #2a6df4; }
+    button.danger { background: #fff; color: #c33; border-color: #fbb; }
     .saved { color: #2a7; margin-left: 8px; font-size: 13px; }
+    .add-btn { font-size: 12px; padding: 4px 10px; margin-top: 4px; }
+    .col-narrow { width: 1%; white-space: nowrap; }
   </style>
 </head>
 <body>
   <h1>Memoria 設定</h1>
-  <label for="server">Memoria サーバー URL</label>
+
+  <h2>サーバー URL</h2>
   <input id="server" type="url" placeholder="http://localhost:5180" />
-  <div>
-    <button id="save">保存</button>
-    <span id="msg" class="saved"></span>
-  </div>
+
+  <h2>🧠 AI チャットドメイン (Note 化対象)</h2>
+  <p class="help">これらのドメインを開いているときに紫の Note 化ボタンが追加表示されます。</p>
+  <table>
+    <thead><tr><th>ホスト</th><th>source</th><th>有効</th><th class="col-narrow"></th></tr></thead>
+    <tbody id="chatRows"></tbody>
+  </table>
+  <button class="add-btn" id="addChat">+ ドメイン追加</button>
+
+  <h2>🚀 実装自慢ドラフト ルール</h2>
+  <p class="help">ホストパターン (例: <code>github.com</code>) + キーワード (URL / タイトル / 本文に 1 つでも含まれれば候補)。 該当するときだけ黄色の「実装自慢として展開」 ボタンが出ます。</p>
+  <table>
+    <thead><tr><th>ラベル</th><th>ホスト</th><th>キーワード (カンマ区切り)</th><th>有効</th><th class="col-narrow"></th></tr></thead>
+    <tbody id="implRows"></tbody>
+  </table>
+  <button class="add-btn" id="addImpl">+ ルール追加</button>
+
+  <h2>🛒 ショッピングドメイン (買い物タスク)</h2>
+  <p class="help">これらのドメインで緑の「タスク (ほしいものリスト) に追加」 ボタンが出ます。 押すと <code>category=買い物</code> のタスクが登録されます。</p>
+  <table>
+    <thead><tr><th>ホスト</th><th>ラベル</th><th>有効</th><th class="col-narrow"></th></tr></thead>
+    <tbody id="shoppingRows"></tbody>
+  </table>
+  <button class="add-btn" id="addShopping">+ ドメイン追加</button>
+
+  <hr style="margin-top: 28px" />
+  <button class="primary" id="save">すべて保存</button>
+  <span id="msg" class="saved"></span>
+
   <script src="options.js"></script>
 </body>
 </html>

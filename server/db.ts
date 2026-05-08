@@ -20,6 +20,8 @@ import type { PushSubscriptionRow } from './db/types/push.js';
 import type { ExternalChatMessageRow } from './db/types/chat.js';
 import type { UserStopwordRow } from './db/types/stopwords.js';
 import type { ImplementationNoteRow } from './db/types/impl.js';
+import type { NoteRow, NoteBlockRow, NoteBlockType, NoteKind } from './db/types/note.js';
+import { NOTE_BLOCK_TYPES } from './db/types/note.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -449,6 +451,39 @@ export function openDb(dbPath: string): Db {
       ON external_chat_messages(received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_external_chat_source
       ON external_chat_messages(source, received_at DESC);
+
+    CREATE TABLE IF NOT EXISTS notes (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      title           TEXT NOT NULL DEFAULT '',
+      kind            TEXT NOT NULL DEFAULT 'doc',
+      tags_json       TEXT,
+      source_kind     TEXT,
+      source_ref      TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_user_id   TEXT,
+      owner_user_name TEXT,
+      shared_at       TEXT,
+      shared_origin   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notes_kind ON notes(kind);
+    CREATE INDEX IF NOT EXISTS idx_notes_source ON notes(source_kind, source_ref);
+
+    CREATE TABLE IF NOT EXISTS note_blocks (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_id     INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+      position    REAL NOT NULL,
+      block_type  TEXT NOT NULL DEFAULT 'text',
+      text        TEXT NOT NULL DEFAULT '',
+      data_json   TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_note_blocks_note_position
+      ON note_blocks(note_id, position);
+    CREATE INDEX IF NOT EXISTS idx_note_blocks_updated
+      ON note_blocks(updated_at);
   `);
 
   // Forward-compat: 既存 DB に列を ALTER で追加
@@ -3791,4 +3826,272 @@ export function removeUserStopword(db: Db, word: string): boolean {
   if (!w) return false;
   const info = db.prepare(`DELETE FROM user_stopwords WHERE lower = ?`).run(w.toLowerCase());
   return info.changes > 0;
+}
+
+// ─── notes (markdown ライク WYSIWYG ノート) ─────────────────────────────────
+//
+// 1 ノート = ヘッダ (notes 行) + N 個のブロック (note_blocks 行)。 並び順は
+// position (REAL) で安定ソート。 挿入時は隣接 2 ブロックの平均値を取る方針なので
+// 全体 reindex は reorder API のみで発生する。
+
+export interface ListNotesOptions {
+  q?: string;
+  kind?: NoteKind | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NoteListRow extends NoteRow {
+  block_count: number;
+  preview: string;
+}
+
+export function listNotes(db: Db, opts: ListNotesOptions = {}): { items: NoteListRow[]; total: number } {
+  const { q = '', kind = null, limit = 50, offset = 0 } = opts;
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (kind) { where.push('n.kind = ?'); args.push(kind); }
+  if (q.trim()) {
+    where.push('(n.title LIKE ? OR n.tags_json LIKE ? OR EXISTS (SELECT 1 FROM note_blocks b WHERE b.note_id = n.id AND b.text LIKE ?))');
+    const like = `%${q.trim()}%`;
+    args.push(like, like, like);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM notes n ${whereSql}`).get(...args) as { c: number }).c;
+  args.push(limit, offset);
+  const items = db.prepare(`
+    SELECT n.*,
+           (SELECT COUNT(*) FROM note_blocks b WHERE b.note_id = n.id) AS block_count,
+           COALESCE((
+             SELECT b.text FROM note_blocks b
+              WHERE b.note_id = n.id AND b.block_type IN ('text','heading_1','heading_2','heading_3','quote')
+              ORDER BY b.position ASC LIMIT 1
+           ), '') AS preview
+    FROM notes n
+    ${whereSql}
+    ORDER BY n.updated_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...args) as NoteListRow[];
+  return { items, total };
+}
+
+export function getNote(db: Db, id: number): NoteRow | undefined {
+  return db.prepare(`SELECT * FROM notes WHERE id = ?`).get(id) as NoteRow | undefined;
+}
+
+export function listNoteBlocks(db: Db, noteId: number): NoteBlockRow[] {
+  return db.prepare(`
+    SELECT * FROM note_blocks
+    WHERE note_id = ?
+    ORDER BY position ASC, id ASC
+  `).all(noteId) as NoteBlockRow[];
+}
+
+export interface InsertNoteInput {
+  title?: string;
+  kind?: NoteKind;
+  tags?: string[] | null;
+  source_kind?: string | null;
+  source_ref?: string | null;
+}
+
+export function insertNote(db: Db, input: InsertNoteInput): number {
+  const tagsJson = input.tags && input.tags.length ? JSON.stringify(input.tags) : null;
+  const info = db.prepare(`
+    INSERT INTO notes (title, kind, tags_json, source_kind, source_ref)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    input.title ?? '',
+    input.kind ?? 'doc',
+    tagsJson,
+    input.source_kind ?? null,
+    input.source_ref ?? null,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+export function updateNote(db: Db, id: number, patch: Record<string, unknown>): void {
+  const allowed = new Set(['title', 'kind', 'tags', 'source_kind', 'source_ref']);
+  const cols: string[] = [];
+  const args: unknown[] = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    if (k === 'tags') {
+      cols.push('tags_json = ?');
+      args.push(Array.isArray(v) && v.length ? JSON.stringify(v) : null);
+    } else {
+      cols.push(`${k} = ?`);
+      args.push(v);
+    }
+  }
+  if (!cols.length) return;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(id);
+  db.prepare(`UPDATE notes SET ${cols.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function bumpNoteUpdated(db: Db, id: number): void {
+  db.prepare(`UPDATE notes SET updated_at = datetime('now') WHERE id = ?`).run(id);
+}
+
+export function deleteNote(db: Db, id: number): void {
+  db.prepare(`DELETE FROM notes WHERE id = ?`).run(id);
+}
+
+function isValidBlockType(t: string): t is NoteBlockType {
+  return (NOTE_BLOCK_TYPES as readonly string[]).includes(t);
+}
+
+export interface InsertBlockInput {
+  block_type: NoteBlockType;
+  text?: string;
+  data?: Record<string, unknown> | null;
+  position?: number;
+  after_block_id?: number | null;
+}
+
+export function insertBlock(db: Db, noteId: number, input: InsertBlockInput): number {
+  if (!isValidBlockType(input.block_type)) {
+    throw new Error(`invalid block_type: ${input.block_type}`);
+  }
+  let position = input.position;
+  if (position == null) {
+    if (input.after_block_id != null) {
+      const cur = db.prepare(`SELECT position FROM note_blocks WHERE id = ? AND note_id = ?`).get(input.after_block_id, noteId) as { position: number } | undefined;
+      if (cur) {
+        const next = db.prepare(`
+          SELECT position FROM note_blocks
+          WHERE note_id = ? AND position > ?
+          ORDER BY position ASC LIMIT 1
+        `).get(noteId, cur.position) as { position: number } | undefined;
+        position = next ? (cur.position + next.position) / 2 : cur.position + 1;
+      }
+    }
+    if (position == null) {
+      const maxRow = db.prepare(`SELECT COALESCE(MAX(position), 0) AS p FROM note_blocks WHERE note_id = ?`).get(noteId) as { p: number };
+      position = maxRow.p + 1;
+    }
+  }
+  const dataJson = input.data ? JSON.stringify(input.data) : null;
+  const info = db.prepare(`
+    INSERT INTO note_blocks (note_id, position, block_type, text, data_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(noteId, position, input.block_type, input.text ?? '', dataJson);
+  bumpNoteUpdated(db, noteId);
+  return Number(info.lastInsertRowid);
+}
+
+export function updateBlock(db: Db, noteId: number, blockId: number, patch: Record<string, unknown>): boolean {
+  const cols: string[] = [];
+  const args: unknown[] = [];
+  if (typeof patch.block_type === 'string') {
+    if (!isValidBlockType(patch.block_type)) throw new Error(`invalid block_type: ${patch.block_type}`);
+    cols.push('block_type = ?'); args.push(patch.block_type);
+  }
+  if (typeof patch.text === 'string') {
+    cols.push('text = ?'); args.push(patch.text);
+  }
+  if ('data' in patch) {
+    cols.push('data_json = ?');
+    args.push(patch.data == null ? null : JSON.stringify(patch.data));
+  }
+  if (!cols.length) return false;
+  cols.push(`updated_at = datetime('now')`);
+  args.push(blockId, noteId);
+  const info = db.prepare(`UPDATE note_blocks SET ${cols.join(', ')} WHERE id = ? AND note_id = ?`).run(...args);
+  if (info.changes > 0) bumpNoteUpdated(db, noteId);
+  return info.changes > 0;
+}
+
+export function deleteBlock(db: Db, noteId: number, blockId: number): boolean {
+  const info = db.prepare(`DELETE FROM note_blocks WHERE id = ? AND note_id = ?`).run(blockId, noteId);
+  if (info.changes > 0) bumpNoteUpdated(db, noteId);
+  return info.changes > 0;
+}
+
+export function reorderBlocks(db: Db, noteId: number, order: number[]): NoteBlockRow[] {
+  const existing = db.prepare(`SELECT id FROM note_blocks WHERE note_id = ?`).all(noteId) as { id: number }[];
+  const existingSet = new Set(existing.map((r) => r.id));
+  if (order.length !== existing.length || order.some((id) => !existingSet.has(id))) {
+    throw new Error('reorder must include exactly all blocks of the note');
+  }
+  const stmt = db.prepare(`UPDATE note_blocks SET position = ?, updated_at = datetime('now') WHERE id = ? AND note_id = ?`);
+  const tx = db.transaction((ids: number[]) => {
+    ids.forEach((id, idx) => stmt.run(idx + 1, id, noteId));
+  });
+  tx(order);
+  bumpNoteUpdated(db, noteId);
+  return listNoteBlocks(db, noteId);
+}
+
+// ─── extension dispatch rules (chat / impl / shopping ボタン設定) ─────────────
+//
+// app_settings の 1 キー (`extension_rules_json`) に JSON で集約して保持。
+// デフォルトはサーバ起動時にこのキーが空なら埋める。
+
+export interface ExtensionChatDomain {
+  host: string;
+  source: 'chatgpt' | 'claude' | 'gemini';
+  enabled: boolean;
+}
+
+export interface ExtensionImplRule {
+  label: string;
+  host_pattern: string;
+  keywords: string[];
+  enabled: boolean;
+}
+
+export interface ExtensionShoppingDomain {
+  host: string;
+  label: string;
+  enabled: boolean;
+}
+
+export interface ExtensionRules {
+  chat_domains: ExtensionChatDomain[];
+  impl_rules: ExtensionImplRule[];
+  shopping_domains: ExtensionShoppingDomain[];
+}
+
+const DEFAULT_EXTENSION_RULES: ExtensionRules = {
+  chat_domains: [
+    { host: 'chatgpt.com', source: 'chatgpt', enabled: true },
+    { host: 'chat.openai.com', source: 'chatgpt', enabled: true },
+    { host: 'claude.ai', source: 'claude', enabled: true },
+    { host: 'gemini.google.com', source: 'gemini', enabled: true },
+  ],
+  impl_rules: [
+    { label: 'LUDIARS GitHub', host_pattern: 'github.com', keywords: ['LUDIARS'], enabled: true },
+  ],
+  shopping_domains: [
+    { host: 'amazon.co.jp', label: 'Amazon (JP)', enabled: true },
+    { host: 'amazon.com', label: 'Amazon (US)', enabled: true },
+    { host: 'rakuten.co.jp', label: '楽天市場', enabled: true },
+  ],
+};
+
+export function getExtensionRules(db: Db): ExtensionRules {
+  const row = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get('extension_rules_json') as { value: string } | undefined;
+  if (!row?.value) {
+    setExtensionRules(db, DEFAULT_EXTENSION_RULES);
+    return DEFAULT_EXTENSION_RULES;
+  }
+  try {
+    const parsed = JSON.parse(row.value) as Partial<ExtensionRules>;
+    return {
+      chat_domains: parsed.chat_domains ?? DEFAULT_EXTENSION_RULES.chat_domains,
+      impl_rules: parsed.impl_rules ?? DEFAULT_EXTENSION_RULES.impl_rules,
+      shopping_domains: parsed.shopping_domains ?? DEFAULT_EXTENSION_RULES.shopping_domains,
+    };
+  } catch {
+    return DEFAULT_EXTENSION_RULES;
+  }
+}
+
+export function setExtensionRules(db: Db, rules: ExtensionRules): void {
+  db.prepare(`
+    INSERT INTO app_settings (key, value) VALUES ('extension_rules_json', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(JSON.stringify(rules));
 }

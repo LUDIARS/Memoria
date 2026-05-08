@@ -1,7 +1,11 @@
-// Floating "Save to Memoria" button. Runs in the content script isolated world.
-// - Single click → save the current page
-// - Drag → reposition (saved to chrome.storage.sync)
-// - Hover and click × → hide for the current tab session
+// Memoria content script — page-aware floating button stack.
+//
+// 通常ページ: 青の保存ボタン 1 つ
+// AI chat ドメイン (chatgpt/claude/gemini): 紫の Note 化ボタンを追加
+// 実装自慢キーワード一致 (github.com × LUDIARS 等): 黄の「実装自慢として展開」 ボタン
+// ショッピングドメイン (amazon 等): 緑の「ほしいものに追加」 ボタン
+//
+// ルール検出は background → /api/extension/rules で取得し、 page-load 時に判定。
 
 (() => {
   const TAG = '[Memoria]';
@@ -19,14 +23,9 @@
 
   console.info(TAG, 'content script loaded on', location.href);
 
-  // Wait for a real parent we can append into. document_idle usually means body
-  // exists, but be defensive for SVG/XML/early-error pages.
   whenReady(() => {
-    try {
-      mount();
-    } catch (e) {
-      console.error(TAG, 'mount failed:', e);
-    }
+    try { mount(); }
+    catch (e) { console.error(TAG, 'mount failed:', e); }
   });
 
   function whenReady(fn) {
@@ -35,33 +34,96 @@
     document.addEventListener('DOMContentLoaded', () => fn(), { once: true });
   }
 
-  function mount() {
-    if (document.getElementById(HOST_ID)) {
-      console.debug(TAG, 'host already in DOM, skipping');
-      return;
-    }
+  // ── chat extractors (inlined — content scripts cannot use ESM imports) ──
 
-    const parent = document.body || document.documentElement;
-    if (!parent) {
-      console.warn(TAG, 'no parent to mount into');
-      return;
+  function extractChatMessages(source) {
+    switch (source) {
+      case 'chatgpt': return extractChatGpt();
+      case 'claude': return extractClaude();
+      case 'gemini': return extractGemini();
+      default: return [];
     }
+  }
+
+  function extractChatGpt() {
+    const out = [];
+    const els = document.querySelectorAll('[data-message-author-role][data-message-id]');
+    for (const el of els) {
+      const role = el.getAttribute('data-message-author-role');
+      const text = (el.textContent || '').trim();
+      if (!text) continue;
+      out.push({
+        role: role === 'assistant' ? 'assistant' : (role === 'system' ? 'system' : 'user'),
+        text,
+      });
+    }
+    return out;
+  }
+
+  function extractClaude() {
+    const out = [];
+    const all = [...document.querySelectorAll('[data-testid="user-message"], [data-testid="message-content"]')];
+    if (all.length > 0) {
+      for (const el of all) {
+        const role = el.getAttribute('data-testid') === 'user-message' ? 'user' : 'assistant';
+        const text = (el.textContent || '').trim();
+        if (text) out.push({ role, text });
+      }
+      return out;
+    }
+    const fallback = document.querySelectorAll('.font-claude-message, .font-user-message');
+    for (const el of fallback) {
+      const cls = el.className || '';
+      const role = /user/i.test(cls) ? 'user' : 'assistant';
+      const text = (el.textContent || '').trim();
+      if (text) out.push({ role, text });
+    }
+    return out;
+  }
+
+  function extractGemini() {
+    const out = [];
+    const els = document.querySelectorAll('user-query, model-response');
+    for (const el of els) {
+      const tag = (el.tagName || '').toLowerCase();
+      const role = tag === 'model-response' ? 'assistant' : 'user';
+      const text = (el.textContent || '').trim();
+      if (text) out.push({ role, text });
+    }
+    return out;
+  }
+
+  // ── dispatch detection (asks background for current rules + match) ──
+
+  async function detectDispatch() {
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: 'memoria.detectDispatch',
+        url: location.href,
+        host: location.host,
+        title: document.title,
+        bodyText: (document.body?.innerText || '').slice(0, 4000),
+      });
+      return res && Array.isArray(res.dispatches) ? res.dispatches : [];
+    } catch (e) {
+      console.warn(TAG, 'detect failed', e);
+      return [];
+    }
+  }
+
+  // ── mount ───────────────────────────────────────────────────────────────
+
+  async function mount() {
+    if (document.getElementById(HOST_ID)) return;
+    const parent = document.body || document.documentElement;
+    if (!parent) return;
 
     const host = document.createElement('div');
     host.id = HOST_ID;
-    // The host itself is a positioned 0-size container; the visible button
-    // is rendered inside Shadow DOM so the page CSS can't bleed in.
     host.style.cssText = [
-      'position: fixed',
-      'left: 0',
-      'top: 0',
-      'width: 0',
-      'height: 0',
-      'z-index: 2147483647',
-      'pointer-events: none',
-      'margin: 0',
-      'padding: 0',
-      'border: 0',
+      'position: fixed', 'left: 0', 'top: 0',
+      'width: 0', 'height: 0', 'z-index: 2147483647',
+      'pointer-events: none', 'margin: 0', 'padding: 0', 'border: 0',
     ].join(';') + ';';
     parent.appendChild(host);
 
@@ -69,68 +131,60 @@
     root.innerHTML = `
       <style>
         :host { all: initial; }
-        .wrap {
-          position: fixed;
-          pointer-events: auto;
+        .stack {
+          position: fixed; pointer-events: auto;
           font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+          display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
         }
         .btn {
           width: 44px; height: 44px;
           border-radius: 50%;
-          background: #2a6df4;
           color: #fff;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: grab;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; user-select: none;
           box-shadow: 0 2px 10px rgba(0,0,0,0.35);
-          user-select: none;
-          transition: background 0.2s, transform 0.05s;
+          transition: transform 0.05s, filter 0.2s;
           position: relative;
           touch-action: none;
+          font-size: 18px;
         }
-        .btn:hover { background: #1f56c0; }
+        .btn.primary { cursor: grab; }
+        .btn.primary.dragging { cursor: grabbing; }
+        .btn:hover { filter: brightness(0.92); }
         .btn:active { transform: scale(0.95); }
-        .btn.dragging { cursor: grabbing; transition: none; }
-        .btn.busy { background: #888; cursor: progress; }
-        .btn svg { width: 22px; height: 22px; pointer-events: none; }
+        .btn.busy { filter: grayscale(0.8); cursor: progress; }
+        .btn.bookmark { background: #2a6df4; }
+        .btn.bookmark.chat-tinted { background: #7b3ff2; }
+        .btn.chat { background: #7b3ff2; }
+        .btn.impl { background: #f6b73c; color: #1d2230; }
+        .btn.shopping { background: #3ac26a; }
+        .btn svg { width: 20px; height: 20px; pointer-events: none; }
         .close {
-          position: absolute;
-          top: -6px; right: -6px;
-          width: 18px; height: 18px;
-          border-radius: 50%;
-          background: rgba(0,0,0,0.65);
-          color: white;
-          font-size: 12px;
-          line-height: 18px;
-          text-align: center;
-          cursor: pointer;
-          opacity: 0;
-          transition: opacity 0.2s;
-          user-select: none;
+          position: absolute; top: -6px; right: -6px;
+          width: 18px; height: 18px; border-radius: 50%;
+          background: rgba(0,0,0,0.65); color: #fff;
+          font-size: 12px; line-height: 18px; text-align: center;
+          cursor: pointer; opacity: 0; transition: opacity 0.2s;
         }
-        .wrap:hover .close { opacity: 1; }
+        .stack:hover .close { opacity: 1; }
         .toast {
-          position: absolute;
-          right: 0;
-          bottom: 52px;
-          background: rgba(20,20,20,0.92);
-          color: white;
-          padding: 6px 10px;
-          border-radius: 6px;
-          font-size: 12px;
-          white-space: nowrap;
-          opacity: 0;
-          transform: translateY(4px);
+          position: absolute; right: 0; bottom: -40px;
+          background: rgba(20,20,20,0.92); color: #fff;
+          padding: 6px 10px; border-radius: 6px;
+          font-size: 12px; white-space: nowrap;
+          opacity: 0; transform: translateY(4px);
           transition: opacity 0.25s, transform 0.25s;
           pointer-events: none;
+          max-width: 280px;
+          overflow: hidden; text-overflow: ellipsis;
         }
         .toast.show { opacity: 1; transform: translateY(0); }
         .toast.ok { background: rgba(40,140,80,0.92); }
         .toast.err { background: rgba(180,40,40,0.92); }
       </style>
-      <div class="wrap">
-        <div class="btn" title="Memoria に保存 (ドラッグで移動)">
+      <div class="stack">
+        <div class="dispatch-buttons"></div>
+        <div class="btn primary bookmark" title="Memoria に保存">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
@@ -141,34 +195,31 @@
       </div>
     `;
 
-    const wrap = root.querySelector('.wrap');
-    const btn = root.querySelector('.btn');
+    const stack = root.querySelector('.stack');
+    const btn = root.querySelector('.btn.primary');
     const close = root.querySelector('.close');
     const toast = root.querySelector('.toast');
+    const dispatchBox = root.querySelector('.dispatch-buttons');
 
     // ---- position --------------------------------------------------------
 
     const DEFAULT_POS = { right: 24, bottom: 24 };
     let pos = { ...DEFAULT_POS };
-
     function applyPos() {
-      wrap.style.right = pos.right + 'px';
-      wrap.style.bottom = pos.bottom + 'px';
-      wrap.style.left = '';
-      wrap.style.top = '';
+      stack.style.right = pos.right + 'px';
+      stack.style.bottom = pos.bottom + 'px';
+      stack.style.left = '';
+      stack.style.top = '';
     }
     applyPos();
-
     try {
       chrome.storage?.sync.get({ buttonPos: DEFAULT_POS }, ({ buttonPos }) => {
         pos = buttonPos || DEFAULT_POS;
         applyPos();
       });
-    } catch (e) {
-      console.warn(TAG, 'storage unavailable, using default position', e);
-    }
+    } catch {}
 
-    // ---- drag ------------------------------------------------------------
+    // ---- drag (primary button only) -------------------------------------
 
     let drag = null;
     const DRAG_THRESHOLD = 4;
@@ -177,11 +228,10 @@
       if (e.button !== 0) return;
       if (e.target === close) return;
       try { btn.setPointerCapture(e.pointerId); } catch {}
-      const r = wrap.getBoundingClientRect();
+      const r = stack.getBoundingClientRect();
       drag = {
         pointerId: e.pointerId,
-        startX: e.clientX,
-        startY: e.clientY,
+        startX: e.clientX, startY: e.clientY,
         origRight: window.innerWidth - r.right,
         origBottom: window.innerHeight - r.bottom,
         moved: false,
@@ -189,19 +239,18 @@
       btn.classList.add('dragging');
       e.preventDefault();
     });
-
     btn.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const dx = e.clientX - drag.startX;
       const dy = e.clientY - drag.startY;
       if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) drag.moved = true;
       if (!drag.moved) return;
-      const newRight = clamp(drag.origRight - dx, 0, window.innerWidth - 44);
-      const newBottom = clamp(drag.origBottom - dy, 0, window.innerHeight - 44);
-      pos = { right: newRight, bottom: newBottom };
+      pos = {
+        right: clamp(drag.origRight - dx, 0, window.innerWidth - 44),
+        bottom: clamp(drag.origBottom - dy, 0, window.innerHeight - 44),
+      };
       applyPos();
     });
-
     btn.addEventListener('pointerup', () => {
       if (!drag) return;
       const wasDrag = drag.moved;
@@ -214,7 +263,6 @@
         saveCurrentPage();
       }
     });
-
     btn.addEventListener('pointercancel', () => {
       if (drag) { btn.classList.remove('dragging'); drag = null; }
     });
@@ -223,10 +271,37 @@
       e.stopPropagation();
       e.preventDefault();
       host.remove();
-      console.info(TAG, 'hidden by user for this tab');
     });
 
-    // ---- save action -----------------------------------------------------
+    // ---- dispatch detection ---------------------------------------------
+
+    const dispatches = await detectDispatch();
+    for (const d of dispatches) {
+      if (d.kind === 'chat') {
+        btn.classList.add('chat-tinted');
+        addDispatchButton('chat', '🧠', `${d.source} のチャットを Note 化`, () => ingestChat(d.source));
+      } else if (d.kind === 'impl') {
+        addDispatchButton('impl', '🚀', `実装自慢として展開 (${d.label})`, () => expandImpl());
+      } else if (d.kind === 'shopping') {
+        addDispatchButton('shopping', '🛒', `${d.label || d.host}: タスクに追加 (買い物)`, () => addWishlist());
+      }
+    }
+
+    function addDispatchButton(kind, icon, title, onClick) {
+      const b = document.createElement('div');
+      b.className = `btn ${kind}`;
+      b.title = title;
+      b.textContent = icon;
+      b.addEventListener('click', async () => {
+        if (b.classList.contains('busy')) return;
+        b.classList.add('busy');
+        try { await onClick(); }
+        finally { b.classList.remove('busy'); }
+      });
+      dispatchBox.appendChild(b);
+    }
+
+    // ---- actions ---------------------------------------------------------
 
     let busy = false;
     async function saveCurrentPage() {
@@ -246,22 +321,86 @@
         } else {
           showToast(`エラー: ${res?.error ?? '不明'}`, 'err');
         }
-      } catch (e) {
-        showToast(`エラー: ${e.message}`, 'err');
-      } finally {
-        busy = false;
-        btn.classList.remove('busy');
-      }
+      } catch (e) { showToast(`エラー: ${e.message}`, 'err'); }
+      finally { busy = false; btn.classList.remove('busy'); }
     }
+
+    async function ingestChat(source) {
+      showToast(`${source} の会話を取得中...`);
+      const messages = extractChatMessages(source);
+      if (messages.length === 0) {
+        showToast('会話が見つかりませんでした (UI の DOM が変わった可能性)', 'err');
+        return;
+      }
+      const conversationId = location.pathname.split('/').filter(Boolean).pop() || null;
+      // 並列で Note 化 + bookmark 保存
+      const [noteRes, bmRes] = await Promise.all([
+        chrome.runtime.sendMessage({
+          type: 'memoria.saveChat',
+          payload: {
+            source,
+            url: location.href,
+            conversation_id: conversationId,
+            title: document.title,
+            messages,
+            also_create_note: true,
+          },
+        }),
+        chrome.runtime.sendMessage({
+          type: 'memoria.save',
+          payload: {
+            url: location.href,
+            title: document.title,
+            html: document.documentElement.outerHTML,
+          },
+        }),
+      ]);
+      const saved = noteRes?.messages_saved ?? 0;
+      const noteId = noteRes?.note?.id;
+      if (noteRes?.ok && noteId) {
+        showToast(`Note 化 (${saved} 件) + bookmark 保存`, 'ok');
+      } else if (noteRes?.ok) {
+        showToast(`セッションログのみ保存 (${saved} 件)`, 'ok');
+      } else {
+        showToast(`エラー: ${noteRes?.error ?? '不明'}`, 'err');
+      }
+      void bmRes;
+    }
+
+    async function expandImpl() {
+      const res = await chrome.runtime.sendMessage({
+        type: 'memoria.expandImpl',
+        payload: {
+          url: location.href,
+          title: document.title,
+          host: location.host,
+        },
+      });
+      if (res?.ok) showToast(`実装自慢ドラフト作成 (id=${res.id})`, 'ok');
+      else showToast(`エラー: ${res?.error ?? '不明'}`, 'err');
+    }
+
+    async function addWishlist() {
+      const res = await chrome.runtime.sendMessage({
+        type: 'memoria.addWishlist',
+        payload: {
+          url: location.href,
+          title: document.title,
+        },
+      });
+      if (res?.ok) showToast(`「買い物」 タスクに追加 (id=${res.id})`, 'ok');
+      else showToast(`エラー: ${res?.error ?? '不明'}`, 'err');
+    }
+
+    // ---- toast / utils ---------------------------------------------------
 
     let toastTimer = null;
     function showToast(msg, kind = '') {
       toast.textContent = msg;
       toast.className = `toast show ${kind}`;
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { toast.className = 'toast'; }, 3000);
+      toastTimer = setTimeout(() => { toast.className = 'toast'; }, 3500);
     }
-
     function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
     window.addEventListener('resize', () => {
@@ -276,7 +415,5 @@
         applyPos();
       }
     });
-
-    console.info(TAG, 'mounted floating button at', pos);
   }
 })();
