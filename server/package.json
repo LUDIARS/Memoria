@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
-    "dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
+    "start": "tsx --env-file-if-exists=.env --env-file-if-exists=../.env index.ts",
+    "dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env index.ts",
     "owntracks": "tsx --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "owntracks:dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 @types/web-push@3 && npx tsc --noEmit -p tsconfig.json",

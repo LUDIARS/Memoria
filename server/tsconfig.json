@@ -23,6 +23,12 @@
     "node_modules",
     "multi/node_modules",
     "public/**/*",
-    "data/**/*"
+    "data/**/*",
+    "local/multi-client.js",
+    "local/uptime.js",
+    "lib/place-resolver.js",
+    "db/index.js",
+    "db/sqlite.js",
+    "owntracks-server.js"
   ]
 }
