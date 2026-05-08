@@ -8,7 +8,8 @@
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env index.js",
     "owntracks": "node --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "owntracks:dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
-    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 && npx tsc --noEmit -p tsconfig.json"
+    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 && npx tsc --noEmit -p tsconfig.json",
+    "lint": "npm install --no-save --no-package-lock --no-audit --no-fund eslint@9 typescript-eslint@8 typescript@5.6 && npx eslint --max-warnings 0 \"**/*.ts\""
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

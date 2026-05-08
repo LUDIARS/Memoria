@@ -47,6 +47,13 @@ jobs:
             typescript@5.6 @types/node@20 @types/better-sqlite3@7
           npx tsc --noEmit -p tsconfig.json
 
+      - name: Lint (server TS)
+        working-directory: server
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund \
+            eslint@9 typescript-eslint@8 typescript@5.6
+          npx eslint --max-warnings 0 "**/*.ts"
+
       - name: Syntax check (mcp-server)
         run: |
           set -e

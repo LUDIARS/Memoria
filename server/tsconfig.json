@@ -8,7 +8,7 @@
     "checkJs": false,
     "noEmit": true,
     "strict": true,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -16,9 +16,8 @@
     "types": ["node"]
   },
   "include": [
-    "**/*.js",
     "**/*.ts",
-    "**/*.mjs"
+    "**/*.mts"
   ],
   "exclude": [
     "node_modules",
