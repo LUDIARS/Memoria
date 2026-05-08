@@ -1,3 +1,7 @@
 node_modules/
 *.log
 test-payload.json
+
+# esbuild bundle of public/src/app.ts (build artifact)
+public/app.js
+public/app.js.map
