@@ -11,7 +11,7 @@
 import * as api from './api.js';
 import type {
   NoteBlockRow, NoteBlockType, NoteSummary, NoteWithBlocks, BlockData,
-  CommentSetWithComments, CommentRow, BookmarkSummary,
+  CommentRow, BookmarkSummary,
 } from './types.js';
 import { renderInline } from './markdown.js';
 import { sanitizeInlineHtml, escapeHtml } from './sanitize.js';

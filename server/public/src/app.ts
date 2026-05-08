@@ -156,7 +156,7 @@ declare global {
 
 // notes module — esa / DocBase 風 WYSIWYG エディタ。
 // switchTab('notes') で loadNotes() を呼ぶ。
-import { loadNotes as notesLoad, openNoteByIdIfPresent as notesOpenById } from './notes/index.js';
+import { loadNotes as notesLoad } from './notes/index.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
