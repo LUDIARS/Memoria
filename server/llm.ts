@@ -1,27 +1,23 @@
 // LLM dispatch — every place that used to call `spawn('claude', ...)` should
 // route through runLlm({ task, prompt, ... }) so the user can pick a provider
 // per task: Claude CLI, Gemini CLI, Codex CLI, or the OpenAI Chat API.
-//
-// Per-task config is loaded once at startup (and re-loaded on PATCH) from
-// app_settings. Tasks recognised at the moment:
-//   summarize, dig, dig_preview, cloud_extract, cloud_validate,
-//   domain_classify, page_summary,
-//   diary_work, diary_highlights, diary_weekly,
-//   meal_vision (画像入力あり — Claude CLI 推奨),
-//   meal_calorie (食品名テキスト → 標準カロリー推定)
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
-export const TASKS = [
+export type LlmTaskName =
+  | 'summarize' | 'dig' | 'dig_preview' | 'cloud_extract' | 'cloud_validate'
+  | 'domain_classify' | 'page_summary'
+  | 'diary_work' | 'diary_highlights' | 'diary_weekly'
+  | 'meal_vision' | 'meal_calorie';
+
+export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
   'domain_classify', 'page_summary',
   'diary_work', 'diary_highlights', 'diary_weekly',
   'meal_vision', 'meal_calorie',
 ];
 
-// When the user hasn't explicitly chosen a model for a task, fall back to these.
-// Sonnet for cheap repeated work; Opus 1M for the integrative narratives.
-const TASK_DEFAULT_MODELS = {
+const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   domain_classify: 'sonnet',
   page_summary: 'sonnet',
   diary_work: 'sonnet',
@@ -31,47 +27,31 @@ const TASK_DEFAULT_MODELS = {
   meal_calorie: 'sonnet',
 };
 
-export const PROVIDERS = {
-  algorithm: {
-    label: 'アルゴリズム (AI なし)',
-    kind: 'none',
-    supportsTools: false,
-    supportsModel: false,
-  },
-  claude: {
-    label: 'Claude CLI',
-    kind: 'cli',
-    defaultBin: 'claude',
-    supportsTools: true,
-    supportsModel: true,
-  },
-  codex: {
-    label: 'Codex CLI',
-    kind: 'cli',
-    defaultBin: 'codex',
-    supportsTools: false,
-    supportsModel: true,
-    jsonOutput: true,
-  },
-  gemini: {
-    label: 'Gemini CLI',
-    kind: 'cli',
-    defaultBin: 'gemini',
-    supportsTools: false,
-    supportsModel: true,
-  },
-  openai: {
-    label: 'OpenAI API',
-    kind: 'api',
-    supportsTools: false,
-    supportsModel: true,
-  },
+export type LlmProviderKey = 'algorithm' | 'claude' | 'codex' | 'gemini' | 'openai';
+
+export interface LlmProviderInfo {
+  label: string;
+  kind: 'cli' | 'api' | 'none';
+  defaultBin?: string;
+  supportsTools: boolean;
+  supportsModel: boolean;
+  jsonOutput?: boolean;
+}
+
+export const PROVIDERS: Record<LlmProviderKey, LlmProviderInfo> = {
+  algorithm: { label: 'アルゴリズム (AI なし)', kind: 'none', supportsTools: false, supportsModel: false },
+  claude:    { label: 'Claude CLI', kind: 'cli', defaultBin: 'claude', supportsTools: true, supportsModel: true },
+  codex:     { label: 'Codex CLI', kind: 'cli', defaultBin: 'codex', supportsTools: false, supportsModel: true, jsonOutput: true },
+  gemini:    { label: 'Gemini CLI', kind: 'cli', defaultBin: 'gemini', supportsTools: false, supportsModel: true },
+  openai:    { label: 'OpenAI API', kind: 'api', supportsTools: false, supportsModel: true },
 };
 
-// 各 provider で選べる主要モデル一覧。空文字 id = provider のデフォルトを使う。
-// 現行モデル (2026-05 時点) を網羅。新しいモデルが出たらここに追加すれば
-// UI のドロップダウンが自動で更新される。
-export const PROVIDER_MODELS = {
+export interface LlmModelOption {
+  id: string;
+  label: string;
+}
+
+export const PROVIDER_MODELS: Record<LlmProviderKey, LlmModelOption[]> = {
   algorithm: [],
   claude: [
     { id: 'sonnet',                 label: 'Sonnet 4.6 (default)' },
@@ -96,35 +76,43 @@ export const PROVIDER_MODELS = {
   ],
 };
 
-// 各 provider の既定モデル ID (model 未指定時に runCli で渡す値)。
-export const PROVIDER_DEFAULT_MODEL = {
+export const PROVIDER_DEFAULT_MODEL: Partial<Record<LlmProviderKey, string>> = {
   claude: 'sonnet',
   codex:  '5.3-codex',
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
 };
 
-let cfg = {
-  tasks: Object.fromEntries(TASKS.map(t => [t, { provider: 'claude' }])),
+interface LlmTaskConfig {
+  provider: LlmProviderKey;
+  model?: string;
+}
+
+interface LlmRuntimeConfig {
+  tasks: Partial<Record<LlmTaskName, LlmTaskConfig>>;
+  bins: { claude: string; gemini: string; codex: string };
+  openai_api_key: string;
+  openai_model: string;
+  git_bash_path: string;
+}
+
+let cfg: LlmRuntimeConfig = {
+  tasks: Object.fromEntries(TASKS.map(t => [t, { provider: 'claude' as LlmProviderKey }])) as Partial<Record<LlmTaskName, LlmTaskConfig>>,
   bins: { claude: 'claude', gemini: 'gemini', codex: 'codex' },
   openai_api_key: '',
   openai_model: 'gpt-4o-mini',
-  // Windows users running the Claude CLI from a packaged Node child need
-  // CLAUDE_CODE_GIT_BASH_PATH set or the CLI dies looking for bash. The
-  // desktop app stashes its discovery here.
   git_bash_path: '',
 };
 
-export function getLlmConfig() {
+export function getLlmConfig(): LlmRuntimeConfig {
   return JSON.parse(JSON.stringify(cfg));
 }
 
-export function loadLlmConfigFromSettings(settings) {
-  // settings is the { key: value } map from app_settings.
-  const tasks = {};
+export function loadLlmConfigFromSettings(settings: Record<string, string | null | undefined>): void {
+  const tasks: Partial<Record<LlmTaskName, LlmTaskConfig>> = {};
   for (const t of TASKS) {
     tasks[t] = {
-      provider: settings[`llm.${t}.provider`] || 'claude',
+      provider: (settings[`llm.${t}.provider`] || 'claude') as LlmProviderKey,
       model: settings[`llm.${t}.model`] || '',
     };
   }
@@ -141,10 +129,16 @@ export function loadLlmConfigFromSettings(settings) {
   };
 }
 
-export function settingsPatchFromConfig(patch) {
-  // Convert a partial { tasks, bins, openai_api_key, openai_model } back into
-  // app_settings flat keys.
-  const out = {};
+export interface LlmConfigPatch {
+  tasks?: Partial<Record<LlmTaskName, Partial<LlmTaskConfig>>>;
+  bins?: Partial<{ claude: string; gemini: string; codex: string }>;
+  openai_api_key?: string;
+  openai_model?: string;
+  git_bash_path?: string;
+}
+
+export function settingsPatchFromConfig(patch: LlmConfigPatch): Record<string, string> {
+  const out: Record<string, string> = {};
   if (patch.tasks) {
     for (const [t, v] of Object.entries(patch.tasks)) {
       if (v?.provider !== undefined) out[`llm.${t}.provider`] = v.provider;
@@ -152,7 +146,9 @@ export function settingsPatchFromConfig(patch) {
     }
   }
   if (patch.bins) {
-    for (const [k, v] of Object.entries(patch.bins)) out[`llm.bin.${k}`] = v;
+    for (const [k, v] of Object.entries(patch.bins)) {
+      if (v !== undefined) out[`llm.bin.${k}`] = v;
+    }
   }
   if (patch.openai_api_key !== undefined) out['llm.openai.api_key'] = patch.openai_api_key;
   if (patch.openai_model !== undefined)   out['llm.openai.model']   = patch.openai_model;
@@ -160,36 +156,33 @@ export function settingsPatchFromConfig(patch) {
   return out;
 }
 
+export interface RunLlmArgs {
+  task: LlmTaskName;
+  prompt: string;
+  tools?: string[];
+  timeoutMs?: number;
+}
+
 /**
  * Run an LLM call for a named task. Falls back to Claude CLI if the configured
  * provider isn't usable (e.g. OpenAI selected but no API key set).
- *
- * Args:
- *   task        — one of TASKS
- *   prompt      — the full prompt text (sent over stdin for CLIs)
- *   tools       — optional array (e.g. ['WebSearch', 'WebFetch']) only honoured
- *                 by providers that support it (claude)
- *   timeoutMs
  */
-export async function runLlm({ task, prompt, tools = undefined, timeoutMs = 180_000 }) {
-  const taskCfg = cfg.tasks[task] || { provider: 'claude' };
-  let provider = taskCfg.provider || 'claude';
-  // Fallback: OpenAI without a key drops back to claude.
+export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }: RunLlmArgs): Promise<string> {
+  const taskCfg = cfg.tasks[task] || { provider: 'claude' as LlmProviderKey };
+  let provider: LlmProviderKey = taskCfg.provider || 'claude';
   if (provider === 'openai' && !cfg.openai_api_key) provider = 'claude';
   const p = PROVIDERS[provider];
   if (!p) throw new Error(`unknown provider: ${provider}`);
-  // 'algorithm' provider = "AI なし" 指定。タスクごとに deterministic な
-  // 代替を持たせる責務は呼び出し側にあるので、ここでは空文字を返す。
   if (p.kind === 'none') return '';
   if (p.kind === 'api') {
     return runOpenAi({
       apiKey: cfg.openai_api_key,
-      model: taskCfg.model || cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai,
+      model: taskCfg.model || cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai || 'gpt-4o-mini',
       prompt, timeoutMs,
     });
   }
   // CLI providers
-  const bin = cfg.bins[provider] || p.defaultBin;
+  const bin = (cfg.bins as Record<string, string>)[provider] || p.defaultBin || provider;
   const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || PROVIDER_DEFAULT_MODEL[provider] || '';
   const args = buildCliArgs({
     provider,
@@ -198,8 +191,6 @@ export async function runLlm({ task, prompt, tools = undefined, timeoutMs = 180_
     supportsModel: p.supportsModel,
     supportsTools: p.supportsTools,
   });
-  // Pass CLAUDE_CODE_GIT_BASH_PATH to the Claude CLI on Windows. Configured
-  // via settings → runtime.git_bash_path; falls back to the parent env.
   const env = { ...process.env };
   if (provider === 'claude' && cfg.git_bash_path) {
     env.CLAUDE_CODE_GIT_BASH_PATH = cfg.git_bash_path;
@@ -207,9 +198,17 @@ export async function runLlm({ task, prompt, tools = undefined, timeoutMs = 180_
   return runCli({ bin, args, prompt, timeoutMs, env, label: provider, jsonOutput: !!p.jsonOutput });
 }
 
-function buildCliArgs({ provider, model, tools, supportsModel, supportsTools }) {
+function buildCliArgs({
+  provider, model, tools, supportsModel, supportsTools,
+}: {
+  provider: LlmProviderKey;
+  model: string;
+  tools: string[] | undefined;
+  supportsModel: boolean;
+  supportsTools: boolean;
+}): string[] {
   if (provider === 'codex') {
-    const args = [
+    const args: string[] = [
       'exec',
       '--json',
       '--color', 'never',
@@ -220,20 +219,29 @@ function buildCliArgs({ provider, model, tools, supportsModel, supportsTools }) 
     args.push('-');
     return args;
   }
-
-  const args = ['-p'];
+  const args: string[] = ['-p'];
   if (model && supportsModel) args.push('--model', model);
-  if (tools && supportsTools) args.push('--allowedTools', tools.join(','));
+  if (tools && tools.length && supportsTools) args.push('--allowedTools', tools.join(','));
   return args;
 }
 
-function runCli({ bin, args, prompt, timeoutMs, env, label, jsonOutput = false }) {
+function runCli({
+  bin, args, prompt, timeoutMs, env, label, jsonOutput = false,
+}: {
+  bin: string;
+  args: string[];
+  prompt: string;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv;
+  label: string;
+  jsonOutput?: boolean;
+}): Promise<string> {
   return new Promise((resolve, reject) => {
-    let child;
+    let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, env });
-    } catch (e) {
-      reject(new Error(`spawn ${bin}: ${e.message}`));
+    } catch (e: unknown) {
+      reject(new Error(`spawn ${bin}: ${e instanceof Error ? e.message : String(e)}`));
       return;
     }
     let stdout = '', stderr = '';
@@ -253,11 +261,11 @@ function runCli({ bin, args, prompt, timeoutMs, env, label, jsonOutput = false }
   });
 }
 
-function extractCodexLastMessage(raw) {
+function extractCodexLastMessage(raw: string): string {
   let lastText = '';
   const lines = raw.split(/\r?\n/).filter(l => l.trim());
   for (const line of lines) {
-    let obj;
+    let obj: unknown;
     try { obj = JSON.parse(line); } catch { continue; }
     const text = extractTextFromCodexEvent(obj);
     if (text) lastText = text;
@@ -265,16 +273,24 @@ function extractCodexLastMessage(raw) {
   return lastText || raw;
 }
 
-function extractTextFromCodexEvent(obj) {
+interface CodexEvent {
+  message?: unknown;
+  text?: unknown;
+  delta?: unknown;
+  payload?: { message?: unknown; text?: unknown; delta?: unknown } & Record<string, unknown>;
+}
+
+function extractTextFromCodexEvent(obj: unknown): string {
   if (!obj || typeof obj !== 'object') return '';
-  const candidates = [
-    obj.message,
-    obj.text,
-    obj.delta,
-    obj.payload?.message,
-    obj.payload?.text,
-    obj.payload?.delta,
-    obj.payload,
+  const o = obj as CodexEvent;
+  const candidates: unknown[] = [
+    o.message,
+    o.text,
+    o.delta,
+    o.payload?.message,
+    o.payload?.text,
+    o.payload?.delta,
+    o.payload,
   ];
   for (const candidate of candidates) {
     const text = extractContentText(candidate);
@@ -283,19 +299,33 @@ function extractTextFromCodexEvent(obj) {
   return '';
 }
 
-function extractContentText(value) {
+interface ContentLike {
+  role?: unknown;
+  content?: unknown;
+  text?: unknown;
+}
+
+function extractContentText(value: unknown): string {
   if (!value) return '';
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(extractContentText).filter(Boolean).join('\n');
   if (typeof value !== 'object') return '';
-  if (value.role && value.role !== 'assistant') return '';
-  if (typeof value.content === 'string') return value.content;
-  if (Array.isArray(value.content)) return extractContentText(value.content);
-  if (typeof value.text === 'string') return value.text;
+  const v = value as ContentLike;
+  if (v.role && v.role !== 'assistant') return '';
+  if (typeof v.content === 'string') return v.content;
+  if (Array.isArray(v.content)) return extractContentText(v.content);
+  if (typeof v.text === 'string') return v.text;
   return '';
 }
 
-async function runOpenAi({ apiKey, model, prompt, timeoutMs }) {
+async function runOpenAi({
+  apiKey, model, prompt, timeoutMs,
+}: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  timeoutMs: number;
+}): Promise<string> {
   if (!apiKey) throw new Error('OpenAI API key is not configured');
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -317,7 +347,7 @@ async function runOpenAi({ apiKey, model, prompt, timeoutMs }) {
       const body = (await res.text()).slice(0, 400);
       throw new Error(`OpenAI ${res.status}: ${body}`);
     }
-    const data = await res.json();
+    const data = await res.json() as { choices?: { message?: { content?: string } }[] };
     return data.choices?.[0]?.message?.content || '';
   } finally {
     clearTimeout(timer);
