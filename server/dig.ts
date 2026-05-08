@@ -1,29 +1,37 @@
 // Dig (deep research) — drive the claude CLI with WebSearch + WebFetch tools
 // allowed, ask it to return a JSON list of sources for a topic.
-//
-// The user can pin a specific search engine (Google / Bing / DuckDuckGo /
-// Brave). The engine is delivered as an instruction in the prompt and as a
-// preferred WebFetch URL pattern so claude actually queries the right SERP.
 
 import { runLlm } from './llm.js';
 
-const SEARCH_ENGINES = {
-  default: { name: 'default', label: 'デフォルト (claude が自動選択)', serpUrl: null },
-  google: { name: 'Google', label: 'Google', serpUrl: q => `https://www.google.com/search?q=${encodeURIComponent(q)}` },
-  bing: { name: 'Bing', label: 'Bing', serpUrl: q => `https://www.bing.com/search?q=${encodeURIComponent(q)}` },
+interface SearchEngineConfig {
+  name: string;
+  label: string;
+  serpUrl: ((q: string) => string) | null;
+}
+
+const SEARCH_ENGINES: Record<string, SearchEngineConfig> = {
+  default:    { name: 'default', label: 'デフォルト (claude が自動選択)', serpUrl: null },
+  google:     { name: 'Google', label: 'Google', serpUrl: q => `https://www.google.com/search?q=${encodeURIComponent(q)}` },
+  bing:       { name: 'Bing', label: 'Bing', serpUrl: q => `https://www.bing.com/search?q=${encodeURIComponent(q)}` },
   duckduckgo: { name: 'DuckDuckGo', label: 'DuckDuckGo', serpUrl: q => `https://duckduckgo.com/?q=${encodeURIComponent(q)}` },
-  brave: { name: 'Brave Search', label: 'Brave Search', serpUrl: q => `https://search.brave.com/search?q=${encodeURIComponent(q)}` },
+  brave:      { name: 'Brave Search', label: 'Brave Search', serpUrl: q => `https://search.brave.com/search?q=${encodeURIComponent(q)}` },
 };
 
-export function listSearchEngines() {
+export interface SearchEngineOption {
+  key: string;
+  name: string;
+  label: string;
+}
+
+export function listSearchEngines(): SearchEngineOption[] {
   return Object.entries(SEARCH_ENGINES).map(([key, v]) => ({ key, name: v.name, label: v.label }));
 }
 
-function engineFor(key) {
+function engineFor(key: string): SearchEngineConfig {
   return SEARCH_ENGINES[key] || SEARCH_ENGINES.default;
 }
 
-function engineInstruction(engine, query) {
+function engineInstruction(engine: SearchEngineConfig, query: string): string {
   if (!engine.serpUrl) return '検索エンジンは claude の判断に任せます。';
   const serp = engine.serpUrl(query);
   return [
@@ -33,7 +41,13 @@ function engineInstruction(engine, query) {
   ].join('\n');
 }
 
-function themeContextBlock(theme, themeContext) {
+export interface DigThemeContext {
+  queries?: string[];
+  topics?: { word: string }[];
+  sources?: { url: string }[];
+}
+
+function themeContextBlock(theme: string | null, themeContext: DigThemeContext | null): string {
   if (!theme || !themeContext) return '';
   const { queries = [], topics = [], sources = [] } = themeContext;
   if (!queries.length && !topics.length && !sources.length) {
@@ -43,7 +57,7 @@ function themeContextBlock(theme, themeContext) {
       '',
     ].join('\n');
   }
-  const lines = [''];
+  const lines: string[] = [''];
   lines.push(`THEME: "${theme}"`);
   lines.push('THIS IS PART OF AN ONGOING THEME — 既に取得済の文脈は以下:');
   if (queries.length) {
@@ -63,13 +77,20 @@ function themeContextBlock(theme, themeContext) {
     }
   }
   lines.push(
-    '注意: 既出のキーワード / ソースを単純に再掲しない。 上記文脈と差分を生む新しい視点 / 新しいソースを優先せよ。'
+    '注意: 既出のキーワード / ソースを単純に再掲しない。 上記文脈と差分を生む新しい視点 / 新しいソースを優先せよ。',
   );
   lines.push('');
   return lines.join('\n');
 }
 
-const PROMPT_TEMPLATE = ({ query, engine, theme, themeContext }) => [
+interface PromptArgs {
+  query: string;
+  engine: SearchEngineConfig;
+  theme: string | null;
+  themeContext: DigThemeContext | null;
+}
+
+const PROMPT_TEMPLATE = ({ query, engine, theme, themeContext }: PromptArgs): string => [
   'You are a research agent. Use Web search and fetching to gather authoritative sources for the topic the user provides.',
   engineInstruction(engine, query),
   themeContextBlock(theme, themeContext),
@@ -98,7 +119,7 @@ const PROMPT_TEMPLATE = ({ query, engine, theme, themeContext }) => [
   `QUERY: ${query}`,
 ].filter(Boolean).join('\n');
 
-const PREVIEW_PROMPT_TEMPLATE = ({ query, engine }) => [
+const PREVIEW_PROMPT_TEMPLATE = ({ query, engine }: { query: string; engine: SearchEngineConfig }): string => [
   'You are returning a SERP-style preview as fast as possible.',
   engineInstruction(engine, query),
   'Use ONLY web search — do NOT fetch or read result pages.',
@@ -126,7 +147,18 @@ const PREVIEW_PROMPT_TEMPLATE = ({ query, engine }) => [
   `QUERY: ${query}`,
 ].join('\n');
 
-export async function runDigPreview({ query, searchEngine = 'default', timeoutMs = 90_000 }) {
+export interface DigPreviewResult {
+  ai_overview: string;
+  results: { title: string; url: string; snippet: string; domain: string }[];
+}
+
+export async function runDigPreview({
+  query, searchEngine = 'default', timeoutMs = 90_000,
+}: {
+  query: string;
+  searchEngine?: string;
+  timeoutMs?: number;
+}): Promise<DigPreviewResult> {
   const engine = engineFor(searchEngine);
   const prompt = PREVIEW_PROMPT_TEMPLATE({ query, engine });
   const stdout = await runLlm({
@@ -135,10 +167,29 @@ export async function runDigPreview({ query, searchEngine = 'default', timeoutMs
   return parsePreview(stdout);
 }
 
+export interface DigSource {
+  url: string;
+  title: string;
+  snippet: string;
+  topics: string[];
+}
+
+export interface DigResult {
+  query: string;
+  summary: string;
+  sources: DigSource[];
+}
+
 export async function runDig({
   query, searchEngine = 'default', timeoutMs = 600_000,
   theme = null, themeContext = null,
-}) {
+}: {
+  query: string;
+  searchEngine?: string;
+  timeoutMs?: number;
+  theme?: string | null;
+  themeContext?: DigThemeContext | null;
+}): Promise<DigResult> {
   const engine = engineFor(searchEngine);
   const prompt = PROMPT_TEMPLATE({ query, engine, theme, themeContext });
   const stdout = await runLlm({
@@ -147,28 +198,18 @@ export async function runDig({
   return parseJsonStrict(stdout);
 }
 
-/// ユーザーの query から軽量にテーマ文字列を抽出する。
-/// クライアント / API 双方が同じロジックで揃えられるよう pure 関数。
-///
-/// 方針: 改行や 「。」 で区切った最初のセンテンスから
-///   - URL を除去
-///   - 末尾の助詞 / 句読点を削る
-///   - 30 文字以内に丸める
-///   - 空なら null を返す (= テーマ未設定として扱う)
-export function deriveDigTheme(query) {
+/**
+ * ユーザーの query から軽量にテーマ文字列を抽出する。
+ * クライアント / API 双方が同じロジックで揃えられるよう pure 関数。
+ */
+export function deriveDigTheme(query: unknown): string | null {
   if (typeof query !== 'string') return null;
   let text = query.trim();
   if (!text) return null;
-  // URL を除去
   text = text.replace(/https?:\/\/\S+/g, ' ');
-  // 改行 / 句点 / ? で最初の塊を取る
   const first = text.split(/[\n。.\?？]/)[0].trim();
-  // 連続スペースを 1 つに
   let theme = first.replace(/\s+/g, ' ').trim();
   if (!theme) return null;
-  // 末尾の助詞 / お願い文をざっくり削る (フォーマルでなく十分)
-  // - について教えて / について調べて / に関して / を教えて / を調べて
-  // - の話 / の件 / とは
   theme = theme
     .replace(/(について|に関して)?(教えて|調べて|まとめて|お願い|して?ほしい)?$/u, '')
     .replace(/(について|に関して|を調べて|を教えて|の話|の件|とは)$/u, '')
@@ -177,50 +218,78 @@ export function deriveDigTheme(query) {
   return theme || null;
 }
 
-function parsePreview(raw) {
+interface RawPreviewResultItem {
+  title?: unknown;
+  url?: unknown;
+  snippet?: unknown;
+  domain?: unknown;
+}
+
+function parsePreview(raw: string): DigPreviewResult {
   let text = raw.trim();
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) text = fence[1].trim();
   const first = text.indexOf('{');
   const last = text.lastIndexOf('}');
   if (first >= 0 && last > first) text = text.slice(first, last + 1);
-  let obj;
-  try { obj = JSON.parse(text); }
-  catch (e) { throw new Error(`preview parse: ${e.message}\nRaw: ${raw.slice(0, 400)}`); }
+  let obj: { ai_overview?: unknown; results?: unknown };
+  try {
+    obj = JSON.parse(text);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`preview parse: ${msg}\nRaw: ${raw.slice(0, 400)}`);
+  }
+  const rawResults = Array.isArray(obj.results) ? (obj.results as RawPreviewResultItem[]) : [];
   return {
     ai_overview: String(obj.ai_overview ?? '').trim(),
-    results: Array.isArray(obj.results) ? obj.results.map(r => ({
+    results: rawResults.map(r => ({
       title: String(r.title ?? '').trim(),
       url: String(r.url ?? '').trim(),
       snippet: String(r.snippet ?? '').trim(),
-      domain: String(r.domain ?? '').trim() || extractDomain(r.url),
-    })).filter(r => /^https?:\/\//.test(r.url)) : [],
+      domain: String(r.domain ?? '').trim() || extractDomain(String(r.url ?? '')),
+    })).filter(r => /^https?:\/\//.test(r.url)),
   };
 }
 
-function extractDomain(url) {
-  try { return new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
+function extractDomain(url: string): string {
+  try {
+    return new URL(String(url)).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
-function parseJsonStrict(raw) {
+interface RawSourceObject {
+  url?: unknown;
+  title?: unknown;
+  snippet?: unknown;
+  topics?: unknown;
+}
+
+function parseJsonStrict(raw: string): DigResult {
   let text = raw.trim();
   const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) text = fence[1].trim();
   const first = text.indexOf('{');
   const last = text.lastIndexOf('}');
   if (first >= 0 && last > first) text = text.slice(first, last + 1);
-  let obj;
-  try { obj = JSON.parse(text); }
-  catch (e) { throw new Error(`Failed to parse claude output as JSON: ${e.message}\nRaw: ${raw.slice(0, 400)}`); }
+  let obj: { query?: unknown; summary?: unknown; sources?: unknown };
+  try {
+    obj = JSON.parse(text);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to parse claude output as JSON: ${msg}\nRaw: ${raw.slice(0, 400)}`);
+  }
   if (!Array.isArray(obj.sources)) throw new Error('claude output missing sources[]');
+  const rawSources = obj.sources as RawSourceObject[];
   return {
     query: String(obj.query ?? ''),
     summary: String(obj.summary ?? '').trim(),
-    sources: obj.sources.map((s, i) => ({
+    sources: rawSources.map((s, i) => ({
       url: String(s.url ?? '').trim(),
       title: String(s.title ?? '').trim() || `source-${i + 1}`,
       snippet: String(s.snippet ?? '').trim(),
-      topics: Array.isArray(s.topics) ? s.topics.map(t => String(t).trim()).filter(Boolean).slice(0, 6) : [],
+      topics: Array.isArray(s.topics) ? (s.topics as unknown[]).map(t => String(t).trim()).filter(Boolean).slice(0, 6) : [],
     })).filter(s => /^https?:\/\//.test(s.url)),
   };
 }

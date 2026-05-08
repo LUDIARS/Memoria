@@ -3,36 +3,68 @@
 // - EXIF パース (時刻 / GPS) — exifr ライブラリ
 // - GPS 軌跡からの後付け推定
 // - 食事内容 / カロリー推定 — `runLlm({ task: 'meal_vision' })` 経由
-//   (デフォルト Claude CLI、 設定 → AI で provider / model 変更可能)
-//
-// 設計判断:
-//   - Vision は llm.js の dispatch に乗せて、 他タスクと同様にユーザが
-//     provider を選べる (Claude / Gemini / Codex / OpenAI)。 デフォルトは
-//     Claude CLI で sonnet モデル
-//   - Claude CLI は `@<absolute_path>` で画像を attachment 扱い + Read tool
-//     許可で読み取り可能。 本実装では prompt に絶対パスを `@` 付きで埋め込み、
-//     allowedTools に Read を渡す
-//   - CLI / API 失敗時は ai_status='error' を保存。 ユーザは
-//     /api/meals/:id/reanalyze で再投入可能
-//   - 個人データ非保管ルール対象外 (Memoria は単一ユーザ前提のローカル DB)
 
 import exifr from 'exifr';
+import type BetterSqlite3 from 'better-sqlite3';
 import { findNearestGpsLocation } from './db.js';
 import { runLlm } from './llm.js';
 
+type Db = BetterSqlite3.Database;
+
+export interface PhotoMeta {
+  capturedAt: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+
+export interface MealLocation {
+  lat: number | null;
+  lon: number | null;
+  source: 'manual' | 'exif' | 'gps_track' | 'none';
+  label: string | null;
+}
+
+export interface MealNutrients {
+  protein_g: number | null;
+  fat_g: number | null;
+  carbs_g: number | null;
+  fiber_g: number | null;
+  sugar_g: number | null;
+  sodium_mg: number | null;
+}
+
+export interface VisionResult {
+  description: string;
+  calories: number | null;
+  items: { name: string; calories: number | null }[];
+  nutrients: MealNutrients | null;
+}
+
+export interface CalorieResult {
+  calories: number | null;
+  serving: string;
+  confidence: 'high' | 'medium' | 'low';
+  nutrients?: MealNutrients | null;
+}
+
 /** 画像バッファから EXIF を抽出する。 失敗しても throw せず空 meta を返す。 */
-export async function extractPhotoMeta(buf) {
+export async function extractPhotoMeta(buf: Buffer): Promise<PhotoMeta> {
   try {
-    const data = await exifr.parse(buf, {
+    // exifr の型定義は ifd0/tiff の boolean を素直に受けないため、 options を
+    // unknown 経由で渡す。 ランタイム挙動は変わらず、 取れるフィールドだけ拾う。
+    const exifrOpts: unknown = {
       tiff: true,
       ifd0: true,
       exif: true,
       gps: true,
       pick: ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'latitude', 'longitude'],
-    });
+    };
+    const parseFn = exifr.parse as (input: Buffer, opts?: unknown) =>
+      Promise<{ DateTimeOriginal?: Date; CreateDate?: Date; ModifyDate?: Date; latitude?: number; longitude?: number } | null>;
+    const data = await parseFn(buf, exifrOpts);
     if (!data) return { capturedAt: null, lat: null, lon: null };
-    let captured = null;
-    for (const k of ['DateTimeOriginal', 'CreateDate', 'ModifyDate']) {
+    let captured: Date | null = null;
+    for (const k of ['DateTimeOriginal', 'CreateDate', 'ModifyDate'] as const) {
       const v = data[k];
       if (v instanceof Date && !isNaN(v.getTime())) {
         captured = v;
@@ -58,26 +90,31 @@ export async function extractPhotoMeta(buf) {
  *   3. 既存 gps_locations から食事時刻に最も近い点 (±5 分)
  *   4. なし
  */
-export function resolveMealLocation(db, exif, eatenAt, manual) {
+export function resolveMealLocation(
+  db: Db,
+  exif: PhotoMeta,
+  eatenAt: string,
+  manual?: { lat?: number; lon?: number } | null,
+): MealLocation {
   if (manual && typeof manual.lat === 'number' && typeof manual.lon === 'number') {
     return { lat: manual.lat, lon: manual.lon, source: 'manual', label: '手動指定' };
   }
   if (typeof exif.lat === 'number' && typeof exif.lon === 'number') {
     return { lat: exif.lat, lon: exif.lon, source: 'exif', label: '写真メタデータ (EXIF)' };
   }
-  const near = findNearestGpsLocation(db, eatenAt, { windowMs: 5 * 60 * 1000 });
+  const near = findNearestGpsLocation(db, eatenAt, { windowMs: 5 * 60 * 1000 }) as { lat?: number; lon?: number; recorded_at?: string } | null;
   if (near && typeof near.lat === 'number' && typeof near.lon === 'number') {
     return {
       lat: near.lat,
       lon: near.lon,
       source: 'gps_track',
-      label: `GPS 軌跡 ±5分 (${formatHm(near.recorded_at)})`,
+      label: `GPS 軌跡 ±5分 (${formatHm(near.recorded_at || '')})`,
     };
   }
   return { lat: null, lon: null, source: 'none', label: null };
 }
 
-function formatHm(iso) {
+function formatHm(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -85,7 +122,7 @@ function formatHm(iso) {
 
 // ─── Vision 解析 (LLM dispatch 経由) ───────────────────────────
 
-const VISION_PROMPT_TEMPLATE = (absPath) => [
+const VISION_PROMPT_TEMPLATE = (absPath: string): string => [
   '次の食事写真を見て、 食事内容を JSON 1 オブジェクトで返してください。',
   '前後の説明文 / コードフェンス / コメントは禁止です。',
   '',
@@ -113,10 +150,9 @@ const VISION_PROMPT_TEMPLATE = (absPath) => [
 ].join('\n');
 
 /**
- * 食事写真を解析する。 photoAbsPath は OS 絶対パス (Claude CLI が `@` 経由で
- * 画像を読むため)。 失敗時は throw する (caller 側で error を記録)。
+ * 食事写真を解析する。 photoAbsPath は OS 絶対パス。
  */
-export async function analyzeMealPhoto(photoAbsPath) {
+export async function analyzeMealPhoto(photoAbsPath: string): Promise<VisionResult> {
   const prompt = VISION_PROMPT_TEMPLATE(photoAbsPath);
   const stdout = await runLlm({
     task: 'meal_vision',
@@ -129,7 +165,7 @@ export async function analyzeMealPhoto(photoAbsPath) {
 
 // ─── 食品名 → 標準カロリー推定 (LLM 経由) ─────────────────────
 
-const CALORIE_PROMPT = (foodName) => [
+const CALORIE_PROMPT = (foodName: string): string => [
   `食品名: ${foodName}`,
   '',
   '上記の食品の標準的な 1 食分 / 1 個分のカロリーと主要栄養素を推定してください。',
@@ -153,11 +189,7 @@ const CALORIE_PROMPT = (foodName) => [
   '一般的な食品でない / 推定不能なら calories を null、 confidence を low、 nutrients は全 null。',
 ].join('\n');
 
-/**
- * 食品名から標準カロリーを LLM で推定する。 失敗時は throw。
- * 戻り値: { calories: number|null, serving: string, confidence: 'high'|'medium'|'low' }
- */
-export async function estimateCaloriesFromName(foodName) {
+export async function estimateCaloriesFromName(foodName: string): Promise<CalorieResult> {
   const cleaned = String(foodName ?? '').trim();
   if (!cleaned) return { calories: null, serving: '', confidence: 'low' };
   const stdout = await runLlm({
@@ -168,69 +200,92 @@ export async function estimateCaloriesFromName(foodName) {
   return parseCalorieJson(stdout);
 }
 
-function parseCalorieJson(raw) {
+interface RawCalorieObject {
+  calories?: unknown;
+  serving?: unknown;
+  confidence?: unknown;
+  nutrients?: unknown;
+}
+
+function parseCalorieJson(raw: string): CalorieResult {
   let s = (raw || '').trim();
   const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) s = fence[1].trim();
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');
   if (first >= 0 && last > first) s = s.slice(first, last + 1);
-  let obj;
+  let obj: RawCalorieObject;
   try {
     obj = JSON.parse(s);
-  } catch (e) {
-    throw new Error(`calorie output is not JSON: ${e.message}\nRaw (first 200): ${(raw || '').slice(0, 200)}`);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`calorie output is not JSON: ${msg}\nRaw (first 200): ${(raw || '').slice(0, 200)}`);
   }
   const calories = (typeof obj.calories === 'number' && isFinite(obj.calories)) ? Math.round(obj.calories) : null;
   const serving = typeof obj.serving === 'string' ? obj.serving.slice(0, 120) : '';
-  const confidence = (obj.confidence === 'high' || obj.confidence === 'medium' || obj.confidence === 'low')
+  const confidence: 'high' | 'medium' | 'low' = (obj.confidence === 'high' || obj.confidence === 'medium' || obj.confidence === 'low')
     ? obj.confidence : 'low';
   const nutrients = sanitizeNutrients(obj.nutrients);
   return { calories, serving, confidence, nutrients };
 }
 
-/** vision / calorie 共通の nutrients サニタイザ。 数値 (有限) のみ採用、 残りは null。 */
-function sanitizeNutrients(input) {
+interface RawNutrientsObject {
+  protein_g?: unknown;
+  fat_g?: unknown;
+  carbs_g?: unknown;
+  fiber_g?: unknown;
+  sugar_g?: unknown;
+  sodium_mg?: unknown;
+}
+
+function sanitizeNutrients(input: unknown): MealNutrients | null {
   if (!input || typeof input !== 'object') return null;
-  const keys = ['protein_g', 'fat_g', 'carbs_g', 'fiber_g', 'sugar_g', 'sodium_mg'];
-  const out = {};
+  const keys: (keyof MealNutrients)[] = ['protein_g', 'fat_g', 'carbs_g', 'fiber_g', 'sugar_g', 'sodium_mg'];
+  const obj = input as RawNutrientsObject;
+  const out: MealNutrients = {
+    protein_g: null, fat_g: null, carbs_g: null, fiber_g: null, sugar_g: null, sodium_mg: null,
+  };
   let any = false;
   for (const k of keys) {
-    const v = input[k];
+    const v = obj[k];
     if (typeof v === 'number' && isFinite(v) && v >= 0) {
-      out[k] = Math.round(v * 10) / 10; // 小数 1 桁
+      out[k] = Math.round(v * 10) / 10;
       any = true;
-    } else {
-      out[k] = null;
     }
   }
   return any ? out : null;
 }
 
-function parseVisionJson(raw) {
+interface RawVisionObject {
+  description?: unknown;
+  calories?: unknown;
+  items?: unknown;
+  nutrients?: unknown;
+}
+
+function parseVisionJson(raw: string): VisionResult {
   let s = (raw || '').trim();
-  // コードフェンスを取り除く
   const fence = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fence) s = fence[1].trim();
-  // 最初の { から最後の } までを切り出す
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');
   if (first >= 0 && last > first) s = s.slice(first, last + 1);
 
-  let obj;
+  let obj: RawVisionObject;
   try {
     obj = JSON.parse(s);
-  } catch (e) {
-    throw new Error(`vision output is not JSON: ${e.message}\nRaw (first 300): ${(raw || '').slice(0, 300)}`);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`vision output is not JSON: ${msg}\nRaw (first 300): ${(raw || '').slice(0, 300)}`);
   }
   const description = typeof obj.description === 'string' ? obj.description : '';
   const calories = typeof obj.calories === 'number' && isFinite(obj.calories) ? Math.round(obj.calories) : null;
-  let items = [];
+  let items: VisionResult['items'] = [];
   if (Array.isArray(obj.items)) {
-    items = obj.items
+    items = (obj.items as { name?: unknown; calories?: unknown }[])
       .filter((it) => it && typeof it === 'object' && typeof it.name === 'string')
       .map((it) => ({
-        name: it.name,
+        name: it.name as string,
         calories: typeof it.calories === 'number' && isFinite(it.calories) ? Math.round(it.calories) : null,
       }));
   }
