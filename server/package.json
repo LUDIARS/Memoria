@@ -8,7 +8,9 @@
     "dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env index.ts",
     "owntracks": "tsx --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "owntracks:dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
-    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 @types/web-push@3 && npx tsc --noEmit -p tsconfig.json",
+    "build:frontend": "esbuild public/src/app.ts --bundle --outfile=public/app.js --target=es2020 --sourcemap --minify",
+    "watch:frontend": "esbuild public/src/app.ts --bundle --outfile=public/app.js --target=es2020 --sourcemap --watch",
+    "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 @types/web-push@3 && npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.frontend.json",
     "lint": "npm install --no-save --no-package-lock --no-audit --no-fund eslint@9 typescript-eslint@8 typescript@5.6 && npx eslint --max-warnings 0 \"**/*.ts\""
   },
   "dependencies": {
@@ -23,6 +25,7 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/web-push": "^3.6.4"
+    "@types/web-push": "^3.6.4",
+    "esbuild": "^0.27.0"
   }
 }

@@ -1,11 +1,252 @@
+// このファイルは esbuild で `app.js` (browser bundle) に bundle される。
+// declare global を有効にするため、 module 化のための `export {}` を末尾
+// に置いてある (TS は 1 つでも import/export があるとファイルを module
+// 扱いする)。
+
+// ── Type relaxations for the legacy 10K-line single-file app ──────────────
+//
+// 旧 app.js は element 種別を意識せず `el.value` `el.checked` `el.dataset`
+// `el.files` 等を素で触り、 また `event.target.dataset` のような
+// `EventTarget` (本来 dataset 等を持たない) アクセスも頻発する。 全部を
+// callsite で cast すると 700+ 箇所の修正になり、 リグレッションリスクが
+// 大きい。
+//
+// そこで TypeScript の interface declaration merging を使って、 グローバル
+// な `EventTarget` / `Element` / `HTMLElement` に旧 JS で必要だったプロパ
+// ティ群を optional で乗せておく。 これは tsconfig.frontend.json で囲った
+// 範囲 (= public/src/**/*.ts) でのみ有効で、 backend (server/*.ts) には
+// 影響しない (別 tsconfig で別 lib)。
+//
+// 実行時動作は変わらない (型のみの追加)。 element 種別に合致しないアクセス
+// はランタイムで undefined / no-op になる。 これは元 JS と同じ挙動。
+
+declare global {
+  // 外部スクリプト由来のグローバル (Google Maps JS API)
+  // 旧 JS は <script src="https://maps.googleapis.com/..."> で `google.maps`
+  // を直接参照していた。 詳細な型は Tracks 機能の中で限定的に使うのみ。
+  // (declare global で var を使うのは TS の標準パターン。 lint で no-var
+  // が出ないように tsconfig の declare global block 内で許容される。)
+  var google: {
+    maps: {
+      Map: new (el: HTMLElement, opts?: unknown) => unknown;
+      Marker: new (opts?: unknown) => unknown;
+      Polyline: new (opts?: unknown) => unknown;
+      LatLng: new (lat: number, lng: number) => unknown;
+      LatLngBounds: new () => unknown;
+      InfoWindow: new (opts?: unknown) => unknown;
+      Geocoder: new () => unknown;
+      MapTypeId: Record<string, string>;
+      ControlPosition: Record<string, number>;
+      SymbolPath: Record<string, number>;
+      Animation: Record<string, number>;
+      event: { addListener(target: unknown, name: string, fn: (...args: unknown[]) => void): unknown };
+      [k: string]: unknown;
+    };
+    [k: string]: unknown;
+  };
+
+  // Element / EventTarget / Event への augmentation:
+  //   旧 JS は element 種別を意識せず .dataset .closest .classList 等を
+  //   触っていた。 callsite で全部 cast すると 700+ 修正箇所になるため、
+  //   subtype と型衝突しない property を optional で乗せる。
+  //   value / name / type 等 (HTMLLIElement.value: number 衝突) は除外し、
+  //   そういう callsite では `(e.target as HTMLInputElement).value` で cast する。
+  interface EventTarget {
+    dataset?: DOMStringMap;
+    classList?: DOMTokenList;
+    closest?<E extends Element = Element>(selectors: string): E | null;
+    tagName?: string;
+    nodeName?: string;
+    id?: string;
+    nodeType?: number;
+    parentElement?: HTMLElement | null;
+    style?: CSSStyleDeclaration;
+    hidden?: boolean;
+    innerHTML?: string;
+    innerText?: string;
+    textContent?: string | null;
+    matches?(selectors: string): boolean;
+    getAttribute?(name: string): string | null;
+    setAttribute?(name: string, value: string): void;
+    hasAttribute?(name: string): boolean;
+    querySelector?<T extends Element = Element>(selectors: string): T | null;
+    querySelectorAll?<T extends Element = Element>(selectors: string): NodeListOf<T>;
+    blur?(): void;
+    focus?(opts?: FocusOptions): void;
+    click?(): void;
+    contains?(other: Node | null): boolean;
+    disabled?: boolean;
+    checked?: boolean;
+  }
+  interface Element {
+    dataset?: DOMStringMap;
+    hidden?: boolean;
+    style?: CSSStyleDeclaration;
+    offsetWidth?: number;
+    offsetHeight?: number;
+    offsetTop?: number;
+    offsetLeft?: number;
+    disabled?: boolean;
+    checked?: boolean;
+    files?: FileList | null;
+    // value: HTMLLIElement.value (number) との衝突を避けて string | number
+    value?: string | number;
+    options?: HTMLOptionsCollection;
+    selectedIndex?: number;
+    src?: string;
+    href?: string;
+    name?: string;
+    type?: string;
+    placeholder?: string;
+    readOnly?: boolean;
+    selected?: boolean;
+  }
+  interface HTMLElement {
+    // dialog
+    open?: boolean;
+    returnValue?: string;
+    showModal?(): void;
+    show?(): void;
+    close?(retval?: string): void;
+    // form
+    submit?(): void;
+    reset?(): void;
+    select?(): void;
+    setSelectionRange?(start: number, end: number, dir?: 'forward' | 'backward' | 'none'): void;
+    oncancel?: ((this: HTMLElement, ev: Event) => unknown) | null;
+    // inputs (subtype 衝突しない optional)
+    readOnly?: boolean;
+    selectedIndex?: number;
+    options?: HTMLOptionsCollection;
+    files?: FileList | null;
+    placeholder?: string;
+    required?: boolean;
+    selected?: boolean;
+    // value: HTMLLIElement.value (number) vs HTMLInputElement.value (string)
+    // 衝突を避けるため string | number で乗せる。 string-only 必要な callsite
+    // では呼び出し側で String() ラップするか HTMLInputElement に narrow する。
+    value?: string | number;
+    // src / href は subtype 衝突しないので string optional で乗せる
+    src?: string;
+    href?: string;
+    name?: string;
+    type?: string;
+  }
+  interface Event {
+    clientX?: number;
+    clientY?: number;
+    pageX?: number;
+    pageY?: number;
+    offsetX?: number;
+    offsetY?: number;
+    key?: string;
+    code?: string;
+    keyCode?: number;
+    deltaY?: number;
+    touches?: TouchList;
+    changedTouches?: TouchList;
+    button?: number;
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+    metaKey?: boolean;
+    data?: unknown;
+  }
+}
+
+// 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
+// でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
+// `as Loose[]` `as string` などに cast する。
+type Loose = { [k: string]: unknown };
+
+// 旧 JS で頻発する動的 access を unknown のまま narrow する helper 集。
+// `(obj as Loose).foo.bar` 形式の代わりに `_o(obj).foo.bar` で書けるように
+// する。 explicit any を避けるための薄いラッパで、 戻り値は Loose / Loose[]
+// / string / number にキャストするだけ (ランタイム上は no-op)。
+//
+// `_obj`: unknown -> Loose (`{}` で fallback)
+// `_arr`: unknown -> Loose[] (`[]` で fallback)
+// `_str`: unknown -> string (`''` で fallback)
+// `_num`: unknown -> number (`0` で fallback)
+function _obj(v: unknown): Loose { return (v ?? {}) as Loose; }
+function _arr(v: unknown): Loose[] { return (Array.isArray(v) ? v : []) as Loose[]; }
+function _str(v: unknown): string { return v == null ? '' : String(v); }
+function _num(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+  return 0;
+}
+
+// state は元 JS で動的にプロパティが生え続ける。 完全列挙して strict に
+// 型付けするのは現実的でないので、 既知フィールドを実用上扱える型で並べ、
+// index signature で動的拡張も受ける intersection 型にしてある。
+// noImplicitAny: false (tsconfig.frontend.json) なので、 既知フィールドの
+// 配列型は `unknown[]`、 detail 系は `unknown | null` 等で受ける。
+
 const BOOKMARKS_PAGE_SIZE = 50;
 
-const state = {
+interface State {
+  // 動的に追加されるフィールド (state.database, state.worklog, state.tracks, ...)
+  // 旧 JS で .sub のような共通 access が頻発するので Loose で受ける。
+  [k: string]: unknown;
+  // 旧 JS 由来の動的 sub-tab state (database / worklog) 用。 後段で
+  // state.database = state.database || {} のような遅延初期化が走る。
+  database?: Loose;
+  worklog?: Loose;
+  // 既知フィールド (旧 JS の初期値由来)。 配列要素の strict typing は callsite で。
+  bookmarks: Loose[];
+  bookmarksTotal: number;
+  categories: Loose[];
+  category: string | null;
+  selected: Set<unknown>;
+  detailId: number | null;
+  search: string;
+  searchDebounce: ReturnType<typeof setTimeout> | null;
+  sort: string;
+  tab: string;
+  queue: Loose;
+  visits: Loose[];
+  visitsSelected: Set<unknown>;
+  visitsRange: string;
+  trendsRange: string;
+  recommendations: Loose[];
+  digSession: Loose | null;
+  digHistory: Loose[];
+  digSelected: Set<unknown>;
+  digPolling: ReturnType<typeof setInterval> | null;
+  digTheme: string;
+  digThemes: Loose[];
+  cloud: Loose | null;
+  cloudPolling: ReturnType<typeof setInterval> | null;
+  cloudShowDropped: boolean;
+  cloudGraph: unknown;
+  detailCloud: Loose | null;
+  detailCloudPolling: ReturnType<typeof setInterval> | null;
+  cloudDictMode: boolean;
+  cloudSiblings: Loose[];
+  dictEntries: Loose[];
+  dictDetail: Loose | null;
+  dictSearch: string;
+  diaryMonth: string | null;
+  diaryEntries: Loose[];
+  diaryDetail: Loose | null;
+  diaryDetailDate: string | null;
+  diaryPolling: ReturnType<typeof setInterval> | null;
+  weeklyEntries: Loose[];
+  weeklyDetail: Loose | null;
+  weeklyDetailWeek: string | null;
+  weeklyPolling: ReturnType<typeof setInterval> | null;
+  domainEntries: Loose[];
+  domainDetail: Loose | null;
+  domainSearch: string;
+}
+
+const state: State = {
   bookmarks: [],
   bookmarksTotal: 0,
   categories: [],
   category: null,
-  selected: new Set(),
+  selected: new Set<unknown>(),
   detailId: null,
   search: '',
   searchDebounce: null,
@@ -13,13 +254,13 @@ const state = {
   tab: 'database',
   queue: { items: [], history: [] },
   visits: [],
-  visitsSelected: new Set(),
+  visitsSelected: new Set<unknown>(),
   visitsRange: '7',
   trendsRange: '30',
   recommendations: [],
   digSession: null,
   digHistory: [],
-  digSelected: new Set(),
+  digSelected: new Set<unknown>(),
   digPolling: null,
   digTheme: '',           // 現在選んでいるテーマ ('' = 全部)
   digThemes: [],          // GET /api/dig/themes の結果
@@ -48,13 +289,150 @@ const state = {
   domainSearch: '',
 };
 
-const $ = (id) => document.getElementById(id);
+// `$()` は永らく document.getElementById のショートハンド。
+//
+// 旧 JS では element 種別を意識せず .value .checked .href .files 等を
+// 直接触っていた。 全部 callsite で `as HTMLInputElement` するのは現実的
+// でないので、 戻り値型 `DomEl` に各 element 種別固有のプロパティを
+// optional で集約してある。 HTMLElement そのものに乗せると HTMLLIElement
+// のような subtype と衝突する (.value: string vs number 等) ため、 別の
+// interface として定義し、 $() 経由の使用に閉じる。
+//
+// element 実体に対して合っていない access はランタイムで undefined になる
+// (元 JS と同じ挙動)。
+interface DomEl extends HTMLElement {
+  value: string;
+  checked: boolean;
+  disabled: boolean;
+  href: string;
+  src: string;
+  type: string;
+  name: string;
+  files: FileList | null;
+}
+const $ = (id: string): DomEl => document.getElementById(id) as unknown as DomEl;
 
-async function api(path, opts) {
+// API helper. 旧 JS では `await api(path)` で JSON を取り、 必要に応じて
+// `.items` `.total` 等を直接触っていた。 generic で呼び出し側が型を宣言で
+// きるが、 旧コード移植では型を書かないことが多いので、 default は
+// `ApiResp` (旧 JS で頻出する items/total/depth/error etc をあらかじめ
+// optional で乗せた型) にしてある。 これで `r.items` `r.total` のような
+// 直接 access が大半の callsite で通る。
+interface ApiResp extends Loose {
+  items?: Loose[];
+  total?: number;
+  depth?: number;
+  count?: number;
+  status?: string;
+  ok?: boolean;
+  error?: string;
+  id?: number;
+  message?: string;
+  // 旧 JS で API レスポンスとして拾うキーで Loose 経由だと面倒なもの
+  result?: Loose;
+  settings?: Loose;
+  body?: string;
+  url?: string;
+  title?: string;
+  summary?: string;
+  // 配列系で頻出する response 直接 array を扱う場合
+  history?: Loose[];
+  data?: Loose;
+  // 旧 JS で API レスポンスから直接読まれるキーをまとめて optional 宣言。
+  // 個別エンドポイントの strict typing は backend (server/api/types) 側にあるが、
+  // フロント側で全部 narrow すると修正量が大きいため、 よく使うキーを ApiResp に
+  // 包括的に optional で乗せて property access を素通しさせる。
+  bookmarks?: Loose[];
+  categories?: Loose[];
+  servers?: Loose[];
+  themes?: Loose[];
+  engines?: Loose[];
+  sources?: Loose[];
+  words?: Loose[];
+  recent?: Loose[];
+  bins?: Loose[];
+  domains?: Loose[];
+  docs?: Loose[];
+  word?: Loose;
+  date?: string;
+  word_id?: number;
+  cloudId?: number;
+  parentWord?: string;
+  parent_cloud_id?: number;
+  parent_word?: string;
+  imported?: number;
+  skipped?: number;
+  user?: Loose;
+  user_profile?: Loose;
+  description?: string;
+  site_name?: string;
+  domain?: string;
+  longitude?: number;
+  latitude?: number;
+  connected?: boolean;
+  readyState?: number;
+  walkSec?: number;
+  walkMeters?: number;
+  transitMeters?: number;
+  metrics?: Loose;
+  github_commits?: Loose[];
+  live_metrics?: Loose;
+  notes?: string;
+  details?: string;
+  enabled?: boolean;
+  visible?: boolean;
+  kind?: string;
+  text?: string;
+  query?: string;
+  q?: string;
+  theme?: string;
+  engine?: string;
+  // dig session
+  session?: Loose;
+  // file paths / urls
+  path?: string;
+  href?: string;
+  // bookmark fields
+  memo?: string;
+  // multi
+  device?: string;
+  device_id?: string;
+  // diary
+  weekly?: Loose;
+  // place
+  place?: Loose;
+  place_name?: string;
+  place_id?: string;
+  lat?: number;
+  lon?: number;
+  // analytics
+  pages?: Loose[];
+  sessions?: Loose[];
+  // workplace
+  workplaces?: Loose[];
+  // privacy
+  privacy?: Loose;
+  // queue
+  queue?: Loose;
+  summary_queue?: Loose;
+  // arbitrary container
+  payload?: Loose;
+  events?: Loose[];
+  rows?: Loose[];
+  results?: Loose[];
+}
+
+async function api<T = ApiResp>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
-  return res.json();
+  return await res.json() as T;
 }
+
+// 元 JS で `funcName = function () {...}` の形で宣言なしに代入 + 後段で再代入
+// される関数群は、 TS 化に当たって `let` で前置宣言する。 これらは module
+// スコープのまま、 元 JS と同じく後段の再代入 (5340/5663 行付近) を受ける。
+let upgradeImplementationFormMarkup: () => void = () => { /* placeholder, reassigned later */ };
+let setupImplementationFormKeyboard: () => void = () => { /* placeholder, reassigned later */ };
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -63,7 +441,7 @@ function fmtDate(s) {
   return d.toLocaleString();
 }
 
-async function load(opts = {}) {
+async function load(opts: Loose = {}) {
   // 50 件ずつのページング。 「もっと表示」 で append=true、 それ以外
   // (カテゴリ切替 / ソート変更 / 検索 / 自動 refresh) は先頭から取り直す。
   const append = opts.append === true;
@@ -155,7 +533,8 @@ function renderCards() {
     return;
   }
   empty.classList.add('hidden');
-  wrap.innerHTML = items.map(b => {
+  wrap.innerHTML = items.map(_b => {
+    const b = _b as Loose;
     const isSel = state.selected.has(b.id);
     const statusBadge = b.status === 'pending' ? '<span class="status-pending">要約中</span>'
       : b.status === 'error' ? '<span class="status-error">要約失敗</span>' : '';
@@ -165,7 +544,7 @@ function renderCards() {
         <div class="title">${escapeHtml(b.title)}</div>
         <div class="url">${escapeHtml(b.url)}</div>
         <div class="summary">${escapeHtml(b.summary || '')}</div>
-        <div class="cats">${(b.categories||[]).map(c => `<span class="cat">${escapeHtml(c)}</span>`).join('')}</div>
+        <div class="cats">${_arr(b.categories).map(c => `<span class="cat">${escapeHtml(c)}</span>`).join('')}</div>
         <div class="footer">
           <span>追加: ${fmtDate(b.created_at)}</span>
           <span>${b.access_count ?? 0} 回</span>
@@ -195,7 +574,7 @@ function renderCards() {
 
 function renderBulk() {
   const bar = $('bulkBar');
-  $('bulkCount').textContent = state.selected.size;
+  $('bulkCount').textContent = String(state.selected.size);
   bar.classList.toggle('hidden', state.selected.size === 0);
 }
 
@@ -277,8 +656,8 @@ function renderDetailCloud() {
     el.innerHTML = `<div class="detail-cloud-empty" style="color:var(--danger)">失敗: ${escapeHtml(wc.error || '不明')}</div>`;
     return;
   }
-  const r = wc.result || {};
-  const kept = (r.words || []).filter(w => w.kept);
+  const r = (wc.result as Loose) || {};
+  const kept = ((r.words as Loose[]) || []).filter(w => (w as Loose).kept);
   el.innerHTML = renderCloudWords(kept);
   el.querySelectorAll('.cloud-word').forEach(w => {
     w.addEventListener('click', (ev) => {
@@ -410,12 +789,12 @@ $('search').addEventListener('input', (e) => {
   // Search is now server-side (?q=) so each keystroke triggers a fetch.
   // Debounce by 250ms — long enough to skip "in-flight typing" but short
   // enough that the result list feels live.
-  state.search = e.target.value;
+  state.search = (e.target as HTMLInputElement).value;
   if (state.searchDebounce) clearTimeout(state.searchDebounce);
   state.searchDebounce = setTimeout(() => load(), 250);
 });
 $('sort').addEventListener('change', (e) => {
-  state.sort = e.target.value;
+  state.sort = (e.target as HTMLSelectElement).value;
   load();
 });
 $('bookmarksMore')?.addEventListener('click', () => loadMoreBookmarks());
@@ -432,9 +811,10 @@ $('bulkClear').addEventListener('click', () => {
   renderBulk();
 });
 $('importInput').addEventListener('change', async (e) => {
-  const f = e.target.files?.[0];
+  const target = e.target as HTMLInputElement;
+  const f = target.files?.[0];
   if (f) await importFile(f);
-  e.target.value = '';
+  target.value = '';
 });
 
 load().catch(err => {
@@ -448,9 +828,9 @@ async function refreshVisitsBadge() {
     const r = await api('/api/visits/unsaved/count');
     const badge = $('tabVisitsCount');
     if (!badge) return;
-    if (r.count > 0) {
+    if ((r.count ?? 0) > 0) {
       badge.classList.remove('hidden');
-      badge.textContent = r.count;
+      badge.textContent = String(r.count);
     } else {
       badge.classList.add('hidden');
     }
@@ -476,9 +856,9 @@ async function refreshQueue() {
       badge.classList.remove('hidden');
       tabCount?.classList.remove('hidden');
       dbBadge?.classList.remove('hidden');
-      $('queueCount').textContent = totalDepth;
-      if (tabCount) tabCount.textContent = totalDepth;
-      if (dbBadge) dbBadge.textContent = totalDepth;
+      $('queueCount').textContent = String(totalDepth);
+      if (tabCount) tabCount.textContent = String(totalDepth);
+      if (dbBadge) dbBadge.textContent = String(totalDepth);
     } else {
       badge.classList.add('hidden');
       tabCount?.classList.add('hidden');
@@ -994,7 +1374,7 @@ function formatDigTime(ts) {
   return `${mm}/${dd} ${hh}:${mi}`;
 }
 
-async function startDig({ chainCloudId, chainParentWord, forceNewTheme } = {}) {
+async function startDig({ chainCloudId, chainParentWord, forceNewTheme }: Loose = {}) {
   const q = $('digQuery').value.trim();
   if (!q) return;
   // ディグ開始と同時に textarea / pick-hint を空にする (ユーザ指示)。 過去の
@@ -1197,7 +1577,7 @@ function renderDigSession() {
       const sel = card.querySelector('.dig-chk').checked;
       if (sel) state.digSelected.add(url); else state.digSelected.delete(url);
       card.classList.toggle('selected', sel);
-      $('digSelCount').textContent = state.digSelected.size;
+      $('digSelCount').textContent = String(state.digSelected.size);
     });
   });
   $('digCloudBtn')?.addEventListener('click', () => {
@@ -1493,6 +1873,8 @@ function digWordCloud(session, sources) {
       x: W / 2 + Math.cos(angle) * 120,
       y: H / 2 + Math.sin(angle) * 90,
       vx: 0, vy: 0,
+      // 後段の力学計算で代入される (TS は object literal で 0 値を必要とする)
+      fx: 0, fy: 0,
     };
   });
 
@@ -1641,7 +2023,7 @@ function renderDigPreview(session) {
   const overview = p.ai_overview
     ? `<div class="dig-preview-overview"><div class="dig-preview-tag">AI overview (検索結果より)</div>${escapeHtml(p.ai_overview)}</div>`
     : '';
-  const results = (p.results || []).map((r, i) => `
+  const results = (p.results || []).map((r, _i) => `
     <li class="dig-preview-result">
       <div class="title"><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.title || r.url)}</a></div>
       <div class="url">${escapeHtml(r.domain || r.url)}</div>
@@ -1683,7 +2065,9 @@ async function addDigToDictionary(session) {
 
 // ── Word cloud ─────────────────────────────────────────────────────────
 
-async function startCloudFromBookmarks() {
+// 旧 JS から残っているが、 現在 UI から呼ばれていないため `_` で
+// unused-vars lint を回避。 将来再利用するかも。
+async function _startCloudFromBookmarks() {
   const cat = state.category;
   if (!confirm(`${cat ? `カテゴリ「${cat}」の` : '全'}ブックマークからワードクラウドを生成します。\nclaude による解析に数十秒〜数分かかります。よろしいですか？`)) return;
   await startCloud({ origin: 'bookmarks', category: cat });
@@ -2103,7 +2487,7 @@ async function loadDictionaryEntry(id) {
 
 async function renderDictionaryDetail() {
   const e = state.dictDetail;
-  const panel = $('dictDetail');
+  // panel ref ($('dictDetail')) は modal helper が直接 DOM 検索するので未使用。
   if (!e) { hideModal('dictDetail'); return; }
   showModal('dictDetail');
   $('dictTerm').value = e.term || '';
@@ -2236,7 +2620,9 @@ async function loadDomainCatalog() {
   } catch (e) { console.error(e); }
 }
 
-function renderDomainList() {
+// ルーズな再代入を許すため `let X = function() {}` 形式 (元 JS は同名関数を
+// 後段で上書き再定義していた)。 詳細は最終再代入位置のコメント参照。
+let renderDomainList = function () {
   const ul = $('domainList');
   if (!state.domainEntries.length) {
     ul.innerHTML = '<li class="dict-empty">ドメイン辞書はまだ空です。アクセス履歴の生成によって自動で追加されます。</li>';
@@ -2285,7 +2671,7 @@ function renderDomainList() {
       }
     });
   });
-}
+};
 
 async function loadDomainEntry(domain) {
   try {
@@ -2298,9 +2684,10 @@ async function loadDomainEntry(domain) {
   } catch (e) { console.error(e); }
 }
 
-function renderDomainDetail() {
+// `let` 形式 (元 JS で後段に上書き再定義あり)
+let renderDomainDetail = function () {
   const e = state.domainDetail;
-  const panel = $('domainDetail');
+  // panel ref は modal helper が直接 DOM 検索するため未使用。
   if (!e) { hideModal('domainDetail'); return; }
   showModal('domainDetail');
   $('domainKey').value = e.domain;
@@ -2316,7 +2703,7 @@ function renderDomainDetail() {
     <span class="domain-stat"><b>${e.user_edited ? '✓' : '—'}</b><br>編集済み</span>
     <span class="domain-stat"><b>${e.status}</b><br>状態</span>
   `;
-}
+};
 
 async function saveDomainEntry() {
   const e = state.domainDetail;
@@ -2362,7 +2749,7 @@ async function deleteDomainEntry() {
   await loadDomainCatalog();
 }
 
-async function recatalogAllDomains({ force = false } = {}) {
+async function recatalogAllDomains({ force = false }: Loose = {}) {
   const note = force
     ? 'force 再分類: 既存ドメインも含めて全部再分類します (user_edited 列は保護)。LLM コストが高くつく可能性があります。実行しますか？'
     : 'アクセス記録に出てきたドメインのうち、まだ辞書に無いものを分類キューに積みます。実行しますか？';
@@ -2577,7 +2964,7 @@ async function deleteWeeklyEntry() {
   refreshDiaryMonth();
 }
 
-function renderDiaryCalendar({ month, start, end }) {
+function renderDiaryCalendar({ month, start: _start, end: _end }) {
   $('diaryMonthLabel').textContent = month;
   const [y, m] = month.split('-').map(Number);
   const firstWeekday = new Date(y, m - 1, 1).getDay();
@@ -3198,7 +3585,7 @@ function appendActivityMoreButton(ul, initialLen, total, dateStr) {
   ul.appendChild(li);
 }
 
-async function generateDiary({ improve = '' } = {}) {
+async function generateDiary({ improve = '' }: Loose = {}) {
   const date = state.diaryDetailDate;
   if (!date) return;
   const btn = improve ? $('diaryImproveBtn') : $('diaryGenerate');
@@ -3342,7 +3729,7 @@ function renderRecommendations() {
   const badge = $('tabRecommendCount');
   if (items.length > 0) {
     badge.classList.remove('hidden');
-    badge.textContent = items.length;
+    badge.textContent = String(items.length);
   } else {
     badge.classList.add('hidden');
   }
@@ -3478,7 +3865,7 @@ function attachDomainClick(root) {
       switchTab('domain');
       await new Promise(r => setTimeout(r, 0));
       try { await loadDomainEntry(domain); }
-      catch (err) {
+      catch (_err) {
         try {
           await api(`/api/domains/${encodeURIComponent(domain)}/regenerate`, { method: 'POST' });
           flashToast(`「${domain}」を分類キューに追加しました`);
@@ -3599,7 +3986,7 @@ function renderTrendGithub(payload) {
   `).join('');
 }
 
-function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts = {}) {
+function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts: Loose = {}) {
   if (!items.length) return '<div class="queue-empty">データなし</div>';
   const max = Math.max(...items.map(valueFn), 1);
   const rowH = 22, padTop = 4, padLeft = 130, padRight = 40, w = 460;
@@ -3625,7 +4012,7 @@ function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts = {}) {
 
 // Generic line chart returning an SVG string. `data` = [{date, value, raw}].
 // Hover tooltips are wired up by attachLineChartTooltip(container).
-function renderLineChartSvg(data, { yLabel, pointLabel, klass = '' } = {}) {
+function renderLineChartSvg(data, { yLabel, pointLabel, klass = '' }: Loose = {}) {
   if (!data?.length) return '<div class="queue-empty">データなし</div>';
   const w = 600, h = 200, padL = 40, padR = 12, padT = 12, padB = 24;
   const innerW = w - padL - padR, innerH = h - padT - padB;
@@ -3800,11 +4187,11 @@ function renderVisits() {
   const tabBadge = $('tabVisitsCount');
   if (items.length > 0) {
     tabBadge.classList.remove('hidden');
-    tabBadge.textContent = items.length;
+    tabBadge.textContent = String(items.length);
   } else {
     tabBadge.classList.add('hidden');
   }
-  $('visitsSelCount').textContent = state.visitsSelected.size;
+  $('visitsSelCount').textContent = String(state.visitsSelected.size);
   $('visitsAll').checked = items.length > 0 && state.visitsSelected.size === items.length;
 
   const list = $('visitsList');
@@ -3890,7 +4277,7 @@ function renderVisits() {
       if (cb.checked) state.visitsSelected.add(url);
       else state.visitsSelected.delete(url);
       li.classList.toggle('selected', cb.checked);
-      $('visitsSelCount').textContent = state.visitsSelected.size;
+      $('visitsSelCount').textContent = String(state.visitsSelected.size);
       $('visitsAll').checked = state.visitsSelected.size === state.visits.length;
     });
   });
@@ -3906,7 +4293,7 @@ function renderVisits() {
       await new Promise(r => setTimeout(r, 0));
       try {
         await loadDomainEntry(domain);
-      } catch (err) {
+      } catch (_err) {
         // 404: domain hasn't been catalogued yet. Queue a fresh
         // classification + show a placeholder.
         try {
@@ -4080,11 +4467,11 @@ function setupExtensionBadge() {
 
 $('visitsRefresh').addEventListener('click', loadVisits);
 $('visitsRange').addEventListener('change', (e) => {
-  state.visitsRange = e.target.value;
+  state.visitsRange = (e.target as HTMLSelectElement).value;
   loadVisits();
 });
 $('trendsRange').addEventListener('change', (e) => {
-  state.trendsRange = e.target.value;
+  state.trendsRange = (e.target as HTMLSelectElement).value;
   loadTrends();
 });
 $('recRefresh').addEventListener('click', () => loadRecommendations(true));
@@ -4103,7 +4490,7 @@ $('dictNewBtn')?.addEventListener('click', createDictionaryEntry);
 $('dictSaveBtn')?.addEventListener('click', saveDictionaryEntry);
 $('dictDeleteBtn')?.addEventListener('click', deleteDictionaryEntry);
 $('dictSearch')?.addEventListener('input', (e) => {
-  state.dictSearch = e.target.value.trim();
+  state.dictSearch = (e.target as HTMLInputElement).value.trim();
   loadDictionary();
 });
 $('diaryPrevMonth')?.addEventListener('click', () => {
@@ -4130,7 +4517,7 @@ $('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel')
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
 $('domainSearch')?.addEventListener('input', (e) => {
-  state.domainSearch = e.target.value.trim();
+  state.domainSearch = (e.target as HTMLInputElement).value.trim();
   loadDomainCatalog();
 });
 $('domainSaveBtn')?.addEventListener('click', saveDomainEntry);
@@ -4832,7 +5219,8 @@ document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
 
 // ---- Tasks / implementation notes / setup docs / privacy ------------------
 
-function ensureMemoriaFeatureViews() {
+// `let` 形式 (元 JS は後段で上書き再定義あり)
+let ensureMemoriaFeatureViews = function () {
   const tabs = document.querySelector('.tabs-scroll');
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
     for (const spec of [
@@ -5093,7 +5481,7 @@ function ensureMemoriaFeatureViews() {
   };
   if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
   if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
-}
+};
 
 function localDatetimeValue(date) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -5343,7 +5731,8 @@ async function loadSetupDocs() {
   if ((r.docs || [])[0]) root.querySelector('button[data-doc]')?.click();
 }
 
-async function loadTasks() {
+// `let` 形式 (元 JS は後段で上書き再定義あり)
+let loadTasks = async function () {
   ensureMemoriaFeatureViews();
   const r = await api('/api/tasks');
   const items = r.items || [];
@@ -5390,9 +5779,10 @@ async function loadTasks() {
       loadTasks();
     });
   });
-}
+};
 
-async function addTaskFromForm() {
+// `let` 形式 (元 JS は後段で上書き再定義あり)
+let addTaskFromForm = async function () {
   const title = $('taskTitle')?.value.trim();
   if (!title) return;
   await api('/api/tasks', {
@@ -5409,9 +5799,10 @@ async function addTaskFromForm() {
   $('taskDetails').value = '';
   $('taskForm')?.classList.add('hidden');
   loadTasks();
-}
+};
 
-async function loadImplementationNotes() {
+// `let` 形式 (元 JS は後段で上書き再定義あり)
+let loadImplementationNotes = async function () {
   ensureMemoriaFeatureViews();
   const r = await api('/api/implementation-notes');
   const list = $('implList');
@@ -5452,9 +5843,10 @@ async function loadImplementationNotes() {
       loadImplementationNotes();
     });
   });
-}
+};
 
-async function addImplementationNoteFromForm() {
+// `let` 形式 (元 JS は後段で上書き再定義あり)
+let addImplementationNoteFromForm = async function () {
   const product = $('implProduct')?.value.trim();
   const title = $('implTitle')?.value.trim();
   if (!product || !title) return;
@@ -5472,7 +5864,7 @@ async function addImplementationNoteFromForm() {
   for (const id of ['implProduct', 'implTitle', 'implGood', 'implBad']) $(id).value = '';
   $('implForm')?.classList.add('hidden');
   loadImplementationNotes();
-}
+};
 
 function implementationAttachmentLabel(type) {
   return ({
@@ -5708,7 +6100,7 @@ renderDomainList = function () {
 
 renderDomainDetail = function () {
   const e = state.domainDetail;
-  const panel = $('domainDetail');
+  // panel ref は modal helper が直接 DOM 検索するため未使用。
   if (!e) { hideModal('domainDetail'); return; }
   showModal('domainDetail');
   $('domainKey').value = e.domain;
@@ -6104,7 +6496,8 @@ async function ensureProviderModels() {
   }
   return _providerModelsCache;
 }
-function invalidateProviderModelsCache() {
+// 元 JS から残っているが現在 caller がいないため `_` で unused-vars 回避。
+function _invalidateProviderModelsCache() {
   _providerModelsCache = null;
   _providerDefaultsCache = null;
 }
@@ -6249,7 +6642,7 @@ async function startAgentRunFromModal() {
 
 // ── GPS / Place API helpers ────────────────────────────────────────────────
 
-function getCurrentPositionPromise(opts = {}) {
+function getCurrentPositionPromise(opts: Loose = {}) {
   return new Promise((resolve, reject) => {
     if (!('geolocation' in navigator)) {
       reject(new Error('このブラウザは Geolocation に対応していません'));
@@ -7535,7 +7928,7 @@ $('wlToday')?.addEventListener('click', () => {
   loadWorklog();
 });
 $('wlDate')?.addEventListener('change', (e) => {
-  const v = e.target.value;
+  const v = (e.target as HTMLInputElement).value;
   if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
     state.worklog.date = v;
     loadWorklog();
@@ -7774,7 +8167,9 @@ refreshMultiTabVisibility();
 // Polyline で重ねる。 Google Maps API key は /api/maps/config で取得 →
 // script を遅延 inject。 key 未設定なら案内メッセージのみ。
 
-const tracksState = {
+// 動的にプロパティが生え続ける (pointMarkers, polylines, showPolyline ...)
+// ため index signature 持ちで宣言。
+const tracksState: Loose = {
   loaded: false,         // google.maps script を読み終えたか
   map: null,
   polyline: null,
@@ -7894,7 +8289,7 @@ function ensureLiveSocket() {
   let ws;
   try {
     ws = new WebSocket(url);
-  } catch (e) {
+  } catch (_e) {
     setLiveStatus('error');
     return;
   }
@@ -8328,7 +8723,8 @@ async function renderDiaryGpsSummary(date) {
   const el = $('diaryGpsSummary');
   if (!el) return;
   let points = [];
-  let sessions = [];
+  // sr.items は assign のみで未使用。 lint 抑制のため `_sessions` に。
+  let _sessions = [];
   let tallies = { home_minutes: 0, workplace_minutes: 0, by_workplace: {} };
   try {
     const [pr, sr] = await Promise.all([
@@ -8336,7 +8732,7 @@ async function renderDiaryGpsSummary(date) {
       api(`/api/work-sessions?date=${encodeURIComponent(date)}`),
     ]);
     points = pr.points || [];
-    sessions = sr.items || [];
+    _sessions = sr.items || [];
     if (sr.tallies) tallies = sr.tallies;
   } catch (err) {
     console.error('[diary gps summary] fetch failed', err);
@@ -8479,7 +8875,7 @@ async function renderWorkSessions(date) {
     }).join('')}</ul>`;
 }
 
-function updateTracksStatsLine(pts, { live = false } = {}) {
+function updateTracksStatsLine(pts, { live = false }: Loose = {}) {
   const el = $('tracksStats');
   if (!el) return;
   if (!pts.length) { el.textContent = '点なし'; return; }
@@ -8696,7 +9092,8 @@ function drawTracks(points) {
   }
 }
 
-function computeDistanceMeters(points) {
+// 旧 JS から残るが現在 caller がいないため `_` で unused-vars 抑制。
+function _computeDistanceMeters(points) {
   if (!points || points.length < 2) return 0;
   const R = 6_371_008;
   const toRad = d => (d * Math.PI) / 180;
@@ -9687,7 +10084,8 @@ async function deleteMealRow(id) {
 }
 
 // ── 補足メモのみ編集 (旧 editMeal の縮小版) ─────────────────
-async function editMealNote(id) {
+// 旧 JS から残るが現在 UI から呼ばれていないため `_` で unused-vars 回避。
+async function _editMealNote(id) {
   const m = mealsState.items.find((x) => x.id === id);
   if (!m) return;
   const note = prompt('補足メモ', m.user_note || '');
@@ -9895,15 +10293,17 @@ async function deleteMealAddition(mealId, idx) {
 document.getElementById('mealsRefresh')?.addEventListener('click', () => loadMeals());
 
 document.getElementById('mealsPhotoInput')?.addEventListener('change', (e) => {
-  const files = Array.from(e.target.files || []);
-  e.target.value = '';
+  const target = e.target as HTMLInputElement;
+  const files = Array.from(target.files || []);
+  target.value = '';
   if (files.length === 0) return;
   startMealModalForFiles(files);
 });
 
 document.getElementById('mealsCameraInput')?.addEventListener('change', (e) => {
-  const files = Array.from(e.target.files || []);
-  e.target.value = '';
+  const target = e.target as HTMLInputElement;
+  const files = Array.from(target.files || []);
+  target.value = '';
   if (files.length === 0) return;
   startMealModalForFiles(files);
 });
@@ -10036,12 +10436,13 @@ async function loadUserStopwords() {
   }
 }
 
-function isUserStopword(word) {
+// 旧 JS から残るが現在 caller がいないため `_` で unused-vars 抑制。
+function _isUserStopword(word) {
   if (!word) return false;
   return userStopwordSet.has(String(word).toLowerCase());
 }
 
-function openWordRingMenu(word, clientX, clientY, ctx = {}) {
+function openWordRingMenu(word, clientX, clientY, ctx: Loose = {}) {
   const menu = document.getElementById('wordRingMenu');
   const wEl = document.getElementById('wordRingWord');
   const pop = menu?.querySelector('.word-ring-pop');
@@ -10185,7 +10586,7 @@ const locEditState = {
   current: null,
 };
 
-async function openLocationEditModal(opts = {}) {
+async function openLocationEditModal(opts: Loose = {}) {
   const modal = document.getElementById('locationEditModal');
   if (!modal) return;
 
@@ -10228,7 +10629,7 @@ function closeLocationEditModal() {
   const modal = document.getElementById('locationEditModal');
   if (!modal) return;
   if (typeof modal.close === 'function' && modal.open) {
-    try { modal.close(); } catch (e) { /* ignore */ }
+    try { modal.close(); } catch (_e) { /* ignore */ }
   }
   modal.removeAttribute('open');
   locEditState.current = null;
@@ -10292,7 +10693,7 @@ async function ensureLocEditMap(initial) {
   }
 }
 
-function placeLocEditMarker(lat, lng, { recenter = false } = {}) {
+function placeLocEditMarker(lat, lng, { recenter = false }: Loose = {}) {
   if (!locEditState.map || !window.google?.maps) return;
   if (locEditState.marker) {
     locEditState.marker.setPosition({ lat, lng });
@@ -10564,7 +10965,7 @@ wireLocationEditModal();
 
   function connect() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-    try { ws = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
+    try { ws = new WebSocket(url); } catch (_e) { scheduleReconnect(); return; }
     ws.addEventListener('open', () => { attempt = 0; setState('connected', 'Legatus'); });
     ws.addEventListener('message', (e) => {
       let parsed = null;
@@ -10595,3 +10996,7 @@ wireLocationEditModal();
 
   connect();
 })();
+
+// このファイルを TS の module 扱いにして、 冒頭の `declare global` を
+// global augmentation として有効化するための noop。
+export {};

@@ -54,6 +54,10 @@ jobs:
             eslint@9 typescript-eslint@8 typescript@5.6
           npx eslint --max-warnings 0 "**/*.ts"
 
+      - name: Build frontend (esbuild bundle public/src/app.ts -> public/app.js)
+        working-directory: server
+        run: npm run build:frontend
+
       - name: Syntax check (mcp-server)
         run: |
           set -e
