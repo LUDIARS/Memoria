@@ -16,6 +16,7 @@
  * 出力: { name?, address?, source: 'places' | 'geocode' | 'cached' | 'failed' }
  */
 
+import type BetterSqlite3 from 'better-sqlite3';
 import {
   findNearbyResolvedPlace,
   findGpsLocationById,
@@ -24,21 +25,63 @@ import {
   getAppSettings,
 } from '../db.js';
 
+type Db = BetterSqlite3.Database;
+
 const PLACES_RADIUS_M = 20;
 const TIMEOUT_MS = 5000;
 const NEAR_CACHE_GRID_M = 10;
 const PLACES_NEW_URL = 'https://places.googleapis.com/v1/places:searchNearby';
 
+export interface PlaceResolveOk {
+  name: string | null;
+  address: string | null;
+  source: 'places' | 'geocode' | 'cached';
+  reused?: boolean;
+}
+
+export interface PlaceResolveFailed {
+  name?: null;
+  address?: null;
+  source: 'failed';
+  reason?: string;
+}
+
+export type PlaceResolveResult = PlaceResolveOk | PlaceResolveFailed;
+
+export interface ResolverDebug {
+  recent_errors: ApiErrorEntry[];
+}
+
+export interface ResolveBatchOptions {
+  limit?: number;
+  stepMs?: number;
+  onResolved?: (id: number, result: PlaceResolveResult) => void;
+}
+
+export interface ResolveBatchResult {
+  processed: number;
+  ok: number;
+  failed: number;
+}
+
+interface ApiErrorEntry {
+  ts: number;
+  api: string;
+  [key: string]: unknown;
+}
+
 // 直近の API エラーを保持して /api/locations/resolve-debug で覗けるようにする.
 // stdout が複数 npm run dev に分散して追えないので、 ここに記録するのが最速.
-let lastApiErrors = [];
-function recordError(api, info) {
-  const entry = { ts: Math.floor(Date.now() / 1000), api, ...info };
+const lastApiErrors: ApiErrorEntry[] = [];
+
+function recordError(api: string, info: Record<string, unknown>): void {
+  const entry: ApiErrorEntry = { ts: Math.floor(Date.now() / 1000), api, ...info };
   lastApiErrors.unshift(entry);
   if (lastApiErrors.length > 20) lastApiErrors.length = 20;
   console.warn(`[place-resolver] ${api} ${JSON.stringify(info).slice(0, 240)}`);
 }
-export function getResolverDebug() {
+
+export function getResolverDebug(): ResolverDebug {
   return { recent_errors: lastApiErrors };
 }
 
@@ -54,14 +97,14 @@ export function getResolverDebug() {
  *          MEMORIA_PLACES_API_KEY に入れる
  *      の 2 段階が要る.
  */
-function readApiKey(db) {
+function readApiKey(db: Db): string {
   const env = process.env.MEMORIA_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
   if (env) return env;
   const settings = getAppSettings(db);
   return settings?.['maps.api_key'] || '';
 }
 
-async function fetchWithTimeout(url, init = {}, ms = TIMEOUT_MS) {
+async function fetchWithTimeout(url: string, init: RequestInit = {}, ms = TIMEOUT_MS): Promise<unknown> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
@@ -69,33 +112,45 @@ async function fetchWithTimeout(url, init = {}, ms = TIMEOUT_MS) {
     if (!res.ok) {
       // 新 Places API は 403/400 を返す. Body にエラー詳細があるので拾う.
       let body = '';
-      try { body = await res.text(); } catch {}
+      try { body = await res.text(); } catch { /* swallow */ }
       recordError('http', { url: maskKey(url), status: res.status, statusText: res.statusText, body: body.slice(0, 400) });
       return null;
     }
     return await res.json();
-  } catch (err) {
-    recordError('fetch', { url: maskKey(url), error: `${err?.name}: ${err?.message}` });
+  } catch (err: unknown) {
+    const e = err as { name?: string; message?: string } | null;
+    recordError('fetch', { url: maskKey(url), error: `${e?.name}: ${e?.message}` });
     return null;
   } finally {
     clearTimeout(t);
   }
 }
 
-function maskKey(url) {
+function maskKey(url: string): string {
   return url.replace(/key=[^&]+/, 'key=***');
 }
 
-/**
- * Places API Nearby Search で半径 20m 以内の最も近い 1 件を取る (language=ja).
- * 返り値: { name, address } | null
- */
+interface PlacesNearbyResponse {
+  places?: Array<{
+    displayName?: { text?: string };
+    formattedAddress?: string;
+    shortFormattedAddress?: string;
+  }>;
+}
+
+interface GeocodeResponse {
+  status?: string;
+  results?: Array<{ formatted_address?: string }>;
+  error_message?: string;
+}
+
 /**
  * Places API (New) — POST {url}/v1/places:searchNearby.
  * Legacy Places API は段階的に無効化されているため (New) を使う.
  * key は X-Goog-Api-Key header で渡し, 必要 field を X-Goog-FieldMask で指定 (必須).
+ * 返り値: { name, address } | null
  */
-async function tryPlacesNearby(lat, lon, apiKey) {
+async function tryPlacesNearby(lat: number, lon: number, apiKey: string): Promise<{ name: string | null; address: string | null } | null> {
   const body = {
     maxResultCount: 1,
     locationRestriction: {
@@ -115,7 +170,7 @@ async function tryPlacesNearby(lat, lon, apiKey) {
       'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.shortFormattedAddress',
     },
     body: JSON.stringify(body),
-  });
+  }) as PlacesNearbyResponse | null;
   if (!j) return null;
   const r = j.places?.[0];
   if (!r) return null;
@@ -129,19 +184,19 @@ async function tryPlacesNearby(lat, lon, apiKey) {
  * Reverse Geocoding で住所文字列を取る (language=ja).
  * 返り値: { address } | null
  */
-async function tryReverseGeocode(lat, lon, apiKey) {
+async function tryReverseGeocode(lat: number, lon: number, apiKey: string): Promise<{ address: string } | null> {
   const url =
     `https://maps.googleapis.com/maps/api/geocode/json` +
     `?latlng=${lat},${lon}` +
     `&language=ja&result_type=street_address|premise|point_of_interest|establishment` +
     `&key=${encodeURIComponent(apiKey)}`;
-  let j = await fetchWithTimeout(url);
+  let j = await fetchWithTimeout(url) as GeocodeResponse | null;
   // 細かい result_type で取れなければ全タイプで再取得
   if (!j || j.status !== 'OK' || !j.results?.length) {
     const url2 =
       `https://maps.googleapis.com/maps/api/geocode/json` +
       `?latlng=${lat},${lon}&language=ja&key=${encodeURIComponent(apiKey)}`;
-    j = await fetchWithTimeout(url2);
+    j = await fetchWithTimeout(url2) as GeocodeResponse | null;
   }
   if (!j) return null;
   if (j.status !== 'OK') {
@@ -160,12 +215,15 @@ async function tryReverseGeocode(lat, lon, apiKey) {
  * 1 点を解決. DB cache → Places → Geocode の順.
  * 結果を gps_locations に書き込み, 出力 dict を返す.
  */
-export async function resolvePlaceForRow(db, row) {
+export async function resolvePlaceForRow(
+  db: Db,
+  row: { id: number; lat: number; lon: number },
+): Promise<PlaceResolveResult> {
   const { id, lat, lon } = row;
   // 既に解決済なら何もしない
   const cur = findGpsLocationById(db, id);
   if (!cur) return { source: 'failed', reason: 'not_found' };
-  if (cur.place_resolved_at) return { source: 'cached', reused: true };
+  if (cur.place_resolved_at) return { name: null, address: null, source: 'cached', reused: true };
 
   // 1. 近接 cache
   const near = findNearbyResolvedPlace(db, lat, lon, NEAR_CACHE_GRID_M);
@@ -188,7 +246,7 @@ export async function resolvePlaceForRow(db, row) {
   const geo = await tryReverseGeocode(lat, lon, apiKey);
   if (geo?.address) {
     setGpsPlace(db, id, { name: null, address: geo.address, source: 'geocode' });
-    return { ...geo, source: 'geocode' };
+    return { name: null, address: geo.address, source: 'geocode' };
   }
   setGpsPlace(db, id, { name: null, address: null, source: 'failed' });
   return { source: 'failed' };
@@ -198,7 +256,10 @@ export async function resolvePlaceForRow(db, row) {
  * 未解決の点をまとめて解決. rate limit 対策に各リクエスト間 stepMs ms 空ける.
  * onResolved(id, result) callback で 1 件ずつ通知 (WS broadcast 用).
  */
-export async function resolveUnresolvedBatch(db, { limit = 50, stepMs = 150, onResolved } = {}) {
+export async function resolveUnresolvedBatch(
+  db: Db,
+  { limit = 50, stepMs = 150, onResolved }: ResolveBatchOptions = {},
+): Promise<ResolveBatchResult> {
   const rows = listUnresolvedGpsLocations(db, limit);
   let ok = 0, failed = 0;
   for (const row of rows) {
@@ -207,7 +268,7 @@ export async function resolveUnresolvedBatch(db, { limit = 50, stepMs = 150, onR
     if (onResolved) {
       try { onResolved(row.id, r); } catch { /* swallow */ }
     }
-    if (stepMs > 0) await new Promise(res => setTimeout(res, stepMs));
+    if (stepMs > 0) await new Promise((res) => setTimeout(res, stepMs));
   }
   return { processed: rows.length, ok, failed };
 }
