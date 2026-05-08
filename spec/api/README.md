@@ -46,3 +46,5 @@ spec/api/
 | マルチ | [multi.md](multi.md) | `/api/multi/*` |
 | Push | [push.md](push.md) | `/api/push/*` |
 | 傾向 / ログ | [misc.md](misc.md) | `/api/trends/*`, `/api/events`, `/api/uptime`, `/api/recommendations*` |
+| ノート | [note.md](note.md) | `/api/notes*`, `/api/notes/from-chat` |
+| 拡張ルール | [misc.md](misc.md) | `/api/extension/rules` (拡張 dispatch 設定) |

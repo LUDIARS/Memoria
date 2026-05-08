@@ -47,6 +47,7 @@ import { makeAgentRouter } from './routes/agent.js';
 import { makeWorkplaceRouter } from './routes/workplace.js';
 import { makeImplRouter } from './routes/impl.js';
 import { makePushRouter } from './routes/push.js';
+import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
@@ -162,6 +163,7 @@ app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
+app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
   onMcpAutostartChange: (enabled) => mcp.sync(enabled),
