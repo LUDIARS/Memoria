@@ -10,6 +10,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type BetterSqlite3 from 'better-sqlite3';
 import webpush from 'web-push';
 import {
   insertPushSubscription,
@@ -17,6 +18,23 @@ import {
   markPushSubscriptionRevoked,
   findPushSubscriptionByEndpoint,
 } from './db.js';
+import type { PushSubscriptionRow } from './db/types/push.js';
+
+type Db = BetterSqlite3.Database;
+
+interface PushPayload {
+  title?: string;
+  body?: string;
+  url?: string;
+  tag?: string;
+  [key: string]: unknown;
+}
+
+interface PushSendResult {
+  sent: number;
+  revoked: number;
+  errors: { id?: number; status?: number; message: string }[];
+}
 
 let configured = false;
 let publicKey = '';
@@ -24,14 +42,14 @@ let privateKey = '';
 const subject = process.env.VAPID_SUBJECT || 'mailto:noreply@memoria.local';
 
 /** 起動時に env or data/vapid.json から VAPID 鍵を読み込み、 web-push を構成 */
-export function initWebPush(dataDir) {
+export function initWebPush(dataDir: string): void {
   if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     publicKey = process.env.VAPID_PUBLIC_KEY;
     privateKey = process.env.VAPID_PRIVATE_KEY;
   } else {
     const file = path.join(dataDir, 'vapid.json');
     if (existsSync(file)) {
-      const j = JSON.parse(readFileSync(file, 'utf8'));
+      const j = JSON.parse(readFileSync(file, 'utf8')) as { publicKey: string; privateKey: string };
       publicKey = j.publicKey;
       privateKey = j.privateKey;
     } else {
@@ -46,19 +64,30 @@ export function initWebPush(dataDir) {
   configured = true;
 }
 
-export function getVapidPublicKey() {
+export function getVapidPublicKey(): string {
   return configured ? publicKey : '';
+}
+
+interface SaveSubscriptionInput {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  label?: string | null;
+  userAgent?: string | null;
 }
 
 /**
  * PushManager.subscribe() の結果を保存。 同一 endpoint があれば再有効化
  * (revokedAt を null に戻す)。 戻り値は保存後の row id。
  */
-export function saveSubscription(db, { endpoint, p256dh, auth, label, userAgent }) {
+export function saveSubscription(
+  db: Db,
+  { endpoint, p256dh, auth, label, userAgent }: SaveSubscriptionInput,
+): number {
   if (!endpoint || !p256dh || !auth) {
     throw new Error('endpoint, p256dh, auth are required');
   }
-  const existing = findPushSubscriptionByEndpoint(db, endpoint);
+  const existing = findPushSubscriptionByEndpoint(db, endpoint) as PushSubscriptionRow | undefined;
   if (existing) {
     return insertPushSubscription(db, {
       id: existing.id,
@@ -71,11 +100,13 @@ export function saveSubscription(db, { endpoint, p256dh, auth, label, userAgent 
     });
   }
   return insertPushSubscription(db, {
+    id: undefined,
     endpoint,
     p256dh,
     auth,
     label: label ?? null,
     userAgent: userAgent ?? null,
+    revokedAt: undefined,
   });
 }
 
@@ -83,14 +114,17 @@ export function saveSubscription(db, { endpoint, p256dh, auth, label, userAgent 
  * 全アクティブ subscription に payload を送る。 410/404 は revoke 扱い。
  * 戻り値: { sent, revoked, errors }。 通知失敗で main flow を止めない。
  */
-export async function sendPushToAll(db, payload) {
+export async function sendPushToAll(
+  db: Db,
+  payload: PushPayload,
+): Promise<PushSendResult> {
   if (!configured) {
     return { sent: 0, revoked: 0, errors: [{ message: 'VAPID not configured' }] };
   }
-  const subs = listActivePushSubscriptions(db);
+  const subs = listActivePushSubscriptions(db) as PushSubscriptionRow[];
   let sent = 0;
   let revoked = 0;
-  const errors = [];
+  const errors: PushSendResult['errors'] = [];
   const json = JSON.stringify(payload ?? {});
 
   for (const s of subs) {
@@ -100,9 +134,9 @@ export async function sendPushToAll(db, payload) {
         json,
       );
       sent += 1;
-    } catch (err) {
+    } catch (err: unknown) {
       const status = err && typeof err === 'object' && 'statusCode' in err
-        ? Number(err.statusCode)
+        ? Number((err as { statusCode: unknown }).statusCode)
         : 0;
       if (status === 404 || status === 410) {
         markPushSubscriptionRevoked(db, s.id);

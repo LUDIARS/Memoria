@@ -5,20 +5,53 @@
  *
  * A task's exception is surfaced into history but does not break the chain.
  */
+
+export type QueueStatus = 'queued' | 'running' | 'done' | 'error';
+
+/** 任意のメタデータ。 kind / id / title など caller が自由に乗せて UI 側で表示する。 */
+export type QueueMeta = Record<string, unknown> & { kind?: string };
+
+export interface QueueItem extends QueueMeta {
+  seq: number;
+  status: QueueStatus;
+  enqueuedAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+}
+
+export interface QueueSnapshot {
+  depth: number;
+  running: boolean;
+  items: QueueItem[];
+  history: QueueItem[];
+  concurrency?: number;
+}
+
+export interface QueueOptions {
+  historyLimit?: number;
+}
+
+export interface PoolOptions extends QueueOptions {
+  concurrency?: number;
+}
+
 export class FifoQueue {
-  constructor({ historyLimit = 50 } = {}) {
-    this.items = [];        // queued + running items (head is currently running once it starts)
-    this.history = [];      // completed items, newest first
+  items: QueueItem[] = [];
+  history: QueueItem[] = [];
+  historyLimit: number;
+  private _chain: Promise<unknown> = Promise.resolve();
+  private _nextSeq = 1;
+
+  constructor({ historyLimit = 50 }: QueueOptions = {}) {
     this.historyLimit = historyLimit;
-    this._chain = Promise.resolve();
-    this._nextSeq = 1;
   }
 
-  enqueue(fn, meta = {}) {
-    const item = {
+  enqueue(fn: () => unknown | Promise<unknown>, meta: QueueMeta = {}): Promise<unknown> {
+    const item: QueueItem = {
       seq: this._nextSeq++,
       ...meta,
-      status: 'queued',         // queued | running | done | error
+      status: 'queued',
       enqueuedAt: Date.now(),
       startedAt: null,
       finishedAt: null,
@@ -26,15 +59,15 @@ export class FifoQueue {
     };
     this.items.push(item);
 
-    const wrapped = async () => {
+    const wrapped = async (): Promise<void> => {
       item.status = 'running';
       item.startedAt = Date.now();
       try {
         await fn();
         item.status = 'done';
-      } catch (e) {
+      } catch (e: unknown) {
         item.status = 'error';
-        item.error = e?.message ?? String(e);
+        item.error = errorMessage(e);
         console.error(`[queue] task ${item.kind ?? ''}#${item.seq} failed:`, item.error);
       } finally {
         item.finishedAt = Date.now();
@@ -50,10 +83,10 @@ export class FifoQueue {
     return this._chain;
   }
 
-  get depth() { return this.items.length; }
-  get running() { return this.items.length > 0 && this.items[0].status === 'running'; }
+  get depth(): number { return this.items.length; }
+  get running(): boolean { return this.items.length > 0 && this.items[0].status === 'running'; }
 
-  snapshot() {
+  snapshot(): QueueSnapshot {
     return {
       depth: this.depth,
       running: this.running,
@@ -63,8 +96,13 @@ export class FifoQueue {
   }
 }
 
-function toPlain(item) {
+function toPlain(item: QueueItem): QueueItem {
   return { ...item };
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
 }
 
 /**
@@ -73,17 +111,20 @@ function toPlain(item) {
  * at least one slot is busy (not just the head).
  */
 export class ConcurrentPool {
-  constructor({ concurrency = 4, historyLimit = 50 } = {}) {
+  concurrency: number;
+  historyLimit: number;
+  history: QueueItem[] = [];
+  private queued: { item: QueueItem; fn: () => unknown | Promise<unknown> }[] = [];
+  private _runningSet = new Set<QueueItem>();
+  private _nextSeq = 1;
+
+  constructor({ concurrency = 4, historyLimit = 50 }: PoolOptions = {}) {
     this.concurrency = Math.max(1, Number(concurrency) || 1);
-    this.queued = [];
-    this._runningSet = new Set();
-    this.history = [];
     this.historyLimit = historyLimit;
-    this._nextSeq = 1;
   }
 
-  enqueue(fn, meta = {}) {
-    const item = {
+  enqueue(fn: () => unknown | Promise<unknown>, meta: QueueMeta = {}): void {
+    const item: QueueItem = {
       seq: this._nextSeq++,
       ...meta,
       status: 'queued',
@@ -96,9 +137,11 @@ export class ConcurrentPool {
     this._tryStart();
   }
 
-  _tryStart() {
+  private _tryStart(): void {
     while (this._runningSet.size < this.concurrency && this.queued.length > 0) {
-      const { item, fn } = this.queued.shift();
+      const next = this.queued.shift();
+      if (!next) break;
+      const { item, fn } = next;
       this._runningSet.add(item);
       item.status = 'running';
       item.startedAt = Date.now();
@@ -106,9 +149,9 @@ export class ConcurrentPool {
         .then(() => fn())
         .then(
           () => { item.status = 'done'; },
-          (e) => {
+          (e: unknown) => {
             item.status = 'error';
-            item.error = e?.message ?? String(e);
+            item.error = errorMessage(e);
             console.error(`[pool] task ${item.kind ?? ''}#${item.seq} failed:`, item.error);
           },
         )
@@ -122,10 +165,10 @@ export class ConcurrentPool {
     }
   }
 
-  get depth() { return this.queued.length + this._runningSet.size; }
-  get running() { return this._runningSet.size > 0; }
+  get depth(): number { return this.queued.length + this._runningSet.size; }
+  get running(): boolean { return this._runningSet.size > 0; }
 
-  snapshot() {
+  snapshot(): QueueSnapshot {
     return {
       depth: this.depth,
       running: this.running,
