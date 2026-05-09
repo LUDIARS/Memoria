@@ -34,7 +34,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
-import { createServiceAuthMiddleware } from '@ludiars/cernere-service-adapter';
+import { createHmac } from 'node:crypto';
 import { initCernereBridge, getAdapter } from './cernere-bridge.js';
 import {
   listSharedBookmarks, insertSharedBookmark, deleteSharedBookmark,
@@ -65,33 +65,78 @@ if (ALLOWED.length > 0) {
 
 app.get('/healthz', (c) => c.text('ok'));
 
-// ── Cernere bridge: /ws/service に常時接続 + admission 受信 ──────────────
+// ── Cernere bridge: /ws/service に常時接続 (admission push、 future API) ──
+//
+// NOTE (2026-05-09): 現在の Cernere には /ws/service エンドポイントが未実装。
+// 当面は initCernereBridge() は no-op に近い (auto-reconnect ループ) になる。
+// 将来 Cernere 側で /ws/service が実装されると、 onUserAdmission が呼ばれて
+// service_token mint flow が成立する。
 
 initCernereBridge();
 const adapter = getAdapter();
+void adapter; // 将来 isRevoked check 等に使う想定
 
-// authMiddleware は service_token (HS256) をローカルで HMAC 検証する。
-// adapter が未初期化 (CERNERE_* 未設定) のときは「全 /api/shared/* が
-// 401 を返す」 状態になる — これは設計上意図的 (Cernere 連携無しでは
-// シェアコンテンツの insert/delete を許さない)。
+// 当面の認証: Cernere が発行した accessToken (HS256 JWT、 claim: sub/role/iat/exp)
+// を **ローカルで** HMAC 検証する。
 //
-// 注: adapter が null でも middleware ファクトリは動くよう、 ダミー adapter
-// (isRevoked: false 固定) を渡しておく。
-const authedAdapter = adapter ?? { isRevoked: () => false, connected: false };
-const authMiddleware = createServiceAuthMiddleware({
-  adapter: authedAdapter,
-  jwtSecret: process.env.SERVICE_JWT_SECRET ?? 'dev-only-jwt-secret',
-  isDev: process.env.NODE_ENV !== 'production',
-});
+// CERNERE_JWT_SECRET = Cernere の .env の JWT_SECRET と一致させること。
+// id-cache パッケージは payload.userId を期待するが Cernere は RFC 7519 標準の
+// `sub` を使うため、 ここでは小さい自前 middleware で sub を読む。
+
+const CERNERE_JWT_SECRET = process.env.CERNERE_JWT_SECRET ?? '';
+const IS_DEV = process.env.NODE_ENV !== 'production';
+
+function verifyCernereJwt(token) {
+  if (!CERNERE_JWT_SECRET) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [h, p, sig] = parts;
+  const expected = createHmac('sha256', CERNERE_JWT_SECRET)
+    .update(`${h}.${p}`).digest('base64url');
+  if (expected !== sig) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(p, 'base64url').toString());
+    if (typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return {
+      userId: typeof payload.sub === 'string' ? payload.sub : null,
+      role: typeof payload.role === 'string' ? payload.role : 'general',
+    };
+  } catch { return null; }
+}
+
+const authMiddleware = async (c, next) => {
+  const auth = c.req.header('authorization') ?? c.req.header('Authorization') ?? '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m) {
+    const v = verifyCernereJwt(m[1]);
+    if (v?.userId) {
+      c.set('userId', v.userId);
+      c.set('userRole', v.role);
+      return next();
+    }
+  }
+  if (IS_DEV) {
+    const devUserId = c.req.header('x-user-id') ?? c.req.header('X-User-Id');
+    if (devUserId) {
+      c.set('userId', devUserId);
+      c.set('userRole', c.req.header('x-user-role') ?? c.req.header('X-User-Role') ?? 'general');
+      return next();
+    }
+  }
+  return c.json({ error: 'unauthorized' }, 401);
+};
 
 // authedUser は middleware 通過後に c.get('userId') 等から組み立てる。
+// Cernere は JWT に displayName を入れていない (sub/role/iat/exp のみ) ので、
+// 当面は userId の先頭 8 文字を fallback 表示名にする。 後で /api/auth/me 経由
+// で取りに行くか、 push admission 時に upsert した DB から引く方針へ。
 function authedUser(c) {
   const userId = c.get('userId');
-  if (!userId) return null;
+  if (!userId || userId === 'anonymous') return null;
   return {
     userId,
-    displayName: c.get('userName') ?? null,
-    role: c.get('userRole') ?? 'user',
+    displayName: c.get('userName') ?? `user-${userId.slice(0, 8)}`,
+    role: c.get('userRole') ?? 'general',
   };
 }
 

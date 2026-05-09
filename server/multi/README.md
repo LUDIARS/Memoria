@@ -21,28 +21,31 @@ server/multi/
     └── 005_workplace_presence.sql
 ```
 
-## 認証モデル (rev3 — service-adapter 準拠)
+## 認証モデル (rev3 — Cernere accessToken 直接検証)
 
 Cernere の設計思想に従い、 **Hub は Cernere の `/auth` 一族にしか触らない**。
 
 ```
 [Cernere]                         [Memoria-Hub]                        [Memoria-Local SPA]
-  /auth (REST + WS)                  cernere-bridge                      cernere-composite
+  /auth (REST + WS)                  authMiddleware                      cernere-composite
   ↓                                  ↓                                   ↓
-  ・ユーザログイン UI                  ・/ws/service に常時接続              ・loginWithPopup() で
-  ・/api/auth/login                  ・onUserAdmission(user) で              Cernere ログイン UI
-    /api/auth/register                 service_token を mint                を popup 表示
-    /api/auth/exchange               ・onUserRevoke(userId) で              ・終わったら
-  ・user 個人情報の単一情報源           revoked set に追加                    accessToken を取得
-                                     ・createServiceAuthMiddleware で
-                                       service_token をローカル検証
+  ・ユーザログイン UI                  ・Cernere accessToken (HS256) を      ・loginWithPopup() で
+  ・/api/auth/login                    HMAC ローカル検証                    Cernere ログイン UI
+    /api/auth/register               ・claim sub → userId, role → role     を popup 表示
+    /api/auth/exchange               ・iat/exp で TTL チェック              ・終わったら
+  ・user 個人情報の単一情報源           ・cernere-bridge は /ws/service        accessToken を取得
+                                       接続を試みる (Cernere 側 endpoint
+                                       未実装のため auto-reconnect 中)
 ```
 
 **重要点**:
-- Hub は Cernere に毎リクエスト問い合わせない (id-cache パターン)
+- Hub は Cernere に毎リクエスト問い合わせない (純ローカル HMAC 検証)
 - Hub は user の個人データを保管しない (Cernere が単一情報源)
-- service_token の発行は admission のタイミングのみ (15 分の TTL)
 - 旧 OAuth Authorization Code + PKCE / password grant 経路は撤去
+
+### 既知の TODO (Cernere との設計合わせ)
+- **Cernere `/ws/service` 未実装**: `cernere-service-adapter` v0.3 の README は `ws://cernere/ws/service` を期待するが Cernere 本体に endpoint がまだ無い。 admission push (user_admission → service_token mint) は future work。 当面は `cernere-bridge.js` が auto-reconnect ループする (warn のみ、 機能影響なし)。
+- **`@ludiars/cernere-id-cache` の claim 名不一致**: middleware 実装が `payload.userId` を読むが Cernere JWT は RFC 7519 標準の `sub` を使う。 暫定で Hub に小さい自前 middleware (`verifyCernereJwt` in `index.js`) を inline して `sub` claim を読む。 id-cache 改修の PR を Cernere 側に出すのが本筋。
 
 ## セットアップ
 
@@ -62,64 +65,55 @@ npm run dev              # http://localhost:5280
 | Method | Path | 認証 | 説明 |
 | --- | --- | --- | --- |
 | GET | `/healthz` | – | liveness |
-| GET | `/api/me` | service_token | 自分のユーザ情報 (id / displayName / role) |
+| GET | `/api/me` | Cernere token | 自分のユーザ情報 (id / role) |
 | GET | `/api/shared/bookmarks` | – | 公開ブクマ一覧 (cursor: `before=<shared_at>`) |
-| POST | `/api/shared/bookmarks` | service_token | 自分の bookmark を共有 |
-| DELETE | `/api/shared/bookmarks/:id` | service_token | 自分のシェア取り下げ。 admin/mod は他人も |
+| POST | `/api/shared/bookmarks` | Cernere token | 自分の bookmark を共有 |
+| DELETE | `/api/shared/bookmarks/:id` | Cernere token | 自分のシェア取り下げ。 admin/mod は他人も |
 | GET | `/api/shared/digs` | – | 公開 dig session 一覧 |
-| POST | `/api/shared/digs` | service_token | dig session を共有 |
-| DELETE | `/api/shared/digs/:id` | service_token | 取り下げ |
+| POST | `/api/shared/digs` | Cernere token | dig session を共有 |
+| DELETE | `/api/shared/digs/:id` | Cernere token | 取り下げ |
 | GET | `/api/shared/dictionary` | – | 公開辞書 (`q=` で部分一致) |
-| POST | `/api/shared/dictionary` | service_token | 辞書エントリを共有 |
-| DELETE | `/api/shared/dictionary/:id` | service_token | 取り下げ |
+| POST | `/api/shared/dictionary` | Cernere token | 辞書エントリを共有 |
+| DELETE | `/api/shared/dictionary/:id` | Cernere token | 取り下げ |
 | GET | `/api/shared/implementation-notes` | – | 実装自慢 一覧 |
-| POST | `/api/shared/implementation-notes` | service_token | 実装自慢を共有 |
-| DELETE | `/api/shared/implementation-notes/:id` | service_token | 取り下げ |
+| POST | `/api/shared/implementation-notes` | Cernere token | 実装自慢を共有 |
+| DELETE | `/api/shared/implementation-notes/:id` | Cernere token | 取り下げ |
 | GET | `/api/shared/work-locations` | – | 作業場所一覧 |
-| POST | `/api/shared/work-locations` | service_token | 作業場所を共有 |
-| DELETE | `/api/shared/work-locations/:id` | service_token | 取り下げ |
-| POST | `/api/shared/workplace-presence` | service_token | enter / leave |
-| GET | `/api/shared/workplace-presence(/current)` | service_token | 直近 / 現在 |
-| POST | `/api/shared/moderation/(hide\|unhide)` | service_token (mod/admin) | モデレーション |
-| GET | `/api/shared/moderation/(hidden\|log)` | service_token (mod/admin) | モデレーション履歴 |
+| POST | `/api/shared/work-locations` | Cernere token | 作業場所を共有 |
+| DELETE | `/api/shared/work-locations/:id` | Cernere token | 取り下げ |
+| POST | `/api/shared/workplace-presence` | Cernere token | enter / leave |
+| GET | `/api/shared/workplace-presence(/current)` | Cernere token | 直近 / 現在 |
+| POST | `/api/shared/moderation/(hide\|unhide)` | Cernere token (mod/admin) | モデレーション |
+| GET | `/api/shared/moderation/(hidden\|log)` | Cernere token (mod/admin) | モデレーション履歴 |
+
+「Cernere token」 = `POST <cernere>/api/auth/login` で得られる accessToken (HS256 JWT、 30 day TTL、 issuer=Cernere)。 Hub の middleware が `CERNERE_JWT_SECRET` (Cernere の `.env` `JWT_SECRET` と同じ値) で HMAC ローカル検証する。
 
 シェア・取り下げは `share_log` に監査記録を書く。
 
-## 認証フロー (詳細)
+## 認証フロー (現状: Cernere accessToken 直接検証)
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant U as User
   participant L as Memoria-Local (SPA)
-  participant C as Cernere (auth UI + WS)
+  participant C as Cernere
   participant H as Memoria-Hub
 
-  rect rgba(220,240,255,0.4)
-    Note over H,C: Hub 起動時、 service-adapter が Cernere /ws/service に常時接続
-    H->>C: WS connect + service_auth { service_code, service_secret }
-    C-->>H: { type: "service_authenticated", service_id }
-  end
-
-  U->>L: 「Hub に接続」 ボタン
-  L->>C: cernere-composite.loginWithPopup() — popup 開く
-  U->>C: ログイン (email+password / GitHub / Google / MFA)
-  C->>C: composite ticket 発行
-  C-->>L: popup → ticket を返す
-  L->>C: POST /api/auth/exchange { code: ticket }
-  C->>H: WS push { type: "user_admission", user, ticket_id }
-  H->>H: onUserAdmission(user) — service_token を mint
-  H-->>C: WS { type: "admission_response", ticket_id, service_token }
-  C-->>L: { accessToken: service_token, user }
-  L->>L: app_settings.multi_jwt = service_token に保存
+  U->>L: 「Hub に接続」
+  L->>C: POST /api/auth/login { email, password }<br/>(or composite popup / GitHub / Google)
+  C-->>L: { accessToken (HS256), user }
+  L->>L: app_settings.multi_jwt = accessToken に保存
 
   Note over L,H: 以降のシェア操作は Cernere 介在なし
-  L->>H: POST /api/shared/bookmarks (Authorization: Bearer service_token)
-  H->>H: createServiceAuthMiddleware で HMAC ローカル検証
+  L->>H: POST /api/shared/bookmarks<br/>Authorization: Bearer accessToken
+  H->>H: HMAC verify (CERNERE_JWT_SECRET 共有)<br/>claim sub → userId, role → role
   H-->>L: 201 Created
 ```
 
-`service_token` は Hub 自身が発行する HS256 JWT (TTL 15 分)。 ローカル検証なので Cernere に毎リクエスト問い合わせない。 期限切れたら再ログイン。
+accessToken は Cernere 発行 (HS256 JWT, 30 day TTL, claims: `sub` / `role` / `iat` / `exp`)。 Hub は per-request で Cernere に問い合わせない (ローカル HMAC 検証)。 期限切れたら再ログイン。
+
+将来 Cernere `/ws/service` が実装されたら、 `cernere-bridge.js` 経由の admission push + Hub 自己発行 service_token (短命) パターンに切り替える予定。
 
 ## CORS
 
@@ -145,24 +139,62 @@ curl -fsS http://localhost:5280/healthz
 docker compose exec postgres pg_dump -U memoria memoria_hub > backup.sql
 ```
 
-## Cernere 側のセットアップ
+## ローカル開発 (smoke-tested 2026-05-09)
 
-Cernere 側で Hub を `managed_project` として登録する必要がある。 詳細は Cernere 側のドキュメント (admin UI または `managed_projects` テーブルへの直接 INSERT) を参照。
+PostgreSQL + Redis をコンテナで上げ、 Cernere と Memoria Hub を native node で動かす。
 
-最低限の登録項目:
-- `client_id` = `memoria-hub` (= `CERNERE_SERVICE_CODE`)
-- `client_secret` = ランダム文字列 (= `CERNERE_SERVICE_SECRET`)
-- `is_active` = true
+```bash
+# 1. PG (Cernere の cernere DB + Hub の memoria_hub DB を共有) と Redis を起動
+docker run -d --name cernere-pg -p 15432:5432 \
+  -e POSTGRES_USER=cernere -e POSTGRES_PASSWORD=cernere -e POSTGRES_DB=cernere \
+  postgres:17-alpine
+docker run -d --name cernere-redis -p 6379:6379 redis:7-alpine \
+  redis-server --appendonly yes
+# Hub 用 DB を追加
+docker exec cernere-pg psql -U cernere -c "CREATE USER memoria WITH PASSWORD 'memoria';"
+docker exec cernere-pg psql -U cernere -c "CREATE DATABASE memoria_hub OWNER memoria;"
 
-ローカル開発:
-1. Cernere standalone-dev を立てる:
-   ```bash
-   cd E:/Document/Ars/Cernere
-   docker compose -f docker-compose.yaml -f docker-compose.standalone.yaml --profile dev up -d
-   ```
-2. Cernere admin で memoria-hub を登録 (or `managed_projects` に手動 INSERT)
-3. その client_secret を `CERNERE_SERVICE_SECRET` に書き込む
-4. Memoria-Hub を起動 (`npm run dev`)
+# (注: port 5432 が Windows host で詰まる場合は 15432 等の別ポートに退避。
+#  Rancher Desktop の vpnkit stuck 既知バグ。)
+
+# 2. Cernere 起動 (.env の DATABASE_URL を 127.0.0.1:15432/cernere に向ける)
+cd E:/Document/Ars/Cernere
+npm run dev:server   # dotenv-cli 経由、 server/ の `npm run dev` 単独では .env を読まない
+
+# 3. Cernere に admin を register + login して JWT_SECRET を確認
+curl -s -X POST http://127.0.0.1:8080/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"adminpass-strong-123","name":"Admin"}'
+
+# 4. Memoria Hub の .env に **Cernere の JWT_SECRET と同じ値**を入れる
+#    CERNERE_JWT_SECRET=<Cernere の .env JWT_SECRET と同値>
+#    MEMORIA_PG_URL=postgres://memoria:memoria@127.0.0.1:15432/memoria_hub
+cd E:/Document/Ars/Memoria/server/multi
+cp .env.example .env  # 編集
+node --env-file=.env migrate.js     # Hub の Postgres スキーマを適用
+npm run dev                          # http://localhost:5280
+```
+
+end-to-end smoke:
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"adminpass-strong-123"}' \
+  | jq -r .accessToken)
+
+# Hub /api/me が Cernere user を返すこと
+curl http://127.0.0.1:5280/api/me -H "Authorization: Bearer $TOKEN"
+# → {"userId":"54c4ad72-...","role":"admin"}
+
+# Hub に bookmark を共有
+curl -X POST http://127.0.0.1:5280/api/shared/bookmarks \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com","title":"Test","summary":"e2e"}'
+# → {"id":"1","shared_at":"..."}
+```
+
+将来 Cernere に `/ws/service` (service-adapter のための admission push) が実装されたら、 `CERNERE_SERVICE_CODE` / `CERNERE_SERVICE_SECRET` で managed_projects 登録 (currently the migration `017_memoria_managed_project_seed.sql` で seed されるが client_secret rotate API がまだ Cernere 側に無いので使えない) → Hub `cernere-bridge.js` が WS 接続成立 → service_token 経由のフローに切替。
 
 ### TLS / リバースプロキシ
 
