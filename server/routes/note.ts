@@ -13,6 +13,7 @@ import {
   listComments, insertComment, updateComment, deleteComment,
   getExtensionRules, setExtensionRules,
 } from '../db.js';
+import { fetchUrlPreview } from '../url-preview.js';
 import type {
   ExtensionRules, ExtensionChatDomain, ExtensionImplRule, ExtensionShoppingDomain,
   ExtensionNotionDomain,
@@ -527,6 +528,9 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
       case 'bullet_list': case 'numbered_list':
       case 'code': case 'divider':
         return kind;
+      // Notion の /bookmark block は Memoria の bookmark_embed (URL カード) として保存
+      case 'bookmark':
+        return 'bookmark_embed';
       default: return null;
     }
   }
@@ -560,14 +564,28 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     let inserted = 0;
     for (const b of blocks) {
       if (!b || typeof b !== 'object') continue;
-      const blockType = notionKindToBlockType(String((b as { kind?: unknown }).kind ?? ''));
-      if (!blockType) continue;
-      const text = typeof (b as { text?: unknown }).text === 'string' ? (b as { text: string }).text : '';
-      const data: Record<string, unknown> = {};
       const bb = b as Record<string, unknown>;
+      const blockType = notionKindToBlockType(String(bb.kind ?? ''));
+      if (!blockType) continue;
+      const text = typeof bb.text === 'string' ? bb.text : '';
+      const data: Record<string, unknown> = {};
       if (blockType === 'todo' && typeof bb.checked === 'boolean') data.checked = bb.checked;
       if ((blockType === 'bullet_list' || blockType === 'numbered_list') && typeof bb.indent === 'number') data.indent = bb.indent;
       if (blockType === 'code' && typeof bb.lang === 'string') data.lang = bb.lang;
+      // Notion bookmark block → bookmark_embed (URL カード、 bookmark_id=null = ad-hoc)
+      if (bb.kind === 'bookmark') {
+        const bUrl = typeof bb.url === 'string' ? bb.url : '';
+        if (!bUrl) continue;
+        const existing = findBookmarkByUrl(db, bUrl);
+        data.bookmark_id = existing ? existing.id : null;
+        data.bookmark_url = bUrl;
+        const bTitle = typeof bb.title === 'string' && bb.title ? bb.title
+          : typeof bb.caption === 'string' && bb.caption ? bb.caption
+          : bUrl;
+        data.title = bTitle;
+        if (typeof bb.caption === 'string' && bb.caption !== bTitle) data.summary = bb.caption;
+        if (typeof bb.image === 'string') data.image = bb.image;
+      }
       try {
         insertBlock(db, noteId, {
           block_type: blockType,
@@ -602,6 +620,30 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
 
     const note = getNote(db, noteId)!;
     return c.json({ note, blocks_inserted: inserted, bookmark_id: createdBookmarkId }, 201);
+  });
+
+  // ---- ad-hoc URL preview (Notion 風 /bookmark) ----------------------------
+  //
+  // editor の「URL を埋め込む」 から呼ばれる。 既に bookmark に登録済みなら
+  // bookmark_id を返し、 そうでなければ OG metadata だけ返す (= bookmark には
+  // 登録しない、 note を共有 / 同期した時に通常の bookmark 経路でカバーされる)。
+
+  r.post('/api/notes/url-preview', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
+    const rawUrl = body && typeof body.url === 'string' ? body.url : '';
+    if (!rawUrl) return c.json({ error: 'url required' }, 400);
+    const preview = await fetchUrlPreview(rawUrl);
+    const existing = findBookmarkByUrl(db, preview.url || rawUrl);
+    return c.json({
+      url: preview.url || rawUrl,
+      bookmark_id: existing ? existing.id : null,
+      title: preview.title || (existing?.title ?? rawUrl),
+      description: preview.description,
+      image: preview.image,
+      site_name: preview.site_name,
+      ok: preview.ok,
+      error: preview.error,
+    });
   });
 
   // ---- extension dispatch rules --------------------------------------------

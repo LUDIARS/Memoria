@@ -72,8 +72,24 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 | `todo` | チェックボックス | 通常ノート | `text` + `data_json.checked` |
 | `divider` | 水平線 | 通常ノート | (空) |
 | `floating_text` | **フローティングテキスト** (canvas 上の自由配置注釈) | **ブックマークノート** | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
-| `bookmark_embed` | **bookmark 埋め込みカード** (Notion 風) | 通常ノート | `data_json.bookmark_id/bookmark_url/title?/summary?` |
+| `bookmark_embed` | **bookmark 埋め込みカード** (Notion 風) | 通常ノート | `data_json.bookmark_id?/bookmark_url/title?/summary?/image?/site_name?` (`bookmark_id=null` = ad-hoc URL カード = Notion `/bookmark` 同等) |
 | `note_link` | **note→note 内部リンクカード** | 通常ノート | `data_json.note_id/title?` |
+
+> 全 block 共通: `data_json.bgColor` (CSS 色) を持つと block の背景色になる (Notion ライク装飾)。
+
+### Inline mention chip
+
+`text` block / heading / list / quote の本文中に **inline chip** として bookmark / note を埋め込める (block 単位の `bookmark_embed` / `note_link` カードとは別経路)。 sentence の流れに沿わせたい時はこちら。
+
+- HTML 形: `<a class="memoria-mention memoria-mention-bookmark" data-bookmark-id="N">タイトル</a>`
+- HTML 形: `<a class="memoria-mention memoria-mention-note" data-note-uuid="...">タイトル</a>`
+- selection toolbar の 🔖 / 📓 から開く inline picker で挿入する。 sanitize は class + data-* + href のみ残す。
+
+### Notion 風 URL preview card (`/bookmark`)
+
+block menu の **🌐 URL を埋め込む** から URL を入力すると、 server の `POST /api/notes/url-preview` が OG metadata (title / description / og:image / og:site_name) を取り、 `bookmark_embed` block (image 付き) として挿入する。 既存 bookmark 行と URL が一致した場合は `data_json.bookmark_id` をそちらに紐付け。 そうでなければ `bookmark_id=null` の ad-hoc カードとなり、 bookmark テーブルには登録されない。
+
+extension 側の Notion 取り込み (`/api/notes/from-notion`) でも `notion-bookmark-block` を `kind: 'bookmark'` (url + title? + caption? + image?) として送り、 server 側で同じ `bookmark_embed` 形に正規化して保存する。
 
 ## コメント仕様
 - 1 (note × user) で 1 set。 set 自体が UUID を持つ (`note_comment_sets.id`)

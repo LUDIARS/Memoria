@@ -85,14 +85,19 @@ export interface BlockData {
   height?: number;
   color?: string;
   anchor?: FloatingAnchor;
-  // bookmark_embed
-  bookmark_id?: number;
+  // bookmark_embed (bookmark_id が null = ad-hoc URL カード = Notion /bookmark 風)
+  bookmark_id?: number | null;
   bookmark_url?: string;
   // note_link
   note_id?: string;
   // shared
   title?: string;
   summary?: string;
+  // bookmark_embed: og:image (Notion 風 URL preview card)
+  image?: string;
+  site_name?: string;
+  // ── 全 block 共通 (Notion ライク装飾) ──
+  bgColor?: string;
 }
 
 export type FloatingAnchor =

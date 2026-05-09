@@ -130,3 +130,20 @@ export async function searchBookmarks(query: string, limit = 20): Promise<Bookma
   const res = await api<{ items: BookmarkSummary[] }>(`/api/bookmarks?${p.toString()}`);
   return res.items;
 }
+
+// ── URL preview (Notion 風 ad-hoc bookmark card) ──────────────────────
+
+export interface UrlPreviewResponse {
+  url: string;
+  bookmark_id: number | null;
+  title: string;
+  description: string;
+  image: string | null;
+  site_name: string | null;
+  ok: boolean;
+  error?: string;
+}
+
+export function urlPreview(url: string): Promise<UrlPreviewResponse> {
+  return api<UrlPreviewResponse>('/api/notes/url-preview', asJson({ url }));
+}

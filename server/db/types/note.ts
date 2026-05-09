@@ -86,13 +86,21 @@ export interface NoteBlockData {
   color?: string;
   anchor?: FloatingAnchor;
   // bookmark_embed
-  bookmark_id?: number;
+  // bookmark_id が null の場合は ad-hoc URL カード (= Notion の /bookmark 同等)
+  bookmark_id?: number | null;
   bookmark_url?: string;
   // note_link
   note_id?: string;
   // shared by bookmark_embed & note_link (キャッシュ)
   title?: string;
   summary?: string;
+  // bookmark_embed: og:image (Notion 風 URL preview card)
+  image?: string;
+  site_name?: string;
+
+  // ── 全 block 共通 (Notion ライク装飾) ──────────────────────────────────
+  /// CSS 色 (#rrggbb / rgb() / 名前) を許可。 空文字 = クリア。
+  bgColor?: string;
 }
 
 export type FloatingAnchor =

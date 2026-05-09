@@ -65,6 +65,13 @@ const BLOCK_TYPE_OPTIONS: ReadonlyArray<{ type: NoteBlockType; label: string; ic
   { type: 'note_link', label: 'Note を挿入', icon: '📓' },
 ];
 
+/// 「ブロック種別」 リストの後に置く別アクション (= 種別変更ではない)。
+/// data-action で識別。
+const BLOCK_EXTRA_ACTIONS: ReadonlyArray<{ action: string; label: string; icon: string }> = [
+  { action: 'url-embed',   label: 'URL を埋め込む (Notion 風)', icon: '🌐' },
+  { action: 'bg-color',    label: '背景色を変える',              icon: '🎨' },
+];
+
 // ── Init ───────────────────────────────────────────────────────────────────
 
 let initialized = false;
@@ -91,6 +98,20 @@ export function initNotes(): void {
     const t = e.target as HTMLElement | null;
     if (t && !t.closest('.note-toolbar') && !t.closest('.note-block-content')) {
       hideSelectionToolbar();
+    }
+  });
+  // inline mention chip クリック → 対応リソースを開く
+  document.addEventListener('click', (e) => {
+    const t = (e.target as HTMLElement | null)?.closest('.memoria-mention') as HTMLAnchorElement | null;
+    if (!t) return;
+    const bid = t.dataset.bookmarkId;
+    const nuuid = t.dataset.noteUuid;
+    if (bid) {
+      e.preventDefault();
+      window.open(`/api/bookmarks/${bid}/html`, '_blank', 'noopener,noreferrer');
+    } else if (nuuid) {
+      e.preventDefault();
+      void openNote(nuuid);
     }
   });
 }
@@ -280,6 +301,12 @@ function buildBlockElement(block: NoteBlockRow): HTMLElement {
   `;
   const body = el.querySelector<HTMLElement>('.nb-body')!;
   body.appendChild(buildBlockBody(block));
+  // block 単位の背景色 (Notion ライク)。 data.bgColor を最優先で apply。
+  const data = parseData(block);
+  if (data.bgColor) {
+    el.style.backgroundColor = data.bgColor;
+    el.classList.add('nb-bg-tinted');
+  }
   el.querySelector<HTMLButtonElement>('.nb-handle')!
     .addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -522,18 +549,39 @@ function buildBookmarkEmbed(block: NoteBlockRow): HTMLElement {
   const url = data.bookmark_url ?? '';
   const title = data.title ?? url;
   const summary = data.summary ?? '';
-  card.innerHTML = `
-    <div class="ne-icon">🔖</div>
-    <div class="ne-body">
-      <div class="ne-title">${escapeHtml(title)}</div>
-      ${summary ? `<div class="ne-summary muted">${escapeHtml(summary)}</div>` : ''}
-      <div class="ne-meta">
-        <span class="ne-url muted">${escapeHtml(url)}</span>
-        ${bid != null ? `<a class="ne-action" href="/api/bookmarks/${bid}/html" target="_blank" rel="noopener noreferrer">📂 キャッシュを開く</a>` : ''}
-        ${url ? `<a class="ne-action" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">🌐 元のページ</a>` : ''}
+  const image = data.image ?? '';
+  const siteName = data.site_name ?? '';
+  // image 付きは Notion 風の横長 preview card。 image 無しは従来の icon + text。
+  if (image) {
+    card.classList.add('note-embed-bookmark-rich');
+    card.innerHTML = `
+      <div class="ne-thumb"><img src="${escapeHtml(image)}" alt="" loading="lazy" /></div>
+      <div class="ne-body">
+        <div class="ne-title">${escapeHtml(title)}</div>
+        ${summary ? `<div class="ne-summary muted">${escapeHtml(summary)}</div>` : ''}
+        <div class="ne-meta">
+          ${siteName ? `<span class="ne-site muted">${escapeHtml(siteName)}</span>` : ''}
+          <span class="ne-url muted">${escapeHtml(url)}</span>
+          ${bid != null ? `<a class="ne-action" href="/api/bookmarks/${bid}/html" target="_blank" rel="noopener noreferrer">📂 キャッシュ</a>` : ''}
+          ${url ? `<a class="ne-action" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">🌐 元のページ</a>` : ''}
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  } else {
+    card.innerHTML = `
+      <div class="ne-icon">🔖</div>
+      <div class="ne-body">
+        <div class="ne-title">${escapeHtml(title)}</div>
+        ${summary ? `<div class="ne-summary muted">${escapeHtml(summary)}</div>` : ''}
+        <div class="ne-meta">
+          ${siteName ? `<span class="ne-site muted">${escapeHtml(siteName)}</span>` : ''}
+          <span class="ne-url muted">${escapeHtml(url)}</span>
+          ${bid != null ? `<a class="ne-action" href="/api/bookmarks/${bid}/html" target="_blank" rel="noopener noreferrer">📂 キャッシュを開く</a>` : ''}
+          ${url ? `<a class="ne-action" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">🌐 元のページ</a>` : ''}
+        </div>
+      </div>
+    `;
+  }
   return card;
 }
 
@@ -662,6 +710,10 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
     ${typeOptions.map((o) => `
       <button class="nbm-item" data-type="${o.type}"><span class="nbm-icon">${o.icon}</span>${o.label}</button>
     `).join('')}
+    <div class="nbm-section">挿入 / 装飾</div>
+    ${BLOCK_EXTRA_ACTIONS.map((o) => `
+      <button class="nbm-item" data-action="${o.action}"><span class="nbm-icon">${o.icon}</span>${o.label}</button>
+    `).join('')}
     <div class="nbm-section">操作</div>
     <button class="nbm-item nbm-action" data-action="comment">💬 このブロックにコメント</button>
     <button class="nbm-item nbm-danger" data-action="delete">🗑 削除</button>
@@ -675,12 +727,15 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
     btn.addEventListener('click', () => {
       const t = btn.dataset.type as NoteBlockType | undefined;
       const a = btn.dataset.action;
+      const handleAnchor = anchor;
       closeBlockMenu();
       if (t === 'bookmark_embed') openBookmarkPickerForBlock(blockUuid);
       else if (t === 'note_link') openNotePickerForBlock(blockUuid);
       else if (t) void changeBlockType(blockUuid, t);
       else if (a === 'delete') void removeBlock(blockUuid);
       else if (a === 'comment') void quickComment(blockUuid);
+      else if (a === 'url-embed') void promptUrlEmbed(blockUuid);
+      else if (a === 'bg-color') openBlockBgColorPicker(blockUuid, handleAnchor);
     });
   });
   setTimeout(() => {
@@ -709,7 +764,10 @@ function ensureToolbar(): HTMLElement {
     <button data-cmd="italic" title="斜体"><i>I</i></button>
     <button data-cmd="code" title="インラインコード">${'<'}/${'>'}</button>
     <button data-cmd="link" title="リンク">🔗</button>
-    <button data-cmd="color" title="色">🎨</button>
+    <button data-cmd="color" title="文字色">🎨</button>
+    <button data-cmd="bg" title="ハイライト">🖍</button>
+    <button data-cmd="mention-bookmark" title="bookmark を inline 挿入">🔖</button>
+    <button data-cmd="mention-note" title="note を inline 挿入">📓</button>
   `;
   toolbar.style.display = 'none';
   document.body.appendChild(toolbar);
@@ -752,7 +810,10 @@ function applyToolbarCmd(cmd: string): void {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return;
   const range = sel.getRangeAt(0);
-  if (cmd === 'color') return showColorPicker(range);
+  if (cmd === 'color') return showColorPicker(range, 'fg');
+  if (cmd === 'bg')    return showColorPicker(range, 'bg');
+  if (cmd === 'mention-bookmark') return openInlineBookmarkPicker(range);
+  if (cmd === 'mention-note')     return openInlineNotePicker(range);
   if (cmd === 'link') {
     const url = prompt('リンク URL を入力してください:');
     if (url && /^(https?:|mailto:|\/|#)/i.test(url)) {
@@ -785,7 +846,8 @@ function wrapRangeWith(range: Range, makeNode: (text: string) => HTMLElement): v
   if (sel) { sel.removeAllRanges(); sel.addRange(r2); }
 }
 
-function showColorPicker(range: Range): void {
+/// `mode='fg'` (文字色) / `'bg'` (ハイライト)。
+function showColorPicker(range: Range, mode: 'fg' | 'bg' = 'fg'): void {
   closeBlockMenu();
   const popup = document.createElement('div');
   popup.className = 'note-color-popup';
@@ -805,14 +867,14 @@ function showColorPicker(range: Range): void {
   popup.querySelectorAll<HTMLButtonElement>('.ncp-swatch').forEach((b) => {
     b.addEventListener('click', () => {
       const c = b.dataset.color || '';
-      applyColor(range, c);
+      applyColor(range, c, mode);
       popup.remove();
       hideSelectionToolbar();
     });
   });
   popup.querySelector<HTMLButtonElement>('#ncpApply')!.addEventListener('click', () => {
     const v = popup.querySelector<HTMLInputElement>('#ncpCustom')!.value;
-    applyColor(range, v);
+    applyColor(range, v, mode);
     popup.remove();
     hideSelectionToolbar();
   });
@@ -824,7 +886,7 @@ function showColorPicker(range: Range): void {
   }, 0);
 }
 
-function applyColor(range: Range, color: string): void {
+function applyColor(range: Range, color: string, mode: 'fg' | 'bg' = 'fg'): void {
   if (!color) {
     const text = range.toString();
     range.deleteContents();
@@ -832,7 +894,8 @@ function applyColor(range: Range, color: string): void {
   } else {
     wrapRangeWith(range, (s) => {
       const span = document.createElement('span');
-      span.style.color = color;
+      if (mode === 'bg') span.style.backgroundColor = color;
+      else span.style.color = color;
       span.textContent = s;
       return span;
     });
@@ -1029,6 +1092,205 @@ function openNotePickerForBlock(blockUuid: string): void {
   });
   void refresh();
   search.focus();
+}
+
+// ── Block 単位の背景色 (Notion ライク) ─────────────────────────────────────
+
+function openBlockBgColorPicker(blockUuid: string, anchor: HTMLElement): void {
+  if (!state.current) return;
+  const block = state.current.blocks.find((b) => b.uuid === blockUuid);
+  if (!block) return;
+  closeBlockMenu();
+  const popup = document.createElement('div');
+  popup.className = 'note-color-popup';
+  // 背景色用 palette は薄めの色を別途用意 (alpha 30% 風)
+  const BG_PALETTE = [
+    '', '#fde2e0', '#fdebc4', '#dcf2e2', '#dde9ff', '#ebdcfa',
+    '#f2f2f2', '#1d2230',
+  ];
+  popup.innerHTML = `
+    <div class="ncp-row">${BG_PALETTE.map((c) => `
+      <button class="ncp-swatch" data-color="${c}" style="${c ? `background:${c}` : ''}" title="${c || '色クリア'}">${c ? '' : '×'}</button>
+    `).join('')}</div>
+    <div class="ncp-custom">
+      <input type="color" id="nbcCustom" />
+      <button class="ghost" id="nbcApply">適用</button>
+    </div>
+  `;
+  document.body.appendChild(popup);
+  const r = anchor.getBoundingClientRect();
+  popup.style.left = `${r.left + window.scrollX}px`;
+  popup.style.top = `${r.bottom + window.scrollY + 4}px`;
+  const apply = (c: string): void => {
+    const data = parseData(block);
+    if (c) data.bgColor = c;
+    else delete data.bgColor;
+    void saveBlockData(block, data).then(async () => {
+      if (state.current) {
+        state.current = await api.getNote(state.current.id);
+        renderAllBlocks();
+      }
+    });
+  };
+  popup.querySelectorAll<HTMLButtonElement>('.ncp-swatch').forEach((b) => {
+    b.addEventListener('click', () => { apply(b.dataset.color || ''); popup.remove(); });
+  });
+  popup.querySelector<HTMLButtonElement>('#nbcApply')!.addEventListener('click', () => {
+    const v = popup.querySelector<HTMLInputElement>('#nbcCustom')!.value;
+    apply(v); popup.remove();
+  });
+  setTimeout(() => {
+    document.addEventListener('click', function once(e) {
+      if (!popup.contains(e.target as Node)) popup.remove();
+      else document.addEventListener('click', once, { once: true });
+    }, { once: true });
+  }, 0);
+}
+
+// ── ad-hoc URL embed (Notion 風 /bookmark) ─────────────────────────────────
+
+async function promptUrlEmbed(blockUuid: string): Promise<void> {
+  if (!state.current) return;
+  const url = prompt('埋め込みたい URL を入力してください:');
+  if (!url || !/^https?:\/\//i.test(url)) {
+    if (url) alert('http(s) URL を入力してください。');
+    return;
+  }
+  let preview;
+  try {
+    preview = await api.urlPreview(url);
+  } catch (e: unknown) {
+    alert(`URL preview 失敗: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  const data: BlockData = {
+    bookmark_id: preview.bookmark_id,
+    bookmark_url: preview.url,
+    title: preview.title || preview.url,
+    summary: preview.description || '',
+    image: preview.image || undefined,
+    site_name: preview.site_name || undefined,
+  };
+  try {
+    await api.patchBlock(state.current.id, blockUuid, {
+      block_type: 'bookmark_embed',
+      data,
+    });
+    state.current = await api.getNote(state.current.id);
+    renderAllBlocks();
+  } catch (e: unknown) {
+    alert(`URL 埋め込み失敗: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// ── Inline mention picker (= sentence 中に bookmark / note の chip 挿入) ─────
+
+function openInlineBookmarkPicker(range: Range): void {
+  openInlineMentionPicker(range, async (q) => {
+    const items = await api.searchBookmarks(q, 30);
+    return items.map((b) => ({
+      id: String(b.id),
+      title: b.title || b.url,
+      sub: b.url,
+      kind: 'bookmark' as const,
+    }));
+  }, 'bookmark');
+}
+
+function openInlineNotePicker(range: Range): void {
+  openInlineMentionPicker(range, async (q) => {
+    const res = await api.listNotes(q, 30);
+    return res.items.map((n) => ({
+      id: n.id,
+      title: n.title || '無題',
+      sub: (n.preview || '').slice(0, 80),
+      kind: 'note' as const,
+    }));
+  }, 'note');
+}
+
+interface InlinePickerItem { id: string; title: string; sub: string; kind: 'bookmark' | 'note' }
+
+function openInlineMentionPicker(
+  range: Range,
+  search: (q: string) => Promise<InlinePickerItem[]>,
+  defaultKind: 'bookmark' | 'note',
+): void {
+  hideSelectionToolbar();
+  const popup = document.createElement('div');
+  popup.className = 'note-mention-popup';
+  popup.innerHTML = `
+    <input type="search" id="nmpSearch" placeholder="${defaultKind === 'bookmark' ? 'bookmark を検索' : 'note を検索'}" />
+    <ul id="nmpList" class="note-mention-list"></ul>
+  `;
+  document.body.appendChild(popup);
+  const r = range.getBoundingClientRect();
+  popup.style.left = `${Math.max(8, r.left + window.scrollX)}px`;
+  popup.style.top = `${r.bottom + window.scrollY + 6}px`;
+  const inp = popup.querySelector<HTMLInputElement>('#nmpSearch')!;
+  const list = popup.querySelector<HTMLUListElement>('#nmpList')!;
+  let timer = 0;
+  // selection を維持するため独自に保存 (popup の input にフォーカスすると selection が飛ぶ)
+  const savedRange = range.cloneRange();
+  const refresh = async (): Promise<void> => {
+    const items = await search(inp.value);
+    list.innerHTML = items.map((it) => `
+      <li class="nmp-row" data-id="${escapeHtml(it.id)}" data-kind="${it.kind}">
+        <div class="nmp-title">${escapeHtml(it.title)}</div>
+        ${it.sub ? `<div class="nmp-sub muted">${escapeHtml(it.sub)}</div>` : ''}
+      </li>
+    `).join('');
+    list.querySelectorAll<HTMLLIElement>('.nmp-row').forEach((li) => {
+      li.addEventListener('click', () => {
+        const id = li.dataset.id || '';
+        const kind = li.dataset.kind as 'bookmark' | 'note';
+        const titleEl = li.querySelector<HTMLElement>('.nmp-title');
+        const label = titleEl?.textContent || id;
+        insertInlineMention(savedRange, kind, id, label);
+        popup.remove();
+      });
+    });
+  };
+  inp.addEventListener('input', () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refresh, 180);
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') popup.remove();
+  });
+  setTimeout(() => {
+    document.addEventListener('click', function once(e) {
+      if (!popup.contains(e.target as Node)) popup.remove();
+      else document.addEventListener('click', once, { once: true });
+    }, { once: true });
+  }, 0);
+  void refresh();
+  inp.focus();
+}
+
+function insertInlineMention(
+  range: Range,
+  kind: 'bookmark' | 'note',
+  id: string,
+  label: string,
+): void {
+  const a = document.createElement('a');
+  a.className = `memoria-mention memoria-mention-${kind}`;
+  if (kind === 'bookmark') a.dataset.bookmarkId = id;
+  else a.dataset.noteUuid = id;
+  a.textContent = `${kind === 'bookmark' ? '🔖' : '📓'} ${label}`;
+  // selection があれば置き換え、 collapsed なら現在位置に挿入。
+  range.deleteContents();
+  range.insertNode(a);
+  // chip の後に空白を追加して続けて入力できるようにする
+  const sp = document.createTextNode(' ');
+  a.after(sp);
+  const r2 = document.createRange();
+  r2.setStartAfter(sp);
+  r2.collapse(true);
+  const sel = window.getSelection();
+  if (sel) { sel.removeAllRanges(); sel.addRange(r2); }
+  triggerSaveForSelection(r2);
 }
 
 // ── Bookmark canvas (iframe + floating overlay) ──────────────────────────

@@ -4,11 +4,17 @@
 //   <b> <strong> <i> <em> <u> <code> <a href> <span style="color: #...">
 // 許可する block-level (heading / quote 内に許す):
 //   <br>
+// 特殊: inline bookmark/note mention chip は
+//   <a class="memoria-mention" data-bookmark-id="N">title</a>
+//   <a class="memoria-mention" data-note-uuid="...">title</a>
+//   class + data-* + href を許可。
 //
 // それ以外は textContent を残してタグだけ削る (= flatten)。
 
 const INLINE_ALLOWED_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'CODE', 'A', 'SPAN', 'BR']);
 const COLOR_RE = /color\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\([0-9, ]+\)|[a-zA-Z]+)/;
+const BG_COLOR_RE = /background-color\s*:\s*(#[0-9a-fA-F]{3,8}|rgb\([0-9, ]+\)|[a-zA-Z]+)/;
+const MENTION_DATA_ATTRS = ['data-bookmark-id', 'data-note-uuid'];
 
 export function sanitizeInlineHtml(input: string): string {
   if (!input) return '';
@@ -39,27 +45,51 @@ function walk(node: ParentNode): void {
     // sanitize attributes
     if (tag === 'A') {
       const href = el.getAttribute('href') || '';
-      // allow http(s):// and mailto:
-      if (!/^(https?:|mailto:|\/|#)/i.test(href)) {
-        el.removeAttribute('href');
+      const cls = el.getAttribute('class') || '';
+      const isMention = cls.includes('memoria-mention');
+      if (isMention) {
+        // memoria mention chip: keep class + data-* + (任意 href + rel/target)
+        const keep: string[] = ['class'];
+        for (const attr of MENTION_DATA_ATTRS) {
+          if (el.hasAttribute(attr)) keep.push(attr);
+        }
+        if (/^(https?:|mailto:|\/|#)/i.test(href)) {
+          el.setAttribute('rel', 'noopener noreferrer');
+          el.setAttribute('target', '_blank');
+          keep.push('href', 'rel', 'target');
+        }
+        // class 属性は memoria-mention とそのバリアント (-bookmark / -note) のみ残す
+        const safeCls = cls
+          .split(/\s+/)
+          .filter((c) => /^memoria-mention(-[\w-]+)?$/.test(c))
+          .join(' ');
+        el.setAttribute('class', safeCls || 'memoria-mention');
+        stripAttrsExcept(el, keep);
       } else {
-        el.setAttribute('rel', 'noopener noreferrer');
-        el.setAttribute('target', '_blank');
+        // 通常リンク
+        if (!/^(https?:|mailto:|\/|#)/i.test(href)) {
+          el.removeAttribute('href');
+        } else {
+          el.setAttribute('rel', 'noopener noreferrer');
+          el.setAttribute('target', '_blank');
+        }
+        stripAttrsExcept(el, ['href', 'rel', 'target']);
       }
-      // strip dangerous attrs
-      stripAttrsExcept(el, ['href', 'rel', 'target']);
     } else if (tag === 'SPAN') {
       const style = el.getAttribute('style') || '';
-      const m = COLOR_RE.exec(style);
-      if (m) {
-        el.setAttribute('style', `color: ${m[1]}`);
-      } else {
-        // 色指定がない span は剥がす (= unwrap)
+      const cm = COLOR_RE.exec(style);
+      const bm = BG_COLOR_RE.exec(style);
+      const styleParts: string[] = [];
+      if (cm) styleParts.push(`color: ${cm[1]}`);
+      if (bm) styleParts.push(`background-color: ${bm[1]}`);
+      if (styleParts.length === 0) {
+        // 色 / 背景色とも指定なしの span は剥がす (= unwrap)
         const frag = document.createDocumentFragment();
         while (el.firstChild) frag.appendChild(el.firstChild);
         el.replaceWith(frag);
         continue;
       }
+      el.setAttribute('style', styleParts.join('; '));
       stripAttrsExcept(el, ['style']);
     } else {
       // b/strong/i/em/u/code/br
