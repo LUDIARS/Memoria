@@ -11,8 +11,9 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@ludiars/cernere-service-adapter": "file:../../../Cernere/packages/service-adapter",
     "hono": "^4.6.10",
-    "jose": "^5.9.6",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "ws": "^8.20.0"
   }
 }
