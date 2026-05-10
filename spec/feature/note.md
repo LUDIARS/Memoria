@@ -89,6 +89,14 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 
 block menu の **🌐 URL を埋め込む** から URL を入力すると、 server の `POST /api/notes/url-preview` が OG metadata (title / description / og:image / og:site_name) を取り、 `bookmark_embed` block (image 付き) として挿入する。 既存 bookmark 行と URL が一致した場合は `data_json.bookmark_id` をそちらに紐付け。 そうでなければ `bookmark_id=null` の ad-hoc カードとなり、 bookmark テーブルには登録されない。
 
+#### metadata の取得経路 (Plan B: extension scrape 優先 → server fetch fallback)
+
+URL preview metadata は以下の優先順で解決される。 response の `source` フィールドにどの経路を使ったかが入る。
+
+1. **`extension-scrape`** — extension が既に該当 URL を bookmark 経路 (`POST /api/bookmark`) で送ってきていた場合、 その時に rendered DOM から抽出した og:* が `page_metadata` テーブルにキャッシュされている。 SPA でも JS 描画後の DOM を捕捉できるので一番高信頼。
+2. **`bookmark-row`** — 上記キャッシュは無いが bookmark 行は存在する場合、 title + summary だけで簡易カードを返す (画像なし)。
+3. **`server-fetch`** — どのキャッシュにも該当が無ければ server-side で OG fetch する (`fetchUrlPreview`)。 SSR ページなら成功、 SPA shell だと空に近い結果になる。
+
 extension 側の Notion 取り込み (`/api/notes/from-notion`) でも `notion-bookmark-block` を `kind: 'bookmark'` (url + title? + caption? + image?) として送り、 server 側で同じ `bookmark_embed` 形に正規化して保存する。
 
 ## コメント仕様

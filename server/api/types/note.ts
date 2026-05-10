@@ -134,6 +134,8 @@ export interface UrlPreviewResponse {
   ok: boolean;
   /// ok=false 時のエラーメッセージ (UI 表示用)
   error?: string;
+  /// どの経路で metadata を取ったか (UI で「extension cache から」 等表示)
+  source?: 'extension-scrape' | 'bookmark-row' | 'server-fetch';
 }
 
 export interface NoteFromNotionRequest {

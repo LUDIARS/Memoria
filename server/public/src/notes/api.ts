@@ -142,6 +142,7 @@ export interface UrlPreviewResponse {
   site_name: string | null;
   ok: boolean;
   error?: string;
+  source?: 'extension-scrape' | 'bookmark-row' | 'server-fetch';
 }
 
 export function urlPreview(url: string): Promise<UrlPreviewResponse> {

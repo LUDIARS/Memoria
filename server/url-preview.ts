@@ -99,6 +99,28 @@ export async function fetchUrlPreview(rawUrl: string): Promise<UrlPreviewResult>
     };
   }
 
+  const parsed_preview = parseOgFromHtml(html, parsed);
+  return {
+    ok: true,
+    url: parsed.toString(),
+    title: parsed_preview.title,
+    description: parsed_preview.description,
+    image: parsed_preview.image,
+    site_name: parsed_preview.site_name,
+  };
+}
+
+/// 与えられた HTML 文字列から OG / Twitter / description / title / image を抽出する。
+/// extension が rendered DOM を直接 POST してきた時 (= /api/bookmark) にも使う。
+/// `base` は相対 URL を絶対に直すためのベース。
+export function parseOgFromHtml(html: string, base: URL | string): {
+  title: string;
+  description: string;
+  image: string | null;
+  site_name: string;
+  og_type: string | null;
+} {
+  const baseUrl = typeof base === 'string' ? new URL(base) : base;
   const root = parseHtml(html, { lowerCaseTagName: false });
   const meta = (sel: string): string =>
     (root.querySelector(sel)?.getAttribute('content') ?? '').trim();
@@ -119,21 +141,16 @@ export async function fetchUrlPreview(rawUrl: string): Promise<UrlPreviewResult>
     meta('meta[name="twitter:image"]') ||
     meta('meta[name="twitter:image:src"]') ||
     '';
-  const image = ogImage ? toAbsoluteUrl(ogImage, parsed) : null;
+  const image = ogImage ? toAbsoluteUrl(ogImage, baseUrl) : null;
 
   const siteName =
     meta('meta[property="og:site_name"]') ||
     meta('meta[name="application-name"]') ||
-    parsed.hostname;
+    baseUrl.hostname;
 
-  return {
-    ok: true,
-    url: parsed.toString(),
-    title,
-    description,
-    image,
-    site_name: siteName,
-  };
+  const ogType = meta('meta[property="og:type"]') || null;
+
+  return { title, description, image, site_name: siteName, og_type: ogType };
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {

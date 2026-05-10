@@ -12,8 +12,13 @@ import {
   getOrCreateCommentSet, listCommentSets, getCommentSet, deleteCommentSet,
   listComments, insertComment, updateComment, deleteComment,
   getExtensionRules, setExtensionRules,
+  getPageMetadata,
 } from '../db.js';
 import { fetchUrlPreview } from '../url-preview.js';
+
+function hostnameOf(rawUrl: string): string {
+  try { return new URL(rawUrl).hostname; } catch { return ''; }
+}
 import type {
   ExtensionRules, ExtensionChatDomain, ExtensionImplRule, ExtensionShoppingDomain,
   ExtensionNotionDomain,
@@ -625,24 +630,66 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
   // ---- ad-hoc URL preview (Notion 風 /bookmark) ----------------------------
   //
   // editor の「URL を埋め込む」 から呼ばれる。 既に bookmark に登録済みなら
-  // bookmark_id を返し、 そうでなければ OG metadata だけ返す (= bookmark には
-  // 登録しない、 note を共有 / 同期した時に通常の bookmark 経路でカバーされる)。
+  // bookmark_id を返し、 そうでなければ OG metadata だけ返す。
+  //
+  // Plan B (= extension scrape 優先 + server fetch fallback):
+  //   1. page_metadata 行 (extension が rendered DOM から書き込んだ og:*) があれば最優先
+  //   2. bookmarks 行があれば title + summary を補完
+  //   3. それでも足りなければ server-side で OG fetch (SPA 相手だと失敗しやすい)
 
   r.post('/api/notes/url-preview', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
     const rawUrl = body && typeof body.url === 'string' ? body.url : '';
     if (!rawUrl) return c.json({ error: 'url required' }, 400);
+
+    const existing = findBookmarkByUrl(db, rawUrl);
+    const cached = getPageMetadata(db, rawUrl);
+
+    // Step 1: extension scrape cache が題名 / 画像どれかを持っていれば、 server fetch せずに返す
+    const hasUsefulCache = cached && (
+      (cached.og_title && cached.og_title.trim()) ||
+      (cached.og_image && cached.og_image.trim()) ||
+      (cached.og_description && cached.og_description.trim())
+    );
+    if (hasUsefulCache && cached) {
+      return c.json({
+        url: rawUrl,
+        bookmark_id: existing ? existing.id : null,
+        title: cached.og_title || cached.title || existing?.title || rawUrl,
+        description: cached.og_description || cached.meta_description || existing?.summary || '',
+        image: cached.og_image || null,
+        site_name: hostnameOf(rawUrl),
+        ok: true,
+        source: 'extension-scrape' as const,
+      });
+    }
+
+    // Step 2: bookmark 行があれば title + summary を返す (画像なしの軽量カード)
+    if (existing) {
+      return c.json({
+        url: rawUrl,
+        bookmark_id: existing.id,
+        title: existing.title || rawUrl,
+        description: existing.summary || '',
+        image: null,
+        site_name: hostnameOf(rawUrl),
+        ok: true,
+        source: 'bookmark-row' as const,
+      });
+    }
+
+    // Step 3: 最終 fallback — server-side OG fetch (SPA 相手だと SSR shell しか取れない)
     const preview = await fetchUrlPreview(rawUrl);
-    const existing = findBookmarkByUrl(db, preview.url || rawUrl);
     return c.json({
       url: preview.url || rawUrl,
-      bookmark_id: existing ? existing.id : null,
-      title: preview.title || (existing?.title ?? rawUrl),
+      bookmark_id: null,
+      title: preview.title || rawUrl,
       description: preview.description,
       image: preview.image,
       site_name: preview.site_name,
       ok: preview.ok,
       error: preview.error,
+      source: 'server-fetch' as const,
     });
   });
 
