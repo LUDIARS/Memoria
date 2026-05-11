@@ -15,6 +15,7 @@ export type NoteBlockType =
   | 'todo'
   | 'divider'
   | 'floating_text'
+  | 'canvas'
   | 'bookmark_embed'
   | 'note_link';
 
@@ -96,8 +97,18 @@ export interface BlockData {
   // bookmark_embed: og:image (Notion 風 URL preview card)
   image?: string;
   site_name?: string;
+  // canvas (drawing)
+  paths?: CanvasPath[];
+  canvasWidth?: number;
+  canvasHeight?: number;
   // ── 全 block 共通 (Notion ライク装飾) ──
   bgColor?: string;
+}
+
+export interface CanvasPath {
+  points: string;
+  color: string;
+  width: number;
 }
 
 export type FloatingAnchor =

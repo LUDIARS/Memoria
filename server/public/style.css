@@ -5784,3 +5784,233 @@ dialog.loc-edit-modal[open] {
   margin: 4px 0;
 }
 .nb-bg-tinted .note-block-content:focus { background: transparent; }
+
+/* ─────────────────────────────────────────────────────────────────
+   📓 Notes rev4 — お絵描き canvas + 通常ノート floating overlay +
+   特殊ブロックメニュー + モバイルサイドバー collapse
+   ───────────────────────────────────────────────────────────────── */
+
+/* ── sidebar drawer / collapse ──
+   PC: 既定で sidebar 表示。 ☰ で grid 1 列目を 0 にして畳む。
+   mobile (≤760px): sidebar を fixed off-canvas drawer に変えて pane を圧迫させない。
+       ☰ で開閉、 backdrop タップで閉。 */
+.notes-sidebar-toggle {
+  padding: 6px 12px;
+  font-size: 18px;
+  line-height: 1;
+}
+.notes-sidebar-backdrop { display: none; }
+
+/* PC: 既定 open。 not-open で 1 列目を畳む。 */
+.notes-layout:not(.notes-sidebar-open) {
+  grid-template-columns: 0 minmax(0, 1fr) 320px;
+}
+.notes-layout:not(.notes-sidebar-open) .notes-sidebar { display: none; }
+@media (max-width: 1100px) {
+  .notes-layout:not(.notes-sidebar-open) { grid-template-columns: 0 minmax(0, 1fr); }
+}
+
+/* mobile drawer */
+@media (max-width: 760px) {
+  /* 既存の `.notes-layout { grid-template-columns: 1fr }` (上の方の rule) を上書きしないが、
+     sidebar を fixed off-canvas に切替えるので grid どうこうは無視される */
+  .notes-layout { position: relative; }
+  .notes-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 84%;
+    max-width: 320px;
+    max-height: none;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 16px rgba(0,0,0,0.2);
+    transform: translateX(-100%);
+    transition: transform 0.22s ease-out;
+    z-index: 9100;
+    display: block;   /* 既定 .notes-sidebar の display を維持 */
+  }
+  .notes-layout.notes-sidebar-open .notes-sidebar { transform: translateX(0); }
+  .notes-layout:not(.notes-sidebar-open) .notes-sidebar { display: block; transform: translateX(-100%); }
+  .notes-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 9099;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s ease-out;
+  }
+  .notes-layout.notes-sidebar-open .notes-sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* 通常ノート編集の上部ツールバー (フローティング追加など) */
+.note-doc-toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 4px 0 8px 0;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.note-doc-toolbar button { font-size: 12px; padding: 4px 10px; }
+
+/* 通常ノート blocks + floating overlay コンテナ */
+.note-blocks-wrap {
+  position: relative;
+  /* overlay を絶対配置するため relative 親を確保 */
+  min-height: 80px;
+}
+.note-doc-floating-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 100%;
+  pointer-events: none;
+}
+.note-doc-floating-overlay .note-floating { pointer-events: auto; }
+
+/* 「+ 特殊ブロック」 用ピッカー (既存 .note-block-menu スタイルを流用 + tweak) */
+.note-special-block-menu {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+/* mobile 時の bottom-sheet 表示 — 画面下端から大きく出して指で押しやすく */
+.note-special-block-sheet {
+  position: fixed !important;
+  top: auto !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  max-height: 70vh;
+  overflow-y: auto;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 9500;
+  padding: 8px 8px 24px 8px;
+}
+.note-special-block-sheet .nbm-item {
+  padding: 12px 14px;
+  font-size: 15px;
+}
+.note-special-block-sheet .nbm-section {
+  padding: 8px 14px 4px 14px;
+  font-size: 12px;
+}
+.nbm-sheet-head {
+  position: sticky;
+  top: -8px;
+  background: inherit;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px 6px 14px;
+  font-weight: 600;
+  font-size: 15px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.nbm-sheet-close {
+  border: 0; background: transparent;
+  width: 32px; height: 32px;
+  font-size: 22px;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.nbm-sheet-close:hover { background: rgba(0,0,0,0.06); }
+.note-sheet-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 9499;
+}
+
+/* お絵描きキャンバス block */
+.note-canvas-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.ncb-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 6px;
+  background: #f7f8fa;
+  border-radius: 6px;
+}
+.ncb-tool-group {
+  display: flex; gap: 4px; align-items: center;
+  padding: 0 4px;
+  border-right: 1px solid var(--border);
+}
+.ncb-tool-group:last-child { border-right: 0; }
+.ncb-tool, .ncb-color, .ncb-width {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ncb-tool.active, .ncb-color.active, .ncb-width.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.ncb-color {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+.ncb-color.active { border-color: var(--accent); transform: scale(1.1); }
+.ncb-color-custom {
+  width: 28px; height: 24px;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.ncb-width { width: 26px; height: 26px; }
+.ncb-actions { margin-left: auto; }
+.ncb-actions button { font-size: 12px; padding: 4px 8px; }
+.ncb-stage {
+  width: 100%;
+  background:
+    repeating-linear-gradient(0deg, #f4f4f6 0 1px, transparent 1px 32px),
+    repeating-linear-gradient(90deg, #f4f4f6 0 1px, transparent 1px 32px),
+    #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ncb-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   📓 Notes — モバイル (~720px) 個別調整
+   ───────────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  /* sidebar は openNote 時に JS で collapse、 toggle で復元 */
+  .notes-layout { grid-template-columns: 1fr; }
+  .notes-sidebar { max-height: 50vh; }
+  .notes-pane { padding: 12px 14px; }
+  .note-title { font-size: 22px; }
+  .note-doc-toolbar button { padding: 6px 12px; font-size: 13px; }
+  .note-add-block button { padding: 8px 14px; font-size: 13px; }
+  /* canvas はビューポート幅に合わせて縮める */
+  .ncb-toolbar { gap: 6px; }
+  .ncb-tool-group { padding: 0 2px; }
+}

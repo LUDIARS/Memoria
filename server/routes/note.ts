@@ -37,7 +37,8 @@ type Db = BetterSqlite3.Database;
 
 const TITLE_MAX = 200;
 const TEXT_MAX = 64 * 1024;
-const DATA_MAX = 32 * 1024;
+// canvas block の SVG path 配列を入れる余地を確保 (旧 32KB → 256KB)。
+const DATA_MAX = 256 * 1024;
 const TAG_MAX = 32;
 const TAGS_MAX_COUNT = 16;
 const COMMENT_TEXT_MAX = 16 * 1024;

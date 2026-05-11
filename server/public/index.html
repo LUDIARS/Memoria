@@ -600,13 +600,16 @@
       <!-- 📓 ノート — esa / DocBase 風 WYSIWYG ブロックエディタ + bookmark base + comment sets。 spec/feature/note.md -->
       <div id="notesView" class="hidden">
         <div class="notes-toolbar">
+          <button id="notesSidebarToggle" type="button" class="ghost notes-sidebar-toggle"
+            title="ノート一覧の表示切替" aria-label="ノート一覧の表示切替">☰</button>
           <input id="notesSearch" type="search" placeholder="ノート検索 (タイトル / 本文)" />
           <span class="grow"></span>
           <button id="notesFromBookmarkBtn" type="button" class="ghost">🔖 bookmark から</button>
           <button id="notesNewBtn" type="button">+ 新規ノート</button>
         </div>
-        <div class="notes-layout">
-          <aside class="notes-sidebar">
+        <div class="notes-layout" id="notesLayout">
+          <div class="notes-sidebar-backdrop" aria-hidden="true"></div>
+          <aside class="notes-sidebar" id="notesSidebar">
             <ul id="notesList" class="notes-list"></ul>
           </aside>
           <section class="notes-pane" id="noteEditor">

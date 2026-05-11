@@ -60,16 +60,23 @@ const BLOCK_TYPE_OPTIONS: ReadonlyArray<{ type: NoteBlockType; label: string; ic
   { type: 'code', label: 'コード', icon: '</>' },
   { type: 'mermaid', label: 'Mermaid 図', icon: '⤵' },
   { type: 'table', label: 'テーブル', icon: '⊞' },
+  { type: 'canvas', label: 'お絵描きキャンバス', icon: '✏️' },
   { type: 'divider', label: '区切り', icon: '—' },
   { type: 'bookmark_embed', label: 'Bookmark を挿入', icon: '🔖' },
   { type: 'note_link', label: 'Note を挿入', icon: '📓' },
 ];
 
+/// 通常ノートで slash menu と別枠に出す「フローティング挿入」 アクション。
+/// floating_text はブロック種別変更ではなく overlay レイヤーに新規追加するため
+/// 種別リストではなく action 経由で扱う。
+const FLOATING_INSERT_ACTION = 'insert-floating' as const;
+
 /// 「ブロック種別」 リストの後に置く別アクション (= 種別変更ではない)。
 /// data-action で識別。
 const BLOCK_EXTRA_ACTIONS: ReadonlyArray<{ action: string; label: string; icon: string }> = [
-  { action: 'url-embed',   label: 'URL を埋め込む (Notion 風)', icon: '🌐' },
-  { action: 'bg-color',    label: '背景色を変える',              icon: '🎨' },
+  { action: 'url-embed',          label: 'URL を埋め込む (Notion 風)', icon: '🌐' },
+  { action: FLOATING_INSERT_ACTION, label: 'フローティング注釈を追加',  icon: '📍' },
+  { action: 'bg-color',           label: '背景色を変える',              icon: '🎨' },
 ];
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -92,6 +99,25 @@ export function initNotes(): void {
 
   const fromBookmarkBtn = byId<HTMLButtonElement>('notesFromBookmarkBtn');
   if (fromBookmarkBtn) fromBookmarkBtn.addEventListener('click', () => openBookmarkPicker());
+
+  const sidebarToggle = byId<HTMLButtonElement>('notesSidebarToggle');
+  if (sidebarToggle) sidebarToggle.addEventListener('click', () => toggleNotesSidebar());
+
+  // 初期状態: mobile では drawer 閉、 PC では開。
+  const layout0 = byId<HTMLDivElement>('notesLayout');
+  if (layout0) {
+    if (isMobileNotesViewport()) layout0.classList.remove('notes-sidebar-open');
+    else layout0.classList.add('notes-sidebar-open');
+  }
+  // backdrop タップ (mobile) → drawer を閉じる
+  document.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement | null;
+    if (!t || !isMobileNotesViewport()) return;
+    if (t.classList?.contains('notes-sidebar-backdrop')) {
+      const layout = byId<HTMLDivElement>('notesLayout');
+      layout?.classList.remove('notes-sidebar-open');
+    }
+  });
 
   document.addEventListener('selectionchange', updateSelectionToolbar);
   document.addEventListener('mousedown', (e) => {
@@ -178,7 +204,24 @@ export async function openNote(uuid: string): Promise<void> {
   state.currentSet = null;
   renderEditor();
   renderSidebar();
+  closeNotesSidebarOnMobile();
   void loadOwnCommentSet();
+}
+
+function isMobileNotesViewport(): boolean {
+  return window.matchMedia('(max-width: 760px)').matches;
+}
+
+function toggleNotesSidebar(): void {
+  const layout = byId<HTMLDivElement>('notesLayout');
+  if (!layout) return;
+  layout.classList.toggle('notes-sidebar-open');
+}
+
+function closeNotesSidebarOnMobile(): void {
+  if (!isMobileNotesViewport()) return;
+  const layout = byId<HTMLDivElement>('notesLayout');
+  if (layout) layout.classList.remove('notes-sidebar-open');
 }
 
 function renderEditor(): void {
@@ -206,9 +249,16 @@ function renderEditor(): void {
          <iframe id="noteCanvasFrame" sandbox="allow-same-origin allow-popups" title="bookmark snapshot"></iframe>
          <div class="note-canvas-overlay" id="noteCanvasOverlay"></div>
        </div>`
-    : `<div class="note-blocks" id="noteBlocks"></div>
+    : `<div class="note-doc-toolbar">
+         <button class="ghost" id="addDocFloatingBtn" title="本文上に絶対配置のフローティング注釈を追加">📍 フローティングを追加</button>
+       </div>
+       <div class="note-blocks-wrap">
+         <div class="note-blocks" id="noteBlocks"></div>
+         <div class="note-doc-floating-overlay" id="noteDocFloatingOverlay"></div>
+       </div>
        <div class="note-add-block">
          <button class="ghost" id="noteAddBlockBtn">+ ブロックを追加</button>
+         <button class="ghost" id="noteAddSpecialBtn" title="種類を選んで挿入 (テキスト含む全ブロック)">+ 特殊ブロック</button>
        </div>`;
   pane.innerHTML = `
     <div class="note-header">
@@ -253,8 +303,81 @@ function renderEditor(): void {
   } else {
     const addBtn = byId<HTMLButtonElement>('noteAddBlockBtn');
     if (addBtn) addBtn.addEventListener('click', () => void appendBlock('text'));
+    const addSpecialBtn = byId<HTMLButtonElement>('noteAddSpecialBtn');
+    if (addSpecialBtn) addSpecialBtn.addEventListener('click', () => openSpecialBlockPicker(addSpecialBtn));
+    const addDocFloat = byId<HTMLButtonElement>('addDocFloatingBtn');
+    if (addDocFloat) addDocFloat.addEventListener('click', () => void insertDocFloatingBlock());
     renderAllBlocks();
+    renderDocFloatingOverlay();
   }
+}
+
+// ── 特殊ブロックピッカー (text を含む全ブロックを選んで末尾に挿入) ─────────
+function openSpecialBlockPicker(anchor: HTMLElement): void {
+  closeBlockMenu();
+  const isMobile = isMobileNotesViewport();
+  const menu = document.createElement('div');
+  menu.className = `note-block-menu note-special-block-menu${isMobile ? ' note-special-block-sheet' : ''}`;
+  const types = BLOCK_TYPE_OPTIONS; // text 含む全種別
+  menu.innerHTML = `
+    ${isMobile ? `
+      <div class="nbm-sheet-head">
+        <span>ブロックを挿入</span>
+        <button class="nbm-sheet-close" type="button" aria-label="閉じる">×</button>
+      </div>` : ''}
+    <div class="nbm-section">挿入するブロック種別</div>
+    ${types.map((o) => `
+      <button class="nbm-item" data-type="${o.type}"><span class="nbm-icon">${o.icon}</span>${o.label}</button>
+    `).join('')}
+    <div class="nbm-section">特殊</div>
+    <button class="nbm-item" data-action="${FLOATING_INSERT_ACTION}"><span class="nbm-icon">📍</span>フローティング注釈</button>
+  `;
+  // mobile では body 直下、 backdrop 付き bottom-sheet
+  let backdrop: HTMLDivElement | null = null;
+  if (isMobile) {
+    backdrop = document.createElement('div');
+    backdrop.className = 'note-sheet-backdrop';
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener('click', () => closeBlockMenu());
+  }
+  document.body.appendChild(menu);
+  if (!isMobile) {
+    const r = anchor.getBoundingClientRect();
+    const top = Math.max(8, r.top + window.scrollY - 8 - 320);
+    menu.style.left = `${Math.max(8, r.left)}px`;
+    menu.style.top = `${top}px`;
+  }
+  menu.querySelector<HTMLButtonElement>('.nbm-sheet-close')?.addEventListener('click', () => closeBlockMenu());
+  // closeBlockMenu が backdrop も巻き取れるよう、 backdrop ref を menu に保持
+  (menu as unknown as { _backdrop?: HTMLElement })._backdrop = backdrop ?? undefined;
+  openMenu = menu;
+  menu.querySelectorAll<HTMLButtonElement>('.nbm-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.type as NoteBlockType | undefined;
+      const a = btn.dataset.action;
+      closeBlockMenu();
+      if (a === FLOATING_INSERT_ACTION) {
+        if (state.current?.kind === 'bookmark') void insertFloatingBlock();
+        else void insertDocFloatingBlock();
+        return;
+      }
+      if (!t) return;
+      if (t === 'bookmark_embed' || t === 'note_link') {
+        // 末尾に空 text を作ってから picker (= 既存の change-type 経路に合流)
+        void appendBlock('text').then(() => {
+          const last = state.current?.blocks[state.current.blocks.length - 1];
+          if (!last) return;
+          if (t === 'bookmark_embed') openBookmarkPickerForBlock(last.uuid);
+          else openNotePickerForBlock(last.uuid);
+        });
+        return;
+      }
+      void appendBlock(t);
+    });
+  });
+  setTimeout(() => {
+    document.addEventListener('click', closeOnOutside, { once: true });
+  }, 0);
 }
 
 async function unlinkBookmark(): Promise<void> {
@@ -284,6 +407,8 @@ function renderAllBlocks(): void {
   if (!container || !state.current) return;
   container.innerHTML = '';
   for (const b of state.current.blocks) {
+    // floating_text は通常ノートでも overlay 側でレンダリング (本文線形フローには出さない)
+    if (b.block_type === 'floating_text') continue;
     container.appendChild(buildBlockElement(b));
   }
 }
@@ -325,16 +450,14 @@ function buildBlockBody(block: NoteBlockRow): HTMLElement {
     case 'code':       return buildCodeBlock(block);
     case 'mermaid':    return buildMermaidBlock(block);
     case 'table':      return buildTableBlock(block);
+    case 'canvas':     return buildCanvasBlock(block);
     case 'divider':    return buildDividerBlock(block);
     case 'bookmark_embed': return buildBookmarkEmbed(block);
     case 'note_link':      return buildNoteLink(block);
     case 'floating_text': {
-      // 通常ブロック流に floating が混入している (本来 bookmark note の overlay でレンダリング)。
-      // フォールバック: 内容を一行で表示し「これは floating です」 と注記。
-      const div = document.createElement('div');
-      div.className = 'note-block-content muted';
-      div.textContent = `📍 floating block (bookmark note でのみ表示): ${block.text.slice(0, 40)}`;
-      return div;
+      // floating_text は overlay 側でレンダリング済み (renderDocFloatingOverlay /
+      // renderFloatingBlocks)。 ここに来るのは本来想定外なので空要素を返す。
+      return document.createElement('div');
     }
     default:           return buildContentEditable(block);
   }
@@ -476,6 +599,254 @@ async function renderMermaid(src: string, target: HTMLElement): Promise<void> {
     const msg = e instanceof Error ? e.message : String(e);
     target.innerHTML = `<div class="note-error">Mermaid: ${escapeHtml(msg)}</div>`;
   }
+}
+
+// ── Canvas (drawing) block ────────────────────────────────────────────────
+
+const CANVAS_DEFAULT_W = 800;
+const CANVAS_DEFAULT_H = 460;
+const CANVAS_PEN_PRESETS: ReadonlyArray<{ color: string; label: string }> = [
+  { color: '#222222', label: '黒' },
+  { color: '#e6553a', label: '赤' },
+  { color: '#2a6df4', label: '青' },
+  { color: '#3ac26a', label: '緑' },
+  { color: '#f6b73c', label: '黄' },
+  { color: '#7b3ff2', label: '紫' },
+];
+const CANVAS_WIDTH_PRESETS: readonly number[] = [1, 2, 4, 8, 16];
+
+interface CanvasUiState {
+  color: string;
+  width: number;
+  tool: 'pen' | 'eraser';
+}
+
+function buildCanvasBlock(block: NoteBlockRow): HTMLElement {
+  const data = parseData(block);
+  const w = data.canvasWidth ?? CANVAS_DEFAULT_W;
+  const h = data.canvasHeight ?? CANVAS_DEFAULT_H;
+  const paths: Array<{ points: string; color: string; width: number }> =
+    Array.isArray(data.paths) ? data.paths.map((p) => ({ points: p.points, color: p.color, width: p.width })) : [];
+
+  const wrap = document.createElement('div');
+  wrap.className = 'note-canvas-block';
+
+  const ui: CanvasUiState = { color: '#222222', width: 2, tool: 'pen' };
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'ncb-toolbar';
+  toolbar.innerHTML = `
+    <div class="ncb-tool-group">
+      <button class="ncb-tool ncb-pen active" data-tool="pen" title="ペン">✏️</button>
+      <button class="ncb-tool ncb-eraser" data-tool="eraser" title="消しゴム (ストローク単位)">🧽</button>
+    </div>
+    <div class="ncb-tool-group ncb-colors">
+      ${CANVAS_PEN_PRESETS.map((p, i) => `
+        <button class="ncb-color${i === 0 ? ' active' : ''}" data-color="${p.color}"
+          style="background:${p.color}" title="${p.label}"></button>
+      `).join('')}
+      <input type="color" class="ncb-color-custom" value="#222222" title="カスタム色" />
+    </div>
+    <div class="ncb-tool-group ncb-widths">
+      ${CANVAS_WIDTH_PRESETS.map((px) => `
+        <button class="ncb-width${px === 2 ? ' active' : ''}" data-width="${px}" title="${px}px">
+          <span style="width:${Math.min(20, px * 2)}px;height:${Math.min(20, px * 2)}px;background:#333;border-radius:50%;display:inline-block;"></span>
+        </button>
+      `).join('')}
+    </div>
+    <div class="ncb-tool-group ncb-actions">
+      <button class="ncb-undo ghost" title="最後のストロークを取り消し">↶ 戻す</button>
+      <button class="ncb-clear ghost danger" title="全消去">🗑 全消去</button>
+    </div>
+  `;
+  wrap.appendChild(toolbar);
+
+  const stage = document.createElement('div');
+  stage.className = 'ncb-stage';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('class', 'ncb-svg');
+  svg.style.touchAction = 'none';
+  stage.appendChild(svg);
+  wrap.appendChild(stage);
+
+  const repaint = (): void => {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    for (const p of paths) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      el.setAttribute('points', p.points);
+      el.setAttribute('stroke', p.color);
+      el.setAttribute('stroke-width', String(p.width));
+      el.setAttribute('fill', 'none');
+      el.setAttribute('stroke-linecap', 'round');
+      el.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(el);
+    }
+  };
+  repaint();
+
+  let saveTimer = 0;
+  const persist = (): void => {
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      void saveBlockData(block, { ...parseData(block), paths, canvasWidth: w, canvasHeight: h });
+    }, 250);
+  };
+
+  // ── ツールバー操作 ──
+  toolbar.querySelectorAll<HTMLButtonElement>('.ncb-tool').forEach((b) => {
+    b.addEventListener('click', () => {
+      ui.tool = (b.dataset.tool as CanvasUiState['tool']) ?? 'pen';
+      toolbar.querySelectorAll('.ncb-tool').forEach((x) => x.classList.toggle('active', x === b));
+    });
+  });
+  toolbar.querySelectorAll<HTMLButtonElement>('.ncb-color').forEach((b) => {
+    b.addEventListener('click', () => {
+      ui.color = b.dataset.color || '#222222';
+      toolbar.querySelectorAll('.ncb-color').forEach((x) => x.classList.toggle('active', x === b));
+      ui.tool = 'pen';
+      toolbar.querySelectorAll('.ncb-tool').forEach((x) => x.classList.toggle('active', (x as HTMLElement).dataset.tool === 'pen'));
+    });
+  });
+  const customColor = toolbar.querySelector<HTMLInputElement>('.ncb-color-custom');
+  if (customColor) {
+    customColor.addEventListener('input', () => {
+      ui.color = customColor.value;
+      toolbar.querySelectorAll('.ncb-color').forEach((x) => x.classList.remove('active'));
+      ui.tool = 'pen';
+    });
+  }
+  toolbar.querySelectorAll<HTMLButtonElement>('.ncb-width').forEach((b) => {
+    b.addEventListener('click', () => {
+      ui.width = Number(b.dataset.width) || 2;
+      toolbar.querySelectorAll('.ncb-width').forEach((x) => x.classList.toggle('active', x === b));
+    });
+  });
+  toolbar.querySelector<HTMLButtonElement>('.ncb-undo')!.addEventListener('click', () => {
+    if (paths.length === 0) return;
+    paths.pop();
+    repaint();
+    persist();
+  });
+  toolbar.querySelector<HTMLButtonElement>('.ncb-clear')!.addEventListener('click', () => {
+    if (paths.length === 0) return;
+    if (!confirm('全てのストロークを消去しますか?')) return;
+    paths.length = 0;
+    repaint();
+    persist();
+  });
+
+  // ── ポインタ描画 ──
+  let drawing: { points: string[]; color: string; width: number; pointerId: number; el: SVGPolylineElement } | null = null;
+
+  const ptToCanvas = (e: PointerEvent): { x: number; y: number } => {
+    const rect = svg.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * w;
+    const y = ((e.clientY - rect.top) / rect.height) * h;
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+
+  svg.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (ui.tool === 'eraser') {
+      eraseAt(e);
+      return;
+    }
+    try { svg.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const { x, y } = ptToCanvas(e);
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    el.setAttribute('stroke', ui.color);
+    el.setAttribute('stroke-width', String(ui.width));
+    el.setAttribute('fill', 'none');
+    el.setAttribute('stroke-linecap', 'round');
+    el.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(el);
+    drawing = { points: [`${x},${y}`], color: ui.color, width: ui.width, pointerId: e.pointerId, el };
+    el.setAttribute('points', drawing.points.join(' '));
+    e.preventDefault();
+  });
+
+  svg.addEventListener('pointermove', (e: PointerEvent) => {
+    if (ui.tool === 'eraser' && (e.buttons & 1)) {
+      eraseAt(e);
+      return;
+    }
+    if (!drawing || drawing.pointerId !== e.pointerId) return;
+    const { x, y } = ptToCanvas(e);
+    const last = drawing.points[drawing.points.length - 1] || '';
+    const lastXY = last.split(',').map(Number);
+    if (lastXY.length === 2 && Math.abs(lastXY[0] - x) < 2 && Math.abs(lastXY[1] - y) < 2) return;
+    drawing.points.push(`${x},${y}`);
+    drawing.el.setAttribute('points', drawing.points.join(' '));
+  });
+
+  const finish = (e: PointerEvent): void => {
+    if (!drawing || drawing.pointerId !== e.pointerId) return;
+    try { svg.releasePointerCapture(drawing.pointerId); } catch { /* ignore */ }
+    if (drawing.points.length >= 2) {
+      paths.push({ points: drawing.points.join(' '), color: drawing.color, width: drawing.width });
+    } else {
+      drawing.el.remove();
+    }
+    drawing = null;
+    persist();
+  };
+  svg.addEventListener('pointerup', finish);
+  svg.addEventListener('pointercancel', finish);
+  svg.addEventListener('pointerleave', (e) => { if (drawing) finish(e); });
+
+  function eraseAt(e: PointerEvent): void {
+    const { x, y } = ptToCanvas(e);
+    let removed = false;
+    for (let i = paths.length - 1; i >= 0; i--) {
+      if (pathHits(paths[i], x, y)) {
+        paths.splice(i, 1);
+        removed = true;
+        break;
+      }
+    }
+    if (removed) {
+      repaint();
+      persist();
+    }
+  }
+
+  return wrap;
+}
+
+function pathHits(path: { points: string; width: number }, x: number, y: number): boolean {
+  const tol = Math.max(6, path.width + 4);
+  const tol2 = tol * tol;
+  let prev: [number, number] | null = null;
+  for (const tok of path.points.split(/\s+/)) {
+    const xy = tok.split(',').map(Number);
+    if (xy.length !== 2 || !Number.isFinite(xy[0]) || !Number.isFinite(xy[1])) continue;
+    const cur: [number, number] = [xy[0], xy[1]];
+    if (prev) {
+      // 線分への距離 (近似: 端点 + 中点距離だけ判定)
+      if (segDistSq(prev, cur, x, y) <= tol2) return true;
+    } else {
+      const dx = cur[0] - x, dy = cur[1] - y;
+      if (dx * dx + dy * dy <= tol2) return true;
+    }
+    prev = cur;
+  }
+  return false;
+}
+
+function segDistSq(a: [number, number], b: [number, number], px: number, py: number): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) {
+    const ex = px - a[0], ey = py - a[1];
+    return ex * ex + ey * ey;
+  }
+  let t = ((px - a[0]) * dx + (py - a[1]) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const fx = a[0] + t * dx, fy = a[1] + t * dy;
+  const ex = px - fx, ey = py - fy;
+  return ex * ex + ey * ey;
 }
 
 function buildTableBlock(block: NoteBlockRow): HTMLElement {
@@ -703,7 +1074,8 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
   closeBlockMenu();
   const menu = document.createElement('div');
   menu.className = 'note-block-menu';
-  // 通常ノートのブロックメニューでは floating_text を除外 (= bookmark canvas 専用)
+  // floating_text はブロック種別変更ではなく overlay 追加 (action 経由) で扱う
+  // → 種別リストには出さない。 通常ノート / bookmark ノート両方で同じ扱い。
   const typeOptions = BLOCK_TYPE_OPTIONS.filter((o) => o.type !== 'floating_text');
   menu.innerHTML = `
     <div class="nbm-section">ブロック種別</div>
@@ -735,6 +1107,10 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
       else if (a === 'delete') void removeBlock(blockUuid);
       else if (a === 'comment') void quickComment(blockUuid);
       else if (a === 'url-embed') void promptUrlEmbed(blockUuid);
+      else if (a === FLOATING_INSERT_ACTION) {
+        if (state.current?.kind === 'bookmark') void insertFloatingBlock();
+        else void insertDocFloatingBlock();
+      }
       else if (a === 'bg-color') openBlockBgColorPicker(blockUuid, handleAnchor);
     });
   });
@@ -748,7 +1124,12 @@ function closeOnOutside(e: MouseEvent): void {
 }
 
 function closeBlockMenu(): void {
-  if (openMenu) { openMenu.remove(); openMenu = null; }
+  if (openMenu) {
+    const bd = (openMenu as unknown as { _backdrop?: HTMLElement })._backdrop;
+    if (bd) bd.remove();
+    openMenu.remove();
+    openMenu = null;
+  }
 }
 
 // ── Selection toolbar (B / I / 🎨色 / link) ────────────────────────────────
@@ -1344,10 +1725,16 @@ function buildFloatingElement(block: NoteBlockRow): HTMLElement {
   attachAutoSave(body, block);
   el.querySelector<HTMLButtonElement>('.nf-del')!.addEventListener('click', (ev) => {
     ev.stopPropagation();
-    void removeBlock(block.uuid).then(() => renderFloatingBlocks());
+    void removeBlock(block.uuid).then(() => repaintFloatingForCurrentNote());
   });
   setupFloatingDrag(el, block);
   return el;
+}
+
+/// 通常ノート / bookmark ノートのどちらに居るかで overlay を再描画する。
+function repaintFloatingForCurrentNote(): void {
+  if (state.current?.kind === 'bookmark') renderFloatingBlocks();
+  else renderDocFloatingOverlay();
 }
 
 function setupFloatingDrag(el: HTMLElement, block: NoteBlockRow): void {
@@ -1389,6 +1776,38 @@ function setupFloatingDrag(el: HTMLElement, block: NoteBlockRow): void {
   };
   handle.addEventListener('pointerup', () => { void finish(); });
   handle.addEventListener('pointercancel', () => { void finish(); });
+}
+
+// ── Doc floating overlay (通常ノート上の絶対配置注釈) ─────────────────────
+
+function renderDocFloatingOverlay(): void {
+  const overlay = byId<HTMLDivElement>('noteDocFloatingOverlay');
+  if (!overlay || !state.current) return;
+  overlay.innerHTML = '';
+  const floats = state.current.blocks.filter((b) => b.block_type === 'floating_text');
+  for (const fb of floats) overlay.appendChild(buildFloatingElement(fb));
+}
+
+async function insertDocFloatingBlock(): Promise<void> {
+  if (!state.current) return;
+  const wrap = document.querySelector<HTMLDivElement>('.note-blocks-wrap');
+  let x = 40, y = 40;
+  if (wrap) {
+    x = Math.max(20, Math.round(wrap.clientWidth / 2 - 100));
+    y = Math.max(20, wrap.scrollTop + 60);
+  }
+  await api.createBlock(state.current.id, {
+    block_type: 'floating_text',
+    text: '',
+    data: { x, y, anchor: { kind: 'point' } },
+  });
+  state.current = await api.getNote(state.current.id);
+  renderDocFloatingOverlay();
+  const last = state.current.blocks.filter((b) => b.block_type === 'floating_text').pop();
+  if (last) {
+    const fb = document.querySelector<HTMLElement>(`.note-floating[data-block-uuid="${last.uuid}"] .nf-body`);
+    if (fb) fb.focus();
+  }
 }
 
 async function insertFloatingBlock(): Promise<void> {
