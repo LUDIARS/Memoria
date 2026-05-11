@@ -50,8 +50,37 @@
 |---|---|---|---|
 | POST | `/api/notes/from-chat` | `NoteFromChatRequest` | `NoteFromChatResponse` |
 | POST | `/api/notes/from-notion` | `NoteFromNotionRequest` | `NoteFromNotionResponse` |
+| POST | `/api/bookmarks/:id/reparse` | `BookmarkReparseRequest` | `BookmarkReparseResponse` |
 
 `NoteFromChatResponse.note.id` / `NoteFromNotionResponse.note.id` は UUID。
+
+### 保存済 HTML の再パース (`/api/bookmarks/:id/reparse`)
+
+extension は bookmark 保存時に rendered HTML を `html_path` にスナップショットしている。 後から server 側パーサ (`server/parsers/{chat,notion}.ts`) が強化された後でも、 同じスナップショットに対して再抽出を実行して note を作り直せる。
+
+```ts
+interface BookmarkReparseRequest {
+  /** 省略時は bookmark.url から auto-detect (chatgpt/claude/gemini → 'chat'、 notion → 'notion') */
+  kind?: 'chat' | 'notion';
+  /** chat の場合の明示指定 (省略時は URL host から判定) */
+  chat_source?: 'chatgpt' | 'claude' | 'gemini';
+  /** 生成 note の先頭 quote ブロックに付ける任意メモ */
+  memo?: string;
+}
+
+type BookmarkReparseResponse =
+  | { ok: true; kind: 'chat'; source: 'chatgpt' | 'claude' | 'gemini';
+      note: NoteRow; messages_saved: number; messages_count: number }
+  | { ok: true; kind: 'notion'; note: NoteRow;
+      blocks_inserted: number; page_id: string | null };
+```
+
+`/api/notes/from-chat` / `/api/notes/from-notion` と同じ `buildChatNote` / `buildNotionNote` ヘルパーで note を作るため、 生成結果は extension 経路と完全に同形 (`kind='chat'` または `'doc'`、 source_kind/source_ref/tags も同じ)。 再パース時は `external_chat_messages` への二重保存を **行わない** (= 初回 extension 取り込み時のみ書き込む)。
+
+エラー:
+- `400` URL から chat/notion を auto-detect できず `kind` も渡されていない
+- `404` bookmark 行が無い / `html_path` 空 / ファイルが disk から消えている
+- `422` パーサが messages / blocks を 1 件も抽出できない (= 保存 HTML が JS shell 状態で DOM が未レンダリングだった場合 等)
 
 ### Notion 取り込み
 

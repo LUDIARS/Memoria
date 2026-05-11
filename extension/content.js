@@ -136,6 +136,23 @@
         kind = 'code';
       } else if (cls.includes('notion-divider-block')) {
         kind = 'divider';
+      } else if (cls.includes('notion-bookmark-block')) {
+        // Notion `/bookmark` block: <a href> + title + caption + img。
+        // server 側で bookmark_embed (URL カード) として保存される。
+        const a = el.querySelector('a[href]');
+        const url = a ? a.getAttribute('href') : '';
+        if (!url) continue;
+        const titleEl = el.querySelector('[class*="bookmark-title"]');
+        const captionEl = el.querySelector('[class*="bookmark-description"]');
+        const img = el.querySelector('img');
+        blocks.push({
+          kind: 'bookmark',
+          url,
+          title: titleEl ? titleEl.textContent.trim() : '',
+          caption: captionEl ? captionEl.textContent.trim() : '',
+          image: img ? img.getAttribute('src') : '',
+        });
+        continue;
       } else if (cls.includes('notion-text-block')) {
         kind = 'text';
       }

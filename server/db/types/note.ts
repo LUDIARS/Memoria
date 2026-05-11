@@ -35,6 +35,7 @@ export type NoteBlockType =
   | 'todo'
   | 'divider'
   | 'floating_text'
+  | 'canvas'
   | 'bookmark_embed'
   | 'note_link';
 
@@ -52,6 +53,7 @@ export const NOTE_BLOCK_TYPES: readonly NoteBlockType[] = [
   'todo',
   'divider',
   'floating_text',
+  'canvas',
   'bookmark_embed',
   'note_link',
 ] as const;
@@ -86,13 +88,36 @@ export interface NoteBlockData {
   color?: string;
   anchor?: FloatingAnchor;
   // bookmark_embed
-  bookmark_id?: number;
+  // bookmark_id が null の場合は ad-hoc URL カード (= Notion の /bookmark 同等)
+  bookmark_id?: number | null;
   bookmark_url?: string;
   // note_link
   note_id?: string;
   // shared by bookmark_embed & note_link (キャッシュ)
   title?: string;
   summary?: string;
+  // bookmark_embed: og:image (Notion 風 URL preview card)
+  image?: string;
+  site_name?: string;
+
+  // canvas (drawing)
+  /// SVG パスのストローク列。 各要素は polyline 形式 "x,y x,y …" を持つ。
+  paths?: CanvasPath[];
+  /// canvas の論理サイズ (px)。 デフォルト 800x500。
+  canvasWidth?: number;
+  canvasHeight?: number;
+
+  // ── 全 block 共通 (Notion ライク装飾) ──────────────────────────────────
+  /// CSS 色 (#rrggbb / rgb() / 名前) を許可。 空文字 = クリア。
+  bgColor?: string;
+}
+
+/// 1 ストローク = 1 つの折れ線。 `points` は "x1,y1 x2,y2 …" (SVG polyline 形)。
+/// 圧縮性重視で座標は整数 px (粒度 1px) で保存。
+export interface CanvasPath {
+  points: string;
+  color: string;
+  width: number;
 }
 
 export type FloatingAnchor =

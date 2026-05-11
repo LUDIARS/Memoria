@@ -11,8 +11,10 @@ import {
   updateMemoAndCategories, deleteBookmark,
   recordAccess, findBookmarkByUrl, listAccesses,
   getBookmarkWordCloud,
+  insertPageMetadataPending, setPageMetadata,
 } from '../db.js';
 import type { FifoQueue } from '../queue.js';
+import { parseOgFromHtml } from '../url-preview.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -64,6 +66,26 @@ export function makeBookmarkRouter(deps: BookmarkRouterDeps): Hono {
 
     // Hand off to the FIFO queue so summarizations run strictly one at a time.
     enqueueSummary(id);
+
+    // Plan B: extension が rendered DOM をそのまま送ってきているので、 OG metadata
+    // を server-side で抽出して page_metadata 行にキャッシュしておく。 後で note
+    // editor の /api/notes/url-preview がこれを最優先で返す (= server-side OG fetch
+    // よりも extension scrape が常に勝つ)。
+    try {
+      const og = parseOgFromHtml(html, url);
+      insertPageMetadataPending(db, url);
+      setPageMetadata(db, url, {
+        title: og.title || title || null,
+        og_title: og.title || null,
+        og_description: og.description || null,
+        og_image: og.image,
+        og_type: og.og_type,
+        status: 'extension-scraped',
+      });
+    } catch (e) {
+      // OG 抽出は best-effort。 失敗しても bookmark 保存自体は成功とする。
+      console.warn('[bookmark] og extract failed for', url, e);
+    }
 
     return c.json({ id, queued: true, queueDepth: summaryQueue.depth });
   });

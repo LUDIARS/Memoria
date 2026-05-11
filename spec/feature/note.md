@@ -26,9 +26,16 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 - **PC 表示の左端タブ「📓 ノート」**
 - ノート一覧 (左サイドバー) + 詳細 (中央) + コメント (右ペイン)
 - 通常ノートの詳細:
-  - 上: タイトル + タグ + 削除ボタン
-  - 中央: 線形ブロックエディタ (markdown 系のみ — floating_text は挿入できない)
+  - 上: タイトル + タグ + 削除ボタン + 「📍 フローティングを追加」 ボタン
+  - 中央: 線形ブロックエディタ + その上に **フローティング overlay layer**
+    (絶対配置の `floating_text` を blocks-wrap に重ねて表示)
+  - 末尾アクション: 「+ ブロックを追加」 (text を追加) と 「+ 特殊ブロック」
+    (text 含む全種別ピッカー、 mobile では bottom-sheet)
   - 右: コメントパネル (テキスト形式のコメント、 自分の set / 他者の set 切替)
+- モバイル (≤760px) の挙動:
+  - 左ノート一覧は off-canvas drawer 化。 ☰ で開閉、 backdrop タップで閉、
+    ノートを開いた瞬間に自動で閉じる (bookmark UI と同じ感覚)
+  - 「+ 特殊ブロック」 メニューは bottom-sheet 表示 (max-height 70vh + ヘッダ ✕)
 - ブックマークノートの詳細:
   - 上: タイトル + タグ + 元 URL バッジ + 削除ボタン
   - 中央: `<iframe sandbox>` で bookmark HTML を canvas として表示 + その上に floating_text ブロックを絶対配置オーバーレイ
@@ -40,6 +47,7 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
   - bookmark 詳細画面 (将来) の「📝 このページにノート」 ボタン → 既存 bookmark note があれば開く / なければ新規
   - extension chat 取り込み: `/api/notes/from-chat` で生成 → 自動でエディタを開く
   - extension Notion 取り込み: `notion.so` / `notion.site` で 黒いボタン → ページ scrape → `/api/notes/from-notion` で生成
+  - **保存済 bookmark の再パース**: bookmark 詳細パネルの 「📄 ノート化 (再パース)」 ボタンで `/api/bookmarks/:id/reparse` を呼ぶ。 保存済 HTML スナップショットに対してサーバ側パーサ (`server/parsers/{chat,notion}.ts`) を実行して chat / notion note を生成する。 ボタンは chatgpt.com / claude.ai / gemini.google.com / notion.so|site の bookmark でのみ表示される。 パーサ強化後に過去ぶんを再 ingest するための経路。
 
 ## bookmark / note 埋め込み (Notion 風)
 通常ノートのスラッシュメニューから:
@@ -68,12 +76,37 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 | `code` | コードブロック | 通常ノート | `text` + `data_json.lang` |
 | `mermaid` | Mermaid 図 | 通常ノート | `text` |
 | `table` | テーブル | 通常ノート | `data_json.rows` + `data_json.header` |
+| `canvas` | **お絵描きキャンバス** (SVG ベース、 ペン / 消しゴム / 6 色 + カスタム / 5 段階太さ / Undo / 全消去) | 通常ノート | `data_json.paths[]` (`points`="x,y x,y …" + `color` + `width`) + `canvasWidth?/canvasHeight?` |
 | `bullet_list` / `numbered_list` | リスト | 通常ノート | `text` + `data_json.indent` |
 | `todo` | チェックボックス | 通常ノート | `text` + `data_json.checked` |
 | `divider` | 水平線 | 通常ノート | (空) |
-| `floating_text` | **フローティングテキスト** (canvas 上の自由配置注釈) | **ブックマークノート** | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
-| `bookmark_embed` | **bookmark 埋め込みカード** (Notion 風) | 通常ノート | `data_json.bookmark_id/bookmark_url/title?/summary?` |
+| `floating_text` | **フローティングテキスト** (自由配置の絶対座標注釈) | **両方** (bookmark canvas overlay / 通常ノートの blocks-wrap overlay) | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
+| `bookmark_embed` | **bookmark 埋め込みカード** (Notion 風) | 通常ノート | `data_json.bookmark_id?/bookmark_url/title?/summary?/image?/site_name?` (`bookmark_id=null` = ad-hoc URL カード = Notion `/bookmark` 同等) |
 | `note_link` | **note→note 内部リンクカード** | 通常ノート | `data_json.note_id/title?` |
+
+> 全 block 共通: `data_json.bgColor` (CSS 色) を持つと block の背景色になる (Notion ライク装飾)。
+
+### Inline mention chip
+
+`text` block / heading / list / quote の本文中に **inline chip** として bookmark / note を埋め込める (block 単位の `bookmark_embed` / `note_link` カードとは別経路)。 sentence の流れに沿わせたい時はこちら。
+
+- HTML 形: `<a class="memoria-mention memoria-mention-bookmark" data-bookmark-id="N">タイトル</a>`
+- HTML 形: `<a class="memoria-mention memoria-mention-note" data-note-uuid="...">タイトル</a>`
+- selection toolbar の 🔖 / 📓 から開く inline picker で挿入する。 sanitize は class + data-* + href のみ残す。
+
+### Notion 風 URL preview card (`/bookmark`)
+
+block menu の **🌐 URL を埋め込む** から URL を入力すると、 server の `POST /api/notes/url-preview` が OG metadata (title / description / og:image / og:site_name) を取り、 `bookmark_embed` block (image 付き) として挿入する。 既存 bookmark 行と URL が一致した場合は `data_json.bookmark_id` をそちらに紐付け。 そうでなければ `bookmark_id=null` の ad-hoc カードとなり、 bookmark テーブルには登録されない。
+
+#### metadata の取得経路 (Plan B: extension scrape 優先 → server fetch fallback)
+
+URL preview metadata は以下の優先順で解決される。 response の `source` フィールドにどの経路を使ったかが入る。
+
+1. **`extension-scrape`** — extension が既に該当 URL を bookmark 経路 (`POST /api/bookmark`) で送ってきていた場合、 その時に rendered DOM から抽出した og:* が `page_metadata` テーブルにキャッシュされている。 SPA でも JS 描画後の DOM を捕捉できるので一番高信頼。
+2. **`bookmark-row`** — 上記キャッシュは無いが bookmark 行は存在する場合、 title + summary だけで簡易カードを返す (画像なし)。
+3. **`server-fetch`** — どのキャッシュにも該当が無ければ server-side で OG fetch する (`fetchUrlPreview`)。 SSR ページなら成功、 SPA shell だと空に近い結果になる。
+
+extension 側の Notion 取り込み (`/api/notes/from-notion`) でも `notion-bookmark-block` を `kind: 'bookmark'` (url + title? + caption? + image?) として送り、 server 側で同じ `bookmark_embed` 形に正規化して保存する。
 
 ## コメント仕様
 - 1 (note × user) で 1 set。 set 自体が UUID を持つ (`note_comment_sets.id`)

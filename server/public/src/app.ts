@@ -642,6 +642,60 @@ async function renderDetail() {
   $('dAccesses').innerHTML = (accesses.items || []).map(a => `<li>${fmtDate(a.accessed_at)}</li>`).join('');
   state.detailCloud = b.wordcloud || null;
   renderDetailCloud();
+
+  // ノート化 (再パース) ボタンは chat / notion ドメインの bookmark でのみ表示する
+  const reparseBtn = $('dReparse');
+  const reparseStatus = $('dReparseStatus');
+  if (reparseBtn) {
+    const kind = detectReparseKindLocal(b.url);
+    reparseBtn.hidden = !kind;
+    if (kind) reparseBtn.dataset.kind = kind;
+    else delete reparseBtn.dataset.kind;
+  }
+  if (reparseStatus) reparseStatus.textContent = '';
+}
+
+/// URL host から chat/notion を判定 (server `detectReparseKind` の縮約版)。 UI 表示判定だけ
+/// に使い、 実際のパースはサーバ側 reparse endpoint で再判定される。
+function detectReparseKindLocal(url: string): 'chat' | 'notion' | null {
+  if (!url) return null;
+  let host = '';
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
+  if (host.endsWith('chatgpt.com') || host.endsWith('chat.openai.com')) return 'chat';
+  if (host.endsWith('claude.ai')) return 'chat';
+  if (host.endsWith('gemini.google.com')) return 'chat';
+  if (host.endsWith('notion.so') || host.endsWith('notion.site')) return 'notion';
+  return null;
+}
+
+async function reparseDetail() {
+  const id = state.detailId;
+  if (id == null) return;
+  const btn = $('dReparse') as HTMLButtonElement;
+  const status = $('dReparseStatus');
+  if (!btn) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '解析中…';
+  if (status) status.textContent = '';
+  try {
+    const res = await api(`/api/bookmarks/${id}/reparse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (status) {
+      const count = res.kind === 'chat'
+        ? `messages=${res.messages_count}`
+        : `blocks=${res.blocks_inserted}`;
+      status.textContent = `✓ ${res.kind} note を作成 (${count}) — 「📓 ノート」 タブで確認できます`;
+    }
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${(e as Error).message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig || '📄 ノート化 (再パース)';
+  }
 }
 
 function renderDetailCloud() {
@@ -805,6 +859,7 @@ $('bookmarksMore')?.addEventListener('click', () => loadMoreBookmarks());
 $('detailClose').addEventListener('click', closeDetail);
 $('dSave').addEventListener('click', saveDetail);
 $('dResummarize').addEventListener('click', resummarizeDetail);
+$('dReparse')?.addEventListener('click', reparseDetail);
 $('dDelete').addEventListener('click', deleteDetail);
 $('dCloudGen')?.addEventListener('click', generateDetailCloud);
 $('exportBtn').addEventListener('click', exportSelected);
