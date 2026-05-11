@@ -2233,13 +2233,51 @@ export function getDiary(db: Db, dateStr: string): DiaryEntryParsed | null {
   };
 }
 
-export function listDiariesInRange(db: Db, { start, end }: { start: string; end: string }): Pick<DiaryEntryRow, 'date' | 'status' | 'summary' | 'notes' | 'updated_at'>[] {
+export function listDiariesInRange(db: Db, { start, end }: { start: string; end: string }): Pick<DiaryEntryRow, 'date' | 'status' | 'summary' | 'notes' | 'work_content' | 'work_minutes' | 'updated_at'>[] {
   return db.prepare(`
-    SELECT date, status, summary, notes, updated_at
+    SELECT date, status, summary, notes, work_content, work_minutes, updated_at
     FROM diary_entries
     WHERE date >= ? AND date <= ?
     ORDER BY date ASC
-  `).all(start, end) as Pick<DiaryEntryRow, 'date' | 'status' | 'summary' | 'notes' | 'updated_at'>[];
+  `).all(start, end) as Pick<DiaryEntryRow, 'date' | 'status' | 'summary' | 'notes' | 'work_content' | 'work_minutes' | 'updated_at'>[];
+}
+
+// ── 週次レポート用 集計 helpers ─────────────────────────────────────────────
+//
+// 各テーブルの timestamp 列はすべて UTC ISO で格納されているので、
+// `date(<col>, 'localtime')` でローカル日付に丸めてから期間 (YYYY-MM-DD)
+// と突合する。 diary.date は元々ローカル日付なので変換不要。
+
+export interface DateRange { start: string; end: string }
+
+export function countBookmarksInRange(db: Db, { start, end }: DateRange): number {
+  return ((db.prepare(`
+    SELECT COUNT(*) AS c FROM bookmarks
+    WHERE date(created_at, 'localtime') BETWEEN ? AND ?
+  `).get(start, end) as { c: number } | undefined)?.c) ?? 0;
+}
+
+export function countVisitEventsInRange(db: Db, { start, end }: DateRange): number {
+  return ((db.prepare(`
+    SELECT COUNT(*) AS c FROM visit_events
+    WHERE date(visited_at, 'localtime') BETWEEN ? AND ?
+  `).get(start, end) as { c: number } | undefined)?.c) ?? 0;
+}
+
+export function countActivityEventsInRange(db: Db, kind: string, { start, end }: DateRange): number {
+  return ((db.prepare(`
+    SELECT COUNT(*) AS c FROM activity_events
+    WHERE kind = ? AND date(occurred_at, 'localtime') BETWEEN ? AND ?
+  `).get(kind, start, end) as { c: number } | undefined)?.c) ?? 0;
+}
+
+export interface WeeklyTotals {
+  work_minutes: number;
+  bookmarks: number;
+  visit_events: number;
+  github_commits: number;          // caller fills (githubByRepo.total)
+  claude_code_prompts: number;
+  git_commits_local: number;       // activity_events kind='git_commit' (= ローカル post-commit hook)
 }
 
 export interface UpsertDiaryInput {

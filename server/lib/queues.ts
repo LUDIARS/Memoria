@@ -24,6 +24,7 @@ import {
   digThemeContext,
   upsertWeekly, listDiariesInRange,
   getDiarySettings,
+  countBookmarksInRange, countVisitEventsInRange, countActivityEventsInRange,
 } from '../db.js';
 import { summarizeWithClaude } from '../claude.js';
 import { classifyDomain, shouldSkipDomain } from '../domain-catalog.js';
@@ -620,11 +621,25 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
       githubByRepo = summarizeGithubByRepo(fetched);
     }
 
+    // 週次定量メトリクス: ローカル DB から count + diary work_minutes 合計
+    const workMinutesTotal = dailyDiaries.reduce(
+      (acc, d) => acc + (typeof d.work_minutes === 'number' && d.work_minutes > 0 ? d.work_minutes : 0),
+      0,
+    );
+    const metrics = {
+      work_minutes: workMinutesTotal,
+      bookmarks: countBookmarksInRange(db, range),
+      visit_events: countVisitEventsInRange(db, range),
+      github_commits: githubByRepo.total,
+      git_commits_local: countActivityEventsInRange(db, 'git_commit', range),
+      claude_code_prompts: countActivityEventsInRange(db, 'claude_code_prompt', range),
+    };
+
     let summary: string;
     try {
       summary = await generateWeekly({
         weekStart: range.start, weekEnd: range.end,
-        dailyDiaries, githubByRepo,
+        dailyDiaries, githubByRepo, metrics,
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
