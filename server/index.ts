@@ -32,6 +32,8 @@ import { makeWsLocations } from './lib/ws-locations.js';
 import { startSchedulers } from './lib/scheduler.js';
 import { makeMcpServer } from './lib/mcp-server.js';
 import { startLegatusSubscriber } from './lib/legatus-subscriber.js';
+import { startMqttBroker } from './mqtt/broker.js';
+import { startWifiLocation } from './wifi-location.js';
 import { fetchPageHtml } from './lib/fetch-page.js';
 import { privacySettings } from './lib/privacy.js';
 
@@ -320,13 +322,45 @@ if (process.env.MEMORIA_MQTT_URL) {
   }
 }
 
-// ---- Legatus WS subscriber (recommended path) -----------------------------
+// ---- 内蔵 MQTT broker (OwnTracks 直接受信) --------------------------------
 //
-// 同じ PC 上で動く Legatus (loopback 17320) が OwnTracks → MQTT → /ws で
-// 個別 GPS 点を broadcast する。
+// 外部 Mosquitto を立てなくても、 モバイル (OwnTracks) を Tailscale 等の VPN
+// 経由で直接この broker に publish させる経路。 受信 → gps_locations insert →
+// /ws/locations broadcast までを 1 process で完結する。
 //
-// 無効化: MEMORIA_LEGATUS_WS=off
-if (process.env.MEMORIA_LEGATUS_WS !== 'off') {
+// 無効化: MEMORIA_MQTT_BROKER=off
+try {
+  startMqttBroker({
+    db,
+    broadcastLocation: ws.broadcastLocation,
+    triggerResolveAsync: ws.triggerResolveAsync,
+  });
+} catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(`[mqtt-broker] failed to start: ${msg}`);
+}
+
+// ---- PC WiFi → 位置情報 (Google Geolocation API) --------------------------
+//
+// モバイルが手元に無い時間帯でも PC が動いていれば BSSID 群から位置を推定
+// して gps_locations に積む。 API key 未設定 or Windows 以外なら自動 disable。
+try {
+  startWifiLocation({
+    db,
+    broadcastLocation: ws.broadcastLocation,
+    triggerResolveAsync: ws.triggerResolveAsync,
+  });
+} catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(`[wifi-location] failed to start: ${msg}`);
+}
+
+// ---- Legatus WS subscriber (legacy path, opt-in) --------------------------
+//
+// 旧経路: Legatus (loopback 17320) を OwnTracks → MQTT → Memoria の中継として
+// 使う構成。 上の内蔵 broker が OwnTracks を直接受けるので、 既定では off。
+// 互換のために残してある (MEMORIA_LEGATUS_WS=on で起動)。
+if (process.env.MEMORIA_LEGATUS_WS === 'on') {
   try {
     startLegatusSubscriber({
       db,

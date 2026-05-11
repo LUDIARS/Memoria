@@ -233,6 +233,12 @@ curl http://localhost:5280/healthz
   選択 (要約は Sonnet、 ハイライト統合は Opus 1M、 等)
 - **PWA share_target** (Android) + iOS Shortcut で、 スマホからも瞬時に保存
   ([`docs/mobile-share.md`](docs/mobile-share.md))
+- **モバイル GPS 受信** (内蔵 MQTT broker): OwnTracks (iOS/Android) を Tailscale
+  経由で Memoria 同梱の broker に publish させて GPS 軌跡をリアルタイム取り込み。
+  別途 Mosquitto / Legatus は不要 ([`docs/mqtt-vpn-setup.md`](docs/mqtt-vpn-setup.md))
+- **PC WiFi → 位置情報**: モバイルが手元に無いときも `netsh wlan show networks` で
+  BSSID を集めて Google Geolocation API に投げ、 10 分おきに `gps_locations` に
+  PC 位置を積む (API key 設定時のみ有効、 Windows 限定)
 - **WebPush 通知**: 日記 / dig / ブックマーク要約完了時にスマホへ push
 - **マルチサーバ連携 (任意)**: Cernere SSO のハブに辞書 / dig / ブックマーク
   だけシェア。 個人ライフログ (GPS / 日記 / 履歴) は手元から出ない
@@ -251,6 +257,13 @@ UI 設定が無い限り使うのは port / data dir くらい。
 | `MEMORIA_CLAUDE_BIN` | `claude` | claude CLI のパス (UI が優先) |
 | `CLAUDE_CODE_GIT_BASH_PATH` | (Windows のみ) | bash.exe 絶対パス (UI が優先) |
 | `MEMORIA_GH_TOKEN` / `MEMORIA_GH_USER` | – | 日記が GitHub commits を引くとき (UI 優先) |
+| `MEMORIA_MQTT_BROKER` | (起動) | `off` で内蔵 MQTT broker を停止 |
+| `MEMORIA_MQTT_BROKER_PORT` | `1883` | broker port |
+| `MEMORIA_MQTT_BROKER_HOST` | `0.0.0.0` | bind host (tailnet IP / `127.0.0.1` に絞ると安全) |
+| `MEMORIA_MQTT_USERNAME` / `MEMORIA_MQTT_PASSWORD` | – | broker 認証 (両方設定で有効化) |
+| `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` | – | 設定すると PC WiFi → Google Geolocation API で位置取り込みを起動 (Windows のみ) |
+| `MEMORIA_WIFI_INTERVAL_SEC` | `600` | WiFi 位置の実行間隔 |
+| `MEMORIA_LEGATUS_WS` | (off) | `on` で旧 Legatus 経由 subscriber を opt-in (通常は内蔵 broker のみ) |
 
 ## ライセンス
 
