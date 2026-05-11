@@ -1,32 +1,41 @@
-// Memoria Hub — multi-server entry point.
+// Memoria Hub — multi-server entry point (rev3 — service-adapter 準拠)
 //
-// Phase 2 MVP. Hono on Node, Postgres-backed, Cernere SSO + JWT.
+// Phase 2 MVP. Hono on Node, Postgres-backed, Cernere service-adapter で
+// admission を受け、 service_token を発行 + ローカル検証する。
 //
 // Endpoints:
-//   GET  /healthz
-//   GET  /api/auth/start            — kick off Cernere OAuth (PKCE)
-//   GET  /api/auth/callback         — exchange code, mint JWT, redirect back
-//   GET  /api/me                    — verify JWT, return user/role
-//   GET  /api/shared/bookmarks
-//   POST /api/shared/bookmarks
-//   DELETE /api/shared/bookmarks/:id
-//   GET  /api/shared/digs
-//   POST /api/shared/digs
-//   DELETE /api/shared/digs/:id
-//   GET  /api/shared/dictionary
-//   POST /api/shared/dictionary
-//   DELETE /api/shared/dictionary/:id
+//   GET    /healthz
+//   GET    /api/shared/bookmarks
+//   POST   /api/shared/bookmarks               (auth)
+//   DELETE /api/shared/bookmarks/:id           (auth)
+//   GET    /api/shared/digs
+//   POST   /api/shared/digs                    (auth)
+//   DELETE /api/shared/digs/:id                (auth)
+//   GET    /api/shared/dictionary
+//   POST   /api/shared/dictionary              (auth)
+//   DELETE /api/shared/dictionary/:id          (auth)
+//   ... (implementation_notes, work_locations, workplace-presence,
+//        moderation/hide も同様、 詳細は server/multi/README.md)
+//
+// 認証フロー:
+//   1. Cernere の auth UI (separate origin) でユーザがログイン
+//   2. ユーザは「memoria-hub にアクセスを許可」 を Cernere 側で承認
+//   3. Cernere が user_admission を /ws/service 経由で Hub に push
+//   4. Hub の cernere-bridge がそれを受け取り、 service_token (HS256) を mint
+//      → Cernere に admission_response で返送
+//   5. Cernere が service_token を SPA / クライアントに返す
+//   6. クライアントは Authorization: Bearer <service_token> で /api/shared/* を
+//      叩く。 middleware が **ローカルで** HMAC 検証 (Cernere 介在なし)
+//
+// 旧 OAuth Authorization Code + PKCE / password grant 経路は撤去。
 //
 // CORS is restricted to MEMORIA_HUB_ALLOWED_ORIGINS (comma-separated).
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
-import {
-  buildAuthorizeUrl, makePkce, exchangeCode, fetchCernereUser,
-  mintHubJwt, verifyHubJwt,
-  cookieNames, setShortCookie, clearCookie,
-} from './auth.js';
+import { createHmac } from 'node:crypto';
+import { initCernereBridge, getAdapter } from './cernere-bridge.js';
 import {
   listSharedBookmarks, insertSharedBookmark, deleteSharedBookmark,
   listSharedDigs, insertSharedDig, deleteSharedDig,
@@ -56,83 +65,106 @@ if (ALLOWED.length > 0) {
 
 app.get('/healthz', (c) => c.text('ok'));
 
-// ── auth ───────────────────────────────────────────────────────────────────
+// ── Cernere bridge: /ws/service に常時接続 (admission push、 future API) ──
+//
+// NOTE (2026-05-09): 現在の Cernere には /ws/service エンドポイントが未実装。
+// 当面は initCernereBridge() は no-op に近い (auto-reconnect ループ) になる。
+// 将来 Cernere 側で /ws/service が実装されると、 onUserAdmission が呼ばれて
+// service_token mint flow が成立する。
 
-app.get('/api/auth/start', (c) => {
-  const redirect = c.req.query('redirect_uri') || '';
-  const state = crypto.randomUUID();
-  const { verifier, challenge } = makePkce();
-  const url = buildAuthorizeUrl({ challenge, state });
-  return new Response(null, {
-    status: 302,
-    headers: {
-      'Location': url,
-      'Set-Cookie': [
-        setShortCookie(cookieNames.pkce, JSON.stringify({ verifier, state })),
-        setShortCookie(cookieNames.redirect, redirect),
-      ].join(', '),
-    },
-  });
-});
+initCernereBridge();
+const adapter = getAdapter();
+void adapter; // 将来 isRevoked check 等に使う想定
 
-function readCookie(req, name) {
-  const cookieHeader = req.header('cookie') || '';
-  for (const pair of cookieHeader.split(/;\s*/)) {
-    const [k, v] = pair.split('=');
-    if (k === name) return decodeURIComponent(v || '');
-  }
-  return null;
+// 当面の認証: Cernere が発行した accessToken (HS256 JWT、 claim: sub/role/iat/exp)
+// を **ローカルで** HMAC 検証する。
+//
+// CERNERE_JWT_SECRET = Cernere の .env の JWT_SECRET と一致させること。
+// id-cache パッケージは payload.userId を期待するが Cernere は RFC 7519 標準の
+// `sub` を使うため、 ここでは小さい自前 middleware で sub を読む。
+
+const CERNERE_JWT_SECRET = process.env.CERNERE_JWT_SECRET ?? '';
+const IS_DEV = process.env.NODE_ENV !== 'production';
+
+function verifyCernereJwt(token) {
+  if (!CERNERE_JWT_SECRET) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [h, p, sig] = parts;
+  const expected = createHmac('sha256', CERNERE_JWT_SECRET)
+    .update(`${h}.${p}`).digest('base64url');
+  if (expected !== sig) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(p, 'base64url').toString());
+    if (typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return {
+      userId: typeof payload.sub === 'string' ? payload.sub : null,
+      role: typeof payload.role === 'string' ? payload.role : 'general',
+    };
+  } catch { return null; }
 }
 
-app.get('/api/auth/callback', async (c) => {
-  const code = c.req.query('code');
-  const state = c.req.query('state');
-  const cookieRaw = readCookie(c.req, cookieNames.pkce);
-  if (!code || !state || !cookieRaw) {
-    return c.json({ error: 'invalid_callback' }, 400);
+const authMiddleware = async (c, next) => {
+  const auth = c.req.header('authorization') ?? c.req.header('Authorization') ?? '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m) {
+    const v = verifyCernereJwt(m[1]);
+    if (v?.userId) {
+      c.set('userId', v.userId);
+      c.set('userRole', v.role);
+      return next();
+    }
   }
-  let pkce;
-  try { pkce = JSON.parse(cookieRaw); } catch { return c.json({ error: 'invalid_pkce_cookie' }, 400); }
-  if (pkce.state !== state) return c.json({ error: 'state_mismatch' }, 400);
+  if (IS_DEV) {
+    const devUserId = c.req.header('x-user-id') ?? c.req.header('X-User-Id');
+    if (devUserId) {
+      c.set('userId', devUserId);
+      c.set('userRole', c.req.header('x-user-role') ?? c.req.header('X-User-Role') ?? 'general');
+      return next();
+    }
+  }
+  return c.json({ error: 'unauthorized' }, 401);
+};
 
-  const tok = await exchangeCode({ code, verifier: pkce.verifier });
-  const user = await fetchCernereUser(tok.access_token);
-  if (!user?.id) return c.json({ error: 'cernere_user_unavailable' }, 502);
-
-  const jwt = await mintHubJwt({
-    userId: String(user.id),
-    displayName: user.display_name || user.username || String(user.id),
-    role: user.role || 'user',
-  });
-
-  const redirect = readCookie(c.req, cookieNames.redirect) || '/';
-  const url = new URL(redirect, redirect.startsWith('http') ? undefined : 'http://placeholder/');
-  url.searchParams.set('memoria_hub_jwt', jwt);
-  const finalLocation = redirect.startsWith('http') ? url.toString() : `${url.pathname}${url.search}`;
-
-  return new Response(null, {
-    status: 302,
-    headers: {
-      'Location': finalLocation,
-      'Set-Cookie': [
-        clearCookie(cookieNames.pkce),
-        clearCookie(cookieNames.redirect),
-      ].join(', '),
-    },
-  });
-});
-
-async function authedUser(c) {
-  const h = c.req.header('authorization') || '';
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  if (!m) return null;
-  try { return await verifyHubJwt(m[1]); } catch { return null; }
+// authedUser は middleware 通過後に c.get('userId') 等から組み立てる。
+// Cernere は JWT に displayName を入れていない (sub/role/iat/exp のみ) ので、
+// 当面は userId の先頭 8 文字を fallback 表示名にする。 後で /api/auth/me 経由
+// で取りに行くか、 push admission 時に upsert した DB から引く方針へ。
+function authedUser(c) {
+  const userId = c.get('userId');
+  if (!userId || userId === 'anonymous') return null;
+  return {
+    userId,
+    displayName: c.get('userName') ?? `user-${userId.slice(0, 8)}`,
+    role: c.get('userRole') ?? 'general',
+  };
 }
 
-app.get('/api/me', async (c) => {
-  const u = await authedUser(c);
+app.get('/api/me', authMiddleware, (c) => {
+  const u = authedUser(c);
   if (!u) return c.json({ error: 'unauthorized' }, 401);
   return c.json(u);
+});
+
+// ── /api/shared/* に認証ガードを適用 ───────────────────────────────────────
+//
+// GET /api/shared/<kind> と GET /api/shared/<kind>/:id は **public** (誰でも
+// 一覧 / 詳細を読める)。 それ以外 (POST / DELETE / モデレーション / presence) は
+// service_token 必須。
+
+const PUBLIC_GET_PATTERNS = [
+  /^\/api\/shared\/bookmarks(\/\d+)?$/,
+  /^\/api\/shared\/digs(\/\d+)?$/,
+  /^\/api\/shared\/dictionary(\/\d+)?$/,
+  /^\/api\/shared\/implementation-notes(\/\d+)?$/,
+  /^\/api\/shared\/work-locations(\/\d+)?$/,
+];
+
+app.use('/api/shared/*', async (c, next) => {
+  if (c.req.method === 'GET' && PUBLIC_GET_PATTERNS.some((re) => re.test(c.req.path))) {
+    return next();
+  }
+  return authMiddleware(c, next);
 });
 
 // ── /api/shared/bookmarks ──────────────────────────────────────────────────
@@ -460,6 +492,8 @@ app.get('/api/shared/moderation/log', async (c) => {
 
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria Hub (multi) listening on http://localhost:${info.port}`);
-  console.log(`  cernere: ${process.env.MEMORIA_CERNERE_BASE || '(unset)'}`);
+  console.log(`  cernere ws: ${process.env.CERNERE_WS_URL || '(unset)'}`);
+  console.log(`  service_code: ${process.env.CERNERE_SERVICE_CODE || 'memoria-hub'}`);
+  console.log(`  cernere bridge: ${adapter ? 'connecting' : 'skip (creds missing)'}`);
   console.log(`  pg: ${process.env.MEMORIA_PG_URL ? '(configured)' : '(unset)'}`);
 });
