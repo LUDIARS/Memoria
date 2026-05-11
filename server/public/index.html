@@ -1004,11 +1004,14 @@ bogus-priv</code></pre>
       <div class="detail-actions">
         <button id="dSave">保存</button>
         <button id="dResummarize" class="ghost">再要約</button>
+        <button id="dReparse" class="ghost" title="保存済 HTML を再パースして note 化 (Gemini / ChatGPT / Claude / Notion)"
+          hidden>📄 ノート化 (再パース)</button>
         <a id="dViewHtml" href="#" target="_blank" class="ghost">保存 HTML を開く</a>
         <button id="dShare" class="ghost" title="マルチサーバに共有" hidden>📤 シェア</button>
         <span id="dShareStatus" class="share-status"></span>
         <button id="dDelete" class="danger">削除</button>
       </div>
+      <span id="dReparseStatus" class="share-status"></span>
       <h3>アクセス履歴</h3>
       <ul id="dAccesses" class="accesses"></ul>
     </aside>

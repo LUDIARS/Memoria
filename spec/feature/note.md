@@ -47,6 +47,7 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
   - bookmark 詳細画面 (将来) の「📝 このページにノート」 ボタン → 既存 bookmark note があれば開く / なければ新規
   - extension chat 取り込み: `/api/notes/from-chat` で生成 → 自動でエディタを開く
   - extension Notion 取り込み: `notion.so` / `notion.site` で 黒いボタン → ページ scrape → `/api/notes/from-notion` で生成
+  - **保存済 bookmark の再パース**: bookmark 詳細パネルの 「📄 ノート化 (再パース)」 ボタンで `/api/bookmarks/:id/reparse` を呼ぶ。 保存済 HTML スナップショットに対してサーバ側パーサ (`server/parsers/{chat,notion}.ts`) を実行して chat / notion note を生成する。 ボタンは chatgpt.com / claude.ai / gemini.google.com / notion.so|site の bookmark でのみ表示される。 パーサ強化後に過去ぶんを再 ingest するための経路。
 
 ## bookmark / note 埋め込み (Notion 風)
 通常ノートのスラッシュメニューから:

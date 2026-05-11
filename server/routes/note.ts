@@ -15,6 +15,7 @@ import {
   getPageMetadata,
 } from '../db.js';
 import { fetchUrlPreview } from '../url-preview.js';
+import { reparseHtml } from '../parsers/index.js';
 
 function hostnameOf(rawUrl: string): string {
   try { return new URL(rawUrl).hostname; } catch { return ''; }
@@ -457,6 +458,67 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     return s === 'chatgpt' || s === 'claude' || s === 'gemini';
   }
 
+  // chat メッセージ列から note を組み立てる共通ヘルパー (extension の from-chat と
+  // bookmark の reparse の両方から呼ばれる)。 messages を external_chat にも保存する。
+  function buildChatNote(opts: {
+    source: ChatExtractionSource;
+    url: string;
+    title: string;
+    conversation_id: string | null;
+    memo: string;
+    messages: ChatExtractedMessage[];
+    record_external: boolean;
+  }): { noteId: string; messagesSaved: number } {
+    let messagesSaved = 0;
+    if (opts.record_external) {
+      for (const m of opts.messages) {
+        if (!m || typeof m !== 'object') continue;
+        const text = String(m.text ?? '').trim();
+        if (!text) continue;
+        try {
+          insertExternalChatMessage(db, {
+            source: opts.source,
+            conversation_id: opts.conversation_id,
+            role: m.role || null,
+            content: text,
+            metadata: { url: opts.url, title: opts.title, ts: m.ts ?? null },
+          });
+          messagesSaved++;
+        } catch { /* skip */ }
+      }
+    }
+
+    const noteTitle = opts.title || `${opts.source} chat (${new Date().toISOString().slice(0, 10)})`;
+    const noteId = insertNote(db, {
+      title: noteTitle,
+      kind: 'chat',
+      source_kind: 'chat',
+      source_ref: opts.conversation_id || opts.url,
+      tags: [opts.source],
+    });
+
+    const headerLines = [
+      `**Source**: ${opts.source}`,
+      opts.url ? `**URL**: <${opts.url}>` : '',
+      `**Imported**: ${new Date().toISOString()}`,
+      opts.memo ? `\n${opts.memo}` : '',
+    ].filter(Boolean).join('\n');
+    insertBlock(db, noteId, { block_type: 'quote', text: headerLines });
+
+    for (const m of opts.messages) {
+      if (!m || typeof m !== 'object') continue;
+      const text = String(m.text ?? '').trim();
+      if (!text) continue;
+      const role = m.role || 'user';
+      insertBlock(db, noteId, {
+        block_type: 'heading_3',
+        text: role === 'user' ? '👤 User' : role === 'assistant' ? '🤖 Assistant' : `📋 ${role}`,
+      });
+      insertBlock(db, noteId, { block_type: 'text', text });
+    }
+    return { noteId, messagesSaved };
+  }
+
   r.post('/api/notes/from-chat', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as {
       source?: unknown; url?: unknown; conversation_id?: unknown; title?: unknown;
@@ -471,58 +533,36 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     const messages = Array.isArray(body.messages) ? body.messages as ChatExtractedMessage[] : [];
     const alsoCreateNote = body.also_create_note !== false;
 
-    let savedCount = 0;
-    for (const m of messages) {
-      if (!m || typeof m !== 'object') continue;
-      const text = String(m.text ?? '').trim();
-      if (!text) continue;
-      try {
-        insertExternalChatMessage(db, {
-          source: body.source,
-          conversation_id: conversationId,
-          role: m.role || null,
-          content: text,
-          metadata: { url, title, ts: m.ts ?? null },
-        });
-        savedCount++;
-      } catch { /* skip */ }
-    }
-
     if (!alsoCreateNote) {
+      // note は作らないが external_chat には残す
+      let savedCount = 0;
+      for (const m of messages) {
+        if (!m || typeof m !== 'object') continue;
+        const text = String(m.text ?? '').trim();
+        if (!text) continue;
+        try {
+          insertExternalChatMessage(db, {
+            source: body.source,
+            conversation_id: conversationId,
+            role: m.role || null,
+            content: text,
+            metadata: { url, title, ts: m.ts ?? null },
+          });
+          savedCount++;
+        } catch { /* skip */ }
+      }
       return c.json({ note: null, messages_saved: savedCount });
     }
 
-    const noteTitle = title || `${body.source} chat (${new Date().toISOString().slice(0, 10)})`;
-    const noteId = insertNote(db, {
-      title: noteTitle,
-      kind: 'chat',
-      source_kind: 'chat',
-      source_ref: conversationId || url,
-      tags: [body.source],
+    const { noteId, messagesSaved } = buildChatNote({
+      source: body.source,
+      url, title,
+      conversation_id: conversationId,
+      memo, messages,
+      record_external: true,
     });
-
-    const headerLines = [
-      `**Source**: ${body.source}`,
-      url ? `**URL**: <${url}>` : '',
-      `**Imported**: ${new Date().toISOString()}`,
-      memo ? `\n${memo}` : '',
-    ].filter(Boolean).join('\n');
-    insertBlock(db, noteId, { block_type: 'quote', text: headerLines });
-
-    for (const m of messages) {
-      if (!m || typeof m !== 'object') continue;
-      const text = String(m.text ?? '').trim();
-      if (!text) continue;
-      const role = m.role || 'user';
-      insertBlock(db, noteId, {
-        block_type: 'heading_3',
-        text: role === 'user' ? '👤 User' : role === 'assistant' ? '🤖 Assistant' : `📋 ${role}`,
-      });
-      insertBlock(db, noteId, { block_type: 'text', text });
-    }
-
     const note = getNote(db, noteId)!;
-    return c.json({ note, messages_saved: savedCount }, 201);
+    return c.json({ note, messages_saved: messagesSaved }, 201);
   });
 
   // ---- extension Notion ingest ---------------------------------------------
@@ -541,34 +581,29 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
     }
   }
 
-  r.post('/api/notes/from-notion', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as {
-      url?: unknown; page_id?: unknown; title?: unknown;
-      blocks?: unknown; memo?: unknown; also_bookmark?: unknown;
-    } | null;
-    if (!body) return c.json({ error: 'body required' }, 400);
-    const url = typeof body.url === 'string' ? body.url : '';
-    const title = typeof body.title === 'string' ? body.title.slice(0, TITLE_MAX) : '';
-    const pageId = typeof body.page_id === 'string' ? body.page_id : null;
-    const memo = typeof body.memo === 'string' ? body.memo : '';
-    const alsoBookmark = body.also_bookmark === true;
-    if (!url || !title) return c.json({ error: 'url + title required' }, 400);
-    const blocks = Array.isArray(body.blocks) ? body.blocks as NotionExtractedBlock[] : [];
-
+  // Notion ブロック列から note を組み立てる共通ヘルパー (extension の from-notion と
+  // bookmark の reparse の両方から呼ばれる)。
+  function buildNotionNote(opts: {
+    url: string;
+    title: string;
+    page_id: string | null;
+    memo: string;
+    blocks: NotionExtractedBlock[];
+  }): { noteId: string; blocksInserted: number } {
     const noteId = insertNote(db, {
-      title,
+      title: opts.title,
       kind: 'doc',
       source_kind: 'notion',
-      source_ref: pageId ?? url,
+      source_ref: opts.page_id ?? opts.url,
       tags: ['notion'],
     });
 
-    if (memo.trim()) {
-      insertBlock(db, noteId, { block_type: 'quote', text: memo.trim() });
+    if (opts.memo.trim()) {
+      insertBlock(db, noteId, { block_type: 'quote', text: opts.memo.trim() });
     }
 
     let inserted = 0;
-    for (const b of blocks) {
+    for (const b of opts.blocks) {
       if (!b || typeof b !== 'object') continue;
       const bb = b as Record<string, unknown>;
       const blockType = notionKindToBlockType(String(bb.kind ?? ''));
@@ -578,7 +613,6 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
       if (blockType === 'todo' && typeof bb.checked === 'boolean') data.checked = bb.checked;
       if ((blockType === 'bullet_list' || blockType === 'numbered_list') && typeof bb.indent === 'number') data.indent = bb.indent;
       if (blockType === 'code' && typeof bb.lang === 'string') data.lang = bb.lang;
-      // Notion bookmark block → bookmark_embed (URL カード、 bookmark_id=null = ad-hoc)
       if (bb.kind === 'bookmark') {
         const bUrl = typeof bb.url === 'string' ? bb.url : '';
         if (!bUrl) continue;
@@ -601,6 +635,24 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
         inserted++;
       } catch { /* skip */ }
     }
+    return { noteId, blocksInserted: inserted };
+  }
+
+  r.post('/api/notes/from-notion', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as {
+      url?: unknown; page_id?: unknown; title?: unknown;
+      blocks?: unknown; memo?: unknown; also_bookmark?: unknown;
+    } | null;
+    if (!body) return c.json({ error: 'body required' }, 400);
+    const url = typeof body.url === 'string' ? body.url : '';
+    const title = typeof body.title === 'string' ? body.title.slice(0, TITLE_MAX) : '';
+    const pageId = typeof body.page_id === 'string' ? body.page_id : null;
+    const memo = typeof body.memo === 'string' ? body.memo : '';
+    const alsoBookmark = body.also_bookmark === true;
+    if (!url || !title) return c.json({ error: 'url + title required' }, 400);
+    const blocks = Array.isArray(body.blocks) ? body.blocks as NotionExtractedBlock[] : [];
+
+    const { noteId, blocksInserted: inserted } = buildNotionNote({ url, title, page_id: pageId, memo, blocks });
 
     let createdBookmarkId: number | null = null;
     if (alsoBookmark && url) {
@@ -692,6 +744,95 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
       error: preview.error,
       source: 'server-fetch' as const,
     });
+  });
+
+  // ---- bookmark の保存済 HTML を再パースして note 化 --------------------
+  //
+  // 拡張は bookmark 保存時に rendered HTML を残す (html_path)。
+  // パーサが強化された後でも、 過去のスナップショットに対して再抽出を
+  // 走らせて note を作り直せるようにするための entry。
+  //
+  // POST /api/bookmarks/:id/reparse
+  //   body: { kind?: 'chat' | 'notion' (省略時は URL から auto-detect),
+  //           chat_source?: 'chatgpt' | 'claude' | 'gemini' (chat 時),
+  //           memo?: string }
+  r.post('/api/bookmarks/:id/reparse', async (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
+    const b = getBookmark(db, id);
+    if (!b) return c.json({ error: 'bookmark not found' }, 404);
+    if (!b.html_path) return c.json({ error: 'no html snapshot saved for this bookmark' }, 404);
+
+    const htmlPath = join(htmlDir, b.html_path);
+    if (!existsSync(htmlPath)) return c.json({ error: 'html file missing on disk' }, 404);
+
+    let html: string;
+    try { html = readFileSync(htmlPath, 'utf8'); }
+    catch (e) { return c.json({ error: `read html failed: ${e instanceof Error ? e.message : String(e)}` }, 500); }
+
+    const body = await c.req.json().catch(() => null) as {
+      kind?: unknown; chat_source?: unknown; memo?: unknown;
+    } | null;
+    const explicitKind = body && (body.kind === 'chat' || body.kind === 'notion')
+      ? (body.kind as 'chat' | 'notion') : undefined;
+    const chatSource = body && isValidChatSource(body.chat_source) ? body.chat_source : undefined;
+    const memo = body && typeof body.memo === 'string' ? body.memo : '';
+
+    const result = reparseHtml(b.url, html, { kind: explicitKind, chat_source: chatSource });
+    if (!result) {
+      return c.json({
+        error: 'auto-detect failed — bookmark URL is not a recognized chat / notion page',
+        hint: 'pass kind="chat" + chat_source="chatgpt|claude|gemini" or kind="notion" explicitly',
+      }, 400);
+    }
+
+    if (result.kind === 'chat') {
+      if (result.messages.length === 0) {
+        return c.json({
+          error: 'no chat messages extracted from saved HTML',
+          hint: 'extension scrapes JS-rendered DOM; if the saved HTML is the raw shell, no messages can be recovered',
+          kind: 'chat', source: result.source,
+        }, 422);
+      }
+      const { noteId, messagesSaved } = buildChatNote({
+        source: result.source,
+        url: b.url,
+        title: result.title || b.title,
+        conversation_id: null,
+        memo,
+        messages: result.messages,
+        // 再パース時は external_chat への二重保存をしない (extension の初回保存時のみ書く)
+        record_external: false,
+      });
+      const note = getNote(db, noteId)!;
+      return c.json({
+        ok: true, kind: 'chat', source: result.source,
+        note, messages_saved: messagesSaved, messages_count: result.messages.length,
+      }, 201);
+    }
+
+    // notion
+    if (!result.title) {
+      return c.json({ error: 'no notion title detected — saved HTML may not be a notion page' }, 422);
+    }
+    if (result.blocks.length === 0) {
+      return c.json({
+        error: 'no notion blocks extracted from saved HTML',
+        kind: 'notion',
+      }, 422);
+    }
+    const { noteId, blocksInserted } = buildNotionNote({
+      url: b.url,
+      title: result.title,
+      page_id: result.page_id,
+      memo,
+      blocks: result.blocks,
+    });
+    const note = getNote(db, noteId)!;
+    return c.json({
+      ok: true, kind: 'notion',
+      note, blocks_inserted: blocksInserted, page_id: result.page_id,
+    }, 201);
   });
 
   // ---- extension dispatch rules --------------------------------------------
