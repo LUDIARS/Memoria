@@ -26,9 +26,16 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 - **PC 表示の左端タブ「📓 ノート」**
 - ノート一覧 (左サイドバー) + 詳細 (中央) + コメント (右ペイン)
 - 通常ノートの詳細:
-  - 上: タイトル + タグ + 削除ボタン
-  - 中央: 線形ブロックエディタ (markdown 系のみ — floating_text は挿入できない)
+  - 上: タイトル + タグ + 削除ボタン + 「📍 フローティングを追加」 ボタン
+  - 中央: 線形ブロックエディタ + その上に **フローティング overlay layer**
+    (絶対配置の `floating_text` を blocks-wrap に重ねて表示)
+  - 末尾アクション: 「+ ブロックを追加」 (text を追加) と 「+ 特殊ブロック」
+    (text 含む全種別ピッカー、 mobile では bottom-sheet)
   - 右: コメントパネル (テキスト形式のコメント、 自分の set / 他者の set 切替)
+- モバイル (≤760px) の挙動:
+  - 左ノート一覧は off-canvas drawer 化。 ☰ で開閉、 backdrop タップで閉、
+    ノートを開いた瞬間に自動で閉じる (bookmark UI と同じ感覚)
+  - 「+ 特殊ブロック」 メニューは bottom-sheet 表示 (max-height 70vh + ヘッダ ✕)
 - ブックマークノートの詳細:
   - 上: タイトル + タグ + 元 URL バッジ + 削除ボタン
   - 中央: `<iframe sandbox>` で bookmark HTML を canvas として表示 + その上に floating_text ブロックを絶対配置オーバーレイ
@@ -68,10 +75,11 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 | `code` | コードブロック | 通常ノート | `text` + `data_json.lang` |
 | `mermaid` | Mermaid 図 | 通常ノート | `text` |
 | `table` | テーブル | 通常ノート | `data_json.rows` + `data_json.header` |
+| `canvas` | **お絵描きキャンバス** (SVG ベース、 ペン / 消しゴム / 6 色 + カスタム / 5 段階太さ / Undo / 全消去) | 通常ノート | `data_json.paths[]` (`points`="x,y x,y …" + `color` + `width`) + `canvasWidth?/canvasHeight?` |
 | `bullet_list` / `numbered_list` | リスト | 通常ノート | `text` + `data_json.indent` |
 | `todo` | チェックボックス | 通常ノート | `text` + `data_json.checked` |
 | `divider` | 水平線 | 通常ノート | (空) |
-| `floating_text` | **フローティングテキスト** (canvas 上の自由配置注釈) | **ブックマークノート** | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
+| `floating_text` | **フローティングテキスト** (自由配置の絶対座標注釈) | **両方** (bookmark canvas overlay / 通常ノートの blocks-wrap overlay) | `text` + `data_json.x/y/width?/height?/color?/anchor?` |
 | `bookmark_embed` | **bookmark 埋め込みカード** (Notion 風) | 通常ノート | `data_json.bookmark_id?/bookmark_url/title?/summary?/image?/site_name?` (`bookmark_id=null` = ad-hoc URL カード = Notion `/bookmark` 同等) |
 | `note_link` | **note→note 内部リンクカード** | 通常ノート | `data_json.note_id/title?` |
 
