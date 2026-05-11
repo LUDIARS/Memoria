@@ -600,13 +600,16 @@
       <!-- 📓 ノート — esa / DocBase 風 WYSIWYG ブロックエディタ + bookmark base + comment sets。 spec/feature/note.md -->
       <div id="notesView" class="hidden">
         <div class="notes-toolbar">
+          <button id="notesSidebarToggle" type="button" class="ghost notes-sidebar-toggle"
+            title="ノート一覧の表示切替" aria-label="ノート一覧の表示切替">☰</button>
           <input id="notesSearch" type="search" placeholder="ノート検索 (タイトル / 本文)" />
           <span class="grow"></span>
           <button id="notesFromBookmarkBtn" type="button" class="ghost">🔖 bookmark から</button>
           <button id="notesNewBtn" type="button">+ 新規ノート</button>
         </div>
-        <div class="notes-layout">
-          <aside class="notes-sidebar">
+        <div class="notes-layout" id="notesLayout">
+          <div class="notes-sidebar-backdrop" aria-hidden="true"></div>
+          <aside class="notes-sidebar" id="notesSidebar">
             <ul id="notesList" class="notes-list"></ul>
           </aside>
           <section class="notes-pane" id="noteEditor">
@@ -1001,11 +1004,14 @@ bogus-priv</code></pre>
       <div class="detail-actions">
         <button id="dSave">保存</button>
         <button id="dResummarize" class="ghost">再要約</button>
+        <button id="dReparse" class="ghost" title="保存済 HTML を再パースして note 化 (Gemini / ChatGPT / Claude / Notion)"
+          hidden>📄 ノート化 (再パース)</button>
         <a id="dViewHtml" href="#" target="_blank" class="ghost">保存 HTML を開く</a>
         <button id="dShare" class="ghost" title="マルチサーバに共有" hidden>📤 シェア</button>
         <span id="dShareStatus" class="share-status"></span>
         <button id="dDelete" class="danger">削除</button>
       </div>
+      <span id="dReparseStatus" class="share-status"></span>
       <h3>アクセス履歴</h3>
       <ul id="dAccesses" class="accesses"></ul>
     </aside>

@@ -103,14 +103,40 @@ export type NotionBlockKind =
   | 'heading_1' | 'heading_2' | 'heading_3'
   | 'text' | 'quote' | 'todo'
   | 'bullet_list' | 'numbered_list'
-  | 'code' | 'divider';
+  | 'code' | 'divider'
+  /// Notion の `/bookmark` block (URL preview)。 Memoria 側では bookmark_embed
+  /// (bookmark_id=null + bookmark_url + title? + summary? + image?) として保存。
+  | 'bookmark';
 
 export type NotionExtractedBlock =
   | { kind: 'heading_1' | 'heading_2' | 'heading_3' | 'text' | 'quote'; text: string }
   | { kind: 'todo'; text: string; checked?: boolean }
   | { kind: 'bullet_list' | 'numbered_list'; text: string; indent?: number }
   | { kind: 'code'; text: string; lang?: string }
-  | { kind: 'divider' };
+  | { kind: 'divider' }
+  | { kind: 'bookmark'; url: string; title?: string; caption?: string; image?: string };
+
+// ── URL preview (Notion 風 ad-hoc bookmark card) ──────────────────────
+
+export interface UrlPreviewRequest {
+  url: string;
+}
+
+export interface UrlPreviewResponse {
+  url: string;
+  /// 既に bookmark として保存済みなら id を返す (= 既存カード経路に切替)。
+  /// 未保存なら null で、 bookmark_embed の data に bookmark_id=null で挿入する想定。
+  bookmark_id: number | null;
+  title: string;
+  description: string;
+  image: string | null;
+  site_name: string | null;
+  ok: boolean;
+  /// ok=false 時のエラーメッセージ (UI 表示用)
+  error?: string;
+  /// どの経路で metadata を取ったか (UI で「extension cache から」 等表示)
+  source?: 'extension-scrape' | 'bookmark-row' | 'server-fetch';
+}
 
 export interface NoteFromNotionRequest {
   url: string;
