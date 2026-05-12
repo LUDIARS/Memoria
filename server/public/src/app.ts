@@ -5810,6 +5810,10 @@ async function loadPrivacySettings() {
   if ($('aiAutoDomainClassify')) $('aiAutoDomainClassify').checked = s.domain_catalog_auto_classify !== false;
   if ($('aiAutoMealVision')) $('aiAutoMealVision').checked = s.meals_auto_vision !== false;
   if ($('aiAutoDiaryGenerate')) $('aiAutoDiaryGenerate').checked = s.diary_auto_generate !== false;
+  if ($('activityAppSampling')) $('activityAppSampling').checked = !!s.activity_app_sampling_enabled;
+  if ($('activitySteamEnabled')) $('activitySteamEnabled').checked = !!s.activity_steam_enabled;
+  // Steam credentials (= 別 endpoint なので非同期 load)
+  loadActivityCredentials().catch(() => { /* swallow */ });
   configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
@@ -5844,8 +5848,12 @@ async function savePrivacySettings() {
       domain_catalog_auto_classify: !!($('aiAutoDomainClassify')?.checked),
       meals_auto_vision: !!($('aiAutoMealVision')?.checked),
       diary_auto_generate: !!($('aiAutoDiaryGenerate')?.checked),
+      activity_app_sampling_enabled: !!($('activityAppSampling')?.checked),
+      activity_steam_enabled: !!($('activitySteamEnabled')?.checked),
     }),
   });
+  // Steam credentials は別 endpoint で保存
+  await saveActivityCredentials().catch(() => { /* swallow */ });
   const s = r.settings || {};
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
@@ -7661,6 +7669,7 @@ const WL_SUB_VIEWS = {
   browsing: 'wlBrowsingView',
   dig: 'wlDigView',
   tracks: 'tracksView',
+  activity: 'wlActivityView',
 };
 
 // データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
@@ -7765,10 +7774,136 @@ async function loadWorklog() {
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
   if (sub === 'tracks') return loadTracks();
+  if (sub === 'activity') return loadWorklogActivityCard(date);
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
     return;
+  }
+}
+
+interface ActivitySettings {
+  app_sampling: boolean;
+  steam_enabled: boolean;
+  app_sample_sec: number;
+  steam_interval_min: number;
+  steam_api_key_set: boolean;
+  steam_id: string;
+}
+interface ActivityAppRow { process_name: string; total_sec: number; samples: number; last_at: string }
+interface ActivitySteamRow {
+  appid: number; name: string;
+  playtime_2weeks_min: number | null;
+  playtime_forever_min: number | null;
+  img_icon_url: string | null;
+  sampled_at: string;
+}
+
+// Activity (PC アプリ / Steam) の credentials 部分は別 endpoint で読み書きする。
+// API key を masked で扱うため、 settings PATCH ([api/privacy/settings]) には
+// 載せない (= 上書き / 露出を避ける)。
+async function loadActivityCredentials() {
+  const r = await api('/api/activity/settings') as ActivitySettings;
+  const k = $('activitySteamApiKey') as HTMLInputElement | null;
+  if (k) k.value = ''; // password なので raw 値は返さない
+  const ks = $('activitySteamApiKeyStatus');
+  if (ks) ks.textContent = r.steam_api_key_set ? '✓ API key 設定済み (再入力で上書き、 空欄保存は維持)' : '(未設定 — VDF fallback で動く)';
+  const sid = $('activitySteamId') as HTMLInputElement | null;
+  if (sid) sid.value = r.steam_id || '';
+}
+
+async function saveActivityCredentials() {
+  const k = ($('activitySteamApiKey') as HTMLInputElement | null)?.value || '';
+  const sid = ($('activitySteamId') as HTMLInputElement | null)?.value || '';
+  const body: Record<string, unknown> = {};
+  // 空欄ならスキップ (= 既存値を維持)。 ユーザが消したいときは「___」 のような
+  // 明示テキストは要らない (= 設計判断で「明示 clear」 のフローは UI に出さない)。
+  if (k.trim()) body.steam_api_key = k.trim();
+  if (sid.trim() || ($('activitySteamId') as HTMLInputElement | null)?.value === '') {
+    body.steam_id = sid.trim();
+  }
+  if (Object.keys(body).length === 0) return;
+  await api('/api/activity/settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function loadWorklogActivityCard(date: string) {
+  const disabled = $('wlActivityDisabled');
+  const appsEmpty = $('wlActivityAppsEmpty');
+  const appsHint = $('wlActivityAppsHint');
+  const appsList = $('wlActivityAppsList');
+  const steamEmpty = $('wlActivitySteamEmpty');
+  const steamHint = $('wlActivitySteamHint');
+  const steamList = $('wlActivitySteamList');
+  // settings は別 endpoint で取って enabled/disabled の案内を出す
+  let settings: ActivitySettings | null = null;
+  try { settings = await api('/api/activity/settings') as ActivitySettings; } catch { /* swallow */ }
+  if (disabled && settings) {
+    disabled.classList.toggle('hidden', settings.app_sampling || settings.steam_enabled);
+  }
+  // PC アプリ
+  if (appsList) appsList.innerHTML = '';
+  if (settings?.app_sampling) {
+    try {
+      const r = await api(`/api/activity/apps?date=${encodeURIComponent(date)}`) as { items: ActivityAppRow[] };
+      if (!r.items || r.items.length === 0) {
+        appsEmpty?.classList.remove('hidden');
+        if (appsHint) appsHint.textContent = `周期: ${settings.app_sample_sec}s`;
+      } else {
+        appsEmpty?.classList.add('hidden');
+        if (appsHint) appsHint.textContent = `周期 ${settings.app_sample_sec}s × ${r.items.reduce((a, b) => a + b.samples, 0)} サンプル`;
+        if (appsList) {
+          appsList.innerHTML = r.items.map((it) => {
+            const min = Math.round((it.total_sec || 0) / 60);
+            return `<li class="wl-list-row">
+              <span class="wl-list-title">${escapeHtml(it.process_name)}</span>
+              <span class="wl-list-meta muted">${min} 分 / ${it.samples} samples</span>
+            </li>`;
+          }).join('');
+        }
+      }
+    } catch (e) {
+      if (appsHint) appsHint.textContent = `取得失敗: ${(e as Error).message}`;
+      appsEmpty?.classList.remove('hidden');
+    }
+  } else {
+    appsEmpty?.classList.remove('hidden');
+    if (appsHint) appsHint.textContent = '(features.activity.app_sampling.enabled が OFF)';
+  }
+  // Steam
+  if (steamList) steamList.innerHTML = '';
+  if (settings?.steam_enabled) {
+    try {
+      const r = await api('/api/activity/steam/recent') as { items: ActivitySteamRow[] };
+      if (!r.items || r.items.length === 0) {
+        steamEmpty?.classList.remove('hidden');
+        const src = settings.steam_api_key_set ? 'Web API' : 'VDF (ローカル)';
+        if (steamHint) steamHint.textContent = `ソース: ${src}、 取得待ち`;
+      } else {
+        steamEmpty?.classList.add('hidden');
+        const src = settings.steam_api_key_set ? 'Web API' : 'VDF (ローカル)';
+        if (steamHint) steamHint.textContent = `ソース: ${src}`;
+        if (steamList) {
+          steamList.innerHTML = r.items.slice(0, 30).map((it) => {
+            const m2 = it.playtime_2weeks_min ? `直近 ${it.playtime_2weeks_min} 分 / ` : '';
+            const mf = it.playtime_forever_min ? `通算 ${Math.round(it.playtime_forever_min / 60)} 時間` : '';
+            return `<li class="wl-list-row">
+              <span class="wl-list-title">${escapeHtml(it.name)}</span>
+              <span class="wl-list-meta muted">${m2}${mf}</span>
+            </li>`;
+          }).join('');
+        }
+      }
+    } catch (e) {
+      if (steamHint) steamHint.textContent = `取得失敗: ${(e as Error).message}`;
+      steamEmpty?.classList.remove('hidden');
+    }
+  } else {
+    steamEmpty?.classList.remove('hidden');
+    if (steamHint) steamHint.textContent = '(features.activity.steam.enabled が OFF)';
   }
 }
 
@@ -8163,6 +8298,22 @@ $('wlDate')?.addEventListener('change', (e) => {
   }
 });
 $('wlRefresh')?.addEventListener('click', () => loadWorklog());
+$('wlActivitySteamSampleNow')?.addEventListener('click', async () => {
+  const btn = $('wlActivitySteamSampleNow') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '取得中…'; }
+  try {
+    const r = await api('/api/activity/steam/sample-now', { method: 'POST' }) as { source: string; count: number; error?: string };
+    if (r.error) alert(`Steam 取得失敗: ${r.error}`);
+    else alert(`Steam ${r.source} から ${r.count} 件を snapshot しました`);
+    if (state.tab === 'worklog' && state.worklog?.sub === 'activity') {
+      void loadWorklogActivityCard(state.worklog.date);
+    }
+  } catch (e) {
+    alert(`Steam 取得失敗: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 いますぐ取得'; }
+  }
+});
 $('wlGeminiWebSaveBtn')?.addEventListener('click', () => {
   saveGeminiWebResearchLog().catch((e) => {
     console.error(e);

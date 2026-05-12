@@ -47,6 +47,8 @@ import { makeDiaryRouter } from './routes/diary.js';
 import { makeTaskRouter } from './routes/task.js';
 import { makeAgentRouter } from './routes/agent.js';
 import { makeWorkplaceRouter } from './routes/workplace.js';
+import { makeActivityRouter } from './routes/activity.js';
+import { configureActivitySamplers } from './lib/activity-sampler.js';
 import { makeImplRouter } from './routes/impl.js';
 import { makePushRouter } from './routes/push.js';
 import { makeNoteRouter } from './routes/note.js';
@@ -163,12 +165,14 @@ app.route('/', makeDiaryRouter({
 app.route('/', makeTaskRouter({ db }));
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
+app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
 app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
   onMcpAutostartChange: (enabled) => mcp.sync(enabled),
+  onActivitySettingsChange: () => configureActivitySamplers(db),
   summaryQueue: queues.summaryQueue,
   cloudQueue: queues.cloudQueue,
   digQueue: queues.digQueue,
@@ -279,6 +283,10 @@ startSchedulers({
     };
   },
 });
+
+// ── activity samplers (PC アプリ + Steam) ─────────────────────────────────
+// feature flag が OFF なら no-op (起動時 + 設定変更時に再構成)
+configureActivitySamplers(db);
 
 // ---- in-process MQTT subscriber (任意) ----------------------------------
 //
