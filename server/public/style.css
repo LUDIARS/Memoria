@@ -4874,6 +4874,33 @@ dialog.meal-modal[open] {
 .ext-cfg-pill-configured { background: #fff7d6; color: #8a6d00; border-color: #e6c97a; }
 .ext-cfg-pill-inactive { background: var(--bg-surface, #fff); color: var(--text-muted); }
 
+/* 軌跡タブの GPS source / WiFi カード (旧 🔌 外部情報設定からの移植) */
+.tracks-source-card {
+  background: var(--bg-surface, var(--panel));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 8px 0;
+}
+.tracks-source-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.tracks-source-icon { font-size: 18px; }
+.tracks-source-name { font-weight: 600; font-size: 13px; }
+.tracks-source-head .ext-cfg-pill { margin-left: 4px; }
+.tracks-source-head button { font-size: 11px; padding: 2px 8px; }
+.tracks-wifi-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(140px, 1.4fr);
+  gap: 6px 12px;
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .tracks-wifi-grid { grid-template-columns: 1fr 1fr; }
+}
+
 .ext-cfg-howto {
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border);
