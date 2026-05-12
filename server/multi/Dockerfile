@@ -15,14 +15,17 @@ RUN apk add --no-cache git
 WORKDIR /tmp
 RUN git clone --depth 1 --filter=blob:none --sparse https://github.com/LUDIARS/Cernere.git
 WORKDIR /tmp/Cernere
-RUN git sparse-checkout set packages/service-adapter
+# Both file: deps used by Memoria Hub:
+#   @ludiars/cernere-service-adapter  -> packages/service-adapter
+#   @ludiars/cernere-id-cache         -> packages/id-cache
+RUN git sparse-checkout set packages/service-adapter packages/id-cache
 
 FROM node:20-alpine AS deps
 WORKDIR /app
-# package.json references `file:../../../Cernere/packages/service-adapter`.
-# Resolved from /app, that points to /Cernere/packages/service-adapter.
-# Place the sparse-checked-out adapter at exactly that path.
+# package.json references `file:../../../Cernere/packages/*`.
+# Resolved from /app, that points to /Cernere/packages/*.
 COPY --from=adapter-fetch /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
+COPY --from=adapter-fetch /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
 COPY package.json ./
 RUN npm install --omit=dev
 
@@ -30,6 +33,10 @@ FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 ENV MEMORIA_HUB_PORT=5280
+# npm install made symlinks `@ludiars/* -> ../../../Cernere/packages/*` in
+# node_modules. The link targets must also exist in the production image.
+COPY --from=adapter-fetch /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
+COPY --from=adapter-fetch /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
