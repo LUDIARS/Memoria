@@ -650,6 +650,7 @@
           <button class="wl-subtab" data-sub="browsing">🌐 ブラウジング</button>
           <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
+          <button class="wl-subtab" data-sub="activity">💻 アプリ</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">
@@ -718,6 +719,36 @@
           <div class="wl-summary-row" id="wlDigSummary"></div>
           <ul id="wlDigList" class="wl-list"></ul>
           <div id="wlDigEmpty" class="queue-empty hidden">この日のディグはありません。</div>
+        </section>
+
+        <!-- 💻 PC アプリ活動 + Steam (= activity-sampler の出力)
+             feature flag は features.activity.app_sampling.enabled / features.activity.steam.enabled。
+             OFF のときは「現在 OFF。 設定 → 🚦 AI 自動処理 で ON にできます」 案内を表示。 -->
+        <section id="wlActivityView" class="wl-sub hidden">
+          <div class="wl-activity-disabled hidden" id="wlActivityDisabled">
+            <p>💻 PC アプリ活動 / 🎮 Steam の取り込みは default OFF です。 <strong>設定 → 🚦 AI 自動処理</strong> の「💻 PC アプリ使用統計」「🎮 Steam プレイ統計」 で有効化してください。</p>
+          </div>
+          <div class="wl-activity-row">
+            <div class="wl-activity-card">
+              <header>
+                <h4>💻 PC アプリ使用時間</h4>
+                <span id="wlActivityAppsHint" class="muted"></span>
+              </header>
+              <ul id="wlActivityAppsList" class="wl-list"></ul>
+              <div id="wlActivityAppsEmpty" class="queue-empty hidden">この日のアプリサンプルはまだありません。</div>
+            </div>
+            <div class="wl-activity-card">
+              <header>
+                <h4>🎮 Steam — 最近プレイした</h4>
+                <span id="wlActivitySteamHint" class="muted"></span>
+              </header>
+              <ul id="wlActivitySteamList" class="wl-list"></ul>
+              <div id="wlActivitySteamEmpty" class="queue-empty hidden">Steam の snapshot はまだありません。 ON 後 1 時間以内 (もしくは「いますぐ取得」 ボタン) で表示されます。</div>
+              <div class="wl-activity-actions">
+                <button id="wlActivitySteamSampleNow" class="ghost" type="button">🔄 いますぐ取得</button>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -1219,7 +1250,22 @@
           <input id="aiAutoDiaryGenerate" type="checkbox" />
           📓 毎日 0:00 の日記 / 日曜 23:00 の週報を自動生成
         </label>
+        <label class="check-inline">
+          <input id="activityAppSampling" type="checkbox" />
+          💻 PC アプリ使用統計 (= 30 秒おきに最前面のアプリ名を記録)
+        </label>
+        <label class="check-inline">
+          <input id="activitySteamEnabled" type="checkbox" />
+          🎮 Steam プレイ統計 (= 1 時間おきに最近プレイした game を取得)
+        </label>
       </div>
+
+      <h4>🎮 Steam Web API (オプション)</h4>
+      <p class="ai-settings-help">API key + SteamID を入れると <a href="https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames" target="_blank" rel="noopener">公式 GetRecentlyPlayedGames</a> で取得します。 未設定でも同じ PC に Steam が入っていればローカル VDF ファイルからフォールバックで取得 (= key 不要)。</p>
+      <label>Steam Web API Key: <input id="activitySteamApiKey" type="password" placeholder="未設定 = VDF fallback" autocomplete="off" /></label>
+      <span id="activitySteamApiKeyStatus" class="ai-keystatus"></span>
+      <label>SteamID64 (17 桁): <input id="activitySteamId" type="text" placeholder="76561198..." autocomplete="off" /></label>
+      <p class="ai-settings-help">API key: <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener">steamcommunity.com/dev/apikey</a> で発行 (無料、 ドメインは <code>localhost</code> でも OK)。 SteamID64 は <a href="https://steamid.io/" target="_blank" rel="noopener">steamid.io</a> 等。 プロフィール公開設定が ON でないと空が返る。</p>
     </section>
 
     <!-- ── 🔌 連携 / API key ── -->
