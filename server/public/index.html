@@ -14,11 +14,9 @@
 <body>
   <header class="topbar">
     <div class="brand">Memoria</div>
-    <div id="multiSwitch" class="multi-switch" hidden></div>
     <button id="extensionBadge" type="button" class="ext-badge" hidden></button>
     <div id="queueBadge" class="queue-badge hidden" title="作業中ジョブ数">作業中 <span id="queueCount">0</span></div>
     <div class="topbar-controls">
-      <button id="howToBookmarkBtn" class="ghost topbar-howto" title="ブックマークの追加方法" hidden>💡 やり方</button>
       <button id="legatusBadge" class="ghost topbar-legatus" type="button" title="Legatus 接続状態" hidden>
         <span class="legatus-dot" data-state="unknown">●</span>
         <span class="legatus-label">Legatus</span>
@@ -27,6 +25,10 @@
       <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定">⚙ 設定</button>
     </div>
   </header>
+
+  <!-- Multi-server (Memoria Hub) スイッチ — Memoria ロゴの下、 機能タブの上の独立行。
+       hub に 1 件も登録が無いときは hidden、 1 件以上で表示される。 -->
+  <div id="multiSwitch" class="multi-switch multi-switch-row" hidden></div>
 
   <!-- ── 起動チュートリアル (5 step wizard) ────────────────────────────
        初回起動時 (= app_settings.tutorial.completed_at が空) で自動表示。
@@ -1350,6 +1352,12 @@
           ON にすると <code>--hidden</code> フラグでウィンドウなし起動 → トレイアイコンだけ表示されます。 普段は OS スタートアップに登録するこの方式で十分。 「ログアウト中も動かしたい」 ような用途は将来 Windows サービス化を検討します (別 PR)。
         </p>
       </div>
+      <h4>📌 スマホでブックマークする方法</h4>
+      <p class="ai-settings-help">スマホには Chrome 拡張が使えないので、 Memoria を PWA 化して OS の共有メニューから保存します。 詳細手順:</p>
+      <div class="ai-settings-actions">
+        <button id="howToBookmarkBtnInSettings" class="ghost" type="button">💡 ブックマーク方法を表示</button>
+      </div>
+
       <h4>📱 通知 (WebPush)</h4>
       <p class="ai-settings-help">
         日記生成完了などをこの端末に通知します。
