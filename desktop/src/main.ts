@@ -172,6 +172,17 @@ function spawnServer(port: number): ChildProcess | null {
     return null;
   }
 
+  // Memoria server は TypeScript (`index.ts`)。 dev / 同梱 (npm install --omit=dev
+  // で tsx が入っている) どちらも `tsx` CLI 経由で起動する。 旧コードは `index.js`
+  // を指定していたが、 server 側に compile step が無いので spawn が即終了して
+  // いた (= 結果、 別途 `npm start` で立てた standalone server に Electron が
+  // フォールバック接続するという紛らわしい状態になっていた)。
+  const tsxCli = path.join(serverDir, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  if (!fs.existsSync(tsxCli)) {
+    console.error(`[memoria-desktop] tsx CLI not found at ${tsxCli}. Run \`npm install\` in ${serverDir}.`);
+    return null;
+  }
+
   const env: NodeJS.ProcessEnv = { ...process.env, MEMORIA_PORT: String(port) };
   if (runAsNode) env.ELECTRON_RUN_AS_NODE = '1';
   if (process.platform === 'win32' && !env.CLAUDE_CODE_GIT_BASH_PATH) {
@@ -182,20 +193,29 @@ function spawnServer(port: number): ChildProcess | null {
     }
   }
 
-  const child = spawn(nodeBin, ['index.js'], {
+  // tsx CLI に server/index.ts を渡す。 `--env-file-if-exists` は `npm start` と
+  // 同じ二段読み (server/.env と repo-root/.env)。
+  const args = [
+    tsxCli,
+    '--env-file-if-exists=.env',
+    '--env-file-if-exists=../.env',
+    'index.ts',
+  ];
+
+  const child = spawn(nodeBin, args, {
     cwd: serverDir,
     env,
     stdio: ['ignore', 'inherit', 'inherit'],
     detached: false,
   });
   child.on('error', (e: Error) => {
-    console.error(`[memoria-desktop] failed to spawn server (${nodeBin} index.js in ${serverDir}):`, e.message);
+    console.error(`[memoria-desktop] failed to spawn server (${nodeBin} ${tsxCli} index.ts in ${serverDir}):`, e.message);
   });
   child.on('exit', (code, signal) => {
     console.log(`[memoria-desktop] server exited (code=${code}, signal=${signal ?? ''})`);
     serverChild = null;
   });
-  console.log(`[memoria-desktop] spawned ${nodeBin} (pid ${child.pid}) in ${serverDir} (port ${port}, runAsNode=${runAsNode})`);
+  console.log(`[memoria-desktop] spawned ${nodeBin} ${tsxCli} index.ts (pid ${child.pid}) in ${serverDir} (port ${port}, runAsNode=${runAsNode})`);
   return child;
 }
 
@@ -495,9 +515,14 @@ app.on('second-instance', () => {
 
 void app.whenReady().then(async () => {
   serverPort = Number(process.env.MEMORIA_PORT) || 5180;
-  serverChild = spawnServer(serverPort);
-  // Even if spawn returned null (e.g. user runs server externally) we still
-  // poll readiness — the URL might already be responding.
+  // 既に外で server が立っている場合 (= dev で `npm start` を別途走らせている等)
+  // は spawn を skip。 そうでなければ Electron が backend を自分で立てる。
+  const externalAlive = await waitForServerReady(serverPort, 500);
+  if (externalAlive) {
+    console.log(`[memoria-desktop] external server detected on :${serverPort} — skipping spawn (Electron will share the existing server)`);
+  } else {
+    serverChild = spawnServer(serverPort);
+  }
   const ready = await waitForServerReady(serverPort, 25_000);
   if (!ready) {
     console.warn(`[memoria-desktop] server on :${serverPort} did not become ready in time — opening the window anyway; the WebView will retry`);
@@ -530,7 +555,11 @@ app.on('before-quit', () => {
 // no other windows open.
 app.on('activate', async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    if (!serverChild) serverChild = spawnServer(serverPort);
+    if (!serverChild) {
+      // 同じガード — 外で生きている server があれば spawn しない
+      const alive = await waitForServerReady(serverPort, 500);
+      if (!alive) serverChild = spawnServer(serverPort);
+    }
     await waitForServerReady(serverPort, 25_000);
     createWindow(serverPort);
   }
