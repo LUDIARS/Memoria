@@ -302,6 +302,9 @@
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
           </button>
+          <button class="tab" data-tab="review">
+            <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -861,6 +864,25 @@
         <div class="tracks-days">
           <h4>記録のある日</h4>
           <ul id="tracksDays" class="tracks-days-list"></ul>
+        </div>
+      </div>
+
+      <div id="reviewView" class="hidden">
+        <div class="bookmarks-toolbar">
+          <span class="muted">LUDIARS 全サービスの AIFormat レビュー (skill `ludiars-review` が生成)</span>
+          <span class="grow"></span>
+          <button id="reviewRefresh" class="ghost" type="button">更新</button>
+        </div>
+        <div class="bookmarks-layout">
+          <aside class="bookmarks-categories" id="reviewRepoList">
+            <h3>リポジトリ</h3>
+            <ul id="reviewRepoUl"></ul>
+          </aside>
+          <div class="bookmarks-main">
+            <div id="reviewDetail" class="muted" style="padding:16px">
+              左のリポジトリを選択するとレビューが表示されます。
+            </div>
+          </div>
         </div>
       </div>
 
