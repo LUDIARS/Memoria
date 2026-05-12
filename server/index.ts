@@ -212,6 +212,25 @@ const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
 
+// 起動時の Cernere project-token 事前取得 — 「起動時に必ず認証を通す」 ポリシー。
+// 接続済みサーバごとに user-JWT → Cernere /api/auth/project-token → memory cache。
+// 失敗してもプロセスは落とさず、 該当 Hub への次の操作で再試行される。
+void import('./local/multi-client.js').then(async ({ readMultiServers, isConnected }) => {
+  const { getProjectTokenForHub } = await import('./lib/cernere-session.js');
+  const projectKey = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
+  const { servers } = readMultiServers(db);
+  for (const s of servers) {
+    const state = { ...s, label: s.label } as const;
+    if (!isConnected(state as never)) continue;
+    try {
+      await getProjectTokenForHub(s.url, s.jwt as string, projectKey);
+      console.log(`[cernere] startup auth ok — hub=${s.url} project=${projectKey}`);
+    } catch (e) {
+      console.warn(`[cernere] startup auth failed — hub=${s.url}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+});
+
 // 起動時に未解決 GPS の backfill を 1 batch だけ走らせる. listen 直後でなく
 // 5 秒遅延させて、 Memoria 起動直後のバタつき (server / WS / RAG init) と
 // 重ならないようにする. API key 未設定なら全件 'failed' で帰すので副作用なし.
