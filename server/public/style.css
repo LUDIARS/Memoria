@@ -5543,11 +5543,14 @@ dialog.loc-edit-modal[open] {
 .nbm-item {
   display: flex; gap: 8px; align-items: center;
   width: 100%; border: 0; background: transparent;
+  /* グローバル `button { color: #fff }` を上書き — メニュー背景が白なので
+   * そのままだと「白背景に白文字」 で読めなくなる。 */
+  color: var(--text);
   text-align: left; padding: 6px 12px; cursor: pointer;
 }
 .nbm-item:hover { background: var(--accent-bg); }
 .nbm-icon { display: inline-block; width: 24px; color: var(--muted); font-weight: 600; font-size: 12px; }
-.nbm-danger { color: #c33; }
+.nbm-danger, .nbm-danger:hover { color: #c33; }
 
 /* selection toolbar */
 .note-toolbar {
@@ -5944,13 +5947,21 @@ dialog.loc-edit-modal[open] {
   .notes-layout:not(.notes-sidebar-open) { grid-template-columns: 0 minmax(0, 1fr); }
 }
 
-/* mobile drawer */
+/* mobile drawer
+ *
+ * モバイルでは sidebar (ノート選択メニュー) を ノートウインドウ内 (= タブの
+ * 下の .notes-layout 領域内) に閉じ込めて表示する。 viewport 全体を覆う
+ * fixed overlay にはしない (タブ nav まで隠れてしまうため)。
+ * → position: absolute + parent (.notes-layout) を起点に left/top/bottom = 0。
+ */
 @media (max-width: 760px) {
-  /* 既存の `.notes-layout { grid-template-columns: 1fr }` (上の方の rule) を上書きしないが、
-     sidebar を fixed off-canvas に切替えるので grid どうこうは無視される */
-  .notes-layout { position: relative; }
+  .notes-layout {
+    position: relative;
+    overflow: hidden;   /* sidebar の transform: translateX(-100%) を内部に閉じる */
+    min-height: 60vh;   /* sidebar が absolute なので layout に高さを与える */
+  }
   .notes-sidebar {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     bottom: 0;
@@ -5962,17 +5973,17 @@ dialog.loc-edit-modal[open] {
     box-shadow: 4px 0 16px rgba(0,0,0,0.2);
     transform: translateX(-100%);
     transition: transform 0.22s ease-out;
-    z-index: 9100;
-    display: block;   /* 既定 .notes-sidebar の display を維持 */
+    z-index: 50;
+    display: block;
   }
   .notes-layout.notes-sidebar-open .notes-sidebar { transform: translateX(0); }
   .notes-layout:not(.notes-sidebar-open) .notes-sidebar { display: block; transform: translateX(-100%); }
   .notes-sidebar-backdrop {
     display: block;
-    position: fixed;
+    position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 9099;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 49;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.22s ease-out;
@@ -5981,6 +5992,36 @@ dialog.loc-edit-modal[open] {
     opacity: 1;
     pointer-events: auto;
   }
+}
+
+/* スマホ専用フローティング「ブロック追加」 ボタン (FAB)。
+ * 右下固定。 タップで「いま居るブロックの次」 にブロックを挿入するメニューが
+ * 開く。 PC では非表示 (= 既存の hover handle + slash menu で十分)。 */
+.notes-mobile-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 80;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  display: none;   /* @media で mobile のみ display: flex */
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.notes-mobile-fab[hidden] { display: none !important; }
+.notes-mobile-fab:hover { background: var(--accent); filter: brightness(1.05); }
+@media (max-width: 760px) {
+  .notes-mobile-fab { display: flex; }
 }
 
 /* 通常ノート編集の上部ツールバー (フローティング追加など) */
