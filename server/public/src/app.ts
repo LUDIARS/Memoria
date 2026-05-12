@@ -162,6 +162,9 @@ import { loadNotes as notesLoad } from './notes/index.js';
 // PAGE_HELP の本文を増やす場合は page-help.ts を編集する。
 import { initTutorial } from './tutorial.js';
 import { initHelpDrawer, openHelpFor } from './help-drawer.js';
+// 位置情報の silent / interactive 取得を分けるヘルパ。 silent は permission='granted'
+// のときだけ叩いてダイアログを出さない。 詳細は geo.ts 参照。
+import { silentGetPosition, requestPosition, type PositionLike } from './geo.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
@@ -6783,18 +6786,10 @@ async function startAgentRunFromModal() {
 
 // ── GPS / Place API helpers ────────────────────────────────────────────────
 
-function getCurrentPositionPromise(opts: Loose = {}) {
-  return new Promise((resolve, reject) => {
-    if (!('geolocation' in navigator)) {
-      reject(new Error('このブラウザは Geolocation に対応していません'));
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(pos.coords),
-      (err) => reject(new Error(err.message || 'GPS 取得失敗')),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000, ...opts },
-    );
-  });
+// 手動「現在地」 ボタン用。 permission='prompt' のときは許可ダイアログを出す
+// (= ユーザの明示的アクションなので OK)。 内部で geo.ts のキャッシュも更新する。
+async function getCurrentPositionPromise(opts: Loose = {}): Promise<PositionLike> {
+  return requestPosition(opts as PositionOptions);
 }
 
 async function resolvePlaceForCoords(coords) {
@@ -6834,25 +6829,29 @@ async function openEditorFromCurrentGps() {
 
 let _workplaceCheckinTimer = null;
 let _workplaceGeoEnabled = false;
+let _workplaceLastSilentMs = 0;
 const WORKPLACE_CHECKIN_INTERVAL_MS = 5 * 60 * 1000;
 
 async function _silentCheckin() {
   if (!_workplaceGeoEnabled) return;
   if (document.visibilityState !== 'visible') return;
+  // silent path は permission='granted' のときだけブラウザ位置 API を叩く
+  // (= 「ブラウザ設定では許可してるのに毎回ポップアップ」 問題の本丸対策)。
+  const coords = await silentGetPosition();
+  if (!coords) return;
   try {
-    const coords = await getCurrentPositionPromise({ timeout: 8000, maximumAge: 60000 });
     const r = await api('/api/work-locations/checkin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
     });
+    _workplaceLastSilentMs = Date.now();
     const banner = $('workplaceCurrentBanner');
     if (banner && r.matched) {
       const broadcast = r.changed && r.broadcast?.ok ? ' ・ Hub に共有しました' : '';
       banner.textContent = `📍 ${r.workplace.name}${broadcast}`;
     }
   } catch (e) {
-    // 静かに失敗 (バッテリ最適化で deny されるなど)。手動ボタンでは表示する。
     console.debug('[workplace] silent checkin skipped:', e.message);
   }
 }
@@ -6865,7 +6864,6 @@ function configureWorkplaceCheckin(enabled) {
   }
   if (_workplaceGeoEnabled) {
     _workplaceCheckinTimer = setInterval(_silentCheckin, WORKPLACE_CHECKIN_INTERVAL_MS);
-    // visibility change で復帰時にも 1 回トリガー
     document.addEventListener('visibilitychange', _onWorkplaceVisibility);
   } else {
     document.removeEventListener('visibilitychange', _onWorkplaceVisibility);
@@ -6873,7 +6871,11 @@ function configureWorkplaceCheckin(enabled) {
 }
 
 function _onWorkplaceVisibility() {
-  if (document.visibilityState === 'visible') _silentCheckin();
+  if (document.visibilityState !== 'visible') return;
+  // visibilitychange で連発するのを抑制。 前回 silent 成功から 5 分経って
+  // いれば再 trigger、 それまでは interval timer の通常巡回を待つ。
+  if (Date.now() - _workplaceLastSilentMs < WORKPLACE_CHECKIN_INTERVAL_MS) return;
+  _silentCheckin();
 }
 
 async function workplaceCheckinNow() {
@@ -8775,17 +8777,13 @@ async function recenterMapOnLatestOrCurrent() {
       return;
     }
   } catch (e) { console.warn('[tracks] latest fetch failed', e); }
-  // fallback: 現在位置
-  if (!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      if (!tracksState.map) return;
-      tracksState.map.setCenter({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-      tracksState.map.setZoom(15);
-    },
-    (err) => { console.info('[tracks] geolocation skipped:', err?.message); },
-    { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 },
-  );
+  // fallback: 現在位置 — ただし permission が 'granted' のときだけ silent に
+  // 取る (= ダイアログを出さない)。 拒否 / 未許可なら東京駅のままで放置。
+  const coords = await silentGetPosition();
+  if (coords && tracksState.map) {
+    tracksState.map.setCenter({ lat: coords.latitude, lng: coords.longitude });
+    tracksState.map.setZoom(15);
+  }
 }
 
 async function renderTracksForCurrentDate() {
