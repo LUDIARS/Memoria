@@ -20,11 +20,19 @@ const DEFAULT_STEAM_INTERVAL_MIN = 60;
 
 let appTimer: ReturnType<typeof setInterval> | null = null;
 let steamTimer: ReturnType<typeof setInterval> | null = null;
+let _maybeQueueApp: ((processName: string, recentTitles?: string[]) => void) | null = null;
 
-export function configureActivitySamplers(db: Db): void {
+export interface ActivitySamplerDeps {
+  /** 新規 process_name を AI 分類するため queues.maybeQueueApplication を渡す。
+   *  渡さなくても sampling 自体は動く (= 分類はスキップ)。 */
+  maybeQueueApplication?: (processName: string, recentTitles?: string[]) => void;
+}
+
+export function configureActivitySamplers(db: Db, deps: ActivitySamplerDeps = {}): void {
   // 都度 clear → 設定に応じて再 schedule
   if (appTimer) { clearInterval(appTimer); appTimer = null; }
   if (steamTimer) { clearInterval(steamTimer); steamTimer = null; }
+  if (deps.maybeQueueApplication) _maybeQueueApp = deps.maybeQueueApplication;
 
   const priv = privacySettings(db);
   const settings = getAppSettings(db);
@@ -59,6 +67,10 @@ export async function sampleAppOnce(db: Db, sampleIntervalSec: number): Promise<
       INSERT INTO app_samples (sampled_at, process_name, window_title, sample_interval_sec)
       VALUES (datetime('now'), ?, ?, ?)
     `).run(fg.process_name, fg.window_title, sampleIntervalSec);
+    // 新規 process_name なら AI 分類を enqueue (= applications カタログ)
+    if (_maybeQueueApp) {
+      _maybeQueueApp(fg.process_name, fg.window_title ? [fg.window_title] : undefined);
+    }
   } catch (e) {
     console.warn('[activity] app sample insert failed:', (e as Error).message);
   }
