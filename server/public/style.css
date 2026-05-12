@@ -1545,6 +1545,140 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   font-size: 13px;
 }
 .visits-actions .check-inline { display: inline-flex; gap: 6px; align-items: center; }
+/* AI 自動処理 opt-out group (Settings → AI / モデル) */
+.ai-autoflag-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.ai-autoflag-grid .check-inline { display: flex; gap: 8px; align-items: center; }
+
+/* ── 起動チュートリアル (5 step wizard) ─────────────────────────────── */
+.tutorial-overlay { z-index: 1500; }
+.tutorial-modal {
+  display: flex; flex-direction: column;
+  width: min(720px, 92vw);
+  max-height: 88vh;
+  overflow: hidden;
+  padding: 0;
+}
+.tutorial-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.tutorial-head h2 { margin: 0; font-size: 18px; flex: 1; }
+.tutorial-progress { font-size: 12px; color: var(--muted); }
+.tutorial-stepper {
+  display: flex; gap: 6px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.tutorial-step {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tutorial-step.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tutorial-step.done { color: var(--text); border-color: var(--accent); }
+.tutorial-body {
+  flex: 1; overflow-y: auto;
+  padding: 18px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.tutorial-body h3 { margin: 14px 0 8px; font-size: 15px; }
+.tutorial-body h3:first-child { margin-top: 0; }
+.tutorial-body h4 { margin: 18px 0 8px; font-size: 13px; color: var(--muted); }
+.tutorial-body p { margin: 0 0 10px; }
+.tutorial-help { color: var(--muted); font-size: 12px; }
+.tutorial-steps { padding-left: 22px; margin: 8px 0; }
+.tutorial-steps li { margin-bottom: 6px; }
+.tutorial-actions {
+  display: flex; gap: 10px; align-items: center;
+  margin: 10px 0;
+}
+.tutorial-form {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0;
+}
+.tutorial-form label { flex: 1; min-width: 240px; display: flex; gap: 8px; align-items: center; }
+.tutorial-form input { flex: 1; min-width: 0; }
+.tutorial-status { font-size: 12px; color: var(--muted); }
+.tutorial-keybox {
+  background: var(--panel-elevated, var(--panel));
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  user-select: all;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.tutorial-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.tutorial-feature {
+  display: flex; flex-direction: column; gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+.tutorial-feature small { font-weight: 400; font-size: 11px; color: var(--muted); line-height: 1.4; }
+.tutorial-feature:hover { border-color: var(--accent); background: var(--panel-elevated, transparent); }
+.tutorial-footer {
+  display: flex; gap: 8px; align-items: center;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+.tutorial-spacer { flex: 1; }
+
+/* ── ページごとのヘルプ drawer ──────────────────────────────────────── */
+.help-drawer {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: min(420px, 92vw);
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0,0,0,0.18);
+  z-index: 1400;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(0);
+  transition: transform 200ms ease;
+}
+.help-drawer[hidden] { display: none; }
+.help-drawer-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.help-drawer-head h3 { margin: 0; font-size: 15px; flex: 1; }
+.help-drawer-body {
+  flex: 1; overflow-y: auto;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.help-drawer-body h4 { margin: 14px 0 6px; font-size: 13px; }
+.help-drawer-body h4:first-child { margin-top: 0; }
+.help-drawer-body p { margin: 0 0 10px; }
+.help-drawer-body ul { padding-left: 20px; margin: 6px 0; }
+.help-drawer-body code {
+  background: var(--panel-elevated, rgba(0,0,0,0.05));
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
 .visits-list { list-style: none; padding: 0; margin: 0; }
 .visits-list li {
   background: var(--panel);

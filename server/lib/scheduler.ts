@@ -7,6 +7,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { yesterdayLocal, formatLocalDate, weekRangeFor } from '../diary.js';
 import { listTasks, getAppSettings, setAppSettings } from '../db.js';
 import { sendPushToAll } from '../push.js';
+import { featureEnabled } from './privacy.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -38,9 +39,15 @@ function scheduleMidnight(deps: SchedulerDeps): void {
   const ms = next.getTime() - now.getTime();
   setTimeout(() => {
     try {
-      const dateStr = yesterdayLocal();
-      console.log(`[diary cron] generating ${dateStr}`);
-      deps.enqueueDiary(dateStr);
+      // `features.diary.auto_generate` で OFF にできる (= 「日記生成」 ボタンの
+      // 手動操作だけが残る)。 cron 自体は走り続けて、 enqueue を skip する。
+      if (!featureEnabled(deps.db, 'diary_auto_generate')) {
+        console.log('[diary cron] skipped (features.diary.auto_generate=false)');
+      } else {
+        const dateStr = yesterdayLocal();
+        console.log(`[diary cron] generating ${dateStr}`);
+        deps.enqueueDiary(dateStr);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[diary cron] failed:', msg);
@@ -61,10 +68,14 @@ function scheduleSundayEvening(deps: SchedulerDeps): void {
   const ms = next.getTime() - now.getTime();
   setTimeout(() => {
     try {
-      const today = new Date();
-      const range = weekRangeFor(formatLocalDate(today));
-      console.log(`[weekly cron] generating week ${range.start}`);
-      deps.enqueueWeekly(range.start);
+      if (!featureEnabled(deps.db, 'diary_auto_generate')) {
+        console.log('[weekly cron] skipped (features.diary.auto_generate=false)');
+      } else {
+        const today = new Date();
+        const range = weekRangeFor(formatLocalDate(today));
+        console.log(`[weekly cron] generating week ${range.start}`);
+        deps.enqueueWeekly(range.start);
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('[weekly cron] failed:', msg);

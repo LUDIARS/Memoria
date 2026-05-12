@@ -162,7 +162,13 @@ export function makeMealRouter(deps: MealRouterDeps): Hono {
     }
     updateMeal(db, id, { photo_path: filename });
 
-    enqueueMealVision(id);
+    // `features.meals.auto_vision` で OFF にできる (写真 + 食事記録は保存されるが
+    // LLM 解析はスキップ。 後から「再分析」 ボタンで手動起動可)。
+    if (featureEnabled(db, 'meals_auto_vision')) {
+      enqueueMealVision(id);
+    } else {
+      updateMeal(db, id, { ai_status: 'done', ai_error: null });
+    }
 
     const created = getMeal(db, id);
     return c.json({ meal: created }, 201);
@@ -228,8 +234,9 @@ export function makeMealRouter(deps: MealRouterDeps): Hono {
       user_note: typeof body.user_note === 'string' ? (body.user_note.trim() || null) : null,
     });
 
-    // calories 未指定なら LLM で背景推定 (description を食品名として渡す)
-    if (calories == null) {
+    // calories 未指定なら LLM で背景推定 (description を食品名として渡す)。
+    // `features.meals.auto_vision` 連動 — OFF だと calories は null のまま (= 「— kcal」 表示)。
+    if (calories == null && featureEnabled(db, 'meals_auto_vision')) {
       enqueueCalorieEstimate(id, -1, description);
     }
 
@@ -324,11 +331,12 @@ export function makeMealRouter(deps: MealRouterDeps): Hono {
 
     // description が変わって user_corrected_calories を null に戻したケースは
     // 「内容が変わったのでカロリー再推定して」 という合図。 LLM で背景推定する。
+    // `features.meals.auto_vision` で OFF にできる。
     const updated = getMeal(db, id);
     const descChanged = patch.user_corrected_description !== undefined &&
       patch.user_corrected_description !== meal.user_corrected_description;
     const calsCleared = patch.user_corrected_calories === null;
-    if (descChanged && calsCleared) {
+    if (descChanged && calsCleared && featureEnabled(db, 'meals_auto_vision')) {
       const desc = (updated?.user_corrected_description as string | null) || updated?.description || '';
       if (desc) enqueueCalorieEstimate(id, -1, desc);
     }
@@ -399,8 +407,9 @@ export function makeMealRouter(deps: MealRouterDeps): Hono {
     additions.push({ name, calories, added_at: addedAt });
     updateMeal(db, id, { additions_json: JSON.stringify(additions) });
 
-    // calories 未指定なら背景で LLM 推定して非同期に書き戻す
-    if (calories == null) {
+    // calories 未指定なら背景で LLM 推定して非同期に書き戻す。
+    // `features.meals.auto_vision` で OFF にできる (= 「— kcal」 のまま手動入力待ち)。
+    if (calories == null && featureEnabled(db, 'meals_auto_vision')) {
       enqueueCalorieEstimate(id, newIdx, name);
     }
     return c.json({ meal: getMeal(db, id) });
