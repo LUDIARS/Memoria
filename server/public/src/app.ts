@@ -7670,6 +7670,7 @@ const WL_SUB_VIEWS = {
   dig: 'wlDigView',
   tracks: 'tracksView',
   activity: 'wlActivityView',
+  games: 'wlGamesView',
 };
 
 // データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
@@ -7775,6 +7776,7 @@ async function loadWorklog() {
   if (sub === 'dig') return loadWorklogDig(date);
   if (sub === 'tracks') return loadTracks();
   if (sub === 'activity') return loadWorklogActivityCard(date);
+  if (sub === 'games') return loadWorklogGamesView(date);
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
@@ -7828,6 +7830,66 @@ async function saveActivityCredentials() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+interface WorkTimeRow {
+  date: string;
+  work_total_sec: number;
+  work_total_min: number;
+  work_samples: number;
+  by_kind: Array<{ kind: string; total_sec: number; samples: number }>;
+}
+interface GameLogRow {
+  source: 'steam' | 'app';
+  occurred_at: string;
+  title: string;
+  duration_min?: number;
+  detail?: string;
+  appid?: number;
+  img_icon_url?: string | null;
+}
+
+async function loadWorklogGamesView(date: string) {
+  const disabled = $('wlGamesDisabled');
+  const empty = $('wlGamesEmpty');
+  const list = $('wlGamesList');
+  const summary = $('wlGamesSummary');
+  // settings 読んで案内出し分け
+  let settings: ActivitySettings | null = null;
+  try { settings = await api('/api/activity/settings') as ActivitySettings; } catch { /* swallow */ }
+  if (disabled) disabled.classList.toggle('hidden', !!(settings && (settings.app_sampling || settings.steam_enabled)));
+  try {
+    const r = await api(`/api/activity/games?date=${encodeURIComponent(date)}`) as { date: string; items: GameLogRow[] };
+    if (summary) summary.innerHTML = '';
+    if (list) list.innerHTML = '';
+    if (!r.items?.length) {
+      empty?.classList.remove('hidden');
+      return;
+    }
+    empty?.classList.add('hidden');
+    const totalMin = r.items.reduce((a, b) => a + (b.duration_min ?? 0), 0);
+    if (summary && totalMin > 0) {
+      summary.innerHTML = `<div class="muted">合計 ${totalMin} 分 / ${r.items.length} 件</div>`;
+    }
+    if (list) {
+      list.innerHTML = r.items.map((it) => {
+        const badge = it.source === 'steam'
+          ? '<span class="wl-game-badge wl-game-badge-steam">Steam</span>'
+          : '<span class="wl-game-badge wl-game-badge-app">App</span>';
+        const time = new Date(it.occurred_at.replace(' ', 'T') + 'Z').toLocaleTimeString();
+        const dur = it.duration_min != null ? `${it.duration_min} 分` : '';
+        const detail = it.detail ? `<span class="muted">${escapeHtml(it.detail)}</span>` : '';
+        return `<li class="wl-list-row wl-game-row">
+          ${badge}
+          <span class="wl-list-title">${escapeHtml(it.title)}</span>
+          <span class="wl-list-meta muted">${dur} ・ ${time}</span>
+          ${detail}
+        </li>`;
+      }).join('');
+    }
+  } catch (e) {
+    if (summary) summary.innerHTML = `<div class="muted">取得失敗: ${escapeHtml((e as Error).message)}</div>`;
+  }
 }
 
 async function loadWorklogActivityCard(date: string) {
@@ -7904,6 +7966,37 @@ async function loadWorklogActivityCard(date: string) {
   } else {
     steamEmpty?.classList.remove('hidden');
     if (steamHint) steamHint.textContent = '(features.activity.steam.enabled が OFF)';
+  }
+
+  // 仕事時間サマリ (applications.kind='work' な samples の合計 + kind 別内訳)
+  const sum = $('wlActivityWorkSummary');
+  if (sum) {
+    if (!settings?.app_sampling) {
+      sum.innerHTML = '';
+    } else {
+      try {
+        const w = await api(`/api/activity/work-time?date=${encodeURIComponent(date)}`) as WorkTimeRow;
+        const kindLabels: Record<string, string> = {
+          work: '💼 仕事', game: '🎮 ゲーム', browser: '🌐 ブラウザ',
+          messaging: '💬 メッセージ', media: '🎬 メディア',
+          creative: '🎨 クリエイティブ', other: '❓ その他',
+        };
+        const breakdown = (w.by_kind || []).map((b) => {
+          const min = Math.round((b.total_sec || 0) / 60);
+          return `<span class="wl-kind-stat">${kindLabels[b.kind] || b.kind}: ${min}分</span>`;
+        }).join(' ・ ');
+        const wm = w.work_total_min || 0;
+        const hh = Math.floor(wm / 60);
+        const mm = wm % 60;
+        sum.innerHTML = `
+          <div class="wl-worktime-headline">💼 仕事時間 (kind=work): <strong>${hh}h${mm}m</strong></div>
+          <div class="wl-worktime-breakdown muted">${breakdown}</div>
+          <div class="muted" style="font-size:11px;margin-top:4px">※ applications カタログで kind が判定済みの行のみ集計</div>
+        `;
+      } catch (e) {
+        sum.innerHTML = `<div class="muted">仕事時間取得失敗: ${escapeHtml((e as Error).message)}</div>`;
+      }
+    }
   }
 }
 

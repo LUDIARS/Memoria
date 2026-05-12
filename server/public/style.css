@@ -5263,6 +5263,15 @@ dialog.loc-edit-modal[open] {
 .wl-activity-card .wl-list-meta { font-size: 11px; white-space: nowrap; }
 .wl-activity-card .wl-activity-actions { margin-top: 8px; display: flex; gap: 6px; }
 .wl-activity-disabled { background: var(--accent-bg, #fff8c5); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+.wl-activity-summary { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel, var(--card)); }
+.wl-worktime-headline { font-size: 14px; margin-bottom: 4px; }
+.wl-worktime-breakdown { font-size: 12px; }
+.wl-kind-stat { display: inline-block; padding: 1px 6px; border-radius: 4px; background: var(--accent-bg, transparent); margin: 1px 0; }
+/* 🎮 ゲームログのバッジ */
+.wl-game-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wl-game-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
+.wl-game-badge-steam { background: #1b2838; color: #66c0f4; }
+.wl-game-badge-app { background: var(--accent-bg, #eef); color: var(--text); border: 1px solid var(--border); }
 @media (max-width: 760px) {
   .wl-activity-row { grid-template-columns: 1fr; }
 }

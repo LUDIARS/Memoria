@@ -25,9 +25,11 @@ import {
   upsertWeekly, listDiariesInRange,
   getDiarySettings,
   countBookmarksInRange, countVisitEventsInRange, countActivityEventsInRange,
+  insertApplicationPending, getApplication, setApplication,
 } from '../db.js';
 import { summarizeWithClaude } from '../claude.js';
 import { classifyDomain, shouldSkipDomain } from '../domain-catalog.js';
+import { classifyApplication } from '../app-catalog.js';
 import { fetchPageMetadata } from '../page-metadata.js';
 import { extractWordCloud } from '../wordcloud.js';
 import { analyzeMealPhoto, estimateCaloriesFromName } from '../meals.js';
@@ -126,6 +128,7 @@ export interface QueueBundle {
   digQueue: FifoQueue;
   diaryQueue: FifoQueue;
   weeklyQueue: FifoQueue;
+  applicationCatalogQueue: FifoQueue;
   // タスク投入ヘルパ
   enqueueSummary: (id: number) => void;
   enqueueCloud: (id: number, args: { docs: string; label: string }) => void;
@@ -136,6 +139,7 @@ export interface QueueBundle {
   enqueueCalorieEstimate: (mealId: number, additionIdx: number, foodName: string) => void;
   maybeQueuePageMetadata: (url: string) => void;
   maybeQueueDomain: (url: string) => void;
+  maybeQueueApplication: (processName: string, recentTitles?: string[]) => void;
   /** ブクマ要約 push の batch flush (process exit 等の手動起動用) */
   flushBookmarkSummaryPush: () => void;
 }
@@ -150,6 +154,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
   const pageMetadataQueue = new FifoQueue();
   const mealVisionQueue = new FifoQueue();
   const digQueue = new FifoQueue();
+  const applicationCatalogQueue = new FifoQueue();
   const diaryQueue = new FifoQueue();
   const weeklyQueue = new FifoQueue();
 
@@ -298,6 +303,38 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
         error: null,
       });
     }, { kind: 'domain', domain, title: domain });
+  }
+
+  // ── application catalog (= process_name → AI 分類) ────────────────────
+  //
+  // app_samples insert 時に「初めて見た process_name」 だったら enqueue。
+  // 既に done / pending / error の row があれば skip。 短時間に同じ process が
+  // 何度も sample されても 1 度しか走らない (= INSERT OR IGNORE で行を作って
+  // 既存なら何もしない)。
+  function maybeQueueApplication(processName: string, recentTitles?: string[]): void {
+    const pn = (processName || '').trim();
+    if (!pn) return;
+    if (getApplication(db, pn)) return;
+    insertApplicationPending(db, pn);
+    applicationCatalogQueue.enqueue(async () => {
+      try {
+        const result = await classifyApplication({
+          processName: pn,
+          recentTitles,
+          platform: process.platform,
+        });
+        setApplication(db, pn, {
+          name: result.name,
+          kind: result.kind,
+          description: result.description,
+          status: 'done',
+          error: null,
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setApplication(db, pn, { status: 'error', error: msg.slice(0, 500) });
+      }
+    }, { kind: 'application', processName: pn, title: pn });
   }
 
   // ── meal vision ───────────────────────────────────────────────────────
@@ -666,6 +703,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
     digQueue,
     diaryQueue,
     weeklyQueue,
+    applicationCatalogQueue,
     enqueueSummary,
     enqueueCloud,
     enqueueDig,
@@ -675,6 +713,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
     enqueueCalorieEstimate,
     maybeQueuePageMetadata,
     maybeQueueDomain,
+    maybeQueueApplication,
     flushBookmarkSummaryPush: bookmarkPusher.flush,
   };
 }
