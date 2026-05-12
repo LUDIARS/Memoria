@@ -58,6 +58,12 @@ export function configureActivitySamplers(db: Db, deps: ActivitySamplerDeps = {}
     steamTimer = setInterval(() => { void sampleSteamOnce(db); }, steamMin * 60_000);
     steamTimer.unref?.();
     console.log(`[activity] steam sampler started — interval ${steamMin}m`);
+    // 起動時に未解決 appid (= 既存の `appid:XXXXX` rows) を resolve 走らせる。
+    // snapshot insert 後にも fire-and-forget で走るが、 新規 snapshot が無くても
+    // 過去ぶんを後追いで埋められるようにここでも 1 度叩く。
+    void resolveUnresolvedSteamApps(db).catch((e) => {
+      console.warn('[activity] steam app resolve (boot) failed:', (e as Error).message);
+    });
   }
 }
 

@@ -400,8 +400,8 @@ export function openDb(dbPath: string): Db {
     -- Steam Store API (= keyless) で appid → name を解決するキャッシュ。
     -- VDF fallback で uninstalled な appid は appmanifest_<appid>.acf が無いので
     -- 「appid:XXXXX」 にしか出来ない。 起動後に Store API で resolve して
-    -- このテーブルに入れる → 以後の表示で name を上書き。 30 日でリフレッシュ。
-    -- not_found=1 は Store API が 404/false を返した (= delisted や private) 印。
+    -- このテーブルに入れる → 以後の表示で name を上書き。 一度解決した name は
+    -- 永続化する (= 再取得しない)。 not_found=1 (= delisted/private) のみ 7 日後に再試行。
     CREATE TABLE IF NOT EXISTS steam_apps_cache (
       appid           INTEGER PRIMARY KEY,
       name            TEXT,
@@ -2120,17 +2120,19 @@ export function upsertSteamAppCache(db: Db, appid: number, patch: SteamAppCacheP
   );
 }
 
-/** 30 日経過した行 + 未解決 (not_found=0 だが name が null) は stale 扱い */
+/** キャッシュ未解決の appid を steam_activity から拾う。
+ *  - キャッシュ row 自体が無い appid
+ *  - 過去 not_found=1 で記録されたが name が後で復活する可能性があるので、 7 日経った
+ *    not_found のみ再試行 (= 完全に永続化、 ただし delisted 復帰は拾う)
+ *  解決済 (name あり) はもう再取得しない (= ゲーム名は永続化)。 */
 export function listStaleAppidsFromActivity(db: Db, limit = 100): number[] {
   const rows = db.prepare(`
     SELECT DISTINCT sa.appid
     FROM steam_activity sa
     LEFT JOIN steam_apps_cache c ON c.appid = sa.appid
     WHERE
-      -- まだキャッシュ自体が無い
       c.appid IS NULL
-      -- もしくは 30 日以上前のフレッシュなものを再確認 (not_found=1 を含む)
-      OR julianday('now') - julianday(c.fetched_at) > 30
+      OR (c.not_found = 1 AND julianday('now') - julianday(c.fetched_at) > 7)
     ORDER BY sa.id DESC
     LIMIT ?
   `).all(limit) as Array<{ appid: number }>;
