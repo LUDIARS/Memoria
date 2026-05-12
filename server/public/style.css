@@ -58,7 +58,8 @@ body {
 .topbar-controls { display: flex; gap: 8px; margin-left: auto; align-items: center; }
 .topbar-settings { margin-left: auto; }
 
-/* Multi-server switch — registered remote pills next to the brand. */
+/* Multi-server switch — registered remote pills. v0.x までは topbar 内
+ * (brand 隣) に置いていたが、 ロゴ下の独立行 (.multi-switch-row) に移動。 */
 .multi-switch {
   display: flex;
   gap: 4px;
@@ -67,6 +68,17 @@ body {
   margin-left: 8px;
 }
 .multi-switch[hidden] { display: none; }
+/* 機能タブ上の独立行版 — Memoria ロゴの下に出る横スクロール可能なバー */
+.multi-switch-row {
+  margin: 0;
+  padding: 6px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.multi-switch-row::-webkit-scrollbar { height: 4px; }
+.multi-switch-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .multi-switch .ms-pill {
   background: var(--bg);
   border: 1px solid var(--border);
