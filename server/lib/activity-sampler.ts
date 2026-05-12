@@ -8,9 +8,16 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import { getForegroundApp } from './app-activity-sampler.js';
-import { getRecentlyPlayedGames, type SteamGameSnapshot } from './steam-client.js';
+import { fetchAppDetails, getRecentlyPlayedGames, type SteamGameSnapshot } from './steam-client.js';
 import { getRecentlyPlayedFromVdf } from './steam-vdf.js';
-import { getAppSettings } from '../db.js';
+import {
+  getAppSettings,
+  getApplication,
+  insertApplicationPending,
+  listStaleAppidsFromActivity,
+  setApplication,
+  upsertSteamAppCache,
+} from '../db.js';
 import { privacySettings } from './privacy.js';
 
 type Db = BetterSqlite3.Database;
@@ -125,5 +132,98 @@ export async function sampleSteamOnce(db: Db): Promise<{ source: 'api' | 'vdf' |
   } catch (e) {
     console.warn('[activity] steam snapshot insert failed:', (e as Error).message);
   }
+
+  // VDF 経路は uninstalled な appid の name が「appid:XXXXX」 になる。
+  // Store API (= keyless) で resolve してキャッシュ + applications にも反映する。
+  // ここは await しても OK だが UX のため snapshot insert を先に返したいので fire-and-forget。
+  void resolveUnresolvedSteamApps(db).catch((e) => {
+    console.warn('[activity] steam app resolve failed:', (e as Error).message);
+  });
+
   return { source, count: games.length };
+}
+
+// ── Steam Store API で appid → name 解決 ───────────────────────────────
+//
+// 動作:
+//   1. steam_activity に存在するが steam_apps_cache が無い (= 未解決) appid を抽出
+//   2. 1 つずつ Store API を叩く (rate-limit 配慮で 600ms 間隔)
+//   3. 結果を steam_apps_cache に upsert
+//   4. 同時に applications テーブルにも `steam:<appid>` の row を作る
+//      (= ゲームリスト / アプリ一覧から横断的に見えるように)
+//
+// 1 回の呼び出しで最大 RESOLVE_BATCH_LIMIT 件まで処理する。
+
+const RESOLVE_BATCH_LIMIT = 30;
+const RESOLVE_INTERVAL_MS = 600;
+
+export async function resolveUnresolvedSteamApps(db: Db): Promise<{ resolved: number; notFound: number; errors: number }> {
+  const appids = listStaleAppidsFromActivity(db, RESOLVE_BATCH_LIMIT);
+  if (appids.length === 0) return { resolved: 0, notFound: 0, errors: 0 };
+
+  let resolved = 0;
+  let notFound = 0;
+  let errors = 0;
+
+  for (let i = 0; i < appids.length; i++) {
+    const appid = appids[i]!;
+    const r = await fetchAppDetails(appid);
+    if (!r.ok) {
+      errors++;
+      console.debug(`[activity] steam appdetails ${appid} error:`, r.error);
+    } else if (r.notFound) {
+      notFound++;
+      upsertSteamAppCache(db, appid, { not_found: true });
+    } else if (r.details) {
+      resolved++;
+      upsertSteamAppCache(db, appid, {
+        name: r.details.name,
+        header_image: r.details.header_image,
+        type: r.details.type,
+        short_desc: r.details.short_description,
+        not_found: false,
+      });
+      registerSteamApplication(db, appid, r.details.name, r.details.type, r.details.short_description, r.details.header_image);
+      // steam_activity 側の name も上書き (= appid:XXXXX → 正式名)
+      try {
+        db.prepare(`UPDATE steam_activity SET name = ? WHERE appid = ? AND name LIKE 'appid:%'`).run(r.details.name, appid);
+      } catch (e) {
+        console.debug('[activity] steam_activity name update failed:', (e as Error).message);
+      }
+    }
+    if (i < appids.length - 1) {
+      await new Promise((res) => setTimeout(res, RESOLVE_INTERVAL_MS));
+    }
+  }
+  if (resolved || notFound || errors) {
+    console.log(`[activity] steam resolve — resolved=${resolved} notFound=${notFound} errors=${errors}`);
+  }
+  return { resolved, notFound, errors };
+}
+
+/** Steam appid を applications テーブルに登録 / 更新する。
+ *  process_name には `steam:<appid>` を使う (exe 名と衝突しない) 。
+ *  Store API の `type` が game/demo なら kind='game'、 その他は 'other'。 */
+function registerSteamApplication(
+  db: Db,
+  appid: number,
+  name: string,
+  type: string,
+  shortDesc: string | null,
+  headerImage: string | null,
+): void {
+  const processName = `steam:${appid}`;
+  const kind = (type === 'game' || type === 'demo') ? 'game' : 'other';
+  // 既存行が無ければ pending を作って setApplication で埋める (user_edited=1 は触らない)
+  if (!getApplication(db, processName)) {
+    insertApplicationPending(db, processName);
+  }
+  setApplication(db, processName, {
+    name,
+    kind,
+    description: shortDesc,
+    icon_url: headerImage,
+    status: 'done',
+    error: null,
+  });
 }
