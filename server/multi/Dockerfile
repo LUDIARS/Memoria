@@ -20,12 +20,22 @@ WORKDIR /tmp/Cernere
 #   @ludiars/cernere-id-cache         -> packages/id-cache
 RUN git sparse-checkout set packages/service-adapter packages/id-cache
 
+# The sparse clone only ships source; package.json points to dist/index.js,
+# so we compile both adapters here before the deps stage consumes them.
+FROM node:20-alpine AS adapter-build
+WORKDIR /tmp
+COPY --from=adapter-fetch /tmp/Cernere /tmp/Cernere
+WORKDIR /tmp/Cernere/packages/service-adapter
+RUN npm install --no-audit --no-fund && npm run build
+WORKDIR /tmp/Cernere/packages/id-cache
+RUN npm install --no-audit --no-fund && npm run build
+
 FROM node:20-alpine AS deps
 WORKDIR /app
 # package.json references `file:../../../Cernere/packages/*`.
 # Resolved from /app, that points to /Cernere/packages/*.
-COPY --from=adapter-fetch /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
-COPY --from=adapter-fetch /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
+COPY --from=adapter-build /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
+COPY --from=adapter-build /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
 COPY package.json ./
 RUN npm install --omit=dev
 
@@ -35,8 +45,8 @@ ENV NODE_ENV=production
 ENV MEMORIA_HUB_PORT=5280
 # npm install made symlinks `@ludiars/* -> ../../../Cernere/packages/*` in
 # node_modules. The link targets must also exist in the production image.
-COPY --from=adapter-fetch /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
-COPY --from=adapter-fetch /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
+COPY --from=adapter-build /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
+COPY --from=adapter-build /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
