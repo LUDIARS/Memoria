@@ -342,6 +342,36 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_gps_locations_dedup
       ON gps_locations(user_id, device_id, recorded_at);
 
+    -- アプリ活動サンプル: 一定周期 (default 30秒) で PC の活動を記録する。
+    -- foreground row = 取得時に最前面だったプロセス (= 1 サンプル 1 件)。
+    -- 同じ sample_at に複数 process 行を入れない設計 (= 表面に出ていたものだけ
+    -- 残す。 全プロセス列挙は別運用)。 集計はカウント * sample_interval_sec で
+    -- おおよその使用時間を出す。
+    CREATE TABLE IF NOT EXISTS app_samples (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      sampled_at          TEXT NOT NULL,
+      process_name        TEXT NOT NULL,
+      window_title        TEXT,
+      sample_interval_sec INTEGER NOT NULL DEFAULT 30
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_samples_at ON app_samples(sampled_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_app_samples_proc_at ON app_samples(process_name, sampled_at);
+
+    -- Steam recently-played スナップショット。 1 時間おきに Web API で取得して
+    -- 各 game 行を 1 つ insert。 集計 (今日の Steam プレイ時間) は同じ appid の
+    -- 連続スナップショット間で playtime_forever_min の差分から出す。
+    CREATE TABLE IF NOT EXISTS steam_activity (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      sampled_at           TEXT NOT NULL,
+      appid                INTEGER NOT NULL,
+      name                 TEXT NOT NULL,
+      playtime_2weeks_min  INTEGER,
+      playtime_forever_min INTEGER,
+      img_icon_url         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_steam_activity_at ON steam_activity(sampled_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_steam_activity_app ON steam_activity(appid, sampled_at);
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,

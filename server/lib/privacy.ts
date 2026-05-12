@@ -32,6 +32,9 @@ export interface PrivacySettings {
   domain_catalog_auto_classify: boolean;
   meals_auto_vision: boolean;
   diary_auto_generate: boolean;
+  // PC 活動 / Steam 取り込み。 どちらも default false (= 明示 opt-in)。
+  activity_app_sampling_enabled: boolean;
+  activity_steam_enabled: boolean;
 }
 
 export type PrivacyBoolKey = keyof Pick<PrivacySettings,
@@ -44,6 +47,7 @@ export type PrivacyBoolKey = keyof Pick<PrivacySettings,
   | 'bookmarks_auto_summarize' | 'page_metadata_auto_fetch'
   | 'domain_catalog_auto_classify' | 'meals_auto_vision'
   | 'diary_auto_generate'
+  | 'activity_app_sampling_enabled' | 'activity_steam_enabled'
 >;
 
 export function settingBool(settings: Record<string, string | null>, key: string, fallback = true): boolean {
@@ -84,6 +88,9 @@ export function privacySettings(db: Db): PrivacySettings {
     domain_catalog_auto_classify: settingBool(s, 'features.domain_catalog.auto_classify', true),
     meals_auto_vision: settingBool(s, 'features.meals.auto_vision', true),
     diary_auto_generate: settingBool(s, 'features.diary.auto_generate', true),
+    // PC 活動 / Steam — default OFF。 設定 → AI / モデル の opt-out グループから ON。
+    activity_app_sampling_enabled: settingBool(s, 'features.activity.app_sampling.enabled', false),
+    activity_steam_enabled: settingBool(s, 'features.activity.steam.enabled', false),
   };
 }
 

@@ -5253,6 +5253,19 @@ dialog.loc-edit-modal[open] {
   flex-direction: column;
   gap: 4px;
 }
+/* 💻 アプリ / 🎮 Steam の 2 カラム (workflow → activity tab) */
+.wl-activity-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.wl-activity-card { background: var(--panel, var(--card)); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.wl-activity-card header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.wl-activity-card header h4 { margin: 0; font-size: 13px; }
+.wl-activity-card .wl-list-row { display: flex; justify-content: space-between; gap: 8px; }
+.wl-activity-card .wl-list-title { font-weight: 600; flex: 1; min-width: 0; word-break: break-word; }
+.wl-activity-card .wl-list-meta { font-size: 11px; white-space: nowrap; }
+.wl-activity-card .wl-activity-actions { margin-top: 8px; display: flex; gap: 6px; }
+.wl-activity-disabled { background: var(--accent-bg, #fff8c5); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+@media (max-width: 760px) {
+  .wl-activity-row { grid-template-columns: 1fr; }
+}
 .wl-list li {
   padding: 8px 10px;
   border-radius: 4px;

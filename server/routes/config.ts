@@ -48,6 +48,8 @@ export interface ConfigRouterDeps {
   dataDir: string;
   /** privacy.mcp_autostart_enabled が変更されたら呼ばれる */
   onMcpAutostartChange: (enabled: boolean) => void;
+  /** activity (app sampling / steam) フラグが変更されたら sampler を再構成 */
+  onActivitySettingsChange: () => void;
   // 全 queue の snapshot を返すために必要
   summaryQueue: FifoQueue;
   cloudQueue: FifoQueue;
@@ -61,7 +63,7 @@ export interface ConfigRouterDeps {
 
 export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
   const {
-    db, port, dataDir, onMcpAutostartChange,
+    db, port, dataDir, onMcpAutostartChange, onActivitySettingsChange,
     summaryQueue, cloudQueue, digQueue, diaryQueue, weeklyQueue,
     domainCatalogQueue, pageMetadataQueue, mealVisionQueue,
   } = deps;
@@ -102,6 +104,8 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
       ['domain_catalog_auto_classify', 'features.domain_catalog.auto_classify'],
       ['meals_auto_vision', 'features.meals.auto_vision'],
       ['diary_auto_generate', 'features.diary.auto_generate'],
+      ['activity_app_sampling_enabled', 'features.activity.app_sampling.enabled'],
+      ['activity_steam_enabled', 'features.activity.steam.enabled'],
     ] as const) {
       if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
     }
@@ -113,6 +117,12 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
     if (Object.keys(patch).length) setAppSettings(db, patch);
     if (Object.prototype.hasOwnProperty.call(body, 'mcp_autostart_enabled')) {
       onMcpAutostartChange(privacySettings(db).mcp_autostart_enabled);
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(body, 'activity_app_sampling_enabled')
+      || Object.prototype.hasOwnProperty.call(body, 'activity_steam_enabled')
+    ) {
+      onActivitySettingsChange();
     }
     return c.json({ settings: privacySettings(db) });
   });
