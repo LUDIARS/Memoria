@@ -6446,10 +6446,11 @@ function openWorkplaceEditor(w = null) {
   if ($('workplaceEditorWifiSsids')) $('workplaceEditorWifiSsids').value = w?.wifi_ssids || '';
   $('workplaceEditorDescription').value = w?.description || '';
   $('workplaceEditorShareable').checked = !!w?.shareable;
-  // Electron 配下のみ「現在の WiFi を追加」 ボタンを出す。 ブラウザ単体では
-  // SSID を取れない (= window.memoria は preload bridge 経由でのみ存在)。
+  // 「現在の WiFi を追加」 ボタンは server 側 /api/wifi/current が返してくれる
+  // のでブラウザ単体でも表示してよい。 サーバ未対応時はボタン押下時に 404 で
+  // 静かに失敗する。
   const wifiRow = $('workplaceEditorWifiCurrent');
-  if (wifiRow) wifiRow.hidden = !(typeof window !== 'undefined' && (window as Loose).memoria?.getCurrentWifiInfo);
+  if (wifiRow) wifiRow.hidden = false;
   showModal('workplaceEditorModal');
   $('workplaceEditorName').focus();
 }
@@ -6916,25 +6917,27 @@ async function workplaceCheckinNow() {
   }
 }
 
-// 「📶 現在の WiFi を追加」 ボタン (Electron 限定)。 接続中の SSID を取って
-// editor の wifi_ssids フィールドに append (重複 SSID は無視)。
+// 「📶 現在の WiFi を追加」 ボタン。 Memoria server の `/api/wifi/current` から
+// 取って editor の wifi_ssids フィールドに append (重複は無視)。 server 側で
+// OS native コマンドを叩く方式なので、 ブラウザ単体接続でも動く (= Electron
+// で起動した Memoria server に別 PC のブラウザから繋ぐ運用にも対応)。
 async function appendCurrentWifiToEditor() {
   const inp = $('workplaceEditorWifiSsids') as HTMLInputElement | null;
   const status = $('workplaceEditorWifiCurrentStatus');
-  const bridge = (typeof window !== 'undefined' ? (window as Loose).memoria : null);
-  if (!inp || !bridge?.getCurrentWifiInfo) {
-    if (status) status.textContent = 'デスクトップ版でのみ利用できます';
-    return;
-  }
+  if (!inp) return;
   if (status) status.textContent = '取得中…';
   try {
-    const info = await bridge.getCurrentWifiInfo();
+    const info = await api('/api/wifi/current') as { supported?: boolean; ssid?: string | null };
+    if (info?.supported === false) {
+      if (status) status.textContent = '作業場所機能が OFF のため取得できません (設定 → 🚦)';
+      return;
+    }
     if (!info?.ssid) {
       if (status) status.textContent = '接続中の WiFi が見つかりませんでした';
       return;
     }
     const existing = (inp.value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
-    if (existing.some((s: string) => s.toLowerCase() === info.ssid.toLowerCase())) {
+    if (existing.some((s: string) => s.toLowerCase() === info.ssid!.toLowerCase())) {
       if (status) status.textContent = `✓ "${info.ssid}" は既に登録済み`;
       return;
     }
@@ -6942,7 +6945,12 @@ async function appendCurrentWifiToEditor() {
     inp.value = existing.join(', ');
     if (status) status.textContent = `✓ "${info.ssid}" を追加`;
   } catch (e) {
-    if (status) status.textContent = `失敗: ${(e as Error).message}`;
+    const msg = (e as Error).message;
+    if (msg?.includes('404')) {
+      if (status) status.textContent = 'このサーバはまだ /api/wifi/current 未対応';
+    } else if (status) {
+      status.textContent = `失敗: ${msg}`;
+    }
   }
 }
 
@@ -9539,9 +9547,13 @@ function setTracksGpsPill(id, src) {
   }
 }
 
-// ── 接続中 WiFi 情報 (Electron 限定) ─────────────────────────────────
-// window.memoria.getCurrentWifiInfo() で SSID / BSSID を取って表示。
-// さらに work_locations.wifi_ssids に登録があれば「対応作業場所」 列に出す。
+// ── 接続中 WiFi 情報 (どのクライアントからも見える) ─────────────────
+// Memoria server プロセスが動く PC の WiFi 接続情報を `/api/wifi/current` から
+// 取る (= Electron で起動したサーバに別 PC のブラウザ / スマホ PWA から
+// 繋いでも同じ SSID が出る)。 対応作業場所のマッチも server 側で行う。
+//
+// サーバが `supported: false` を返した場合 (= workplace_geo OFF) や、
+// 旧サーバで endpoint が無い (404) 場合は card 自体を hidden に。
 async function loadTracksWifiInfo() {
   const card = document.getElementById('tracksWifiCard');
   const ssidEl = document.getElementById('tracksWifiSsid');
@@ -9549,23 +9561,28 @@ async function loadTracksWifiInfo() {
   const matchEl = document.getElementById('tracksWifiMatch');
   const pillEl = document.getElementById('tracksWifiPill');
   if (!card) return;
-  const bridge = (typeof window !== 'undefined' ? (window as Loose).memoria : null);
-  if (!bridge?.getCurrentWifiInfo) {
-    // ブラウザ単体: カードごと非表示
-    card.hidden = true;
-    return;
-  }
-  card.hidden = false;
   if (pillEl) {
     pillEl.classList.remove('ext-cfg-pill-loading', 'ext-cfg-pill-active', 'ext-cfg-pill-configured', 'ext-cfg-pill-inactive');
     pillEl.classList.add('ext-cfg-pill-loading');
     pillEl.textContent = '取得中…';
   }
   try {
-    const info = await bridge.getCurrentWifiInfo();
+    const info = await api('/api/wifi/current') as {
+      supported?: boolean;
+      ssid?: string | null;
+      bssid?: string | null;
+      platform?: string;
+      workplace?: { id: number; name: string } | null;
+    };
+    if (info?.supported === false) {
+      // workplace 機能が OFF — カードごと隠す
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
     if (!info?.ssid) {
       if (ssidEl) ssidEl.textContent = '(未接続 / 取得失敗)';
-      if (bssidEl) bssidEl.textContent = '—';
+      if (bssidEl) bssidEl.textContent = info?.bssid || '—';
       if (matchEl) matchEl.textContent = '—';
       if (pillEl) {
         pillEl.classList.remove('ext-cfg-pill-loading');
@@ -9576,18 +9593,7 @@ async function loadTracksWifiInfo() {
     }
     if (ssidEl) ssidEl.textContent = info.ssid;
     if (bssidEl) bssidEl.textContent = info.bssid || '—';
-    // work_locations.wifi_ssids との照合
-    let matchName: string | null = null;
-    try {
-      const r = await api('/api/work-locations?limit=500');
-      const all = r.items as Array<{ id: number; name: string; wifi_ssids?: string | null }>;
-      const norm = info.ssid.toLowerCase();
-      const hit = all.find((w) => {
-        const list = (w.wifi_ssids ?? '').split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean);
-        return list.includes(norm);
-      });
-      matchName = hit?.name ?? null;
-    } catch { /* swallow */ }
+    const matchName = info.workplace?.name ?? null;
     if (matchEl) matchEl.textContent = matchName ?? '(未登録 — 設定 → 作業場所 から紐付け可)';
     if (pillEl) {
       pillEl.classList.remove('ext-cfg-pill-loading');
@@ -9600,6 +9606,12 @@ async function loadTracksWifiInfo() {
       }
     }
   } catch (e) {
+    // 404 / 旧サーバ → カード隠す
+    if ((e as Error).message?.includes('404')) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
     if (ssidEl) ssidEl.textContent = '(取得エラー)';
     if (pillEl) {
       pillEl.classList.remove('ext-cfg-pill-loading');

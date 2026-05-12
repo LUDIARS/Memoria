@@ -13,6 +13,7 @@ import {
   readMultiState, isConnected, shareWorkplacePresence,
 } from '../local/multi-client.js';
 import { privacySettings } from '../lib/privacy.js';
+import { getCurrentWifiInfo } from '../lib/wifi-info.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -36,6 +37,37 @@ export interface WorkplaceRouterDeps {
 export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
   const { db } = deps;
   const r = new Hono();
+
+  // 接続中の WiFi 情報 (Memoria server プロセスが動いている PC で検出)。
+  // どのクライアント (Electron renderer / 別 PC のブラウザ / スマホ PWA / Chrome
+  // 拡張) から叩いても、 同じ「Memoria サーバ機の WiFi」 を返す。
+  // → Electron で起動した Memoria に Web から接続している場合も SSID が見える。
+  //
+  // 結果がカンマ区切りの登録 SSID と一致すれば対応 workplace 名も返す。
+  r.get('/api/wifi/current', async (c: Context) => {
+    const settings = privacySettings(db);
+    // workplace 機能を OFF にしているなら SSID も出さない (= 同じ flag で gate)。
+    if (!settings.workplace_geo_enabled) {
+      return c.json({ supported: false, reason: 'workplace_geo disabled' });
+    }
+    const info = await getCurrentWifiInfo();
+    if (!info?.ssid) {
+      return c.json({ supported: true, ssid: null, bssid: info?.bssid ?? null, platform: info?.platform ?? process.platform, workplace: null });
+    }
+    const norm = info.ssid.toLowerCase();
+    const all = listWorkLocations(db, { limit: 500 });
+    const hit = all.find((w) => {
+      const list = (w.wifi_ssids ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+      return list.includes(norm);
+    }) ?? null;
+    return c.json({
+      supported: true,
+      ssid: info.ssid,
+      bssid: info.bssid,
+      platform: info.platform,
+      workplace: hit ? { id: hit.id, name: hit.name } : null,
+    });
+  });
 
   r.get('/api/work-locations', (c: Context) => {
     const limit = Math.min(Number(c.req.query('limit') || 200), 500);
