@@ -29,8 +29,16 @@
 //   MEMORIA_MQTT_TOPIC           subscribe する topic (default 'owntracks/+/+')
 //   MEMORIA_USER_ID              Memoria 側で gps 行に書く user_id (default 'me')
 
-import { createBroker, AuthErrorCode } from 'aedes';
+// aedes は CJS で `module.exports = Aedes (= createBroker)` のみ。 ESM 側からは
+// named import で createBroker / AuthErrorCode を引けないので default import に統一。
+import Aedes from 'aedes';
 import type { AedesPublishPacket, AuthenticateError, Client as AedesClient } from 'aedes';
+const createBroker = Aedes;
+
+// aedes は AuthErrorCode を `const enum` でしか export しないため
+// tsx (isolatedModules) からは値として import できない。 MQTT 3.1.1 の
+// CONNACK return code 4 = bad username / password をローカル定義する。
+const AUTH_RC_BAD_USERNAME_OR_PASSWORD = 4 as const;
 import { createServer as netCreateServer, type Server as NetServer } from 'node:net';
 import type BetterSqlite3 from 'better-sqlite3';
 import { insertGpsLocation } from '../db.js';
@@ -83,7 +91,7 @@ export function startMqttBroker(deps: MqttBrokerDeps): MqttBrokerHandle | null {
         done(null, true);
       } else {
         const err = Object.assign(new Error('bad credentials'), {
-          returnCode: AuthErrorCode.BAD_USERNAME_OR_PASSWORD,
+          returnCode: AUTH_RC_BAD_USERNAME_OR_PASSWORD,
         }) as AuthenticateError;
         done(err, false);
       }

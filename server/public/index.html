@@ -23,9 +23,208 @@
         <span class="legatus-dot" data-state="unknown">●</span>
         <span class="legatus-label">Legatus</span>
       </button>
+      <button id="topbarHelpBtn" class="ghost topbar-help" title="このページのヘルプ">💡 ヘルプ</button>
       <button id="aiSettingsBtn" class="ghost topbar-settings" title="設定">⚙ 設定</button>
     </div>
   </header>
+
+  <!-- ── 起動チュートリアル (5 step wizard) ────────────────────────────
+       初回起動時 (= app_settings.tutorial.completed_at が空) で自動表示。
+       設定 → AI / モデルの「🎓 はじめての Memoria を表示」 で再表示も可。
+       スキップ可 / 任意の途中ステップから抜けることも可 — どの時点で
+       閉じても tutorial.completed_at は書き込まれる (= 自動再表示は二度
+       としない、 再表示は手動から)。 -->
+  <div id="tutorialOverlay" class="modal-backdrop tutorial-overlay" hidden>
+    <div class="modal-panel tutorial-modal">
+      <header class="tutorial-head">
+        <h2>🎓 はじめての Memoria</h2>
+        <div class="tutorial-progress"><span id="tutorialStepLabel">1</span> / 6</div>
+        <button id="tutorialClose" class="modal-close" title="閉じる">×</button>
+      </header>
+      <nav class="tutorial-stepper" aria-label="チュートリアル進行">
+        <button type="button" class="tutorial-step active" data-step="1">1. 許可</button>
+        <button type="button" class="tutorial-step" data-step="2">2. AI 自動処理</button>
+        <button type="button" class="tutorial-step" data-step="3">3. Chrome 拡張</button>
+        <button type="button" class="tutorial-step" data-step="4">4. シェアサーバ</button>
+        <button type="button" class="tutorial-step" data-step="5">5. 追加 API</button>
+        <button type="button" class="tutorial-step" data-step="6">6. 機能から開く</button>
+      </nav>
+      <main class="tutorial-body">
+
+        <!-- Step 1: 許可設定 -->
+        <section class="tutorial-step-body" data-step="1">
+          <h3>🔔 通知の許可</h3>
+          <p>Memoria は、 要約 / 日記 / 調べもの の処理が終わったときにブラウザ通知でお知らせします。 ローカルで使う場合も「処理が終わりました」 が画面のすみで届くので便利です。</p>
+          <p>下のボタンを押すと、 ブラウザが許可を聞いてきます。 そのまま許可してください。</p>
+          <div class="tutorial-actions">
+            <button id="tutorialPushBtn" type="button">この PC で通知を有効化</button>
+            <span id="tutorialPushStatus" class="tutorial-status"></span>
+          </div>
+          <p class="tutorial-help">💡 iPhone / iPad の場合: Memoria を「ホーム画面に追加」 してアプリのように開いた状態でないと、 通知許可のダイアログ自体が出せません (iOS 16.4 以降の仕様)。</p>
+
+          <h3>📍 位置情報について</h3>
+          <p>Memoria は機能ごとに位置情報を取得します:</p>
+          <ul class="tutorial-steps">
+            <li><b>作業場所 / 食事登録 / GPS マップ</b> ではブラウザの位置情報を使います。 これらの機能を初めて使うときに、 ブラウザが許可ダイアログを出します。</li>
+            <li><b>継続的な軌跡記録</b> は iPhone の OwnTracks 連携 (ステップ 5 で案内)。</li>
+            <li><b>PC の WiFi スキャン</b> から大まかな位置を推定する経路もあります (環境変数 <code>MEMORIA_GOOGLE_GEOLOCATION_API_KEY</code> を設定したとき・ Windows のみ・ 10 分間隔)。</li>
+          </ul>
+          <p class="tutorial-help">これらの機能を使わなければ、 位置情報は一切収集・送信されません。</p>
+        </section>
+
+        <!-- Step 2: AI 自動処理 (opt-out) -->
+        <section class="tutorial-step-body hidden" data-step="2">
+          <h3>🚦 AI に自動でやらせる範囲を決める</h3>
+          <p>Memoria は既定で、 保存と同時に AI が「要約」「分類」「カロリー推定」「日記生成」 を自動で走らせます。 claude / OpenAI などの AI をまだ用意していない場合や、 「素材だけ溜めて AI には触らせたくない」 場合は、 ここで個別に OFF にできます。</p>
+          <p class="tutorial-help">OFF にしても、 各画面の「再要約」「再分析」「日記生成」 などの手動ボタンは引き続き使えます。 ここでの設定は 設定 → AI / モデル の「🚦 AI 自動処理」 と同じ場所に保存されます。</p>
+          <div class="ai-autoflag-grid">
+            <label class="check-inline">
+              <input id="tutAutoBookmarkSummarize" type="checkbox" />
+              📚 ブックマーク保存時に要約 / カテゴリを自動生成
+            </label>
+            <label class="check-inline">
+              <input id="tutAutoPageMetadata" type="checkbox" />
+              🔖 訪問 URL の kind / 要約を自動取得
+            </label>
+            <label class="check-inline">
+              <input id="tutAutoDomainClassify" type="checkbox" />
+              🌐 ドメイン辞書 (site_name / カテゴリ) を AI 自動分類
+            </label>
+            <label class="check-inline">
+              <input id="tutAutoMealVision" type="checkbox" />
+              🍽 食事写真 / 名称からカロリー・栄養を自動推定
+            </label>
+            <label class="check-inline">
+              <input id="tutAutoDiaryGenerate" type="checkbox" />
+              📓 毎日 0:00 の日記 / 日曜 23:00 の週報を自動生成
+            </label>
+          </div>
+          <p class="tutorial-status" id="tutorialAutoStatus"></p>
+        </section>
+
+        <!-- Step 3: Chrome Extension -->
+        <section class="tutorial-step-body hidden" data-step="3">
+          <h3>🧩 Chrome 拡張をインストール</h3>
+          <p>「拡張」 とは Chrome に新しい機能を追加する仕組みです。 ブラウザで見ているページを Memoria に保存するために、 一度だけインストールが必要です。</p>
+          <ol class="tutorial-steps">
+            <li><span id="tutorialExtOpenLabel">拡張機能ページ</span> を開く
+              <button class="ghost" type="button" id="tutorialExtOpenBtn">🧩 拡張設定を開く</button>
+              <span class="tutorial-help" id="tutorialExtOpenHint">(<code id="tutorialExtOpenUrl">chrome://extensions</code> を新しいタブで開きます)</span>
+            </li>
+            <li>右上の <b>デベロッパーモード</b> をオン</li>
+            <li>左上に表示される <b>「パッケージ化されていない拡張機能を読み込む」</b> を押し、 このリポジトリの <code id="tutorialExtPath">…/Memoria/extension</code> フォルダを選択</li>
+            <li>拡張のオプションで <b>サーバ URL</b> が <code id="tutorialExtUrl">http://localhost:5180</code> になっていることを確認
+              <div class="tutorial-help">💡 Tailscale や Cloudflare Tunnel 経由で Memoria を開いている場合でも、 拡張は同じ PC 内の Memoria に直接 (loopback) 接続するため、 この URL は <code>localhost</code> のままで OK です。</div>
+            </li>
+            <li>適当なページを開いて、 右上の Memoria ボタンを押すと保存できます (下の表示が「✓ 拡張を検出しました」 に変わります)</li>
+          </ol>
+          <div class="tutorial-actions">
+            <span id="tutorialExtStatus" class="tutorial-status">⏳ 拡張からの通信を待っています</span>
+          </div>
+          <p class="tutorial-help" id="tutorialExtBrowserNote">💡 スマホで使う場合: スマホには Chrome 拡張がないので、 Memoria を「ホーム画面に追加」 して PWA として開き、 OS の共有メニューから保存します。</p>
+        </section>
+
+        <!-- Step 4: Memoria Hub (シェアサーバ) -->
+        <section class="tutorial-step-body hidden" data-step="4">
+          <h3>🌐 共有サーバ (Memoria Hub) — オプション</h3>
+          <p>1 人で使う場合は、 このステップはスキップしてかまいません。</p>
+          <p>複数の PC や他のユーザーと <b>辞書 / 調べもの / ブックマーク</b> を共有したい場合だけ、 共有サーバ (Hub) の URL をここに登録します。</p>
+          <p class="tutorial-help">🔒 日記 / GPS / 訪問履歴などの個人ログは、 共有サーバには送信されません。 ローカルにのみ保存されます。</p>
+          <div class="tutorial-form">
+            <label>Hub URL:
+              <input id="tutorialHubUrl" type="url" placeholder="https://hub.example.com" />
+            </label>
+            <button id="tutorialHubAddBtn" type="button">登録</button>
+            <span id="tutorialHubStatus" class="tutorial-status"></span>
+          </div>
+          <p class="tutorial-help">後から 設定 → 📦 データ / Hub でも追加できます。</p>
+        </section>
+
+        <!-- Step 5: 追加 API -->
+        <section class="tutorial-step-body hidden" data-step="5">
+          <h3>📍 OwnTracks (iPhone GPS 連携) — オプション</h3>
+          <p>iPhone のアプリ「OwnTracks」 を経由して GPS 軌跡を Memoria に取り込めます。 細かい設定が必要なので、 不要な場合はそのまま次へ進んでください。</p>
+          <p>下の「合言葉を生成」 を押すと、 接続用の長い文字列が発行されます。 これを OwnTracks のパスワード欄に設定して使います。</p>
+          <div class="tutorial-actions">
+            <button id="tutorialIngestBtn" type="button">合言葉を生成</button>
+            <span id="tutorialIngestStatus" class="tutorial-status"></span>
+          </div>
+          <pre id="tutorialIngestKeyBox" class="tutorial-keybox hidden"></pre>
+          <p class="tutorial-help">詳しい手順は 設定 → 📚 セットアップ → OwnTracks を参照してください。</p>
+
+          <h3>🗺 Google Maps API key — オプション</h3>
+          <p>GPS の軌跡や食事の位置を地図で表示する際に必要な鍵です。 Google Cloud Console で発行します。</p>
+          <p>パソコンに <code>gcloud</code> コマンドがインストールされていれば、 下のボタンで自動取得できます。 ない場合は手動で入力してください。</p>
+          <div class="tutorial-actions">
+            <button id="tutorialMapsAutoBtn" type="button">🔧 gcloud から自動取得</button>
+            <span id="tutorialMapsStatus" class="tutorial-status"></span>
+          </div>
+          <div class="tutorial-form">
+            <label>または手動入力:
+              <input id="tutorialMapsKey" type="password" placeholder="AIzaSy..." autocomplete="off" />
+            </label>
+            <button id="tutorialMapsSaveBtn" type="button">保存</button>
+          </div>
+        </section>
+
+        <!-- Step 6: 機能から開く -->
+        <section class="tutorial-step-body hidden" data-step="6">
+          <h3>🚀 どこから始めますか？</h3>
+          <p>気になる機能カードを押すと、 その機能の画面に移動して、 使い方の説明も自動で表示します。 各タブの右上 <b>💡 ヘルプ</b> ボタンからも、 いつでも同じ説明を呼び出せます。</p>
+
+          <h4>📚 知識を集める</h4>
+          <div class="tutorial-feature-grid">
+            <button class="tutorial-feature" data-go="database">🗄 ブックマーク<small>Chrome 拡張で保存したページの一覧 + AI の要約</small></button>
+            <button class="tutorial-feature" data-go="dig">🔎 ディグる<small>1 つのテーマを 3 段階で深く調べる (検索結果 → 要点 → 詳細)</small></button>
+            <button class="tutorial-feature" data-go="database" data-sub="dict">📖 辞書<small>調べものの中で出会った用語を自動で自分用辞書に蓄積</small></button>
+            <button class="tutorial-feature" data-go="notes">📓 ノート<small>メモを書く場所。 ブックマークや絵を貼り付けられる</small></button>
+          </div>
+
+          <h4>📝 自分の動きを記録する</h4>
+          <div class="tutorial-feature-grid">
+            <button class="tutorial-feature" data-go="diary">📅 日記 / 週報<small>1 日 / 1 週間の作業を AI が文章にまとめる</small></button>
+            <button class="tutorial-feature" data-go="trends">📊 傾向<small>ジャンル / サイト / キーワードの時系列推移</small></button>
+            <button class="tutorial-feature" data-go="worklog" data-sub="tasks">✅ タスク<small>やることリスト + AI への委託経路</small></button>
+            <button class="tutorial-feature" data-go="worklog" data-sub="presence">🟢 プレゼンス<small>PC 稼働時間と、 コードを書いた時間の記録</small></button>
+          </div>
+
+          <h4>📍 位置 / 身体ログ</h4>
+          <div class="tutorial-feature-grid">
+            <button class="tutorial-feature" data-go="worklog" data-sub="tracks">🗺 GPS 軌跡<small>OwnTracks 経由の位置情報を 1 日 1 地図で可視化</small></button>
+            <button class="tutorial-feature" data-go="meals">🍽 食事<small>写真をアップすると AI が料理名 + カロリー + 栄養素を推定</small></button>
+            <button class="tutorial-feature" data-go="worklog" data-sub="workplace">🏠 作業場所<small>家 / 図書館 / カフェ などへの滞在時間を自動記録</small></button>
+          </div>
+
+          <h4>🔗 AI / チーム連携</h4>
+          <div class="tutorial-feature-grid">
+            <button class="tutorial-feature" data-go="recommend">✨ おすすめ<small>過去の傾向から「次に読むと面白そうなもの」 を AI が提案</small></button>
+            <button class="tutorial-feature" data-go="database" data-sub="cloud">🌐 ワードクラウド<small>ブックマークからよく出る言葉を抽出して可視化</small></button>
+            <button class="tutorial-feature" data-go="database" data-sub="domain">🏷 ドメイン辞書<small>各サイトを「何屋さんか」 で AI が自動分類</small></button>
+          </div>
+
+          <p class="tutorial-help" style="margin-top:12px">何も選ばずに <b>「完了」</b> を押してもかまいません。 設定 → AI / モデル → <b>🎓 はじめての Memoria を表示</b> でいつでも再表示できます。</p>
+        </section>
+
+      </main>
+      <footer class="tutorial-footer">
+        <button id="tutorialPrev" class="ghost" type="button" hidden>← 前へ</button>
+        <button id="tutorialSkip" class="ghost" type="button">スキップ</button>
+        <span class="tutorial-spacer"></span>
+        <button id="tutorialNext" type="button">次へ →</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ── ページごとのヘルプ drawer ─────────────────────────────────────
+       右上「💡 ヘルプ」 で開き、 現在のタブに応じた説明を出す。 内容は
+       app.ts 側の PAGE_HELP 辞書から取得。 -->
+  <aside id="helpDrawer" class="help-drawer" hidden>
+    <header class="help-drawer-head">
+      <h3 id="helpDrawerTitle">ヘルプ</h3>
+      <button id="helpDrawerClose" class="modal-close" title="閉じる">×</button>
+    </header>
+    <div id="helpDrawerBody" class="help-drawer-body"></div>
+  </aside>
 
   <!-- Mobile-only: how to bookmark when the Chrome extension isn't an
        option (Android Chrome, iOS Safari, etc.). Re-uses the PWA share-
@@ -1087,6 +1286,38 @@ bogus-priv</code></pre>
       <h4>📝 日記の常設メモ</h4>
       <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
       <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
+
+      <h4>🎓 はじめての Memoria</h4>
+      <p class="ai-settings-help">起動チュートリアル (5 step wizard) を再表示します。 すでに設定済みの項目はそのまま残り、 必要なものだけ確認できます。</p>
+      <div class="ai-settings-actions">
+        <button id="tutorialReopenBtn" type="button" class="ghost">🎓 はじめての Memoria を表示</button>
+        <span id="tutorialReopenStatus" class="ai-keystatus"></span>
+      </div>
+
+      <h4>🚦 AI 自動処理 (opt-out)</h4>
+      <p class="ai-settings-help">既定では「保存と同時に AI が要約 / 分類 / カロリー推定 / 日記生成」を自動で走らせます。 claude / OpenAI などをまだ設定していない場合や、 ローカル単体で「素材だけ溜める」 運用にしたいときは OFF にしてください。 OFF にしても各画面の「再要約」「再分析」「日記生成」 等の手動ボタンは引き続き使えます。</p>
+      <div class="ai-autoflag-grid">
+        <label class="check-inline">
+          <input id="aiAutoBookmarkSummarize" type="checkbox" />
+          📚 ブックマーク保存時に要約 / カテゴリを自動生成
+        </label>
+        <label class="check-inline">
+          <input id="aiAutoPageMetadata" type="checkbox" />
+          🔖 訪問 URL の kind / 要約を自動取得
+        </label>
+        <label class="check-inline">
+          <input id="aiAutoDomainClassify" type="checkbox" />
+          🌐 ドメイン辞書 (site_name / カテゴリ) を AI 自動分類
+        </label>
+        <label class="check-inline">
+          <input id="aiAutoMealVision" type="checkbox" />
+          🍽 食事写真 / 名称からカロリー・栄養を自動推定
+        </label>
+        <label class="check-inline">
+          <input id="aiAutoDiaryGenerate" type="checkbox" />
+          📓 毎日 0:00 の日記 / 日曜 23:00 の週報を自動生成
+        </label>
+      </div>
     </section>
 
     <!-- ── 🔌 連携 / API key ── -->
@@ -1098,9 +1329,13 @@ bogus-priv</code></pre>
 
       <h4>📍 Legatus 連携 (GPS / 位置情報リレー)</h4>
       <p class="ai-settings-help">
-        この PC 上の <strong>Legatus</strong> (loopback 17320) と WebSocket で接続し、 OwnTracks の MQTT 受信状態 / Memoria 向け relay の成否を live で表示します。 Legatus が落ちている場合 🔴 disconnected。
+        この PC 上の <strong>Legatus</strong> (loopback 17320) と WebSocket で接続し、 OwnTracks の MQTT 受信状態 / Memoria 向け relay の成否を live で表示します。 既定 OFF — Legatus を別途立てている人だけ ON にしてください (OFF のあいだは右上 Legatus バッジも非表示)。
       </p>
-      <div id="legatusStatusBox" class="legatus-status-box">
+      <label class="check-inline">
+        <input id="aiLegatusEnabled" type="checkbox" />
+        Legatus 連携を有効化する
+      </label>
+      <div id="legatusStatusBox" class="legatus-status-box hidden">
         <div class="legatus-row"><span class="legatus-key">接続</span><span id="legatusConnState" class="legatus-val">checking…</span></div>
         <div class="legatus-row"><span class="legatus-key">MQTT</span><span id="legatusMqttState" class="legatus-val">—</span></div>
         <div class="legatus-row"><span class="legatus-key">直近 GPS</span><span id="legatusLastEvent" class="legatus-val">—</span></div>
@@ -1131,6 +1366,11 @@ bogus-priv</code></pre>
         <input id="mapsApiKey" type="password" placeholder="AIzaSy..." autocomplete="off" />
       </label>
       <span id="mapsApiKeyStatus" class="ai-keystatus"></span>
+      <div class="ai-settings-actions">
+        <button id="mapsApiKeyAutoBtn" type="button" class="ghost">🔧 gcloud から自動取得</button>
+        <span id="mapsApiKeyAutoStatus" class="ai-keystatus"></span>
+      </div>
+      <p class="ai-settings-help">「🔧 gcloud から自動取得」は <code>gcloud services api-keys list</code> を叩いて active project の Maps key を引き当て、 そのまま設定に書き込みます (Maps API 制限の付いた key 優先 → 無制限 → その他)。 事前に <code>gcloud auth login</code> + <code>gcloud config set project &lt;ID&gt;</code> が必要。</p>
       <p class="ai-settings-help">優先順: <code>app_settings.maps.api_key</code> &gt; 環境変数 <code>GOOGLE_MAPS_API_KEY</code>。 ここで保存すれば DB 側に書かれ、 再起動不要で反映。</p>
     </section>
 
