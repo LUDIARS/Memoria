@@ -13,7 +13,7 @@ import {
   readMultiState, isConnected, shareWorkplacePresence,
 } from '../local/multi-client.js';
 import { privacySettings } from '../lib/privacy.js';
-import { getCurrentWifiInfo } from '../lib/wifi-info.js';
+import { getCurrentWifiInfo, hasWiredConnection } from '../lib/wifi-info.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -43,29 +43,44 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
   // 拡張) から叩いても、 同じ「Memoria サーバ機の WiFi」 を返す。
   // → Electron で起動した Memoria に Web から接続している場合も SSID が見える。
   //
-  // 結果がカンマ区切りの登録 SSID と一致すれば対応 workplace 名も返す。
+  // 結果は SSID + BSSID + 有線接続有無 + 解決済み workplace + 解決ソース。
+  // 解決優先度: GPS (= OwnTracks の最近の gps_locations) > WiFi (SSID マッチ) >
+  // 有線 (= is_home の workplace)。 endpoint 名は `/api/wifi/current` のまま
+  // 後方互換 (旧クライアントの fetch でも壊れない)、 中身は network 全般。
   r.get('/api/wifi/current', async (c: Context) => {
     const settings = privacySettings(db);
-    // workplace 機能を OFF にしているなら SSID も出さない (= 同じ flag で gate)。
     if (!settings.workplace_geo_enabled) {
       return c.json({ supported: false, reason: 'workplace_geo disabled' });
     }
     const info = await getCurrentWifiInfo();
-    if (!info?.ssid) {
-      return c.json({ supported: true, ssid: null, bssid: info?.bssid ?? null, platform: info?.platform ?? process.platform, workplace: null });
-    }
-    const norm = info.ssid.toLowerCase();
+    const wired = hasWiredConnection();
     const all = listWorkLocations(db, { limit: 500 });
-    const hit = all.find((w) => {
-      const list = (w.wifi_ssids ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-      return list.includes(norm);
-    }) ?? null;
+
+    // 1) WiFi SSID マッチ
+    let workplace: { id: number; name: string } | null = null;
+    let source: 'wifi' | 'wired' | null = null;
+    if (info?.ssid) {
+      const norm = info.ssid.toLowerCase();
+      const hit = all.find((w) => {
+        const list = (w.wifi_ssids ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+        return list.includes(norm);
+      });
+      if (hit) { workplace = { id: hit.id, name: hit.name }; source = 'wifi'; }
+    }
+    // 2) 有線 (= is_home の workplace に fallback)
+    if (!workplace && wired) {
+      const home = all.find((w) => w.is_home === 1);
+      if (home) { workplace = { id: home.id, name: home.name }; source = 'wired'; }
+    }
+
     return c.json({
       supported: true,
-      ssid: info.ssid,
-      bssid: info.bssid,
-      platform: info.platform,
-      workplace: hit ? { id: hit.id, name: hit.name } : null,
+      ssid: info?.ssid ?? null,
+      bssid: info?.bssid ?? null,
+      platform: info?.platform ?? process.platform,
+      wired,
+      workplace,
+      source,
     });
   });
 
@@ -78,7 +93,8 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
   r.post('/api/work-locations', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as
       { name?: unknown; address?: unknown; latitude?: unknown; longitude?: unknown;
-        description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown; shareable?: unknown };
+        description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown;
+        is_home?: unknown; shareable?: unknown };
     const name = String(body.name ?? '').trim();
     if (!name) return c.json({ error: 'name required' }, 400);
     const id = insertWorkLocation(db, {
@@ -90,6 +106,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
       url: typeof body.url === 'string' ? body.url.trim() : null,
       tags: typeof body.tags === 'string' ? body.tags.trim() : null,
       wifi_ssids: typeof body.wifi_ssids === 'string' ? body.wifi_ssids.trim() : null,
+      is_home: !!body.is_home,
       shareable: !!body.shareable,
     });
     return c.json({ location: getWorkLocation(db, id) }, 201);
@@ -100,7 +117,8 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
     const body = await c.req.json().catch(() => ({})) as
       { name?: unknown; address?: unknown; latitude?: unknown; longitude?: unknown;
-        description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown; shareable?: unknown };
+        description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown;
+        is_home?: unknown; shareable?: unknown };
     const patch: Record<string, unknown> = {};
     if (typeof body.name === 'string') patch.name = body.name.trim();
     if (typeof body.address === 'string' || body.address === null) patch.address = body.address;
@@ -114,6 +132,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     if (typeof body.url === 'string' || body.url === null) patch.url = body.url;
     if (typeof body.tags === 'string' || body.tags === null) patch.tags = body.tags;
     if (typeof body.wifi_ssids === 'string' || body.wifi_ssids === null) patch.wifi_ssids = body.wifi_ssids;
+    if (typeof body.is_home === 'boolean') patch.is_home = body.is_home;
     if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
     updateWorkLocation(db, id, patch);
     return c.json({ location: getWorkLocation(db, id) });
@@ -297,10 +316,18 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     // SSID は大文字小文字を区別しない。 wifi_ssids はカンマ区切り。
     const norm = ssid.toLowerCase();
     const all = listWorkLocations(db, { limit: 500 });
-    const matched = all.find((w) => {
+    let matched = all.find((w) => {
       const list = (w.wifi_ssids ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
       return list.includes(norm);
     }) ?? null;
+
+    // Fallback: SSID に対応 workplace が無くても、 PC が有線接続なら is_home を
+    // current に置く (= 「OwnTracks > WiFi > 有線」 の優先度ルール)。
+    let resolutionSource: 'wifi' | 'wired' = 'wifi';
+    if (!matched && hasWiredConnection()) {
+      const home = all.find((w) => w.is_home === 1);
+      if (home) { matched = home; resolutionSource = 'wired'; }
+    }
 
     const appS = getAppSettings(db);
     const lastId = appS['workplace.current.id'] ? Number(appS['workplace.current.id']) : null;
@@ -309,9 +336,10 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
       matched: boolean;
       workplace: typeof all[number] | null;
       ssid: string;
+      source: 'wifi' | 'wired' | null;
       changed: boolean;
       broadcast: { ok: boolean; id?: number; occurred_at?: string; error?: string; kind?: string } | null;
-    } = { matched: !!matched, workplace: matched, ssid, changed: false, broadcast: null };
+    } = { matched: !!matched, workplace: matched, ssid, source: matched ? resolutionSource : null, changed: false, broadcast: null };
 
     if (matched) {
       if (lastId !== matched.id) {
@@ -320,7 +348,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
           'workplace.current.id': String(matched.id),
           'workplace.current.at': now,
           // どの経路で current になったかを記録 (debug / UI 用)
-          'workplace.current.source': `wifi:${ssid}`,
+          'workplace.current.source': resolutionSource === 'wired' ? 'wired:home' : `wifi:${ssid}`,
         });
         if (settings.workplace_auto_share_enabled) {
           try {

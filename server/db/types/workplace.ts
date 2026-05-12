@@ -15,6 +15,9 @@ export interface WorkLocationRow {
    *  (= GPS / Permission を経由せず「家の WiFi だから家に居る」 と判定)。
    *  1 ワークプレイスに複数 SSID (2.4 GHz / 5 GHz など) を持てる。 */
   wifi_ssids: string | null;
+  /** 1 つだけ true にできる「自宅」 フラグ。 PC が有線接続のとき higher
+   *  priority な信号 (GPS / WiFi) が無ければ、 ここを current に置く。 */
+  is_home: 0 | 1;
   shareable: 0 | 1;
   shared_at: string | null;
   shared_origin: string | null;
