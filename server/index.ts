@@ -55,6 +55,7 @@ import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
+import { makeReviewRouter } from './routes/review.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -189,6 +190,7 @@ app.route('/', makeMultiRouter({
   triggerResolveAsync: ws.triggerResolveAsync,
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
+app.route('/', makeReviewRouter());
 
 // ---- static UI ------------------------------------------------------------
 
