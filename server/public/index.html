@@ -623,12 +623,26 @@
         <div id="queueHistory" class="queue-history-list"></div>
       </div>
 
+      <!-- 💻 アプリ (Application catalog) — process_name 単位の AI 分類カタログ。
+           ドメイン辞書と同じ構造 (= 自動分類 + 手動上書き)。
+           data: app_samples (= sampling 元) / applications (= AI 分類済 row) -->
+      <div id="appsView" class="hidden">
+        <div class="apps-bar">
+          <span id="appsCount" class="muted"></span>
+          <span class="grow"></span>
+          <button id="appsRefresh" class="ghost" title="再読込">↻</button>
+        </div>
+        <div id="appsEmpty" class="queue-empty hidden">applications カタログがまだ空です。 設定 → 🚦 AI 自動処理 で「💻 PC アプリ使用統計」 を ON にすると、 サンプリングされた process_name が AI 分類されてここに表示されます。</div>
+        <ul id="appsList" class="apps-list"></ul>
+      </div>
+
       <div id="databaseView" class="hidden">
         <nav class="worklog-subtabs" id="databaseSubtabs">
           <button class="wl-subtab active" data-db-sub="bookmarks">📚 ブックマーク</button>
           <button class="wl-subtab" data-db-sub="dict">📖 辞書</button>
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
+          <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
           <button class="wl-subtab" data-db-sub="queue">⚙ キュー <span id="dbQueueBadge" class="tab-count hidden">0</span></button>
         </nav>
       </div>
