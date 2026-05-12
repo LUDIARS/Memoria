@@ -4459,20 +4459,15 @@ setupCategoriesDrawer();
 setupExtensionBadge();
 setupHowToBookmark();
 
-// 💡 やり方 button — only shows on mobile (no Chrome extension available).
+// 💡 やり方 (スマホでブックマークする方法) — 旧 topbar の howToBookmarkBtn は
+// 廃止し、 設定 → 🔔 通知 / 端末 内の howToBookmarkBtnInSettings に移動。
+// モバイル幅でしか出さない自動表示も止め、 設定からいつでも開ける形に。
 function setupHowToBookmark() {
-  const btn = $('howToBookmarkBtn');
+  const btn = $('howToBookmarkBtnInSettings');
   const overlay = $('howToBookmarkOverlay');
   const close = $('howToBookmarkClose');
-  if (!btn || !overlay) return;
-  // Show only when viewport is mobile-ish — desktop uses the Chrome
-  // extension, so this prompt isn't relevant.
-  function syncVisibility() {
-    btn.hidden = window.innerWidth > 760;
-  }
-  syncVisibility();
-  window.addEventListener('resize', syncVisibility);
-  btn.addEventListener('click', () => { overlay.hidden = false; });
+  if (!overlay) return;
+  btn?.addEventListener('click', () => { overlay.hidden = false; });
   close?.addEventListener('click', () => { overlay.hidden = true; });
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) overlay.hidden = true;
