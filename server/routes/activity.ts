@@ -11,6 +11,7 @@ import {
 import { privacySettings } from '../lib/privacy.js';
 import {
   sampleAppOnce, sampleSteamOnce, configureActivitySamplers,
+  resolveUnresolvedSteamApps,
 } from '../lib/activity-sampler.js';
 import { classifyApplication } from '../app-catalog.js';
 
@@ -146,12 +147,19 @@ export function makeActivityRouter(deps: ActivityRouterDeps): Hono {
       ? dateRaw
       : new Date().toISOString().slice(0, 10);
 
-    // 1) Steam — 当日に取られた snapshot を時系列で
+    // 1) Steam — 当日に取られた snapshot を時系列で。
+    //    steam_apps_cache に解決済 name があれば優先 (= VDF 由来の `appid:XXXXX` を上書き)
     const steamRows = db.prepare(`
-      SELECT sampled_at, appid, name, playtime_2weeks_min, playtime_forever_min, img_icon_url
-      FROM steam_activity
-      WHERE date(sampled_at, 'localtime') = ?
-      ORDER BY sampled_at ASC
+      SELECT sa.sampled_at,
+             sa.appid,
+             COALESCE(NULLIF(c.name, ''), sa.name) AS name,
+             sa.playtime_2weeks_min,
+             sa.playtime_forever_min,
+             COALESCE(sa.img_icon_url, c.header_image) AS img_icon_url
+      FROM steam_activity sa
+      LEFT JOIN steam_apps_cache c ON c.appid = sa.appid
+      WHERE date(sa.sampled_at, 'localtime') = ?
+      ORDER BY sa.sampled_at ASC
     `).all(date) as Array<{
       sampled_at: string; appid: number; name: string;
       playtime_2weeks_min: number | null; playtime_forever_min: number | null;
@@ -268,13 +276,18 @@ export function makeActivityRouter(deps: ActivityRouterDeps): Hono {
   //   uniq して返す (= 最新の playtime_2weeks_min 順)
   r.get('/api/activity/steam/recent', (c: Context) => {
     const rows = db.prepare(`
-      SELECT appid, name, playtime_2weeks_min, playtime_forever_min,
-             img_icon_url, sampled_at
-      FROM steam_activity
-      WHERE id IN (
+      SELECT sa.appid,
+             COALESCE(NULLIF(c.name, ''), sa.name) AS name,
+             sa.playtime_2weeks_min,
+             sa.playtime_forever_min,
+             COALESCE(sa.img_icon_url, c.header_image) AS img_icon_url,
+             sa.sampled_at
+      FROM steam_activity sa
+      LEFT JOIN steam_apps_cache c ON c.appid = sa.appid
+      WHERE sa.id IN (
         SELECT MAX(id) FROM steam_activity GROUP BY appid
       )
-      ORDER BY COALESCE(playtime_2weeks_min, 0) DESC, sampled_at DESC
+      ORDER BY COALESCE(sa.playtime_2weeks_min, 0) DESC, sa.sampled_at DESC
       LIMIT 50
     `).all() as SteamDayRow[];
     return c.json({ items: rows });
@@ -283,6 +296,12 @@ export function makeActivityRouter(deps: ActivityRouterDeps): Hono {
   // POST /api/activity/steam/sample-now — 手動 snapshot 取得
   r.post('/api/activity/steam/sample-now', async (c: Context) => {
     const r2 = await sampleSteamOnce(db);
+    return c.json(r2);
+  });
+
+  // POST /api/activity/steam/resolve-now — Store API で未解決 appid を resolve
+  r.post('/api/activity/steam/resolve-now', async (c: Context) => {
+    const r2 = await resolveUnresolvedSteamApps(db);
     return c.json(r2);
   });
 

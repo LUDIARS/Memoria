@@ -397,6 +397,21 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_steam_activity_at ON steam_activity(sampled_at DESC);
     CREATE INDEX IF NOT EXISTS idx_steam_activity_app ON steam_activity(appid, sampled_at);
 
+    -- Steam Store API (= keyless) で appid → name を解決するキャッシュ。
+    -- VDF fallback で uninstalled な appid は appmanifest_<appid>.acf が無いので
+    -- 「appid:XXXXX」 にしか出来ない。 起動後に Store API で resolve して
+    -- このテーブルに入れる → 以後の表示で name を上書き。 一度解決した name は
+    -- 永続化する (= 再取得しない)。 not_found=1 (= delisted/private) のみ 7 日後に再試行。
+    CREATE TABLE IF NOT EXISTS steam_apps_cache (
+      appid           INTEGER PRIMARY KEY,
+      name            TEXT,
+      header_image    TEXT,
+      type            TEXT,
+      short_desc      TEXT,
+      fetched_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      not_found       INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,
@@ -2051,6 +2066,77 @@ export function updateApplicationUser(db: Db, processName: string, patch: Applic
 
 export function deleteApplication(db: Db, processName: string): void {
   db.prepare(`DELETE FROM applications WHERE process_name = ?`).run(processName);
+}
+
+// ── steam_apps_cache (Store API resolved appid → name) -------------------
+
+export interface SteamAppCacheRow {
+  appid: number;
+  name: string | null;
+  header_image: string | null;
+  type: string | null;
+  short_desc: string | null;
+  fetched_at: string;
+  not_found: number;
+}
+
+export function getSteamAppCache(db: Db, appid: number): SteamAppCacheRow | null {
+  return (db.prepare(`SELECT * FROM steam_apps_cache WHERE appid = ?`).get(appid) as SteamAppCacheRow | undefined) ?? null;
+}
+
+export function getSteamAppsCacheMap(db: Db, appids: number[]): Map<number, SteamAppCacheRow> {
+  if (!appids.length) return new Map();
+  const placeholders = appids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM steam_apps_cache WHERE appid IN (${placeholders})`).all(...appids) as SteamAppCacheRow[];
+  return new Map(rows.map(r => [r.appid, r]));
+}
+
+export interface SteamAppCachePatch {
+  name?: string | null;
+  header_image?: string | null;
+  type?: string | null;
+  short_desc?: string | null;
+  not_found?: boolean;
+}
+
+export function upsertSteamAppCache(db: Db, appid: number, patch: SteamAppCachePatch): void {
+  db.prepare(`
+    INSERT INTO steam_apps_cache (appid, name, header_image, type, short_desc, fetched_at, not_found)
+    VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+    ON CONFLICT(appid) DO UPDATE SET
+      name = excluded.name,
+      header_image = excluded.header_image,
+      type = excluded.type,
+      short_desc = excluded.short_desc,
+      fetched_at = excluded.fetched_at,
+      not_found = excluded.not_found
+  `).run(
+    appid,
+    patch.name ?? null,
+    patch.header_image ?? null,
+    patch.type ?? null,
+    patch.short_desc ?? null,
+    patch.not_found ? 1 : 0,
+  );
+}
+
+/** キャッシュ未解決の appid を steam_activity から拾う。
+ *  - キャッシュ row 自体が無い appid
+ *  - 過去 not_found=1 で記録されたが name が後で復活する可能性があるので、 7 日経った
+ *    not_found のみ再試行 (= 完全に永続化、 ただし delisted 復帰は拾う)
+ *  解決済 (name あり) はもう再取得しない (= ゲーム名は永続化)。 */
+export function listStaleAppidsFromActivity(db: Db, limit = 100): number[] {
+  const rows = db.prepare(`
+    SELECT DISTINCT sa.appid
+    FROM steam_activity sa
+    LEFT JOIN steam_apps_cache c ON c.appid = sa.appid
+    WHERE
+      c.appid IS NULL
+      OR (c.not_found = 1 AND julianday('now') - julianday(c.fetched_at) > 7)
+    ORDER BY sa.id DESC
+    LIMIT ?
+  `).all(limit) as Array<{ appid: number }>;
+  return rows.map(r => r.appid);
 }
 
 // ── server events (uptime / downtime / lifecycle) -------------------------

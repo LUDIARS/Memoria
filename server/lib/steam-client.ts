@@ -76,3 +76,67 @@ export async function getRecentlyPlayedGames(
     return { ok: false, error: `steam api: ${msg}`, games: [] };
   }
 }
+
+// ── Store API (= keyless) で appid → name 解決 ──────────────────────────
+//
+// localconfig.vdf の appid のうち steamapps/appmanifest_<appid>.acf が無い
+// (= uninstalled) ものは VDF からは name を出せない。 そこで公開 Store API
+// で resolve する。 こちらは API key 不要。
+//
+// 仕様 (rate limit など): https://wiki.teamfortress.com/wiki/User:RJackson/StorefrontAPI
+// 体感で 1 req/sec 程度なら問題なし。 呼び出し側で連投しない。
+
+export interface SteamStoreAppDetails {
+  appid: number;
+  name: string;
+  type: string;                    // 'game' | 'dlc' | 'demo' | 'tool' | 'music' | ...
+  header_image: string | null;
+  short_description: string | null;
+}
+
+export interface FetchAppDetailsResult {
+  ok: boolean;
+  error?: string;
+  /** Store API が `success: false` (= delisted/private) を明示で返した */
+  notFound?: boolean;
+  details?: SteamStoreAppDetails;
+}
+
+export async function fetchAppDetails(
+  appid: number,
+  opts: { timeoutMs?: number; lang?: string } = {},
+): Promise<FetchAppDetailsResult> {
+  if (!Number.isFinite(appid) || appid <= 0) {
+    return { ok: false, error: 'invalid appid' };
+  }
+  const lang = (opts.lang || 'japanese').trim();
+  const url = `https://store.steampowered.com/api/appdetails?appids=${appid}&l=${encodeURIComponent(lang)}`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000),
+    });
+    if (!res.ok) return { ok: false, error: `store api ${res.status}` };
+    const json = await res.json() as Record<string, unknown>;
+    const entry = json?.[String(appid)] as { success?: boolean; data?: Record<string, unknown> } | undefined;
+    if (!entry) return { ok: false, error: 'store api: empty response' };
+    if (entry.success === false) return { ok: true, notFound: true };
+    const data = entry.data;
+    if (!data || typeof data !== 'object') return { ok: false, error: 'store api: missing data' };
+    const name = typeof data.name === 'string' ? data.name : '';
+    if (!name) return { ok: false, error: 'store api: missing name' };
+    return {
+      ok: true,
+      details: {
+        appid,
+        name,
+        type: typeof data.type === 'string' ? data.type : 'game',
+        header_image: typeof data.header_image === 'string' ? data.header_image : null,
+        short_description: typeof data.short_description === 'string' ? data.short_description : null,
+      },
+    };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `store api: ${msg}` };
+  }
+}

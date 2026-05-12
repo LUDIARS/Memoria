@@ -8506,6 +8506,23 @@ $('wlActivitySteamSampleNow')?.addEventListener('click', async () => {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 いますぐ取得'; }
   }
 });
+$('wlActivitySteamResolveNow')?.addEventListener('click', async () => {
+  const btn = $('wlActivitySteamResolveNow') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '解決中…'; }
+  try {
+    const r = await api('/api/activity/steam/resolve-now', { method: 'POST' }) as { resolved: number; notFound: number; errors: number };
+    alert(`Steam 名前解決 — ${r.resolved} 件解決 / ${r.notFound} 件見つからず / ${r.errors} 件エラー`);
+    if (state.tab === 'worklog' && state.worklog?.sub === 'activity') {
+      void loadWorklogActivityCard(state.worklog.date);
+    } else if (state.tab === 'worklog' && state.worklog?.sub === 'games') {
+      void loadWorklogGamesView(state.worklog.date);
+    }
+  } catch (e) {
+    alert(`Steam 名前解決失敗: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🏷️ 名前を解決'; }
+  }
+});
 $('wlGeminiWebSaveBtn')?.addEventListener('click', () => {
   saveGeminiWebResearchLog().catch((e) => {
     console.error(e);
