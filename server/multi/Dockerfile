@@ -1,14 +1,29 @@
 # Memoria Hub — Phase 7 production image.
 #
-# Build context is `server/multi/`. The image is intentionally minimal:
-# only the multi-server code and its deps (pg, jose, hono, …). Local
-# server modules at `../*.js` are never imported.
+# `@ludiars/cernere-service-adapter` is declared as a file: dep pointing at
+#   ../../../Cernere/packages/service-adapter
+# which is outside the docker build context (server/multi/). The previous
+# Dockerfile silently produced an image without the adapter installed, so the
+# container crashed with:
+#   ERR_MODULE_NOT_FOUND '@ludiars/cernere-service-adapter'
+#
+# Fix: sparse-clone LUDIARS/Cernere in a build stage and materialize the
+# adapter at the relative path the package.json points to.
+
+FROM node:20-alpine AS adapter-fetch
+RUN apk add --no-cache git
+WORKDIR /tmp
+RUN git clone --depth 1 --filter=blob:none --sparse https://github.com/LUDIARS/Cernere.git
+WORKDIR /tmp/Cernere
+RUN git sparse-checkout set packages/service-adapter
+
 FROM node:20-alpine AS deps
 WORKDIR /app
+# package.json references `file:../../../Cernere/packages/service-adapter`.
+# Resolved from /app, that points to /Cernere/packages/service-adapter.
+# Place the sparse-checked-out adapter at exactly that path.
+COPY --from=adapter-fetch /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
 COPY package.json ./
-# `npm install` instead of `npm ci` — lockfile lives one level up in the
-# monorepo install layout. Phase 7 follow-up will add a dedicated
-# `multi/package-lock.json` once the dep set settles.
 RUN npm install --omit=dev
 
 FROM node:20-alpine
