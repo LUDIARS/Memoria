@@ -5279,6 +5279,24 @@ dialog.loc-edit-modal[open] {
 .wl-worktime-headline { font-size: 14px; margin-bottom: 4px; }
 .wl-worktime-breakdown { font-size: 12px; }
 .wl-kind-stat { display: inline-block; padding: 1px 6px; border-radius: 4px; background: var(--accent-bg, transparent); margin: 1px 0; }
+/* 💻 アプリケーションカタログ (Database → アプリ) */
+.apps-bar { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.apps-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.apps-row { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, var(--card)); display: flex; flex-direction: column; gap: 6px; }
+.apps-row-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.apps-status { font-size: 14px; }
+.apps-process { background: var(--bg, transparent); padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+.apps-edited { color: var(--accent, #2a6df4); font-size: 11px; }
+.apps-reclassify { font-size: 11px; padding: 2px 8px; }
+.apps-row-body { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 2fr; gap: 8px; }
+.apps-field { display: flex; flex-direction: column; font-size: 11px; gap: 2px; }
+.apps-field span { color: var(--muted); }
+.apps-field input, .apps-field select { font-size: 12px; padding: 3px 6px; width: 100%; box-sizing: border-box; }
+.apps-error { font-size: 11px; }
+@media (max-width: 760px) {
+  .apps-row-body { grid-template-columns: 1fr; }
+}
+
 /* 🎮 ゲームログのバッジ */
 .wl-game-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .wl-game-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
