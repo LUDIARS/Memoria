@@ -12,6 +12,12 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
+export interface WifiInfo {
+  ssid: string | null;
+  bssid: string | null;
+  platform: string;
+}
+
 interface MemoriaBridge {
   /** Returns true if the OS is configured to auto-launch Memoria at login. */
   getAutoLaunch: () => Promise<boolean>;
@@ -23,6 +29,10 @@ interface MemoriaBridge {
   hide: () => Promise<void>;
   /** Fully quit the app — kills the server too. */
   quit: () => Promise<void>;
+  /** 接続中の WiFi 名 (SSID + BSSID)。 取れなければ null。
+   *  Electron 限定 — ブラウザ単体では呼べない。
+   *  Memoria 起動時に SSID matching → workplace を即チェックインするのに使う。 */
+  getCurrentWifiInfo: () => Promise<WifiInfo | null>;
 }
 
 const api: MemoriaBridge = {
@@ -31,6 +41,7 @@ const api: MemoriaBridge = {
   getServerPort: () => ipcRenderer.invoke('memoria:get-server-port'),
   hide: () => ipcRenderer.invoke('memoria:hide'),
   quit: () => ipcRenderer.invoke('memoria:quit'),
+  getCurrentWifiInfo: () => ipcRenderer.invoke('memoria:get-wifi-info'),
 };
 
 contextBridge.exposeInMainWorld('memoria', api);

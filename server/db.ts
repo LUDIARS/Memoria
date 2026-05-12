@@ -453,6 +453,7 @@ export function openDb(dbPath: string): Db {
       description    TEXT,
       url            TEXT,
       tags           TEXT,
+      wifi_ssids     TEXT,
       shareable      INTEGER NOT NULL DEFAULT 0,
       shared_at      TEXT,
       shared_origin  TEXT,
@@ -599,6 +600,13 @@ export function openDb(dbPath: string): Db {
   }
 
   // Forward-compat: 既存 DB に列を ALTER で追加
+  // Forward-compat: work_locations に wifi_ssids 列を追加 (Electron 起動時の SSID
+  // matching 用、 旧 DB は NULL のまま)。
+  const wlCols = (db.prepare(`PRAGMA table_info(work_locations)`).all() as { name: string }[]).map(c => c.name);
+  if (wlCols.length > 0 && !wlCols.includes('wifi_ssids')) {
+    db.exec(`ALTER TABLE work_locations ADD COLUMN wifi_ssids TEXT`);
+  }
+
   const mealsCols = (db.prepare(`PRAGMA table_info(meals)`).all() as { name: string }[]).map(c => c.name);
   if (mealsCols.length > 0 && !mealsCols.includes('additions_json')) {
     db.exec(`ALTER TABLE meals ADD COLUMN additions_json TEXT`);
@@ -3700,14 +3708,16 @@ export interface InsertWorkLocationInput {
   description?: string | null;
   url?: string | null;
   tags?: string | null;
+  /** カンマ区切り (例 'MyHomeWifi,MyHomeWifi-5G') */
+  wifi_ssids?: string | null;
   shareable?: boolean | 0 | 1;
 }
 
 export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number {
   const info = db.prepare(`
     INSERT INTO work_locations
-      (name, address, latitude, longitude, description, url, tags, shareable)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (name, address, latitude, longitude, description, url, tags, wifi_ssids, shareable)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     loc.name,
     loc.address ?? null,
@@ -3716,6 +3726,7 @@ export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number
     loc.description ?? null,
     loc.url ?? null,
     loc.tags ?? null,
+    loc.wifi_ssids ?? null,
     loc.shareable ? 1 : 0,
   );
   return Number(info.lastInsertRowid);
@@ -3724,6 +3735,7 @@ export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number
 export function updateWorkLocation(db: Db, id: number, patch: Record<string, unknown>): void {
   const allowed = new Set([
     'name', 'address', 'latitude', 'longitude', 'description', 'url', 'tags',
+    'wifi_ssids',
     'shareable', 'shared_at', 'shared_origin',
     'owner_user_id', 'owner_user_name',
   ]);
