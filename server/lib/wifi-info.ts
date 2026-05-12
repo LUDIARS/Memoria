@@ -18,6 +18,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { networkInterfaces } from 'node:os';
 
 const execFileP = promisify(execFile);
 
@@ -25,6 +26,58 @@ export interface WifiInfo {
   ssid: string | null;
   bssid: string | null;
   platform: NodeJS.Platform;
+}
+
+export interface NetworkInfo extends WifiInfo {
+  /** 有線 (Ethernet) アダプタが UP + IP を持っているか。 PC が物理的に
+   *  ネット設備の近く (= 自宅 / オフィス) にいる目安に使う。 */
+  wired: boolean;
+}
+
+/**
+ * 有線 (Ethernet) 接続を検出する。
+ *
+ * 厳密には「物理的にケーブルが刺さっている」 とは限らないが、 ethernet 系の
+ * インターフェース名 (eth0 / enp* / Ethernet / イーサネット) で UP かつ
+ * 非 internal な IPv4/IPv6 を持っていれば「有線で繋がっている」 とみなす。
+ *
+ * 注意:
+ * - WiFi インターフェース (wlan* / wlp* / Wi-Fi / Wireless) は除外
+ * - VPN tunnel (utun / tap / tun / vEthernet / Hyper-V) も除外
+ * - Loopback / link-local も除外
+ */
+export function hasWiredConnection(): boolean {
+  const wirelessPatterns = /^(wlan|wlp|wlx|wifi|wi[- ]?fi|wireless|airport|en[01]$)/i;
+  const tunnelPatterns = /^(utun|tap|tun|vEthernet|veth|vmnet|VirtualBox|Hyper-V|WSL|Tailscale|ZeroTier|wireguard|cloudflare)/i;
+  const ifaces = networkInterfaces();
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    if (wirelessPatterns.test(name)) continue;
+    if (tunnelPatterns.test(name)) continue;
+    // 名前が ethernet 系っぽいかチェック (= 完全に loopback/未知名は除外)
+    const looksEthernet = /(ethernet|eth\d|en(p|s)|eno|enx|イーサネット|local.*area)/i.test(name);
+    if (!looksEthernet) continue;
+    for (const a of addrs) {
+      if (a.internal) continue;
+      if (a.family !== 'IPv4' && a.family !== 'IPv6') continue;
+      // IPv6 link-local (fe80::) と IPv4 link-local (169.254.) は除外
+      if (a.family === 'IPv6' && a.address.toLowerCase().startsWith('fe80')) continue;
+      if (a.family === 'IPv4' && a.address.startsWith('169.254.')) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** SSID/BSSID + 有線状態を 1 つにまとめて返す。 */
+export async function getNetworkInfo(): Promise<NetworkInfo> {
+  const wifi = await getCurrentWifiInfo();
+  return {
+    ssid: wifi?.ssid ?? null,
+    bssid: wifi?.bssid ?? null,
+    platform: wifi?.platform ?? process.platform,
+    wired: hasWiredConnection(),
+  };
 }
 
 /** 失敗時 (= 取得経路無し / 未接続 / 権限不足) は null。 */

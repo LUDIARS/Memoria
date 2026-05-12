@@ -5471,6 +5471,11 @@ let ensureMemoriaFeatureViews = function () {
             <textarea id="workplaceEditorDescription" rows="6" placeholder="営業時間・wifi・電源・席数・雰囲気など"></textarea>
           </label>
           <label class="simple-check-row">
+            <input id="workplaceEditorIsHome" type="checkbox" />
+            <span>🏠 自宅 (有線接続時のデフォルト)</span>
+          </label>
+          <small class="muted" style="margin-top:-4px">PC が有線で繋がっていて WiFi / GPS で他の場所が判定できないとき、 ここを current にします。 1 つだけ true にできます (= 別の場所を 🏠 にすると自動的に解除)。</small>
+          <label class="simple-check-row">
             <input id="workplaceEditorShareable" type="checkbox" />
             <span>シェア可能にする</span>
           </label>
@@ -6444,6 +6449,7 @@ function openWorkplaceEditor(w = null) {
   $('workplaceEditorUrl').value = w?.url || '';
   $('workplaceEditorTags').value = w?.tags || '';
   if ($('workplaceEditorWifiSsids')) $('workplaceEditorWifiSsids').value = w?.wifi_ssids || '';
+  if ($('workplaceEditorIsHome')) $('workplaceEditorIsHome').checked = !!w?.is_home;
   $('workplaceEditorDescription').value = w?.description || '';
   $('workplaceEditorShareable').checked = !!w?.shareable;
   // 「現在の WiFi を追加」 ボタンは server 側 /api/wifi/current が返してくれる
@@ -6968,6 +6974,7 @@ async function saveWorkLocationFromForm() {
     url: $('workplaceEditorUrl')?.value.trim() || null,
     tags: $('workplaceEditorTags')?.value.trim() || null,
     wifi_ssids: $('workplaceEditorWifiSsids')?.value.trim() || null,
+    is_home: !!$('workplaceEditorIsHome')?.checked,
     description: $('workplaceEditorDescription')?.value.trim() || null,
     shareable: !!$('workplaceEditorShareable')?.checked,
   };
@@ -9558,7 +9565,9 @@ async function loadTracksWifiInfo() {
   const card = document.getElementById('tracksWifiCard');
   const ssidEl = document.getElementById('tracksWifiSsid');
   const bssidEl = document.getElementById('tracksWifiBssid');
+  const wiredEl = document.getElementById('tracksWifiWired');
   const matchEl = document.getElementById('tracksWifiMatch');
+  const sourceEl = document.getElementById('tracksWifiSource');
   const pillEl = document.getElementById('tracksWifiPill');
   if (!card) return;
   if (pillEl) {
@@ -9572,41 +9581,40 @@ async function loadTracksWifiInfo() {
       ssid?: string | null;
       bssid?: string | null;
       platform?: string;
+      wired?: boolean;
       workplace?: { id: number; name: string } | null;
+      source?: 'wifi' | 'wired' | null;
     };
     if (info?.supported === false) {
-      // workplace 機能が OFF — カードごと隠す
       card.hidden = true;
       return;
     }
     card.hidden = false;
-    if (!info?.ssid) {
-      if (ssidEl) ssidEl.textContent = '(未接続 / 取得失敗)';
-      if (bssidEl) bssidEl.textContent = info?.bssid || '—';
-      if (matchEl) matchEl.textContent = '—';
-      if (pillEl) {
-        pillEl.classList.remove('ext-cfg-pill-loading');
-        pillEl.classList.add('ext-cfg-pill-inactive');
-        pillEl.textContent = '⚪ 未接続';
-      }
-      return;
+    if (ssidEl) ssidEl.textContent = info?.ssid || '(未接続)';
+    if (bssidEl) bssidEl.textContent = info?.bssid || '—';
+    if (wiredEl) wiredEl.textContent = info?.wired ? '🟢 接続中' : '⚪ 未接続';
+    const matchName = info?.workplace?.name ?? null;
+    if (matchEl) matchEl.textContent = matchName ?? '(該当なし)';
+    if (sourceEl) {
+      const label = info?.source === 'wifi' ? '📶 WiFi SSID'
+        : info?.source === 'wired' ? '🔌 有線 (自宅)'
+        : '—';
+      sourceEl.textContent = label;
     }
-    if (ssidEl) ssidEl.textContent = info.ssid;
-    if (bssidEl) bssidEl.textContent = info.bssid || '—';
-    const matchName = info.workplace?.name ?? null;
-    if (matchEl) matchEl.textContent = matchName ?? '(未登録 — 設定 → 作業場所 から紐付け可)';
     if (pillEl) {
       pillEl.classList.remove('ext-cfg-pill-loading');
       if (matchName) {
         pillEl.classList.add('ext-cfg-pill-active');
-        pillEl.textContent = '🟢 マッチ済';
-      } else {
+        pillEl.textContent = '🟢 解決済';
+      } else if (info?.ssid || info?.wired) {
         pillEl.classList.add('ext-cfg-pill-configured');
         pillEl.textContent = '🟡 未登録';
+      } else {
+        pillEl.classList.add('ext-cfg-pill-inactive');
+        pillEl.textContent = '⚪ オフライン';
       }
     }
   } catch (e) {
-    // 404 / 旧サーバ → カード隠す
     if ((e as Error).message?.includes('404')) {
       card.hidden = true;
       return;

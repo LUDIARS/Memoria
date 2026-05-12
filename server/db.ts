@@ -454,6 +454,7 @@ export function openDb(dbPath: string): Db {
       url            TEXT,
       tags           TEXT,
       wifi_ssids     TEXT,
+      is_home        INTEGER NOT NULL DEFAULT 0,
       shareable      INTEGER NOT NULL DEFAULT 0,
       shared_at      TEXT,
       shared_origin  TEXT,
@@ -605,6 +606,11 @@ export function openDb(dbPath: string): Db {
   const wlCols = (db.prepare(`PRAGMA table_info(work_locations)`).all() as { name: string }[]).map(c => c.name);
   if (wlCols.length > 0 && !wlCols.includes('wifi_ssids')) {
     db.exec(`ALTER TABLE work_locations ADD COLUMN wifi_ssids TEXT`);
+  }
+  // is_home: 有線接続時のデフォルト workplace。 1 つだけ true にできる (= UI で
+  // 排他制御、 ここでは制約までは設けない)。
+  if (wlCols.length > 0 && !wlCols.includes('is_home')) {
+    db.exec(`ALTER TABLE work_locations ADD COLUMN is_home INTEGER NOT NULL DEFAULT 0`);
   }
 
   const mealsCols = (db.prepare(`PRAGMA table_info(meals)`).all() as { name: string }[]).map(c => c.name);
@@ -3710,14 +3716,20 @@ export interface InsertWorkLocationInput {
   tags?: string | null;
   /** カンマ区切り (例 'MyHomeWifi,MyHomeWifi-5G') */
   wifi_ssids?: string | null;
+  /** 有線接続時のデフォルト workplace に使う */
+  is_home?: boolean | 0 | 1;
   shareable?: boolean | 0 | 1;
 }
 
 export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number {
+  // is_home=true なら既存の home flag を全部 clear (= 1 つだけ true 制約をソフトに維持)
+  if (loc.is_home) {
+    db.prepare(`UPDATE work_locations SET is_home = 0 WHERE is_home = 1`).run();
+  }
   const info = db.prepare(`
     INSERT INTO work_locations
-      (name, address, latitude, longitude, description, url, tags, wifi_ssids, shareable)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (name, address, latitude, longitude, description, url, tags, wifi_ssids, is_home, shareable)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     loc.name,
     loc.address ?? null,
@@ -3727,15 +3739,20 @@ export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number
     loc.url ?? null,
     loc.tags ?? null,
     loc.wifi_ssids ?? null,
+    loc.is_home ? 1 : 0,
     loc.shareable ? 1 : 0,
   );
   return Number(info.lastInsertRowid);
 }
 
 export function updateWorkLocation(db: Db, id: number, patch: Record<string, unknown>): void {
+  // is_home を true に変えるリクエストなら、 他の行の is_home を先に clear
+  if (patch.is_home === true || patch.is_home === 1) {
+    db.prepare(`UPDATE work_locations SET is_home = 0 WHERE is_home = 1 AND id != ?`).run(id);
+  }
   const allowed = new Set([
     'name', 'address', 'latitude', 'longitude', 'description', 'url', 'tags',
-    'wifi_ssids',
+    'wifi_ssids', 'is_home',
     'shareable', 'shared_at', 'shared_origin',
     'owner_user_id', 'owner_user_name',
   ]);
@@ -3744,7 +3761,7 @@ export function updateWorkLocation(db: Db, id: number, patch: Record<string, unk
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) continue;
     cols.push(`${k} = ?`);
-    if (k === 'shareable') args.push(v ? 1 : 0);
+    if (k === 'shareable' || k === 'is_home') args.push(v ? 1 : 0);
     else if (k === 'latitude' || k === 'longitude') args.push(v == null ? null : Number(v));
     else args.push(v);
   }

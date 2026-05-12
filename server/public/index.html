@@ -765,20 +765,22 @@
           <p class="ext-cfg-help" id="tracksGpsHint"></p>
         </div>
 
-        <!-- 接続中の WiFi (Electron 限定で表示。 SSID をワークプレイスにマップするヒント付き) -->
+        <!-- 接続中の WiFi / 有線 (サーバ機の接続情報を REST 経由で取得) -->
         <div id="tracksWifiCard" class="tracks-source-card" hidden>
           <header class="tracks-source-head">
-            <span class="tracks-source-icon">📶</span>
-            <span class="tracks-source-name">接続中の WiFi</span>
+            <span class="tracks-source-icon">📡</span>
+            <span class="tracks-source-name">接続情報 (サーバ機)</span>
             <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksWifiPill">取得中…</span>
             <button id="tracksWifiRefresh" class="ghost" type="button" title="再取得">↻</button>
           </header>
           <div class="tracks-wifi-grid">
             <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">SSID</span><span id="tracksWifiSsid" class="ext-cfg-stat-val">—</span></div>
             <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">BSSID</span><span id="tracksWifiBssid" class="ext-cfg-stat-val">—</span></div>
-            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">対応作業場所</span><span id="tracksWifiMatch" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">有線</span><span id="tracksWifiWired" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">解決された作業場所</span><span id="tracksWifiMatch" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">解決ソース</span><span id="tracksWifiSource" class="ext-cfg-stat-val">—</span></div>
           </div>
-          <p class="ext-cfg-help" id="tracksWifiHint">この SSID をワークプレイスに紐付けると、 起動するだけで自動チェックインされます。</p>
+          <p class="ext-cfg-help" id="tracksWifiHint">優先度: OwnTracks GPS &gt; WiFi SSID &gt; 有線 (= 自宅)。 高優先度のソースで判定できなければ次の段に fallback します。</p>
         </div>
 
         <div id="tracksMissingKey" class="tracks-missing-key hidden">
