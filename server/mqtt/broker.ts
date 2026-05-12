@@ -30,10 +30,16 @@
 //   MEMORIA_USER_ID              Memoria 側で gps 行に書く user_id (default 'me')
 
 // aedes は CJS で `module.exports = Aedes (= createBroker)` のみ。 ESM 側からは
-// named import で createBroker / AuthErrorCode を引けないので default import に統一。
-import Aedes from 'aedes';
+// named import で createBroker / AuthErrorCode を引けないので default import に
+// 統一する。 型情報上 default は class (Aedes) として宣言されているため、
+// 実行時の callable (= createBroker と同じ) 値として使うには cast が必要。
+import AedesDefault from 'aedes';
 import type { AedesPublishPacket, AuthenticateError, Client as AedesClient } from 'aedes';
-const createBroker = Aedes;
+// TS の `typeof import('aedes')` は class でも function でもない namespace 扱い
+// になるため call signature を別途宣言する必要がある。 d.ts では
+// `createBroker(opts?): Aedes` と宣言されているので、 戻り値は ReturnType で拾う。
+type CreateBrokerFn = typeof import('aedes').createBroker;
+const createBroker = AedesDefault as unknown as CreateBrokerFn;
 
 // aedes は AuthErrorCode を `const enum` でしか export しないため
 // tsx (isolatedModules) からは値として import できない。 MQTT 3.1.1 の
