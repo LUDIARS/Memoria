@@ -7674,6 +7674,7 @@ const DB_SUB_VIEWS = {
   dict: 'dictView',
   domain: 'domainView',
   workplace: 'workplaceView',
+  apps: 'appsView',
   queue: 'queueView',
 };
 
@@ -7707,11 +7708,113 @@ function switchDatabaseSub(sub) {
   if (sub === 'dict') loadDictionary();
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
+  if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
   if (sub === 'queue') renderQueue();
 }
 
+interface ApplicationCatalogRow {
+  process_name: string;
+  name: string | null;
+  kind: string | null;
+  description: string | null;
+  icon_url: string | null;
+  user_edited: 0 | 1;
+  status: string;
+  error: string | null;
+  classified_at: string | null;
+}
+
+const APP_KIND_LABELS: Record<string, string> = {
+  game: '🎮 ゲーム',
+  work: '💼 仕事',
+  browser: '🌐 ブラウザ',
+  messaging: '💬 メッセージ',
+  media: '🎬 メディア',
+  creative: '🎨 クリエイティブ',
+  other: '❓ その他',
+};
+
+async function loadApplicationsCatalog() {
+  const list = $('appsList');
+  const empty = $('appsEmpty');
+  const count = $('appsCount');
+  if (!list) return;
+  try {
+    const r = await api('/api/activity/applications') as { items: ApplicationCatalogRow[] };
+    const items = r.items || [];
+    if (count) count.textContent = `${items.length} 件`;
+    if (items.length === 0) {
+      empty?.classList.remove('hidden');
+      list.innerHTML = '';
+      return;
+    }
+    empty?.classList.add('hidden');
+    list.innerHTML = items.map((it) => {
+      const kindOptions = Object.entries(APP_KIND_LABELS).map(([k, label]) =>
+        `<option value="${k}"${it.kind === k ? ' selected' : ''}>${label}</option>`
+      ).join('');
+      const statusBadge = it.status === 'done' ? '✓' : it.status === 'error' ? '⚠' : '⟳';
+      const edited = it.user_edited ? '<span class="apps-edited" title="手動編集済み">✎</span>' : '';
+      return `<li class="apps-row" data-process="${escapeHtml(it.process_name)}">
+        <div class="apps-row-head">
+          <span class="apps-status">${statusBadge}</span>
+          <code class="apps-process">${escapeHtml(it.process_name)}</code>
+          ${edited}
+          <span class="grow"></span>
+          <button class="ghost apps-reclassify" data-process="${escapeHtml(it.process_name)}" title="AI 分類を再実行">↻ 再分類</button>
+        </div>
+        <div class="apps-row-body">
+          <label class="apps-field">
+            <span>名前</span>
+            <input class="apps-name" type="text" value="${escapeHtml(it.name || '')}" placeholder="(未分類)" />
+          </label>
+          <label class="apps-field">
+            <span>種類</span>
+            <select class="apps-kind">
+              <option value="">--</option>
+              ${kindOptions}
+            </select>
+          </label>
+          <label class="apps-field apps-field-wide">
+            <span>説明</span>
+            <input class="apps-desc" type="text" value="${escapeHtml(it.description || '')}" placeholder="(未分類)" />
+          </label>
+        </div>
+        ${it.error ? `<div class="apps-error muted">⚠ ${escapeHtml(it.error)}</div>` : ''}
+      </li>`;
+    }).join('');
+    // 行ごとに save (blur で自動保存) + 再分類ボタン配線
+    list.querySelectorAll<HTMLLIElement>('.apps-row').forEach((row) => {
+      const processName = row.dataset.process || '';
+      const save = async () => {
+        const name = (row.querySelector<HTMLInputElement>('.apps-name')?.value || '').trim();
+        const kind = row.querySelector<HTMLSelectElement>('.apps-kind')?.value || '';
+        const description = (row.querySelector<HTMLInputElement>('.apps-desc')?.value || '').trim();
+        try {
+          await api(`/api/activity/applications/${encodeURIComponent(processName)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, kind, description }),
+          });
+        } catch (e) { console.warn('app patch failed:', (e as Error).message); }
+      };
+      row.querySelector('.apps-name')?.addEventListener('blur', save);
+      row.querySelector('.apps-desc')?.addEventListener('blur', save);
+      row.querySelector('.apps-kind')?.addEventListener('change', save);
+      row.querySelector('.apps-reclassify')?.addEventListener('click', async () => {
+        try {
+          await api(`/api/activity/applications/${encodeURIComponent(processName)}/classify-now`, { method: 'POST' });
+          await loadApplicationsCatalog();
+        } catch (e) { alert(`再分類失敗: ${(e as Error).message}`); }
+      });
+    });
+  } catch (e) {
+    if (count) count.textContent = `取得失敗: ${(e as Error).message}`;
+  }
+}
+
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
-const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks']);
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'activity', 'games']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -7745,6 +7848,7 @@ migrateDatabaseSubViews();
 document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
   btn.addEventListener('click', () => switchDatabaseSub(btn.dataset.dbSub));
 });
+$('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
 
 function switchWorklogSub(sub) {
   if (!WL_SUB_VIEWS[sub]) return;
