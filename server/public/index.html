@@ -817,6 +817,9 @@
           <aside class="notes-comments" id="notesComments">
             <div class="muted">ノートを選択するとコメントが表示されます</div>
           </aside>
+          <!-- スマホ専用フローティングボタン: ブロックを「いま居るブロックの次」 に挿入する。
+               PC では CSS @media で非表示。 ノート未選択時も JS で hidden=true。 -->
+          <button id="notesMobileFab" class="notes-mobile-fab" type="button" hidden aria-label="ブロックを追加">＋</button>
         </div>
       </div>
 

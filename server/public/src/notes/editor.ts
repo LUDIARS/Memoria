@@ -29,6 +29,8 @@ interface EditorState {
   saveTimers: Map<string, number>;
   loadingMermaid: Promise<MermaidLib> | null;
   bookmarkPickerOpen: boolean;
+  /** 最後に focus された block の uuid。 モバイル FAB の挿入位置に使う。 */
+  lastFocusedBlockUuid: string | null;
 }
 
 const state: EditorState = {
@@ -39,6 +41,7 @@ const state: EditorState = {
   saveTimers: new Map(),
   loadingMermaid: null,
   bookmarkPickerOpen: false,
+  lastFocusedBlockUuid: null,
 };
 
 const SAVE_DEBOUNCE_MS = 600;
@@ -103,11 +106,21 @@ export function initNotes(): void {
   const sidebarToggle = byId<HTMLButtonElement>('notesSidebarToggle');
   if (sidebarToggle) sidebarToggle.addEventListener('click', () => toggleNotesSidebar());
 
-  // 初期状態: mobile では drawer 閉、 PC では開。
+  // モバイル用 FAB: いま居るブロックの次にブロックを追加する挿入メニュー。
+  const mobileFab = byId<HTMLButtonElement>('notesMobileFab');
+  if (mobileFab) {
+    mobileFab.addEventListener('click', (ev) => {
+      ev.stopPropagation();   // closeOnOutside の即時クローズを回避
+      openInsertBlockMenu(mobileFab);
+    });
+  }
+
+  // 初期状態: モバイルでも note 未選択なら sidebar を開いて起動 (= ノート選択
+  // メニューから始まる)。 PC は常に開。 note を選んだ時点で closeNotesSidebarOnMobile
+  // が走って閉じる。
   const layout0 = byId<HTMLDivElement>('notesLayout');
   if (layout0) {
-    if (isMobileNotesViewport()) layout0.classList.remove('notes-sidebar-open');
-    else layout0.classList.add('notes-sidebar-open');
+    layout0.classList.add('notes-sidebar-open');
   }
   // backdrop タップ (mobile) → drawer を閉じる
   document.addEventListener('click', (e) => {
@@ -202,10 +215,21 @@ export async function openNote(uuid: string): Promise<void> {
   const note = await api.getNote(uuid);
   state.current = note;
   state.currentSet = null;
+  state.lastFocusedBlockUuid = note.blocks?.[note.blocks.length - 1]?.uuid ?? null;
   renderEditor();
   renderSidebar();
   closeNotesSidebarOnMobile();
+  updateMobileFabVisibility();
   void loadOwnCommentSet();
+}
+
+function updateMobileFabVisibility(): void {
+  const fab = byId<HTMLButtonElement>('notesMobileFab');
+  if (!fab) return;
+  // note が開かれているとき (= state.current あり) だけ表示。 PC は CSS @media で
+  // どのみち非表示になっているので、 hidden 属性での出し分けは主に「note 未選択」
+  // 用途。
+  fab.hidden = !state.current;
 }
 
 function isMobileNotesViewport(): boolean {
@@ -999,11 +1023,58 @@ function attachAutoSave(
     });
   };
   el.addEventListener('blur', flush);
+  el.addEventListener('focus', () => { state.lastFocusedBlockUuid = block.uuid; });
   el.addEventListener('input', () => {
     if (state.saveTimers.has(block.uuid)) window.clearTimeout(state.saveTimers.get(block.uuid));
     state.saveTimers.set(block.uuid, window.setTimeout(flush, SAVE_DEBOUNCE_MS));
   });
   el.addEventListener('keydown', (ev) => handleEditorKey(ev, block));
+}
+
+// ── caret 位置判定 (ArrowUp/Down で前後ブロックに移動するか決めるのに使う) ──
+//
+// contenteditable 内の Selection を見て、 caret が要素の先頭 / 末尾にあるかを返す。
+// 先頭にあって ArrowUp なら前の block に移動、 末尾にあって ArrowDown なら次に
+// 移動。 code / mermaid のような多行ブロックは「最初の行 / 最後の行」 にいる
+// ときだけ block 越え移動になる。
+function caretAtEdges(el: HTMLElement): { atStart: boolean; atEnd: boolean } {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
+    return { atStart: false, atEnd: false };
+  }
+  const range = sel.getRangeAt(0);
+  if (!range.collapsed) return { atStart: false, atEnd: false };
+  // collapsed caret の左側 / 右側に何かテキストが残っているかで判定。
+  const before = document.createRange();
+  before.selectNodeContents(el);
+  before.setEnd(range.startContainer, range.startOffset);
+  const atStart = before.toString().length === 0;
+  const after = document.createRange();
+  after.selectNodeContents(el);
+  after.setStart(range.endContainer, range.endOffset);
+  const atEnd = after.toString().length === 0;
+  return { atStart, atEnd };
+}
+
+function focusBlock(uuid: string, place: 'start' | 'end'): boolean {
+  const target = document.querySelector<HTMLElement>(`[data-block-uuid="${uuid}"] .note-block-content`);
+  if (!target) return false;
+  target.focus();
+  // caret を端に置く (Enter/Backspace の挙動と整合)
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(place === 'start');
+  const sel = window.getSelection();
+  if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+  return true;
+}
+
+function siblingBlockUuid(currentUuid: string, direction: -1 | 1): string | null {
+  const blocks = state.current?.blocks ?? [];
+  const idx = blocks.findIndex((b) => b.uuid === currentUuid);
+  if (idx < 0) return null;
+  const next = blocks[idx + direction];
+  return next?.uuid ?? null;
 }
 
 function htmlToStorageText(el: HTMLElement): string {
@@ -1037,6 +1108,22 @@ function handleEditorKey(ev: KeyboardEvent, block: NoteBlockRow): void {
     ev.preventDefault();
     openBlockMenu(block.uuid, ev.currentTarget as HTMLElement, true);
     return;
+  }
+  // ArrowUp / ArrowDown: caret が先頭 / 末尾なら前後ブロックの contenteditable に
+  // focus を移す。 中間にいるときは default 動作 (= contenteditable 内 caret 移動)。
+  // 修飾キー (Shift / Alt / Meta) が押されている場合は範囲選択 / 専用ショート
+  // カットの可能性があるので何もしない。
+  if ((ev.key === 'ArrowUp' || ev.key === 'ArrowDown') && !ev.shiftKey && !ev.altKey && !ev.metaKey && !ev.ctrlKey) {
+    const el = ev.currentTarget as HTMLElement;
+    const edges = caretAtEdges(el);
+    if (ev.key === 'ArrowUp' && edges.atStart) {
+      const prev = siblingBlockUuid(block.uuid, -1);
+      if (prev && focusBlock(prev, 'end')) { ev.preventDefault(); return; }
+    }
+    if (ev.key === 'ArrowDown' && edges.atEnd) {
+      const next = siblingBlockUuid(block.uuid, 1);
+      if (next && focusBlock(next, 'start')) { ev.preventDefault(); return; }
+    }
   }
 }
 
@@ -1091,9 +1178,7 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
     <button class="nbm-item nbm-danger" data-action="delete">🗑 削除</button>
   `;
   document.body.appendChild(menu);
-  const r = anchor.getBoundingClientRect();
-  menu.style.left = `${r.left}px`;
-  menu.style.top = `${r.bottom + 4}px`;
+  positionBlockMenu(menu, anchor);
   openMenu = menu;
   menu.querySelectorAll<HTMLButtonElement>('.nbm-item').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1117,6 +1202,88 @@ function openBlockMenu(blockUuid: string, anchor: HTMLElement, _slashMode = fals
   setTimeout(() => {
     document.addEventListener('click', closeOnOutside, { once: true });
   }, 0);
+}
+
+// スマホ FAB 用「ブロック追加」 メニュー。 既存の openBlockMenu と違って
+// 「現在ブロックの種別変更」 ではなく「現在ブロックの次に新規ブロックを追加」
+// するための専用フロー。
+function openInsertBlockMenu(anchor: HTMLElement): void {
+  if (!state.current) return;
+  closeBlockMenu();
+  const blocks = state.current.blocks;
+  // 挿入位置の決定: 直前 focus → 最終ブロック → どれも無ければ undefined (=末尾)
+  const afterUuid = (state.lastFocusedBlockUuid && blocks.some((b) => b.uuid === state.lastFocusedBlockUuid))
+    ? state.lastFocusedBlockUuid
+    : blocks[blocks.length - 1]?.uuid;
+  const menu = document.createElement('div');
+  menu.className = 'note-block-menu';
+  const typeOptions = BLOCK_TYPE_OPTIONS.filter((o) => o.type !== 'floating_text');
+  menu.innerHTML = `
+    <div class="nbm-section">追加するブロック種別</div>
+    ${typeOptions.map((o) => `
+      <button class="nbm-item" data-type="${o.type}"><span class="nbm-icon">${o.icon}</span>${o.label}</button>
+    `).join('')}
+  `;
+  document.body.appendChild(menu);
+  positionBlockMenu(menu, anchor);
+  openMenu = menu;
+  menu.querySelectorAll<HTMLButtonElement>('.nbm-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.type as NoteBlockType | undefined;
+      closeBlockMenu();
+      if (!t) return;
+      if (t === 'bookmark_embed' || t === 'note_link') {
+        // 既存パターン: 空 text を挿入してから picker → picker 側で change-type
+        void appendBlock('text', afterUuid).then(() => {
+          const list = state.current?.blocks ?? [];
+          const idx = afterUuid ? list.findIndex((b) => b.uuid === afterUuid) : -1;
+          const inserted = idx >= 0 ? list[idx + 1] : list[list.length - 1];
+          if (!inserted) return;
+          if (t === 'bookmark_embed') openBookmarkPickerForBlock(inserted.uuid);
+          else openNotePickerForBlock(inserted.uuid);
+        });
+        return;
+      }
+      void appendBlock(t, afterUuid);
+    });
+  });
+  setTimeout(() => {
+    document.addEventListener('click', closeOnOutside, { once: true });
+  }, 0);
+}
+
+// メニューを viewport にクランプして配置する。
+// 既定: anchor の下に出す。 下が見切れる場合は上に。 左右もはみ出さないようクランプ。
+function positionBlockMenu(menu: HTMLElement, anchor: HTMLElement): void {
+  const margin = 8;
+  // 一度フィットさせて寸法を取得 (position: fixed + 左上に仮配置)
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  menu.style.maxHeight = `${Math.max(160, window.innerHeight - 2 * margin)}px`;
+  menu.style.overflowY = 'auto';
+  const r = anchor.getBoundingClientRect();
+  const m = menu.getBoundingClientRect();
+  // 横位置: anchor 左を基準に右側にはみ出さないようクランプ
+  let left = r.left;
+  if (left + m.width > window.innerWidth - margin) left = window.innerWidth - m.width - margin;
+  if (left < margin) left = margin;
+  // 縦位置: 下に出して入るなら下、 入らなければ上に出す。 両方無理なら上端に貼り付け
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  let top: number;
+  if (m.height <= spaceBelow) {
+    top = r.bottom + 4;
+  } else if (m.height <= spaceAbove) {
+    top = r.top - m.height - 4;
+  } else if (spaceBelow >= spaceAbove) {
+    top = r.bottom + 4;
+    menu.style.maxHeight = `${Math.max(120, spaceBelow)}px`;
+  } else {
+    top = margin;
+    menu.style.maxHeight = `${Math.max(120, spaceAbove + r.height)}px`;
+  }
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
 }
 
 function closeOnOutside(e: MouseEvent): void {
