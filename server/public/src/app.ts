@@ -7646,14 +7646,13 @@ const WL_SUB_VIEWS = {
   tracks: 'tracksView',
 };
 
-// データベースタブのサブビュー一覧
+// データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
 const DB_SUB_VIEWS = {
   bookmarks: 'bookmarksView',
   dict: 'dictView',
   domain: 'domainView',
   workplace: 'workplaceView',
   queue: 'queueView',
-  external: 'externalView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -7687,7 +7686,6 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'queue') renderQueue();
-  if (sub === 'external') loadExternalConfig();
 }
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
@@ -8422,6 +8420,21 @@ async function loadTracks() {
       const v = $('tracksKeyRevealValue')?.textContent ?? '';
       if (v) navigator.clipboard?.writeText(v).catch(() => {});
     });
+    // 「📖 設定方法」 モーダル (旧 🔌 外部情報設定の手順を移植)
+    $('tracksHowtoBtn')?.addEventListener('click', () => {
+      const m = $('tracksHowtoModal');
+      if (m) m.hidden = false;
+    });
+    $('tracksHowtoClose')?.addEventListener('click', () => {
+      const m = $('tracksHowtoModal');
+      if (m) m.hidden = true;
+    });
+    $('tracksHowtoCloseBtn')?.addEventListener('click', () => {
+      const m = $('tracksHowtoModal');
+      if (m) m.hidden = true;
+    });
+    // 接続中 WiFi の再取得ボタン
+    $('tracksWifiRefresh')?.addEventListener('click', () => void loadTracksWifiInfo());
     document.addEventListener('visibilitychange', () => {
       // タブに戻ってきたら最新の状態に再同期 + WS 再接続
       if (document.visibilityState === 'visible' && (state.tab === 'worklog' && state.worklog?.sub === 'tracks')) {
@@ -8430,6 +8443,9 @@ async function loadTracks() {
       }
     });
   }
+  // GPS source status / WiFi info を毎回 (タブ切替で再表示するたび) 更新する。
+  loadTracksGpsStatus().catch(() => { /* swallow */ });
+  loadTracksWifiInfo().catch(() => { /* swallow */ });
 
   try {
     const [{ apiKey, hasKey }, { days }, ts] = await Promise.all([
@@ -9480,94 +9496,119 @@ const mealsState = {
   pollTimer: null,
 };
 
-// ── 外部情報設定 (Legatus 系統別ステータス + チュートリアル) ────────
-async function loadExternalConfig() {
+// ── 軌跡タブの GPS source status / WiFi info (旧 🔌 外部情報設定から移植) ─
+//
+// 旧 loadExternalConfig は location + DNS の 2 系統を出していたが、
+// DNS (Legatus dnstap) は Legatus 非依存化に伴い廃止。 location のみを
+// 軌跡タブの #tracksGpsSourceCard に描画する。
+
+async function loadTracksGpsStatus() {
   const $set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   const fmtTime = (s) => s ? new Date(s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z')).toLocaleString() : '—';
-
   try {
     const r = await api('/api/external/stats');
-
-    // 📍 位置情報 (OwnTracks)
     const loc = r.location || {};
-    $set('extCfgLocCount24h', String(loc.count_24h ?? 0));
-    $set('extCfgLocCount7d', String(loc.count_7d ?? 0));
-    $set('extCfgLocDeviceCount', String(loc.device_count ?? 0));
-    $set('extCfgLocLatest', fmtTime(loc.latest));
-    setExtCfgPill('extCfgLocationPill', loc, {
-      activeMsg: '稼働中',
-      configuredMsg: '受信待機',
-      inactiveMsg: '未受信',
-    });
-    const locHint = document.getElementById('extCfgLocationHint');
-    if (locHint) {
-      if (loc.active) locHint.textContent = '直近 24 時間に GPS 点が届いています。';
-      else if (loc.configured) locHint.textContent = 'ingest key が設定済み。 OwnTracks 側の publish 状況を確認してください。';
-      else locHint.textContent = 'ingest key 未設定 — まず「🗺 軌跡」 タブで key を生成してください。';
-    }
-
-    // 🌐 DNS / SNI tap
-    const dns = r.dns || {};
-    $set('extCfgCount24h', String(dns.count_24h ?? 0));
-    $set('extCfgCount7d', String(dns.count_7d ?? 0));
-    $set('extCfgDeviceCount', String(dns.device_count ?? 0));
-    $set('extCfgLatest', fmtTime(dns.latest));
-    setExtCfgPill('extCfgDnsPill', dns, {
-      activeMsg: '稼働中',
-      configuredMsg: '受信待機',
-      inactiveMsg: '未受信',
-    });
-    const dnsHint = document.getElementById('extCfgDnsHint');
-    if (dnsHint) {
-      if (dns.active) dnsHint.textContent = '直近 24 時間に Legatus dnstap からドメインアクセスが届いています。';
-      else if (dns.configured) dnsHint.textContent = '直近 1 週間にデータあり、 24h 内は未到達。 Legatus / dnsmasq の稼働を確認してください。';
-      else dnsHint.textContent = 'まだデータが届いていません。 下記「📖 設定方法 B」 を実施してください。';
-    }
-
-    // 直近 20 件 (DNS のみ — domain 単位なので位置情報と混ぜない)
-    const recent = document.getElementById('extCfgRecent');
-    if (recent) {
-      const items = Array.isArray(dns.recent) ? dns.recent : [];
-      if (items.length === 0) {
-        recent.innerHTML = '<div class="hint">DNS / SNI 取り込みは未受信。 下記「設定方法 B」 を実施してください。</div>';
-      } else {
-        recent.innerHTML = `
-          <h4>🌐 DNS / SNI 直近 20 件</h4>
-          <table class="ext-cfg-recent-tbl">
-            <thead><tr><th>時刻</th><th>device</th><th>OS</th><th>source</th><th>domain</th></tr></thead>
-            <tbody>
-              ${items.map((e) => `
-                <tr>
-                  <td>${escapeHtml(fmtTime(e.visited_at))}</td>
-                  <td>${escapeHtml(e.device_label || '—')}</td>
-                  <td>${escapeHtml(e.device_os || '—')}</td>
-                  <td><span class="ext-cfg-src ext-cfg-src-${escapeHtml(e.source || 'unknown')}">${escapeHtml(e.source || '—')}</span></td>
-                  <td>${escapeHtml(e.domain || '—')}</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        `;
-      }
+    $set('tracksGpsCount24h', String(loc.count_24h ?? 0));
+    $set('tracksGpsCount7d', String(loc.count_7d ?? 0));
+    $set('tracksGpsDeviceCount', String(loc.device_count ?? 0));
+    $set('tracksGpsLatest', fmtTime(loc.latest));
+    setTracksGpsPill('tracksGpsPill', loc);
+    const hint = document.getElementById('tracksGpsHint');
+    if (hint) {
+      if (loc.active) hint.textContent = '直近 24 時間に GPS 点が届いています。';
+      else if (loc.configured) hint.textContent = 'ingest key が設定済み。 OwnTracks 側の publish 状況を確認してください。';
+      else hint.textContent = 'ingest key 未設定 — 上の「🔑 key」 で生成してください。 詳しい手順は「📖 設定方法」 から。';
     }
   } catch (e) {
-    const recent = document.getElementById('extCfgRecent');
-    if (recent) recent.innerHTML = `<div class="hint">取得エラー: ${escapeHtml(e.message)}</div>`;
+    const hint = document.getElementById('tracksGpsHint');
+    if (hint) hint.textContent = `取得エラー: ${e.message}`;
   }
 }
 
-function setExtCfgPill(id, src, msg) {
+function setTracksGpsPill(id, src) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.remove('ext-cfg-pill-loading', 'ext-cfg-pill-active', 'ext-cfg-pill-configured', 'ext-cfg-pill-inactive');
   if (src.active) {
     el.classList.add('ext-cfg-pill-active');
-    el.textContent = `🟢 ${msg.activeMsg}`;
+    el.textContent = '🟢 稼働中';
   } else if (src.configured) {
     el.classList.add('ext-cfg-pill-configured');
-    el.textContent = `🟡 ${msg.configuredMsg}`;
+    el.textContent = '🟡 受信待機';
   } else {
     el.classList.add('ext-cfg-pill-inactive');
-    el.textContent = `⚪ ${msg.inactiveMsg}`;
+    el.textContent = '⚪ 未受信';
+  }
+}
+
+// ── 接続中 WiFi 情報 (Electron 限定) ─────────────────────────────────
+// window.memoria.getCurrentWifiInfo() で SSID / BSSID を取って表示。
+// さらに work_locations.wifi_ssids に登録があれば「対応作業場所」 列に出す。
+async function loadTracksWifiInfo() {
+  const card = document.getElementById('tracksWifiCard');
+  const ssidEl = document.getElementById('tracksWifiSsid');
+  const bssidEl = document.getElementById('tracksWifiBssid');
+  const matchEl = document.getElementById('tracksWifiMatch');
+  const pillEl = document.getElementById('tracksWifiPill');
+  if (!card) return;
+  const bridge = (typeof window !== 'undefined' ? (window as Loose).memoria : null);
+  if (!bridge?.getCurrentWifiInfo) {
+    // ブラウザ単体: カードごと非表示
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  if (pillEl) {
+    pillEl.classList.remove('ext-cfg-pill-loading', 'ext-cfg-pill-active', 'ext-cfg-pill-configured', 'ext-cfg-pill-inactive');
+    pillEl.classList.add('ext-cfg-pill-loading');
+    pillEl.textContent = '取得中…';
+  }
+  try {
+    const info = await bridge.getCurrentWifiInfo();
+    if (!info?.ssid) {
+      if (ssidEl) ssidEl.textContent = '(未接続 / 取得失敗)';
+      if (bssidEl) bssidEl.textContent = '—';
+      if (matchEl) matchEl.textContent = '—';
+      if (pillEl) {
+        pillEl.classList.remove('ext-cfg-pill-loading');
+        pillEl.classList.add('ext-cfg-pill-inactive');
+        pillEl.textContent = '⚪ 未接続';
+      }
+      return;
+    }
+    if (ssidEl) ssidEl.textContent = info.ssid;
+    if (bssidEl) bssidEl.textContent = info.bssid || '—';
+    // work_locations.wifi_ssids との照合
+    let matchName: string | null = null;
+    try {
+      const r = await api('/api/work-locations?limit=500');
+      const all = r.items as Array<{ id: number; name: string; wifi_ssids?: string | null }>;
+      const norm = info.ssid.toLowerCase();
+      const hit = all.find((w) => {
+        const list = (w.wifi_ssids ?? '').split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+        return list.includes(norm);
+      });
+      matchName = hit?.name ?? null;
+    } catch { /* swallow */ }
+    if (matchEl) matchEl.textContent = matchName ?? '(未登録 — 設定 → 作業場所 から紐付け可)';
+    if (pillEl) {
+      pillEl.classList.remove('ext-cfg-pill-loading');
+      if (matchName) {
+        pillEl.classList.add('ext-cfg-pill-active');
+        pillEl.textContent = '🟢 マッチ済';
+      } else {
+        pillEl.classList.add('ext-cfg-pill-configured');
+        pillEl.textContent = '🟡 未登録';
+      }
+    }
+  } catch (e) {
+    if (ssidEl) ssidEl.textContent = '(取得エラー)';
+    if (pillEl) {
+      pillEl.classList.remove('ext-cfg-pill-loading');
+      pillEl.classList.add('ext-cfg-pill-inactive');
+      pillEl.textContent = '⚪ 取得失敗';
+    }
+    console.debug('[tracks-wifi] failed:', (e as Error).message);
   }
 }
 
