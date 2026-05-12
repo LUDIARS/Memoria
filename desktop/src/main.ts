@@ -29,10 +29,13 @@
 //                          OS login auto-start integration.
 
 import { app, BrowserWindow, shell, Menu, Tray, nativeImage, ipcMain } from 'electron';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+
+const execFileP = promisify(execFile);
 
 // ── single instance ───────────────────────────────────────────────────────
 // Only one Memoria desktop at a time per user — the second launch focuses
@@ -363,6 +366,91 @@ function getAutoLaunch(): boolean {
   return app.getLoginItemSettings().openAtLogin;
 }
 
+// ── WiFi info (Electron 起動時の SSID matching 用) ─────────────────────────
+//
+// renderer (Memoria web UI) からは `window.memoria.getCurrentWifiInfo()` で
+// 呼ばれる。 接続中の WiFi SSID と BSSID を返す。 取れなければ null。
+//
+// 各 OS で native CLI を叩く:
+//   Windows : `netsh wlan show interfaces` の "SSID" / "BSSID" 行をパース
+//   macOS   : `networksetup -getairportnetwork en0` (SSID のみ取れる)
+//             modern macOS は `airport -I` も使えるが path がバージョン依存
+//   Linux   : `iwgetid -r` (SSID) と `iwgetid -ar` (BSSID)、 無ければ nmcli
+//
+// すべて読み取り専用コマンド (= 状態を変えない)。 失敗時は null。
+export interface WifiInfo { ssid: string | null; bssid: string | null; platform: string }
+
+async function getCurrentWifiInfo(): Promise<WifiInfo | null> {
+  const platform = process.platform;
+  try {
+    if (platform === 'win32') return await wifiInfoWindows();
+    if (platform === 'darwin') return await wifiInfoMac();
+    if (platform === 'linux') return await wifiInfoLinux();
+  } catch (err) {
+    console.warn('[wifi-info] failed:', (err as Error).message);
+  }
+  return null;
+}
+
+async function wifiInfoWindows(): Promise<WifiInfo | null> {
+  // chcp 65001 → UTF-8。 日本語版 Windows の cp932 出力で正規表現が壊れるのを回避
+  const r = await execFileP('netsh', ['wlan', 'show', 'interfaces'], { encoding: 'utf8', windowsHide: true });
+  const out = r.stdout || '';
+  // 日本語版 ("SSID" → "プロファイル" や "SSID" のまま) 両方を拾えるよう、
+  // ": <value>" の前に行頭の半角 / 全角空白を許容する正規表現で取る。
+  // BSSID と SSID の判別は順序で行う (BSSID は SSID の直後に出る)。
+  const lines = out.split(/\r?\n/);
+  let ssid: string | null = null;
+  let bssid: string | null = null;
+  for (const line of lines) {
+    const m = /^\s*(?:SSID|BSSID)\b[^\:]*:\s*(.+?)\s*$/.exec(line);
+    if (!m) continue;
+    // BSSID 行は前置に「BSSID」 を含む。 SSID 行のみ純粋な「SSID」 で始まる。
+    if (/^\s*BSSID/.test(line) && !bssid) bssid = m[1] ?? null;
+    else if (/^\s*SSID/.test(line) && !ssid) ssid = m[1] ?? null;
+    if (ssid && bssid) break;
+  }
+  return ssid || bssid ? { ssid, bssid, platform: 'win32' } : null;
+}
+
+async function wifiInfoMac(): Promise<WifiInfo | null> {
+  // networksetup は信頼性が高い (sudo 不要)。 SSID のみ。 BSSID は別経路 (airport -I)
+  // で取れるが、 macOS Sonoma 以降は restricted のためベストエフォート。
+  try {
+    const r = await execFileP('networksetup', ['-getairportnetwork', 'en0'], { encoding: 'utf8' });
+    const m = /Current Wi-Fi Network:\s*(.+?)\s*$/m.exec(r.stdout || '');
+    const ssid = m?.[1] ?? null;
+    let bssid: string | null = null;
+    try {
+      const apt = await execFileP('/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport', ['-I'], { encoding: 'utf8' });
+      const b = /\bBSSID:\s*([0-9a-f:]+)\s*$/im.exec(apt.stdout || '');
+      bssid = b?.[1] ?? null;
+    } catch { /* airport restricted on newer macOS */ }
+    return ssid ? { ssid, bssid, platform: 'darwin' } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function wifiInfoLinux(): Promise<WifiInfo | null> {
+  // iwgetid: -r で SSID 単独、 -ar で BSSID 単独。 net-tools / wireless-tools 系。
+  let ssid: string | null = null;
+  let bssid: string | null = null;
+  try { const r = await execFileP('iwgetid', ['-r'], { encoding: 'utf8' }); ssid = r.stdout.trim() || null; } catch { /* try nmcli */ }
+  try { const r = await execFileP('iwgetid', ['-ar'], { encoding: 'utf8' }); bssid = r.stdout.trim() || null; } catch { /* skip */ }
+  if (!ssid) {
+    try {
+      const r = await execFileP('nmcli', ['-t', '-f', 'active,ssid,bssid', 'dev', 'wifi'], { encoding: 'utf8' });
+      for (const line of (r.stdout || '').split(/\r?\n/)) {
+        // nmcli の bssid フィールド内 ':' は '\\:' で escape されているので強引に分解
+        const parts = line.split(/(?<!\\):/).map((s) => s.replace(/\\:/g, ':'));
+        if (parts[0] === 'yes') { ssid = parts[1] || ssid; bssid = parts[2] || bssid; break; }
+      }
+    } catch { /* nmcli 不在 */ }
+  }
+  return ssid || bssid ? { ssid, bssid, platform: 'linux' } : null;
+}
+
 // ── IPC bridge (preload talks to us via these channels) ───────────────────
 
 ipcMain.handle('memoria:get-auto-launch', () => getAutoLaunch());
@@ -371,6 +459,7 @@ ipcMain.handle('memoria:set-auto-launch', (_event, enabled: unknown) => {
   return getAutoLaunch();
 });
 ipcMain.handle('memoria:get-server-port', () => serverPort);
+ipcMain.handle('memoria:get-wifi-info', () => getCurrentWifiInfo());
 ipcMain.handle('memoria:quit', () => {
   isQuitting = true;
   app.quit();

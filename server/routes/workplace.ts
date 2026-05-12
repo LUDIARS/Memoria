@@ -46,7 +46,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
   r.post('/api/work-locations', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as
       { name?: unknown; address?: unknown; latitude?: unknown; longitude?: unknown;
-        description?: unknown; url?: unknown; tags?: unknown; shareable?: unknown };
+        description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown; shareable?: unknown };
     const name = String(body.name ?? '').trim();
     if (!name) return c.json({ error: 'name required' }, 400);
     const id = insertWorkLocation(db, {
@@ -57,6 +57,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
       description: typeof body.description === 'string' ? body.description.trim() : null,
       url: typeof body.url === 'string' ? body.url.trim() : null,
       tags: typeof body.tags === 'string' ? body.tags.trim() : null,
+      wifi_ssids: typeof body.wifi_ssids === 'string' ? body.wifi_ssids.trim() : null,
       shareable: !!body.shareable,
     });
     return c.json({ location: getWorkLocation(db, id) }, 201);
@@ -67,7 +68,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     if (!getWorkLocation(db, id)) return c.json({ error: 'not found' }, 404);
     const body = await c.req.json().catch(() => ({})) as
       { name?: unknown; address?: unknown; latitude?: unknown; longitude?: unknown;
-        description?: unknown; url?: unknown; tags?: unknown; shareable?: unknown };
+        description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown; shareable?: unknown };
     const patch: Record<string, unknown> = {};
     if (typeof body.name === 'string') patch.name = body.name.trim();
     if (typeof body.address === 'string' || body.address === null) patch.address = body.address;
@@ -80,6 +81,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     if (typeof body.description === 'string' || body.description === null) patch.description = body.description;
     if (typeof body.url === 'string' || body.url === null) patch.url = body.url;
     if (typeof body.tags === 'string' || body.tags === null) patch.tags = body.tags;
+    if (typeof body.wifi_ssids === 'string' || body.wifi_ssids === null) patch.wifi_ssids = body.wifi_ssids;
     if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
     updateWorkLocation(db, id, patch);
     return c.json({ location: getWorkLocation(db, id) });
@@ -237,6 +239,76 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
           }
         } catch (e: unknown) {
           console.error('[workplace/checkin] leave broadcast failed', e);
+        }
+      }
+    }
+    return c.json(result);
+  });
+
+  // ── WiFi SSID 経由のチェックイン (Electron 起動時に呼ばれる) ─────────────
+  //
+  // GPS / 位置情報 permission を経由せず、 接続中の WiFi 名 (SSID) から「ここに
+  // 居る」 を判定する経路。 work_locations.wifi_ssids (カンマ区切り) に該当 SSID
+  // が登録されていれば、 そのワークプレイスを current として扱う。
+  //
+  // 「Electron 起動時のみ」 = renderer 側で window.memoria.getCurrentWifiInfo()
+  // が使える状況でのみ呼ばれる、 という運用 (= サーバ側は呼ばれたら処理する)。
+  r.post('/api/work-locations/wifi-checkin', async (c: Context) => {
+    const body = await c.req.json().catch(() => ({})) as { ssid?: unknown; bssid?: unknown };
+    const ssid = typeof body.ssid === 'string' ? body.ssid.trim() : '';
+    if (!ssid) return c.json({ error: 'ssid required' }, 400);
+    const settings = privacySettings(db);
+    if (!settings.workplace_geo_enabled) {
+      return c.json({ error: 'workplace_geo disabled' }, 403);
+    }
+
+    // SSID は大文字小文字を区別しない。 wifi_ssids はカンマ区切り。
+    const norm = ssid.toLowerCase();
+    const all = listWorkLocations(db, { limit: 500 });
+    const matched = all.find((w) => {
+      const list = (w.wifi_ssids ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+      return list.includes(norm);
+    }) ?? null;
+
+    const appS = getAppSettings(db);
+    const lastId = appS['workplace.current.id'] ? Number(appS['workplace.current.id']) : null;
+    const now = new Date().toISOString();
+    const result: {
+      matched: boolean;
+      workplace: typeof all[number] | null;
+      ssid: string;
+      changed: boolean;
+      broadcast: { ok: boolean; id?: number; occurred_at?: string; error?: string; kind?: string } | null;
+    } = { matched: !!matched, workplace: matched, ssid, changed: false, broadcast: null };
+
+    if (matched) {
+      if (lastId !== matched.id) {
+        result.changed = true;
+        setAppSettings(db, {
+          'workplace.current.id': String(matched.id),
+          'workplace.current.at': now,
+          // どの経路で current になったかを記録 (debug / UI 用)
+          'workplace.current.source': `wifi:${ssid}`,
+        });
+        if (settings.workplace_auto_share_enabled) {
+          try {
+            const state = readMultiState(db);
+            if (isConnected(state)) {
+              const r2 = await shareWorkplacePresence(state, {
+                workplace_name: matched.name,
+                address: matched.address,
+                latitude: matched.latitude,
+                longitude: matched.longitude,
+                kind: 'enter',
+              });
+              result.broadcast = { ok: true, id: r2.id, occurred_at: r2.occurred_at };
+            } else {
+              result.broadcast = { ok: false, error: 'not_connected' };
+            }
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            result.broadcast = { ok: false, error: msg };
+          }
         }
       }
     }

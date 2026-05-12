@@ -5455,6 +5455,15 @@ let ensureMemoriaFeatureViews = function () {
             <input id="workplaceEditorTags" type="text" placeholder="wifi, 電源, 静か" />
           </label>
           <label class="simple-field">
+            <span>WiFi SSID (カンマ区切り)</span>
+            <input id="workplaceEditorWifiSsids" type="text" placeholder="例: MyHomeWifi, MyHomeWifi-5G" />
+            <small class="muted">Memoria デスクトップ版がこの SSID に接続中だと、 GPS を使わずにこの場所にチェックインします。</small>
+          </label>
+          <div id="workplaceEditorWifiCurrent" class="simple-actions" hidden style="justify-content:flex-start">
+            <button type="button" class="ghost" id="workplaceEditorWifiCurrentBtn">📶 現在の WiFi を追加</button>
+            <span id="workplaceEditorWifiCurrentStatus" class="muted" style="font-size:11px"></span>
+          </div>
+          <label class="simple-field">
             <span>説明 / メモ</span>
             <textarea id="workplaceEditorDescription" rows="6" placeholder="営業時間・wifi・電源・席数・雰囲気など"></textarea>
           </label>
@@ -6431,8 +6440,13 @@ function openWorkplaceEditor(w = null) {
   $('workplaceEditorLng').value = w?.longitude == null ? '' : w.longitude;
   $('workplaceEditorUrl').value = w?.url || '';
   $('workplaceEditorTags').value = w?.tags || '';
+  if ($('workplaceEditorWifiSsids')) $('workplaceEditorWifiSsids').value = w?.wifi_ssids || '';
   $('workplaceEditorDescription').value = w?.description || '';
   $('workplaceEditorShareable').checked = !!w?.shareable;
+  // Electron 配下のみ「現在の WiFi を追加」 ボタンを出す。 ブラウザ単体では
+  // SSID を取れない (= window.memoria は preload bridge 経由でのみ存在)。
+  const wifiRow = $('workplaceEditorWifiCurrent');
+  if (wifiRow) wifiRow.hidden = !(typeof window !== 'undefined' && (window as Loose).memoria?.getCurrentWifiInfo);
   showModal('workplaceEditorModal');
   $('workplaceEditorName').focus();
 }
@@ -6900,6 +6914,36 @@ async function workplaceCheckinNow() {
   }
 }
 
+// 「📶 現在の WiFi を追加」 ボタン (Electron 限定)。 接続中の SSID を取って
+// editor の wifi_ssids フィールドに append (重複 SSID は無視)。
+async function appendCurrentWifiToEditor() {
+  const inp = $('workplaceEditorWifiSsids') as HTMLInputElement | null;
+  const status = $('workplaceEditorWifiCurrentStatus');
+  const bridge = (typeof window !== 'undefined' ? (window as Loose).memoria : null);
+  if (!inp || !bridge?.getCurrentWifiInfo) {
+    if (status) status.textContent = 'デスクトップ版でのみ利用できます';
+    return;
+  }
+  if (status) status.textContent = '取得中…';
+  try {
+    const info = await bridge.getCurrentWifiInfo();
+    if (!info?.ssid) {
+      if (status) status.textContent = '接続中の WiFi が見つかりませんでした';
+      return;
+    }
+    const existing = (inp.value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+    if (existing.some((s: string) => s.toLowerCase() === info.ssid.toLowerCase())) {
+      if (status) status.textContent = `✓ "${info.ssid}" は既に登録済み`;
+      return;
+    }
+    existing.push(info.ssid);
+    inp.value = existing.join(', ');
+    if (status) status.textContent = `✓ "${info.ssid}" を追加`;
+  } catch (e) {
+    if (status) status.textContent = `失敗: ${(e as Error).message}`;
+  }
+}
+
 async function saveWorkLocationFromForm() {
   const name = $('workplaceEditorName')?.value.trim();
   if (!name) { alert('名前を入力してください'); return; }
@@ -6913,6 +6957,7 @@ async function saveWorkLocationFromForm() {
     longitude: lngStr === '' || lngStr == null ? null : Number(lngStr),
     url: $('workplaceEditorUrl')?.value.trim() || null,
     tags: $('workplaceEditorTags')?.value.trim() || null,
+    wifi_ssids: $('workplaceEditorWifiSsids')?.value.trim() || null,
     description: $('workplaceEditorDescription')?.value.trim() || null,
     shareable: !!$('workplaceEditorShareable')?.checked,
   };
@@ -7466,6 +7511,7 @@ ensureMemoriaFeatureViews = function () {
   if ($('workplaceEditorGpsBtn')) $('workplaceEditorGpsBtn').onclick = fillEditorFromCurrentLocation;
   if ($('workplaceFromGpsBtn')) $('workplaceFromGpsBtn').onclick = openEditorFromCurrentGps;
   if ($('workplaceCheckinBtn')) $('workplaceCheckinBtn').onclick = workplaceCheckinNow;
+  if ($('workplaceEditorWifiCurrentBtn')) $('workplaceEditorWifiCurrentBtn').onclick = appendCurrentWifiToEditor;
   document.querySelectorAll('#tasksMenu [data-task-menu]').forEach((btn) => {
     btn.onclick = () => {
       state.taskMenu = btn.dataset.taskMenu;
@@ -7535,6 +7581,32 @@ window.addEventListener('resize', decorateTaskAndImplTabs);
 
 ensureMemoriaFeatureViews();
 loadPrivacySettings().catch(console.warn);
+
+// Electron 起動時 SSID チェックイン: window.memoria が居る (= デスクトップアプリ) かつ
+// getCurrentWifiInfo が exposed されていれば、 接続中の SSID で work-locations の
+// wifi_ssids match を試みる。 ブラウザ単体では window.memoria が存在しないので
+// 静かに skip される (= ブラウザ単体時の挙動は無変化)。
+// permission ダイアログは一切出ない (ブラウザ位置情報 API を使わないので)。
+(async () => {
+  const bridge = (typeof window !== 'undefined' ? (window as Loose).memoria : null);
+  if (!bridge?.getCurrentWifiInfo) return;
+  try {
+    const info = await bridge.getCurrentWifiInfo();
+    if (!info?.ssid) return;
+    const r = await api('/api/work-locations/wifi-checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid: info.ssid, bssid: info.bssid }),
+    });
+    if (r?.matched && r.workplace) {
+      console.info(`[wifi-checkin] matched "${info.ssid}" → ${r.workplace.name}${r.changed ? ' (新規 enter)' : ''}`);
+      const banner = $('workplaceCurrentBanner');
+      if (banner) banner.textContent = `📍 ${r.workplace.name} (WiFi: ${info.ssid})`;
+    }
+  } catch (e) {
+    console.debug('[wifi-checkin] skipped:', (e as Error).message);
+  }
+})();
 
 // ── Worklog tab (作業ログ) ─────────────────────────────────────────────
 //
