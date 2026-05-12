@@ -651,6 +651,7 @@
           <button class="wl-subtab" data-sub="dig">🔎 ディグ</button>
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
           <button class="wl-subtab" data-sub="activity">💻 アプリ</button>
+          <button class="wl-subtab" data-sub="games">🎮 ゲーム</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">
@@ -749,6 +750,18 @@
               </div>
             </div>
           </div>
+          <!-- 仕事時間サマリ (applications.kind='work' な samples の合計) -->
+          <div class="wl-activity-summary" id="wlActivityWorkSummary"></div>
+        </section>
+
+        <!-- 🎮 ゲームログ — Steam スナップショット + applications.kind='game' な samples の混合タイムライン -->
+        <section id="wlGamesView" class="wl-sub hidden">
+          <div class="wl-activity-disabled hidden" id="wlGamesDisabled">
+            <p>🎮 ゲームログには「Steam プレイ統計」 か「PC アプリ使用統計 + applications.kind='game'」 のどちらかが必要です。 <strong>設定 → 🚦 AI 自動処理</strong> で有効化してください。</p>
+          </div>
+          <div class="wl-summary-row" id="wlGamesSummary"></div>
+          <ul id="wlGamesList" class="wl-list"></ul>
+          <div id="wlGamesEmpty" class="queue-empty hidden">この日のゲームログはありません。</div>
         </section>
       </div>
 

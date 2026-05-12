@@ -172,7 +172,7 @@ app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
   onMcpAutostartChange: (enabled) => mcp.sync(enabled),
-  onActivitySettingsChange: () => configureActivitySamplers(db),
+  onActivitySettingsChange: () => configureActivitySamplers(db, { maybeQueueApplication: queues.maybeQueueApplication }),
   summaryQueue: queues.summaryQueue,
   cloudQueue: queues.cloudQueue,
   digQueue: queues.digQueue,
@@ -286,7 +286,7 @@ startSchedulers({
 
 // ── activity samplers (PC アプリ + Steam) ─────────────────────────────────
 // feature flag が OFF なら no-op (起動時 + 設定変更時に再構成)
-configureActivitySamplers(db);
+configureActivitySamplers(db, { maybeQueueApplication: queues.maybeQueueApplication });
 
 // ---- in-process MQTT subscriber (任意) ----------------------------------
 //

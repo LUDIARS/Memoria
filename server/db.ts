@@ -16,6 +16,7 @@ import type { DictionaryEntryRow, DictionaryLinkRow } from './db/types/dictionar
 import type { WordCloudRow } from './db/types/wordcloud.js';
 import type { PageVisitRow, VisitEventRow } from './db/types/visit.js';
 import type { PageMetadataRow, DomainCatalogRow } from './db/types/page.js';
+import type { ApplicationRow } from './db/types/application.js';
 import type { ServerEventRow, ActivityEventRow, ActivityKind } from './db/types/activity.js';
 import type { PushSubscriptionRow } from './db/types/push.js';
 import type { ExternalChatMessageRow } from './db/types/chat.js';
@@ -356,6 +357,30 @@ export function openDb(dbPath: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_app_samples_at ON app_samples(sampled_at DESC);
     CREATE INDEX IF NOT EXISTS idx_app_samples_proc_at ON app_samples(process_name, sampled_at);
+
+    -- applications: process_name 単位で「何のアプリか」 を AI 分類するカタログ。
+    -- domain_catalog と同じパターン。
+    -- kind は以下のいずれか (UI 側 enum):
+    --   game     — ゲーム (= 🎮 ゲームタブに集計、 「仕事時間」 にはカウントしない)
+    --   work     — 仕事系 (= IDE / オフィスツール / ターミナル等、 仕事時間にカウント)
+    --   browser  — ブラウザ (= Chrome / Edge 等)
+    --   messaging— Discord / Slack / Teams 等
+    --   media    — 動画 / 音楽プレイヤー
+    --   creative — Photoshop / Blender / DAW 等
+    --   other    — 上記に当てはまらない
+    CREATE TABLE IF NOT EXISTS applications (
+      process_name  TEXT PRIMARY KEY,
+      name          TEXT,
+      kind          TEXT,
+      description   TEXT,
+      icon_url      TEXT,
+      user_edited   INTEGER NOT NULL DEFAULT 0,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      error         TEXT,
+      classified_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_applications_kind ON applications(kind);
+    CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 
     -- Steam recently-played スナップショット。 1 時間おきに Web API で取得して
     -- 各 game 行を 1 つ insert。 集計 (今日の Steam プレイ時間) は同じ appid の
@@ -1939,6 +1964,93 @@ export function listDomainCatalogWithCounts(db: Db, { limit = 500, search }: { l
 
 export function deleteDomainCatalog(db: Db, domain: string): void {
   db.prepare(`DELETE FROM domain_catalog WHERE domain = ?`).run(domain);
+}
+
+// ── applications (exe classification) ------------------------------------
+
+export function getApplication(db: Db, processName: string): ApplicationRow | null {
+  return (db.prepare(`SELECT * FROM applications WHERE process_name = ?`).get(processName) as ApplicationRow | undefined) ?? null;
+}
+
+export function listApplications(db: Db, { limit = 500 }: { limit?: number } = {}): ApplicationRow[] {
+  return db.prepare(`
+    SELECT * FROM applications
+    ORDER BY (status = 'done') DESC, classified_at DESC, process_name ASC
+    LIMIT ?
+  `).all(limit) as ApplicationRow[];
+}
+
+export function listApplicationsByKind(db: Db, kind: string): ApplicationRow[] {
+  return db.prepare(`
+    SELECT * FROM applications WHERE kind = ? AND status = 'done'
+  `).all(kind) as ApplicationRow[];
+}
+
+/** bulk fetch — process_name 集合 → row map */
+export function getApplicationsMap(db: Db, processNames: string[]): Map<string, ApplicationRow> {
+  if (!processNames.length) return new Map();
+  const placeholders = processNames.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM applications WHERE process_name IN (${placeholders})`).all(...processNames) as ApplicationRow[];
+  return new Map(rows.map(r => [r.process_name, r]));
+}
+
+export function insertApplicationPending(db: Db, processName: string): void {
+  db.prepare(`INSERT OR IGNORE INTO applications (process_name, status) VALUES (?, 'pending')`).run(processName);
+}
+
+export interface ApplicationPatch {
+  name?: string | null;
+  kind?: string | null;
+  description?: string | null;
+  icon_url?: string | null;
+  status?: string | null;
+  error?: string | null;
+}
+
+export function setApplication(db: Db, processName: string, patch: ApplicationPatch): void {
+  // user_edited=1 のとき AI 分類は値を上書きしない (domain_catalog と同じ)。
+  db.prepare(`
+    UPDATE applications
+       SET name = CASE WHEN user_edited = 1 THEN name ELSE COALESCE(?, name) END,
+           kind = CASE WHEN user_edited = 1 THEN kind ELSE COALESCE(?, kind) END,
+           description = CASE WHEN user_edited = 1 THEN description ELSE COALESCE(?, description) END,
+           icon_url = COALESCE(?, icon_url),
+           status = COALESCE(?, status),
+           error = ?,
+           classified_at = datetime('now')
+     WHERE process_name = ?
+  `).run(
+    patch.name ?? null,
+    patch.kind ?? null,
+    patch.description ?? null,
+    patch.icon_url ?? null,
+    patch.status ?? null,
+    patch.error ?? null,
+    processName,
+  );
+}
+
+export interface ApplicationUserPatch {
+  name?: string | null;
+  kind?: string | null;
+  description?: string | null;
+}
+
+export function updateApplicationUser(db: Db, processName: string, patch: ApplicationUserPatch): void {
+  db.prepare(`
+    UPDATE applications
+       SET name = COALESCE(?, name),
+           kind = COALESCE(?, kind),
+           description = COALESCE(?, description),
+           user_edited = 1,
+           status = 'done',
+           classified_at = datetime('now')
+     WHERE process_name = ?
+  `).run(patch.name ?? null, patch.kind ?? null, patch.description ?? null, processName);
+}
+
+export function deleteApplication(db: Db, processName: string): void {
+  db.prepare(`DELETE FROM applications WHERE process_name = ?`).run(processName);
 }
 
 // ── server events (uptime / downtime / lifecycle) -------------------------
