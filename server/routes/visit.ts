@@ -21,6 +21,7 @@ import {
   listServerEvents, listServerEventsForDate,
 } from '../db.js';
 import { shouldSkipDomain } from '../domain-catalog.js';
+import { featureEnabled } from '../lib/privacy.js';
 import {
   recommendationsFor, dismissRecommendation, clearDismissals,
 } from '../recommendations.js';
@@ -230,8 +231,10 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     upsertVisit(db, { url: body.url, title });
     insertVisitEvent(db, { url: body.url, title });
     // Lazily classify the domain in the background (skip for localhost, dedup
-    // via domain_catalog rows).
-    maybeQueueDomain(body.url);
+    // via domain_catalog rows). `features.domain_catalog.auto_classify` で OFF にできる。
+    if (featureEnabled(db, 'domain_catalog_auto_classify')) {
+      maybeQueueDomain(body.url);
+    }
 
     // If this URL is already bookmarked, also bump its bookmark access counter.
     const b = findBookmarkByUrl(db, body.url);
@@ -250,9 +253,13 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     const catalog = getDomainCatalogMap(db, domains);
     const pageMap = getPageMetadataMap(db, urls);
 
-    // Lazy-fetch any URL that doesn't have metadata yet.
-    for (const url of urls) {
-      if (!pageMap.has(url)) maybeQueuePageMetadata(url);
+    // Lazy-fetch any URL that doesn't have metadata yet。
+    // `features.page_metadata.auto_fetch` で OFF にできる (= 訪問は記録するが
+    // LLM での kind 推論・要約は走らない)。
+    if (featureEnabled(db, 'page_metadata_auto_fetch')) {
+      for (const url of urls) {
+        if (!pageMap.has(url)) maybeQueuePageMetadata(url);
+      }
     }
 
     return c.json({
@@ -441,7 +448,10 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
       });
       // 既知の domain_catalog があれば description を埋める。 maybeQueueDomain
       // は内部で skipDomain (localhost / 内部 IP) を弾いてくれる。
-      maybeQueueDomain(`https://${domain}/`);
+      // `features.domain_catalog.auto_classify` で OFF にできる。
+      if (featureEnabled(db, 'domain_catalog_auto_classify')) {
+        maybeQueueDomain(`https://${domain}/`);
+      }
       inserted++;
     }
     return c.json({ ok: true, inserted, skipped });

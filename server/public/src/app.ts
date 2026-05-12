@@ -158,6 +158,11 @@ declare global {
 // switchTab('notes') で loadNotes() を呼ぶ。
 import { loadNotes as notesLoad } from './notes/index.js';
 
+// 起動チュートリアル / ページヘルプ drawer。 app.ts 肥大化対策で分離。
+// PAGE_HELP の本文を増やす場合は page-help.ts を編集する。
+import { initTutorial } from './tutorial.js';
+import { initHelpDrawer, openHelpFor } from './help-drawer.js';
+
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
 // `as Loose[]` `as string` などに cast する。
@@ -4797,6 +4802,11 @@ async function openAiSettings() {
         <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
       `;
     }
+    // privacy / feature flags (Legatus 連携 ON/OFF, tracks/meals 可視化 etc.) を
+    // ここで一括ロードしておく。 API タブには Legatus 連携トグルが、 privacy タブには
+    // tracks/meals/tasks reminder 等のトグルが入っており、 どちらを先に開いても
+    // 一度ロード済みの状態にする。
+    loadPrivacySettings().catch((e) => console.warn('privacy settings load:', e));
     // Google Maps API key の現在値ステータス (実値はブラウザに渡さない方針 — masked)
     if ($('mapsApiKey')) {
       try {
@@ -5216,6 +5226,44 @@ document.addEventListener('click', (ev) => {
 document.getElementById('aiSettingsBtn')?.addEventListener('click', openAiSettings);
 document.getElementById('aiSettingsClose')?.addEventListener('click', () => $('aiSettingsPanel').classList.add('hidden'));
 document.getElementById('aiSettingsSave')?.addEventListener('click', saveAiSettings);
+// Legatus 連携 ON/OFF を保存ボタンを待たずに即時反映 (バッジ / 詳細ボックスの出し入れ)。
+// 設定値の永続化自体は保存ボタンで /api/privacy/settings に PATCH される。
+document.getElementById('aiLegatusEnabled')?.addEventListener('change', (e) => {
+  applyLegatusEnabled(!!(e.target as HTMLInputElement).checked);
+});
+// 🔧 gcloud から自動取得 (Google Maps API key)
+document.getElementById('mapsApiKeyAutoBtn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('mapsApiKeyAutoBtn') as HTMLButtonElement | null;
+  const status = document.getElementById('mapsApiKeyAutoStatus');
+  const input = document.getElementById('mapsApiKey') as HTMLInputElement | null;
+  if (!btn || !status) return;
+  btn.disabled = true;
+  status.textContent = 'gcloud から取得中…';
+  try {
+    const r = await api('/api/maps/config/auto-fetch', { method: 'POST' });
+    if (r?.ok && r.apiKey) {
+      if (input) input.value = r.apiKey;
+      status.textContent = `✓ ${r.picked || 'API key'} を取得・保存しました (project: ${r.project})`;
+      const ks = document.getElementById('mapsApiKeyStatus');
+      if (ks) ks.textContent = '✓ API key 設定済み (gcloud 自動取得)';
+    } else {
+      const reasonHint: Record<string, string> = {
+        not_installed: 'gcloud CLI が PATH に見つかりません',
+        not_authenticated: '`gcloud auth login` で認証が必要です',
+        no_project: '`gcloud config set project <PROJECT_ID>` で active project を設定してください',
+        no_keys: 'project に Maps API key がありません。Cloud Console で発行してください',
+        no_string: 'keyString の取得に失敗 (権限不足の可能性)',
+        exec_failed: 'gcloud 実行に失敗しました',
+      };
+      const reason = (r && typeof r.reason === 'string') ? r.reason : 'unknown';
+      status.textContent = `⚠ ${reasonHint[reason] || reason}: ${r?.error || ''}`;
+    }
+  } catch (e) {
+    status.textContent = `⚠ 取得失敗: ${(e as Error).message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
 document.getElementById('pushSubscribeBtn')?.addEventListener('click', () => pushSubscribeFlow().catch(e => setPushStatus(e.message, true)));
 document.getElementById('pushTestBtn')?.addEventListener('click', () => pushTestSend().catch(e => setPushStatus(e.message, true)));
 document.getElementById('multiAddBtn')?.addEventListener('click', multiAddServer);
@@ -5226,6 +5274,15 @@ document.getElementById('digShareBtn')?.addEventListener('click', shareCurrentDi
 // Pull JWT out of OAuth redirect on first paint, then prime the share buttons.
 multiFinishFromUrl();
 refreshMultiStatus();
+
+// Legatus 連携の初期 ON/OFF を取得し、 watcher / 右上バッジを早期に整える。
+// 設定 OFF (default) なら watcher は WS を張らないし、 バッジも hidden のまま。
+(async () => {
+  try {
+    const r = await api('/api/privacy/settings');
+    applyLegatusEnabled(!!r?.settings?.legatus_enabled);
+  } catch (_e) { /* settings 取得失敗時は OFF 扱い */ }
+})();
 
 // ── Events / uptime ────────────────────────────────────────────────────
 async function loadEvents() {
@@ -5728,6 +5785,14 @@ async function loadPrivacySettings() {
   if ($('workplaceGeoEnabled')) $('workplaceGeoEnabled').checked = !!s.workplace_geo_enabled;
   if ($('workplaceAutoShareEnabled')) $('workplaceAutoShareEnabled').checked = !!s.workplace_auto_share_enabled;
   if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 50;
+  if ($('aiLegatusEnabled')) $('aiLegatusEnabled').checked = !!s.legatus_enabled;
+  applyLegatusEnabled(!!s.legatus_enabled);
+  // AI 自動処理 opt-out 群
+  if ($('aiAutoBookmarkSummarize')) $('aiAutoBookmarkSummarize').checked = s.bookmarks_auto_summarize !== false;
+  if ($('aiAutoPageMetadata')) $('aiAutoPageMetadata').checked = s.page_metadata_auto_fetch !== false;
+  if ($('aiAutoDomainClassify')) $('aiAutoDomainClassify').checked = s.domain_catalog_auto_classify !== false;
+  if ($('aiAutoMealVision')) $('aiAutoMealVision').checked = s.meals_auto_vision !== false;
+  if ($('aiAutoDiaryGenerate')) $('aiAutoDiaryGenerate').checked = s.diary_auto_generate !== false;
   configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
@@ -5756,6 +5821,12 @@ async function savePrivacySettings() {
       workplace_geo_enabled: !!($('workplaceGeoEnabled')?.checked),
       workplace_auto_share_enabled: !!($('workplaceAutoShareEnabled')?.checked),
       workplace_match_radius_m: Number($('workplaceMatchRadiusM')?.value ?? 150),
+      legatus_enabled: !!($('aiLegatusEnabled')?.checked),
+      bookmarks_auto_summarize: !!($('aiAutoBookmarkSummarize')?.checked),
+      page_metadata_auto_fetch: !!($('aiAutoPageMetadata')?.checked),
+      domain_catalog_auto_classify: !!($('aiAutoDomainClassify')?.checked),
+      meals_auto_vision: !!($('aiAutoMealVision')?.checked),
+      diary_auto_generate: !!($('aiAutoDiaryGenerate')?.checked),
     }),
   });
   const s = r.settings || {};
@@ -5763,7 +5834,16 @@ async function savePrivacySettings() {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
   }
   configureWorkplaceCheckin(!!s.workplace_geo_enabled);
+  applyLegatusEnabled(!!s.legatus_enabled);
   applyFeatureVisibility(s);
+}
+
+function applyLegatusEnabled(on) {
+  const box = document.getElementById('legatusStatusBox');
+  if (box) box.classList.toggle('hidden', !on);
+  const badge = document.getElementById('legatusBadge');
+  if (badge && !on) badge.hidden = true;
+  window.legatusWatcher?.setEnabled?.(!!on);
 }
 
 function applyFeatureVisibility(s) {
@@ -10912,25 +10992,58 @@ function wireLocationEditModal() {
 }
 wireLocationEditModal();
 
+// ── 起動チュートリアル + ページヘルプ ──────────────────────────────
+// 本体は tutorial.ts / help-drawer.ts に分離。 app.ts は依存だけ渡して
+// 初期化する。 PAGE_HELP の本文を増やすときは page-help.ts を編集。
+initHelpDrawer();
+initTutorial({
+  api,
+  switchTab,
+  pushSubscribeFlow,
+  refreshMultiStatus,
+  openHelpFor,
+  getState: () => state,
+  closeSettingsPanel: () => $('aiSettingsPanel')?.classList.add('hidden'),
+});
+// 右上「💡 ヘルプ」 ボタン → 現在のタブのヘルプを開く
+document.getElementById('topbarHelpBtn')?.addEventListener('click', () => {
+  openHelpFor(state.tab as string);
+});
+
+
 // ── Legatus WS client (loopback ws://127.0.0.1:17320/ws) ─────────────
 // 接続状態 / MQTT 受信 / relay 成否を live で取り込む。
 // loopback 専用 (mobile PWA からは到達しないので unhide しない)。
+// 設定 `features.legatus.enabled` (= privacy/settings の legatus_enabled) が
+// false の間は WS を一切張らない / 右上バッジも隠れたまま。 設定 UI 側から
+// `window.legatusWatcher.setEnabled(bool)` で随時切り替える。
+declare global {
+  interface Window {
+    legatusWatcher?: { setEnabled: (on: boolean) => void };
+  }
+}
 (function setupLegatusWatcher() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   // loopback 固定。 Memoria が別ホスト経由 (PWA / 別 PC) で開かれたときは接続試行のみ。
   const url = `${proto}//127.0.0.1:17320/ws`;
   const RECONNECT_BASE_MS = 1000;
   const RECONNECT_MAX_MS = 30000;
-  let ws = null;
+  let ws: WebSocket | null = null;
   let attempt = 0;
-  let reconnectTimer = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let lastHeartbeatTs = 0;
   let lastEventLine = '';
-  let lastSnapshot = null;
+  let lastSnapshot: {
+    mqtt?: { connected?: boolean; url?: string; topic?: string };
+    last_event_ts?: number;
+    buffer_pending?: number;
+    audit_24h?: { ok: number; error: number };
+  } | null = null;
+  let enabled = false;
 
-  const dot = () => document.querySelector('#legatusBadge .legatus-dot');
-  const labelEl = () => document.querySelector('#legatusBadge .legatus-label');
-  const badge = () => document.getElementById('legatusBadge');
+  const dot = () => document.querySelector<HTMLElement>('#legatusBadge .legatus-dot');
+  const labelEl = () => document.querySelector<HTMLElement>('#legatusBadge .legatus-label');
+  const badge = () => document.getElementById('legatusBadge') as HTMLElement | null;
 
   function setState(state, hint) {
     const d = dot();
@@ -10938,7 +11051,7 @@ wireLocationEditModal();
     const lab = labelEl();
     if (lab) lab.textContent = hint || 'Legatus';
     const b = badge();
-    if (b) b.hidden = false;
+    if (b && enabled) b.hidden = false;
   }
 
   function fmtAgo(ts) {
@@ -11025,6 +11138,7 @@ wireLocationEditModal();
   }
 
   function connect() {
+    if (!enabled) return;
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     try { ws = new WebSocket(url); } catch (_e) { scheduleReconnect(); return; }
     ws.addEventListener('open', () => { attempt = 0; setState('connected', 'Legatus'); });
@@ -11035,27 +11149,50 @@ wireLocationEditModal();
     });
     ws.addEventListener('close', () => {
       ws = null;
-      setState('disconnected', 'Legatus');
-      scheduleReconnect();
+      if (enabled) {
+        setState('disconnected', 'Legatus');
+        scheduleReconnect();
+      }
     });
     ws.addEventListener('error', () => { /* close ハンドラに任せる */ });
   }
 
   function scheduleReconnect() {
+    if (!enabled) return;
     if (reconnectTimer) return;
     const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, attempt), RECONNECT_MAX_MS);
     attempt += 1;
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
   }
 
+  function setEnabled(on: boolean) {
+    if (enabled === on) return;
+    enabled = on;
+    const b = badge();
+    if (on) {
+      if (b) b.hidden = false;
+      setState('unknown', 'Legatus');
+      connect();
+    } else {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
+      attempt = 0;
+      lastHeartbeatTs = 0;
+      lastEventLine = '';
+      lastSnapshot = null;
+      if (b) b.hidden = true;
+    }
+  }
+
   // 30 秒おきに status bucket を再評価 (heartbeat タイムアウトを検出)
   setInterval(() => {
+    if (!enabled) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     setState(ageBucketFromHeartbeat(), 'Legatus');
     refreshDetailBox();
   }, 5000);
 
-  connect();
+  window.legatusWatcher = { setEnabled };
 })();
 
 // このファイルを TS の module 扱いにして、 冒頭の `declare global` を

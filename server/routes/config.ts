@@ -96,6 +96,12 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
       ['mcp_autostart_enabled', 'features.mcp.autostart.enabled'],
       ['workplace_geo_enabled', 'features.workplace.geo.enabled'],
       ['workplace_auto_share_enabled', 'features.workplace.share.enabled'],
+      ['legatus_enabled', 'features.legatus.enabled'],
+      ['bookmarks_auto_summarize', 'features.bookmarks.auto_summarize'],
+      ['page_metadata_auto_fetch', 'features.page_metadata.auto_fetch'],
+      ['domain_catalog_auto_classify', 'features.domain_catalog.auto_classify'],
+      ['meals_auto_vision', 'features.meals.auto_vision'],
+      ['diary_auto_generate', 'features.diary.auto_generate'],
     ] as const) {
       if (typeof body[bodyKey] === 'boolean') patch[settingKey] = body[bodyKey] ? '1' : '0';
     }
@@ -225,6 +231,116 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
       return c.json({ error: 'apiKey (string) required' }, 400);
     }
     setAppSettings(db, { 'maps.api_key': body.apiKey.trim() });
+    return c.json({ ok: true });
+  });
+
+  // gcloud から既存の API key を引き当てて自動セットする補助エンドポイント。
+  // 仕様:
+  //   1. `gcloud services api-keys list --format=json` で active key を列挙
+  //   2. Maps JavaScript API (maps-backend.googleapis.com) に restrict された
+  //      key を優先、 無ければ無制限 (restrictions 無し) の key、 最後にどれか 1 つ
+  //   3. `gcloud services api-keys get-key-string <name> --format=json` で
+  //      生 key 文字列を取得 → app_settings に保存して返却
+  // 失敗時の理由 (`reason` フィールド):
+  //   - not_installed : gcloud CLI が PATH に無い
+  //   - not_authenticated : `gcloud auth list` で active account 無し
+  //   - no_project : active project 未設定
+  //   - no_keys : list が空
+  //   - no_string : get-key-string が key を返さない (権限不足等)
+  //   - exec_failed : 通常の exec エラー (stderr を error に格納)
+  r.post('/api/maps/config/auto-fetch', async (c: Context) => {
+    const { spawn } = await import('node:child_process');
+    type Run = { code: number; stdout: string; stderr: string };
+    const run = (args: string[]): Promise<Run> => new Promise((resolve) => {
+      const child = spawn('gcloud', args, { shell: process.platform === 'win32' });
+      let stdout = ''; let stderr = '';
+      child.stdout.on('data', (b) => { stdout += String(b); });
+      child.stderr.on('data', (b) => { stderr += String(b); });
+      child.on('error', (e) => resolve({ code: -1, stdout: '', stderr: String(e) }));
+      child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    });
+
+    const probe = await run(['--version']);
+    if (probe.code !== 0) {
+      // probe.stderr は Windows cmd.exe だと Shift-JIS で返ってきて mojibake になる。
+      // 何が起きたかは reason から明確なので生 stderr は捨てる。
+      return c.json({ ok: false, reason: 'not_installed', error: 'gcloud CLI が PATH に見つかりません' }, 200);
+    }
+
+    const auth = await run(['auth', 'list', '--filter=status:ACTIVE', '--format=value(account)']);
+    if (auth.code !== 0 || !auth.stdout.trim()) {
+      return c.json({ ok: false, reason: 'not_authenticated', error: 'gcloud auth login が必要です' }, 200);
+    }
+    const project = await run(['config', 'get-value', 'project']);
+    const projectId = project.stdout.trim();
+    if (!projectId || projectId === '(unset)') {
+      return c.json({ ok: false, reason: 'no_project', error: '`gcloud config set project <PROJECT_ID>` で active project を設定してください' }, 200);
+    }
+
+    const list = await run(['services', 'api-keys', 'list', '--format=json']);
+    if (list.code !== 0) {
+      return c.json({ ok: false, reason: 'exec_failed', error: list.stderr.trim() || 'list failed' }, 200);
+    }
+    interface ApiKeyEntry { name?: string; displayName?: string; restrictions?: { apiTargets?: { service?: string }[] } }
+    let keys: ApiKeyEntry[] = [];
+    try { keys = JSON.parse(list.stdout) as ApiKeyEntry[]; } catch { keys = []; }
+    if (!Array.isArray(keys) || keys.length === 0) {
+      return c.json({ ok: false, reason: 'no_keys', error: 'project にまだ API key がありません', project: projectId }, 200);
+    }
+    const mapsLike = (e: ApiKeyEntry) => (e.restrictions?.apiTargets ?? []).some(
+      (t) => typeof t.service === 'string' && /maps|geocoding|geolocation|places/i.test(t.service),
+    );
+    const noRestriction = (e: ApiKeyEntry) => !e.restrictions?.apiTargets || e.restrictions.apiTargets.length === 0;
+    const pick = keys.find(mapsLike) ?? keys.find(noRestriction) ?? keys[0];
+    if (!pick?.name) {
+      return c.json({ ok: false, reason: 'no_keys', error: '使える key を抽出できませんでした', project: projectId }, 200);
+    }
+
+    const str = await run(['services', 'api-keys', 'get-key-string', pick.name, '--format=value(keyString)']);
+    const apiKey = str.stdout.trim();
+    if (str.code !== 0 || !apiKey) {
+      return c.json({ ok: false, reason: 'no_string', error: str.stderr.trim() || 'keyString を取得できませんでした', project: projectId, picked: pick.displayName ?? pick.name }, 200);
+    }
+    setAppSettings(db, { 'maps.api_key': apiKey });
+    return c.json({ ok: true, apiKey, project: projectId, picked: pick.displayName ?? pick.name });
+  });
+
+  // ---- server runtime info (= Tutorial / 拡張連携で「ローカル接続先 URL」 を
+  // 動的に出すための軽量 endpoint。 /api/llm/config の runtime と内容は同じだが
+  // LLM config を引かなくて済むので拡張インストール画面用に切り出す)。
+  r.get('/api/server/info', (c: Context) => {
+    return c.json({
+      port,
+      // Chrome 拡張は PC 内の Memoria に loopback 接続する想定。 Tailscale や
+      // Cloudflare Tunnel 経由でアクセス中でも拡張が指すべき URL は localhost。
+      extension_url: `http://localhost:${port}`,
+      data_dir: dataDir,
+      platform: process.platform,
+    });
+  });
+
+  // ---- 起動チュートリアル状態 (= 「はじめての Memoria」 wizard) ---------
+  //
+  // 初回起動時にウェルカム wizard を出すための flag。 設定 → AI / モデル の
+  // 「🎓 はじめての Memoria を表示」 ボタンで reset 可。 個別のステップで進めた
+  // ことを記録する必要は今のところ無く、 完了タイムスタンプだけで十分。
+
+  r.get('/api/tutorial/status', (c: Context) => {
+    const s = getAppSettings(db);
+    const completedAt = s['tutorial.completed_at'] || '';
+    return c.json({
+      completed: !!completedAt,
+      completed_at: completedAt || null,
+    });
+  });
+
+  r.post('/api/tutorial/complete', (c: Context) => {
+    setAppSettings(db, { 'tutorial.completed_at': new Date().toISOString() });
+    return c.json({ ok: true });
+  });
+
+  r.post('/api/tutorial/reset', (c: Context) => {
+    setAppSettings(db, { 'tutorial.completed_at': '' });
     return c.json({ ok: true });
   });
 

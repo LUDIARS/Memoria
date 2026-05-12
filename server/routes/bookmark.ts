@@ -15,6 +15,7 @@ import {
 } from '../db.js';
 import type { FifoQueue } from '../queue.js';
 import { parseOgFromHtml } from '../url-preview.js';
+import { featureEnabled } from '../lib/privacy.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -65,7 +66,11 @@ export function makeBookmarkRouter(deps: BookmarkRouterDeps): Hono {
     recordAccess(db, id);
 
     // Hand off to the FIFO queue so summarizations run strictly one at a time.
-    enqueueSummary(id);
+    // 自動要約は `features.bookmarks.auto_summarize` で opt-out 可。 保存は常に走るので
+    // 後から「再要約」 ボタンを押せば手動で起動できる。
+    if (featureEnabled(db, 'bookmarks_auto_summarize')) {
+      enqueueSummary(id);
+    }
 
     // Plan B: extension が rendered DOM をそのまま送ってきているので、 OG metadata
     // を server-side で抽出して page_metadata 行にキャッシュしておく。 後で note

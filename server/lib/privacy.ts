@@ -23,6 +23,15 @@ export interface PrivacySettings {
   workplace_geo_enabled: boolean;
   workplace_auto_share_enabled: boolean;
   workplace_match_radius_m: number;
+  legatus_enabled: boolean;
+  // AI 自動処理の opt-out 群。 すべて default true (= 現状維持) で、
+  // ローカル運用ユーザは個別に OFF にして「素材は溜まる、 AI は呼ばない」
+  // 状態を作る。
+  bookmarks_auto_summarize: boolean;
+  page_metadata_auto_fetch: boolean;
+  domain_catalog_auto_classify: boolean;
+  meals_auto_vision: boolean;
+  diary_auto_generate: boolean;
 }
 
 export type PrivacyBoolKey = keyof Pick<PrivacySettings,
@@ -31,6 +40,10 @@ export type PrivacyBoolKey = keyof Pick<PrivacySettings,
   | 'tasks_actio_share_enabled' | 'tasks_reminder_enabled'
   | 'tasks_reminder_nuntius_enabled' | 'mcp_autostart_enabled'
   | 'workplace_geo_enabled' | 'workplace_auto_share_enabled'
+  | 'legatus_enabled'
+  | 'bookmarks_auto_summarize' | 'page_metadata_auto_fetch'
+  | 'domain_catalog_auto_classify' | 'meals_auto_vision'
+  | 'diary_auto_generate'
 >;
 
 export function settingBool(settings: Record<string, string | null>, key: string, fallback = true): boolean {
@@ -59,6 +72,18 @@ export function privacySettings(db: Db): PrivacySettings {
     // OwnTracks の locator displacement と整合させやすい 50m を既定に。
     // 屋内ビルや GPS が荒い環境では 100-200m に上げる。
     workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 50),
+    // Legatus 連携は明示 opt-in。 default OFF (= 旧 Legatus 同居 PC を持たないユーザは
+    // 何も気にせず UI から消える)。
+    legatus_enabled: settingBool(s, 'features.legatus.enabled', false),
+    // AI 自動処理。 default true (= 現状動作維持)。 すべて OFF で claude / OpenAI を
+    // 一切自発的に呼ばないモードに切り替え可。 手動の「再要約」「dig」「日記生成
+    // ボタン」 等の明示的トリガは引き続き動く (これらは UI ボタン → /api/.../resummarize
+    // など別経路)。
+    bookmarks_auto_summarize: settingBool(s, 'features.bookmarks.auto_summarize', true),
+    page_metadata_auto_fetch: settingBool(s, 'features.page_metadata.auto_fetch', true),
+    domain_catalog_auto_classify: settingBool(s, 'features.domain_catalog.auto_classify', true),
+    meals_auto_vision: settingBool(s, 'features.meals.auto_vision', true),
+    diary_auto_generate: settingBool(s, 'features.diary.auto_generate', true),
   };
 }
 
