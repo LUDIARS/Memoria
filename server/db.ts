@@ -412,6 +412,35 @@ export function openDb(dbPath: string): Db {
       not_found       INTEGER NOT NULL DEFAULT 0
     );
 
+    -- 乗った電車/バスの記録。 検索結果 (= ekispert 経路) からそのまま取り込んでも、
+    -- 手動入力でも作れる。 segments_json は SearchSegment[] と互換 (= 1 経路に
+    -- 複数 line 乗換が入る)。 from_lat/lon は記録時点の GPS (= 開始駅周辺)、
+    -- 移動経路 (= tracks) と時系列でマージする際に使う。 終了駅側の lat/lon は
+    -- arrival_lat/lon に保持。
+    CREATE TABLE IF NOT EXISTS transit_rides (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      from_station    TEXT NOT NULL,
+      to_station      TEXT NOT NULL,
+      line_name       TEXT,
+      train_type      TEXT,
+      departure_at    TEXT,
+      arrival_at      TEXT,
+      duration_min    INTEGER,
+      fare_yen        INTEGER,
+      from_lat        REAL,
+      from_lon        REAL,
+      arrival_lat     REAL,
+      arrival_lon     REAL,
+      transfer_count  INTEGER NOT NULL DEFAULT 0,
+      segments_json   TEXT,
+      notes           TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_transit_rides_departure
+      ON transit_rides(departure_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_transit_rides_recorded
+      ON transit_rides(recorded_at DESC);
+
     -- 天気スナップショット。 1 fetch = 1 行 append。 同じ date に複数行入る
     -- (= 朝・昼・夜と再 fetch しても履歴は残す)。 日記生成は date の最新行を読む。
     -- current/hourly/daily は Open-Meteo の payload を分割して保存。
