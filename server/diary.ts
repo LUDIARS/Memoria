@@ -9,7 +9,9 @@ import {
   visitEventsForDate, getDomainCatalogMap, digSessionsForDate,
   listServerEventsForDate, listGpsLocationsForDate, listMealsForDate,
   getAppSettings, activityEventsForDate,
+  appUsageForDate, gameUsageForDate,
 } from './db.js';
+import type { AppUsageRow, GameUsageRow } from './db.js';
 import { runLlm } from './llm.js';
 import type { VisitEventRow } from './db/types/visit.js';
 import type { ActivityKind } from './db/types/activity.js';
@@ -248,11 +250,40 @@ export interface AggregatedDay {
   meals_pfc_label: string | null;
   caloric_balance: CaloricBalance | null;
   activity: ActivitySummary;
+  apps: AppUsageSummary | null;
+  games: GameUsageSummary | null;
   sources: {
     visit_events: number;
     page_visits: number;
     activity_events: number;
   };
+}
+
+export interface AppUsageItem {
+  process_name: string;
+  display_name: string;
+  kind: string | null;
+  minutes: number;
+  active_minutes: number;
+}
+export interface AppUsageKindTotal { kind: string; minutes: number; active_minutes: number }
+export interface AppUsageSummary {
+  total_minutes: number;
+  active_minutes: number;
+  by_kind: AppUsageKindTotal[];
+  top: AppUsageItem[];
+}
+
+export interface GameUsageItem {
+  appid: number;
+  name: string;
+  minutes: number;
+  first_at: string;
+  last_at: string;
+}
+export interface GameUsageSummary {
+  total_minutes: number;
+  items: GameUsageItem[];
 }
 
 /**
@@ -469,6 +500,13 @@ export function aggregateDay(
   const allActivity = activityEventsForDate(db, dateStr) as ActivityEventWithMetadata[];
   const activity = summarizeActivityForDate(allActivity, activityLimit ?? null);
 
+  // アプリ使用 (フォアグラウンドプロセスの秒積算) と Steam ゲーム時間。
+  // どちらも 0 件のときは null を返して prompt 側で「(なし)」 にする。
+  const appsRaw = appUsageForDate(db, dateStr) as AppUsageRow[];
+  const gamesRaw = gameUsageForDate(db, dateStr) as GameUsageRow[];
+  const apps = summarizeAppUsage(appsRaw);
+  const games = summarizeGameUsage(gamesRaw);
+
   return {
     date: dateStr,
     total_events: totalEvents,
@@ -493,12 +531,119 @@ export function aggregateDay(
       gpsDistanceM: gps?.distance_meters ?? 0,
     }),
     activity,
+    apps,
+    games,
     sources: {
       visit_events: events.length,
       page_visits: pageVisitsContribution,
       activity_events: allActivity.length,
     },
   };
+}
+
+function summarizeAppUsage(rows: AppUsageRow[]): AppUsageSummary | null {
+  if (!rows.length) return null;
+  // 短すぎる (= 30 秒未満) は誤検出が多いので捨てる。
+  const filtered = rows.filter((r) => r.total_sec >= 30);
+  if (!filtered.length) return null;
+  const items: AppUsageItem[] = filtered.map((r) => ({
+    process_name: r.process_name,
+    display_name: r.name?.trim() || r.process_name,
+    kind: r.kind || null,
+    minutes: Math.round(r.total_sec / 60),
+    active_minutes: Math.round(r.active_sec / 60),
+  })).filter((it) => it.minutes >= 1);
+  if (!items.length) return null;
+  const kindMap = new Map<string, { minutes: number; active_minutes: number }>();
+  for (const it of items) {
+    const k = it.kind || 'unknown';
+    const cur = kindMap.get(k) ?? { minutes: 0, active_minutes: 0 };
+    cur.minutes += it.minutes;
+    cur.active_minutes += it.active_minutes;
+    kindMap.set(k, cur);
+  }
+  const by_kind: AppUsageKindTotal[] = [...kindMap.entries()]
+    .map(([kind, v]) => ({ kind, minutes: v.minutes, active_minutes: v.active_minutes }))
+    .sort((a, b) => b.minutes - a.minutes);
+  const totalMinutes = items.reduce((s, it) => s + it.minutes, 0);
+  const activeMinutes = items.reduce((s, it) => s + it.active_minutes, 0);
+  return {
+    total_minutes: totalMinutes,
+    active_minutes: activeMinutes,
+    by_kind,
+    top: items.slice(0, 15),
+  };
+}
+
+function summarizeGameUsage(rows: GameUsageRow[]): GameUsageSummary | null {
+  if (!rows.length) return null;
+  const items: GameUsageItem[] = rows
+    .filter((r) => r.minutes_played >= 1)
+    .map((r) => ({
+      appid: r.appid,
+      name: r.name?.trim() || `appid:${r.appid}`,
+      minutes: r.minutes_played,
+      first_at: r.first_at,
+      last_at: r.last_at,
+    }));
+  if (!items.length) return null;
+  return {
+    total_minutes: items.reduce((s, it) => s + it.minutes, 0),
+    items,
+  };
+}
+
+function formatMinutes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0m';
+  if (n < 60) return `${n}m`;
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+const APP_KIND_LABEL: Record<string, string> = {
+  game: '🎮 ゲーム',
+  work: '💼 仕事',
+  browser: '🌐 ブラウザ',
+  messaging: '💬 メッセージ',
+  media: '🎬 メディア',
+  creative: '🎨 クリエイティブ',
+  other: '❓ その他',
+  unknown: '❔ 未分類',
+};
+
+function formatAppsBlock(apps: AppUsageSummary | null | undefined): string {
+  if (!apps || apps.top.length === 0) return '(アプリ使用記録なし)';
+  const lines: string[] = [];
+  lines.push(`合計フォアグラウンド時間: ${formatMinutes(apps.total_minutes)} (入力アクティブ: ${formatMinutes(apps.active_minutes)})`);
+  if (apps.by_kind.length > 0) {
+    const kindStr = apps.by_kind
+      .filter((k) => k.minutes >= 1)
+      .map((k) => `${APP_KIND_LABEL[k.kind] || k.kind} ${formatMinutes(k.minutes)}`)
+      .join(' / ');
+    if (kindStr) lines.push(`カテゴリ別: ${kindStr}`);
+  }
+  lines.push('上位アプリ:');
+  for (const it of apps.top) {
+    const tag = APP_KIND_LABEL[it.kind || 'unknown'] || it.kind || '';
+    const act = it.active_minutes > 0 && it.active_minutes !== it.minutes
+      ? ` (入力 ${formatMinutes(it.active_minutes)})` : '';
+    lines.push(`- ${tag} ${it.display_name}: ${formatMinutes(it.minutes)}${act}`);
+  }
+  return lines.join('\n');
+}
+
+function formatGamesBlock(games: GameUsageSummary | null | undefined): string {
+  if (!games || games.items.length === 0) return '(プレイ記録なし)';
+  const lines: string[] = [];
+  lines.push(`合計プレイ時間: ${formatMinutes(games.total_minutes)} (Steam playtime_forever の delta)`);
+  for (const g of games.items) {
+    const startHH = g.first_at?.slice(11, 16);
+    const endHH = g.last_at?.slice(11, 16);
+    const span = (startHH && endHH && startHH !== endHH) ? ` (${startHH}〜${endHH})` : '';
+    lines.push(`- 🎮 ${g.name}: ${formatMinutes(g.minutes)}${span}`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -1067,9 +1212,11 @@ interface WorkContentPromptArgs {
   totalEvents: number;
   totalDomains: number;
   activityCounts: string | null;
+  appsBlock: string;
+  gamesBlock: string;
 }
 
-const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts }: WorkContentPromptArgs): string => [
+const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts, appsBlock, gamesBlock }: WorkContentPromptArgs): string => [
   `あなたは ${dateStr} の「作業内容」セクションを書きます。`,
   'ブラウザ閲覧履歴 (URL + 時刻) と開発活動 (git commit / Claude Code への指示) を両方読み、',
   '**大まかな時間帯**で何をしていたかを 1 文でまとめ、',
@@ -1130,6 +1277,18 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, tota
   '',
   '開発活動 (時刻 + イベント):',
   activityList || '(なし)',
+  '',
+  'アプリ使用 (フォアグラウンド時間、 入力アクティブ秒):',
+  appsBlock,
+  '',
+  'ゲームプレイ (Steam playtime delta):',
+  gamesBlock,
+  '',
+  '※ アプリ / ゲーム情報は時間帯まとめの根拠として使う。 例:',
+  '  - 🎮 ゲーム合計が長い時間帯 → 「ゲームをしていた」 として 1 ブロック',
+  '  - 💼 仕事 / 🎨 クリエイティブ系アプリの時間 → 作業として扱う (URL の薄い日でも作業時間として認める)',
+  '  - 「主な作業」 に具体アプリ名 (VSCode / Photoshop / 特定ゲーム名) を入れて良い',
+  '  - WORK_MINUTES の見積もりにアプリ入力アクティブ秒も考慮する (= 仕事系アプリの active_min は作業時間)。 ゲームは作業に含めない。',
 ].join('\n');
 
 export interface WorkMinutesExtraction {
@@ -1317,6 +1476,12 @@ const HIGHLIGHTS_PROMPT = ({ dateStr, workContent, githubByRepo, bookmarkSummary
   '## 入力 3b: ローカル開発活動 (git commit + Claude Code 指示)',
   formatActivityBlock(metrics.activity),
   '',
+  '## 入力 3c: アプリ使用 (フォアグラウンド時間)',
+  formatAppsBlock(metrics.apps),
+  '',
+  '## 入力 3d: ゲームプレイ (Steam playtime delta)',
+  formatGamesBlock(metrics.games),
+  '',
   '## 入力 4: 当日のディグ調査 (検索 + 取得した情報源)',
   (digs && digs.length > 0)
     ? digs.map(d => {
@@ -1438,6 +1603,8 @@ export async function generateWorkContent({
     totalEvents: metrics.total_events,
     totalDomains: metrics.unique_domains,
     activityCounts,
+    appsBlock: formatAppsBlock(metrics.apps),
+    gamesBlock: formatGamesBlock(metrics.games),
   });
   const prompt = appendMemoAndImprove(base, { globalMemo, improve });
   const raw = await runLlm({ task: 'diary_work', prompt, timeoutMs });
