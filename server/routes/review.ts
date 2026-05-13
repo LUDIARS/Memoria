@@ -70,7 +70,14 @@ function listReviewedRepos(): string[] {
   for (const name of readdirSync(LUDIARS_ROOT)) {
     if (!safeRepoName(name)) continue;
     const dir = reviewDir(name);
-    if (existsSync(dir) && statSync(dir).isDirectory()) out.push(name);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+    // review/ フォルダがあっても日付サブディレクトリが 1 件も無い場合は
+    // 一覧に出さない (= Actio と Actio.cocoiru のように同一 remote の別 clone で
+    // pull タイミングがずれて空の review/ だけが残っている worktree 対策)。
+    const hasDates = readdirSync(dir).some(
+      (n) => safeDate(n) && statSync(join(dir, n)).isDirectory(),
+    );
+    if (hasDates) out.push(name);
   }
   return out.sort();
 }

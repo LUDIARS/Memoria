@@ -5201,9 +5201,14 @@ dialog.loc-edit-modal[open] {
 .wl-subtab.active {
   color: var(--text);
   background: var(--card);
-  border-color: var(--accent);
-  border-bottom: 1px solid var(--card);
-  margin-bottom: -1px;
+  /* top/left/right だけ accent 化、 bottom は inactive と同じ透明のまま。
+   * 以前は `border-bottom: 1px solid var(--card); margin-bottom: -1px;` で
+   * コンテナの border-bottom と継ぎ目なく繋ぐ trick を使っていたが、
+   * 切替時に box geometry が 1px 変化して行全体がガタついていたため
+   * 視覚マージは捨てる (= active タブの下にもコンテナのグレー線が見える)。 */
+  border-top-color: var(--accent);
+  border-left-color: var(--accent);
+  border-right-color: var(--accent);
 }
 
 .wl-sub { padding: 12px; }
