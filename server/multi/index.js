@@ -86,6 +86,12 @@ void adapter; // 将来 isRevoked check 等に使う想定
 const CERNERE_JWT_SECRET = process.env.CERNERE_JWT_SECRET ?? '';
 const IS_DEV = process.env.NODE_ENV !== 'production';
 
+// PASETO v4 (Phase 1 / Cernere Issue #91)。 起動時 + 6h 毎に Cernere の
+// /.well-known/cernere-public-key を fetch して in-memory cache に持つ。
+import { verifyPaseto, startPublicKeyRefreshLoop, getCachedKidList } from './paseto-verifier.js';
+startPublicKeyRefreshLoop();
+console.log(`[hub] PASETO public key refresh loop started (cernere: ${process.env.CERNERE_BASE_URL || 'http://localhost:8080'})`);
+
 function verifyCernereJwt(token) {
   if (!CERNERE_JWT_SECRET) return null;
   const parts = token.split('.');
@@ -108,10 +114,28 @@ const authMiddleware = async (c, next) => {
   const auth = c.req.header('authorization') ?? c.req.header('Authorization') ?? '';
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (m) {
-    const v = verifyCernereJwt(m[1]);
+    const raw = m[1];
+    // PASETO v4 (新、 Cernere の signProjectToken が発行) を優先検証
+    if (raw.startsWith('v4.public.')) {
+      const p = await verifyPaseto(raw);
+      if (p?.userId) {
+        c.set('userId', p.userId);
+        c.set('userRole', p.role);
+        if (p.displayName) c.set('userName', p.displayName);
+        c.set('tokenAlg', 'EdDSA');
+        return next();
+      }
+      // PASETO 形式だが検証失敗 → fallback には流さず即拒否 (= forge 防止)
+      console.warn(`[auth] PASETO token verify failed (cached kids: ${getCachedKidList().join(',') || '(empty)'})`);
+      return c.json({ error: 'unauthorized', detail: 'paseto verify failed' }, 401);
+    }
+    // 旧 HS256 (= 互換期間中の legacy client)
+    const v = verifyCernereJwt(raw);
     if (v?.userId) {
       c.set('userId', v.userId);
       c.set('userRole', v.role);
+      c.set('tokenAlg', 'HS256');
+      console.warn(`[auth] deprecated HS256 token used (user=${v.userId.slice(0, 8)}) — migrate to PASETO`);
       return next();
     }
   }
