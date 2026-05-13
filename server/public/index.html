@@ -9,7 +9,7 @@
   <title>Memoria</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon-192.svg" />
-  <link rel="stylesheet" href="style.css?v=20260503c" />
+  <link rel="stylesheet" href="style.css?v=20260513h" />
 </head>
 <body>
   <header class="topbar">
@@ -630,13 +630,14 @@
            ドメイン辞書と同じ構造 (= 自動分類 + 手動上書き)。
            data: app_samples (= sampling 元) / applications (= AI 分類済 row) -->
       <div id="appsView" class="hidden">
-        <div class="apps-bar">
+        <div class="dict-bar">
+          <input id="appsSearch" type="search" placeholder="プロセス名・表示名・説明で検索" />
           <span id="appsCount" class="muted"></span>
           <span class="grow"></span>
           <button id="appsRefresh" class="ghost" title="再読込">↻</button>
         </div>
-        <div id="appsEmpty" class="queue-empty hidden">applications カタログがまだ空です。 設定 → 🚦 AI 自動処理 で「💻 PC アプリ使用統計」 を ON にすると、 サンプリングされた process_name が AI 分類されてここに表示されます。</div>
-        <ul id="appsList" class="apps-list"></ul>
+        <div id="appsEmpty" class="dict-empty hidden">applications カタログがまだ空です。 設定 → 🚦 AI 自動処理 で「💻 PC アプリ使用統計」 を ON にすると、 サンプリングされた process_name が AI 分類されてここに表示されます。</div>
+        <ul id="appsList" class="dict-list pin-grid"></ul>
       </div>
 
       <div id="databaseView" class="hidden">
@@ -869,20 +870,32 @@
 
       <div id="reviewView" class="hidden">
         <div class="bookmarks-toolbar">
-          <span class="muted">LUDIARS 全サービスの AIFormat レビュー (skill `ludiars-review` が生成)</span>
+          <span class="muted">AIFormat レビュー (skill <code>/ludiars-review</code> が生成)</span>
           <span class="grow"></span>
+          <button id="reviewBackBtn" class="ghost" type="button" hidden>← 一覧に戻る</button>
+          <button id="reviewAddTargetBtn" class="ghost" type="button" title="レビュー対象リポを追加">+ 追加</button>
           <button id="reviewRefresh" class="ghost" type="button">更新</button>
         </div>
-        <div class="bookmarks-layout">
-          <aside class="bookmarks-categories" id="reviewRepoList">
-            <h3>リポジトリ</h3>
-            <ul id="reviewRepoUl"></ul>
-          </aside>
-          <div class="bookmarks-main">
-            <div id="reviewDetail" class="muted" style="padding:16px">
-              左のリポジトリを選択するとレビューが表示されます。
-            </div>
+        <div id="reviewListLayout">
+          <div class="review-filter-bar">
+            <label class="muted">リポジトリ
+              <select id="reviewRepoMenu"></select>
+            </label>
+            <span id="reviewListCount" class="muted"></span>
           </div>
+          <div id="reviewCards" class="cards"></div>
+          <div id="reviewEmpty" class="dict-empty hidden">レビューが見つかりません。 <code>/ludiars-review</code> を実行してください。</div>
+        </div>
+        <div id="reviewDetailLayout" class="hidden">
+          <div class="review-detail-bar">
+            <div class="review-detail-title-row">
+              <h2 id="reviewDetailRepo" class="review-detail-title"></h2>
+              <a id="reviewFixPrLink" class="review-pr-badge" href="#" target="_blank" rel="noopener" hidden>🔧 修正 PR</a>
+            </div>
+            <label class="review-detail-date muted">日付 <select id="reviewDateSel"></select></label>
+          </div>
+          <nav class="tabs review-file-tabs" id="reviewFileTabs"></nav>
+          <div id="reviewBody" class="review-body">読み込み中…</div>
         </div>
       </div>
 
@@ -1224,6 +1237,64 @@
     <ul id="dictLinks" class="dict-links"></ul>
   </div>
 
+  <div id="reviewTargetModal" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <h3 style="margin:0;flex:1">🔍 レビュー対象リポを追加</h3>
+      <button id="reviewTargetSaveBtn">保存</button>
+      <button id="reviewTargetCloseBtn" class="modal-close" title="閉じる">×</button>
+    </div>
+    <p class="muted" style="margin:8px 0;font-size:12px">
+      ローカルにある git clone をレビュー対象として登録します。 cloud routine
+      <code>ludiars-review-daily</code> は登録済の対象を読み、 指定フォーマットに
+      従って <code>review/&lt;date&gt;/</code> を生成します。
+    </p>
+    <h4>表示名</h4>
+    <input id="reviewTargetName" type="text" placeholder="例: Memoria" />
+    <h4>ローカルパス</h4>
+    <input id="reviewTargetPath" type="text" placeholder="例: E:/Document/Ars/Memoria" />
+    <p class="muted" style="font-size:11px;margin:4px 0">
+      LUDIARS_ROOT (既定 <code>E:/Document/Ars</code>) からの相対パスでも、 絶対パスでも可。
+    </p>
+    <h4>フォーマット</h4>
+    <select id="reviewTargetFormat">
+      <option value="aiformat">AIFormat (5 観点 + 総合)</option>
+    </select>
+    <p class="muted" style="font-size:11px;margin:4px 0">
+      現在は AIFormat のみ。 カスタムフォーマットは将来対応。
+    </p>
+    <div id="reviewTargetError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
+  </div>
+
+  <div id="appsDetail" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <input id="appsKey" type="text" placeholder="process_name" disabled />
+      <button id="appsSaveBtn">保存</button>
+      <button id="appsReclassifyBtn" class="ghost" title="AI に再分類させる">↻ 再分類</button>
+      <button id="appsDetailClose" class="modal-close" title="閉じる">×</button>
+    </div>
+    <div id="appsStatusRow" class="domain-stats">
+      <span class="domain-stat"><b id="appsStatusBadge">—</b><br>状態</span>
+      <span class="domain-stat"><b id="appsEditedBadge">—</b><br>編集済み</span>
+      <span class="domain-stat"><b id="appsClassifiedAt">—</b><br>分類日時</span>
+    </div>
+    <h4>表示名</h4>
+    <input id="appsName" type="text" placeholder="(未分類)" />
+    <h4>種類</h4>
+    <select id="appsKind">
+      <option value="">--</option>
+      <option value="game">🎮 ゲーム</option>
+      <option value="work">💼 仕事</option>
+      <option value="browser">🌐 ブラウザ</option>
+      <option value="messaging">💬 メッセージ</option>
+      <option value="media">🎬 メディア</option>
+      <option value="creative">🎨 クリエイティブ</option>
+      <option value="other">❓ その他</option>
+    </select>
+    <h4>説明</h4>
+    <textarea id="appsDesc" rows="3" placeholder="このアプリの 1〜2 文の説明"></textarea>
+    <div id="appsErrorRow" class="muted" style="margin-top:8px;font-size:11px" hidden></div>
+  </div>
+
   <div id="domainDetail" class="dict-detail modal-panel hidden">
     <div class="dict-detail-head">
       <input id="domainKey" type="text" placeholder="ドメイン" disabled />
@@ -1478,6 +1549,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260508f"></script>
+  <script src="app.js?v=20260513f"></script>
 </body>
 </html>

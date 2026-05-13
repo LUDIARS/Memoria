@@ -19,6 +19,16 @@ body {
   font-size: 14px;
 }
 
+/* iOS の status-bar tap (= 最上部に戻すジェスチャ) は window を scrollTop=0
+ * に向けて scroll させる動作。 Memoria は実スクロールが `.layout > .content`
+ * 側にあるため、 window が常に 0 のままだと status-bar tap で何も起きない。
+ * mobile では body に 1px だけ余白を持たせて window scroll が成立する状態を
+ * 作り、 起動時に scrollTo(0, 1) で待機させておく (app.ts の setup 側)。
+ * 見た目への影響は 1px ぶん下にスクロール可能になるだけで実用上ゼロ。 */
+@media (max-width: 760px) {
+  body { min-height: calc(100vh + 1px); }
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -5164,7 +5174,10 @@ dialog.loc-edit-modal[open] {
 .wl-subtab {
   background: transparent;
   border: 1px solid var(--border);
-  border-bottom: none;
+  /* inactive にも透明な border-bottom を持たせて高さを active と揃える。
+   * 以前は `border-bottom: none` で active 時に 1px 高さが変わり、
+   * タップごとに行全体が上下にガタついていた。 */
+  border-bottom: 1px solid transparent;
   border-radius: 6px 6px 0 0;
   padding: 6px 12px;
   font-size: 13px;
@@ -5188,9 +5201,14 @@ dialog.loc-edit-modal[open] {
 .wl-subtab.active {
   color: var(--text);
   background: var(--card);
-  border-color: var(--accent);
-  border-bottom: 1px solid var(--card);
-  margin-bottom: -1px;
+  /* top/left/right だけ accent 化、 bottom は inactive と同じ透明のまま。
+   * 以前は `border-bottom: 1px solid var(--card); margin-bottom: -1px;` で
+   * コンテナの border-bottom と継ぎ目なく繋ぐ trick を使っていたが、
+   * 切替時に box geometry が 1px 変化して行全体がガタついていたため
+   * 視覚マージは捨てる (= active タブの下にもコンテナのグレー線が見える)。 */
+  border-top-color: var(--accent);
+  border-left-color: var(--accent);
+  border-right-color: var(--accent);
 }
 
 .wl-sub { padding: 12px; }
@@ -5279,26 +5297,187 @@ dialog.loc-edit-modal[open] {
 .wl-worktime-headline { font-size: 14px; margin-bottom: 4px; }
 .wl-worktime-breakdown { font-size: 12px; }
 .wl-kind-stat { display: inline-block; padding: 1px 6px; border-radius: 4px; background: var(--accent-bg, transparent); margin: 1px 0; }
-/* 💻 アプリケーションカタログ (Database → アプリ) */
-.apps-bar { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
-.apps-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.apps-row { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, var(--card)); display: flex; flex-direction: column; gap: 6px; }
-.apps-row-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.apps-status { font-size: 14px; }
-.apps-process { background: var(--bg, transparent); padding: 1px 6px; border-radius: 3px; font-size: 12px; }
-.apps-edited { color: var(--accent, #2a6df4); font-size: 11px; }
-.apps-reclassify { font-size: 11px; padding: 2px 8px; }
-.apps-row-body { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 2fr; gap: 8px; }
-.apps-field { display: flex; flex-direction: column; font-size: 11px; gap: 2px; }
-.apps-field span { color: var(--muted); }
-.apps-field input, .apps-field select { font-size: 12px; padding: 3px 6px; width: 100%; box-sizing: border-box; }
-.apps-error { font-size: 11px; }
-@media (max-width: 760px) {
-  .apps-row-body { grid-template-columns: 1fr; }
+/* 💻 アプリケーションカタログ (Database → アプリ)
+ * カード形式 (= ドメインタブと同じ .dict-list.pin-grid + .dict-item)。
+ * 詳細編集は appsDetail モーダル。 */
+.apps-kind-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--accent-bg, #eef);
+  color: var(--text);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  vertical-align: middle;
+  font-weight: 500;
 }
 
 /* 🎮 ゲームログのバッジ */
+
+/* 🎮 ゲームログのバッジ */
 .wl-game-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+/* ─── 旧 apps-* (vertical row レイアウト) は 2026-05-13 にカード化で廃止 ─── */
+
+/* 🔍 レビュータブ (DB サブタブ) ──────────────────────────────────────── */
+.review-filter-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.review-filter-bar select {
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+.review-detail-bar {
+  padding: 14px 18px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.review-detail-title-row {
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap;
+}
+.review-detail-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.25;
+  word-break: break-word;
+  flex: 1;
+}
+.review-detail-date {
+  font-size: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.review-detail-date select {
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+.review-file-tabs {
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+@media (max-width: 760px) {
+  .review-detail-bar { padding: 12px 14px 8px; }
+  .review-detail-title { font-size: 22px; }
+  .review-file-tabs { padding: 6px 12px 0; }
+}
+.review-card {
+  cursor: pointer;
+  padding: 12px 14px;
+}
+.review-card-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.review-card-repo {
+  font-size: 14px;
+  font-weight: 700;
+  flex: 1;
+  word-break: break-word;
+}
+.review-card-meta {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  font-size: 11px;
+}
+.review-pr-badge {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: #fff5e1; color: #8a5a00;
+  border: 1px solid #f0c97a;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.review-pr-badge:hover { filter: brightness(0.95); }
+
+/* markdown body (見出し / 段落 / テーブル / リスト / 引用 / コードフェンス) */
+.review-body {
+  padding: 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-y: auto;
+  max-width: 100%;
+}
+.review-body .md-h1 { font-size: 22px; font-weight: 700; margin: 18px 0 10px; border-bottom: 2px solid var(--border); padding-bottom: 6px; }
+.review-body .md-h2 { font-size: 18px; font-weight: 700; margin: 16px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.review-body .md-h3 { font-size: 16px; font-weight: 700; margin: 14px 0 6px; color: var(--accent); }
+.review-body .md-h4 { font-size: 14px; font-weight: 700; margin: 12px 0 4px; }
+.review-body .md-h5 { font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
+.review-body .md-h6 { font-size: 12px; font-weight: 700; margin: 10px 0 4px; color: var(--muted); }
+.review-body .md-p { margin: 6px 0; }
+.review-body .md-ul, .review-body .md-ol { margin: 6px 0; padding-left: 24px; }
+.review-body .md-ul li, .review-body .md-ol li { margin: 2px 0; }
+.review-body .md-blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-bg);
+  color: var(--text);
+  font-style: normal;
+}
+.review-body .md-hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+.review-body .md-code {
+  background: #2a2f3a;
+  color: #e6e9ef;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.review-body code {
+  background: var(--accent-bg);
+  color: var(--text);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", "Menlo", monospace;
+}
+.review-body .md-table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+.review-body .md-table thead { background: var(--accent-bg); }
+.review-body .md-table th, .review-body .md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.review-body .md-table th { font-weight: 700; }
+.review-body a { color: var(--accent); }
+@media (max-width: 760px) {
+  .review-body { padding: 12px; font-size: 13px; }
+  .review-body .md-h1 { font-size: 20px; }
+  .review-body .md-h2 { font-size: 16px; }
+  .review-body .md-h3 { font-size: 15px; }
+  .review-body .md-table { font-size: 12px; }
+  .review-body .md-table th, .review-body .md-table td { padding: 5px 8px; }
+}
 .wl-game-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
 .wl-game-badge-steam { background: #1b2838; color: #66c0f4; }
 .wl-game-badge-app { background: var(--accent-bg, #eef); color: var(--text); border: 1px solid var(--border); }
@@ -6038,6 +6217,13 @@ dialog.loc-edit-modal[open] {
     position: relative;
     overflow: hidden;   /* sidebar の transform: translateX(-100%) を内部に閉じる */
     min-height: 60vh;   /* sidebar が absolute なので layout に高さを与える */
+  }
+  /* mobile では sidebar が position: absolute でグリッド外なので、
+   * non-open 状態でも pane を 1fr 維持する (親の 1100px ルール
+   * `grid-template-columns: 0 minmax(0,1fr)` が pane を幅 0 の
+   * 1 列目に詰め込んでしまうのを上書き)。 ページ幅 = pane 幅。 */
+  .notes-layout:not(.notes-sidebar-open) {
+    grid-template-columns: 1fr;
   }
   .notes-sidebar {
     position: absolute;

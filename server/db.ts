@@ -412,6 +412,20 @@ export function openDb(dbPath: string): Db {
       not_found       INTEGER NOT NULL DEFAULT 0
     );
 
+    -- レビュー対象リポジトリ。 ludiars-review skill (= cloud routine) が
+    -- iterate するリスト。 起動時に LUDIARS_ROOT 配下の git clone を seed し、
+    -- ユーザは UI から任意のローカルパスを足せる。 format_key は将来カスタム
+    -- フォーマットを追加するための拡張点 (現状は 'aiformat' のみ)。
+    CREATE TABLE IF NOT EXISTS review_targets (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL UNIQUE,
+      local_path  TEXT NOT NULL UNIQUE,
+      format_key  TEXT NOT NULL DEFAULT 'aiformat',
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_targets_enabled ON review_targets(enabled);
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,
@@ -2250,6 +2264,135 @@ export interface ActivityEventParsed extends Omit<ActivityEventRow, 'ingested_at
  * 内部集計 (hourly bucket / kind 別件数) で全部欲しい時用。
  * UI のリスト表示には activityEventsPage を使うこと。
  */
+/** 当日 (local) のフォアグラウンドアプリ使用時間を process_name 単位で集計する。
+ *  applications カタログ (AI 分類済) に LEFT JOIN して name / kind / icon_url を返す。
+ *  total_sec = 全 sample 区間の合計、 active_sec = input_active=1 のみの合計。
+ *  上位 50 件 (total_sec 降順) で打ち切る。 */
+export interface AppUsageRow {
+  process_name: string;
+  name: string | null;
+  kind: string | null;
+  icon_url: string | null;
+  total_sec: number;
+  active_sec: number;
+  samples: number;
+}
+export function appUsageForDate(db: Db, dateStr: string, limit = 50): AppUsageRow[] {
+  return db.prepare(`
+    SELECT
+      s.process_name,
+      app.name        AS name,
+      app.kind        AS kind,
+      app.icon_url    AS icon_url,
+      CAST(COALESCE(SUM(s.sample_interval_sec), 0) AS INTEGER) AS total_sec,
+      CAST(COALESCE(SUM(CASE WHEN s.input_active = 1 THEN s.sample_interval_sec ELSE 0 END), 0) AS INTEGER) AS active_sec,
+      COUNT(*) AS samples
+    FROM app_samples s
+    LEFT JOIN applications app ON app.process_name = s.process_name
+    WHERE date(s.sampled_at, 'localtime') = ?
+    GROUP BY s.process_name, app.name, app.kind, app.icon_url
+    ORDER BY total_sec DESC
+    LIMIT ?
+  `).all(dateStr, limit) as AppUsageRow[];
+}
+
+/** 当日 (local) の Steam ゲームプレイ時間を appid 別に集計する。
+ *  playtime_forever_min の MAX - MIN を「その日にプレイした分」 とみなす
+ *  (= Steam が回した間の delta が露出されるカラム)。 Steam がその日まったく
+ *  起動しなかった appid は 0 件で含まれない。 1 分以上プレイした行のみ。 */
+export interface GameUsageRow {
+  appid: number;
+  name: string | null;
+  minutes_played: number;
+  first_at: string;
+  last_at: string;
+}
+export function gameUsageForDate(db: Db, dateStr: string, limit = 20): GameUsageRow[] {
+  return db.prepare(`
+    SELECT
+      appid,
+      MAX(name) AS name,
+      CAST(MAX(playtime_forever_min) - MIN(playtime_forever_min) AS INTEGER) AS minutes_played,
+      MIN(sampled_at) AS first_at,
+      MAX(sampled_at) AS last_at
+    FROM steam_activity
+    WHERE date(sampled_at, 'localtime') = ?
+    GROUP BY appid
+    HAVING MAX(playtime_forever_min) - MIN(playtime_forever_min) > 0
+    ORDER BY minutes_played DESC
+    LIMIT ?
+  `).all(dateStr, limit) as GameUsageRow[];
+}
+
+// ─── review_targets ──────────────────────────────────────────────────────────
+export interface ReviewTargetRow {
+  id: number;
+  name: string;
+  local_path: string;
+  format_key: string;
+  enabled: number;          // 1 or 0
+  created_at: string;
+}
+
+export function listReviewTargets(db: Db, { enabledOnly = false }: { enabledOnly?: boolean } = {}): ReviewTargetRow[] {
+  const where = enabledOnly ? 'WHERE enabled = 1' : '';
+  return db.prepare(`
+    SELECT id, name, local_path, format_key, enabled, created_at
+    FROM review_targets
+    ${where}
+    ORDER BY name ASC
+  `).all() as ReviewTargetRow[];
+}
+
+export function getReviewTargetByName(db: Db, name: string): ReviewTargetRow | undefined {
+  return db.prepare(
+    `SELECT id, name, local_path, format_key, enabled, created_at
+     FROM review_targets WHERE name = ?`,
+  ).get(name) as ReviewTargetRow | undefined;
+}
+
+export function insertReviewTarget(
+  db: Db,
+  { name, local_path, format_key = 'aiformat' }: { name: string; local_path: string; format_key?: string },
+): number {
+  const r = db.prepare(
+    `INSERT INTO review_targets (name, local_path, format_key) VALUES (?, ?, ?)`,
+  ).run(name, local_path, format_key);
+  return Number(r.lastInsertRowid);
+}
+
+/** 既存があれば何もしない (= INSERT OR IGNORE)。 戻り値: 新規に挿入したら true */
+export function insertReviewTargetIfMissing(
+  db: Db,
+  { name, local_path, format_key = 'aiformat' }: { name: string; local_path: string; format_key?: string },
+): boolean {
+  const r = db.prepare(
+    `INSERT OR IGNORE INTO review_targets (name, local_path, format_key) VALUES (?, ?, ?)`,
+  ).run(name, local_path, format_key);
+  return r.changes > 0;
+}
+
+export function updateReviewTarget(
+  db: Db,
+  id: number,
+  patch: { name?: string; local_path?: string; format_key?: string; enabled?: 0 | 1 },
+): void {
+  const set: string[] = [];
+  const args: unknown[] = [];
+  if (typeof patch.name === 'string') { set.push('name = ?'); args.push(patch.name); }
+  if (typeof patch.local_path === 'string') { set.push('local_path = ?'); args.push(patch.local_path); }
+  if (typeof patch.format_key === 'string') { set.push('format_key = ?'); args.push(patch.format_key); }
+  if (patch.enabled === 0 || patch.enabled === 1) { set.push('enabled = ?'); args.push(patch.enabled); }
+  if (set.length === 0) return;
+  args.push(id);
+  db.prepare(`UPDATE review_targets SET ${set.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteReviewTarget(db: Db, id: number): boolean {
+  const r = db.prepare(`DELETE FROM review_targets WHERE id = ?`).run(id);
+  return r.changes > 0;
+}
+
 export function activityEventsForDate(db: Db, dateStr: string): ActivityEventParsed[] {
   const rows = db.prepare(`
     SELECT id, kind, occurred_at, source, ref_id, content, metadata_json
