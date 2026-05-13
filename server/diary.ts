@@ -934,7 +934,7 @@ export interface FetchGithubActivityArgs {
  * commit lists in its payload (only ref/head/before SHAs).
  */
 export async function fetchGithubActivity({
-  token, user, repos, dateStr, timeoutMs = 30_000,
+  token, user, repos, dateStr, timeoutMs = 60_000,
 }: FetchGithubActivityArgs): Promise<GithubActivityResult | null> {
   if (!user) return null;
 
@@ -1046,7 +1046,7 @@ export interface PingGithubArgs {
  * permissions, even though the token itself is valid.
  */
 export async function pingGithub({
-  token, user, timeoutMs = 12_000,
+  token, user, timeoutMs = 60_000,
 }: PingGithubArgs): Promise<PingGithubResult> {
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',
@@ -1933,7 +1933,7 @@ export interface FetchGithubRangeResult extends GithubByRepo {
 
 /** Fetch a user's commits across `repos` in a date range, grouped by repo. */
 export async function fetchGithubRange({
-  token, user, repos, since, until, timeoutMs = 30_000,
+  token, user, repos, since, until, timeoutMs = 60_000,
 }: FetchGithubRangeArgs): Promise<FetchGithubRangeResult> {
   if (!user || !repos?.length) return { commits: [], repos: [], total: 0 };
   const headers: Record<string, string> = {
