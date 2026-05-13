@@ -55,7 +55,7 @@ import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
-import { makeReviewRouter } from './routes/review.js';
+import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -116,6 +116,18 @@ for (const m of listPendingMeals(db, { limit: 50 })) {
     console.log(`[startup] re-queuing ${pendingDiaries.length} pending diary job(s): ${pendingDiaries.map((d) => d.date).join(', ')}`);
     for (const { date } of pendingDiaries) queues.enqueueDiary(date);
   }
+}
+
+// レビュー対象を LUDIARS clone から自動 seed (= 既存に追加するだけで、 ユーザが
+// UI で追加した行は触らない)。
+try {
+  const seedResult = seedReviewTargets(db);
+  if (seedResult.seeded > 0) {
+    console.log(`[startup] seeded ${seedResult.seeded} review target(s) from LUDIARS clones (${seedResult.skipped} skipped)`);
+  }
+} catch (e) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.warn(`[startup] review target seed failed: ${msg}`);
 }
 
 // ── App ──────────────────────────────────────────────────────────────────
@@ -207,7 +219,7 @@ app.route('/', makeMultiRouter({
   triggerResolveAsync: ws.triggerResolveAsync,
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
-app.route('/', makeReviewRouter());
+app.route('/', makeReviewRouter({ db }));
 
 // ---- static UI ------------------------------------------------------------
 

@@ -9,7 +9,7 @@
   <title>Memoria</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon-192.svg" />
-  <link rel="stylesheet" href="style.css?v=20260513g" />
+  <link rel="stylesheet" href="style.css?v=20260513h" />
 </head>
 <body>
   <header class="topbar">
@@ -302,9 +302,11 @@
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
           </button>
+          <button class="tab" data-tab="review">
+            <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
-               機能タブからは外す (PC/スマホ共通)。
-               🔍 レビュー はデータベースタブのサブタブ (data-db-sub="review") へ移動。 -->
+               機能タブからは外す (PC/スマホ共通)。 -->
         </div>
         <button type="button" id="tabMoreBtn" class="tab tab-more-btn" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
         <ul id="tabMoreMenu" class="tab-more-menu" hidden role="menu"></ul>
@@ -645,7 +647,6 @@
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
-          <button class="wl-subtab" data-db-sub="review">🔍 レビュー</button>
           <button class="wl-subtab" data-db-sub="queue">⚙ キュー <span id="dbQueueBadge" class="tab-count hidden">0</span></button>
         </nav>
       </div>
@@ -869,9 +870,10 @@
 
       <div id="reviewView" class="hidden">
         <div class="bookmarks-toolbar">
-          <span class="muted">LUDIARS 全サービスの AIFormat レビュー (skill <code>/ludiars-review</code> が生成)</span>
+          <span class="muted">AIFormat レビュー (skill <code>/ludiars-review</code> が生成)</span>
           <span class="grow"></span>
           <button id="reviewBackBtn" class="ghost" type="button" hidden>← 一覧に戻る</button>
+          <button id="reviewAddTargetBtn" class="ghost" type="button" title="レビュー対象リポを追加">+ 追加</button>
           <button id="reviewRefresh" class="ghost" type="button">更新</button>
         </div>
         <div id="reviewListLayout">
@@ -1235,6 +1237,34 @@
     <ul id="dictLinks" class="dict-links"></ul>
   </div>
 
+  <div id="reviewTargetModal" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <h3 style="margin:0;flex:1">🔍 レビュー対象リポを追加</h3>
+      <button id="reviewTargetSaveBtn">保存</button>
+      <button id="reviewTargetCloseBtn" class="modal-close" title="閉じる">×</button>
+    </div>
+    <p class="muted" style="margin:8px 0;font-size:12px">
+      ローカルにある git clone をレビュー対象として登録します。 cloud routine
+      <code>ludiars-review-daily</code> は登録済の対象を読み、 指定フォーマットに
+      従って <code>review/&lt;date&gt;/</code> を生成します。
+    </p>
+    <h4>表示名</h4>
+    <input id="reviewTargetName" type="text" placeholder="例: Memoria" />
+    <h4>ローカルパス</h4>
+    <input id="reviewTargetPath" type="text" placeholder="例: E:/Document/Ars/Memoria" />
+    <p class="muted" style="font-size:11px;margin:4px 0">
+      LUDIARS_ROOT (既定 <code>E:/Document/Ars</code>) からの相対パスでも、 絶対パスでも可。
+    </p>
+    <h4>フォーマット</h4>
+    <select id="reviewTargetFormat">
+      <option value="aiformat">AIFormat (5 観点 + 総合)</option>
+    </select>
+    <p class="muted" style="font-size:11px;margin:4px 0">
+      現在は AIFormat のみ。 カスタムフォーマットは将来対応。
+    </p>
+    <div id="reviewTargetError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
+  </div>
+
   <div id="appsDetail" class="dict-detail modal-panel hidden">
     <div class="dict-detail-head">
       <input id="appsKey" type="text" placeholder="process_name" disabled />
@@ -1519,6 +1549,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260513e"></script>
+  <script src="app.js?v=20260513f"></script>
 </body>
 </html>

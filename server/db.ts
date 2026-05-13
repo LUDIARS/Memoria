@@ -412,6 +412,20 @@ export function openDb(dbPath: string): Db {
       not_found       INTEGER NOT NULL DEFAULT 0
     );
 
+    -- レビュー対象リポジトリ。 ludiars-review skill (= cloud routine) が
+    -- iterate するリスト。 起動時に LUDIARS_ROOT 配下の git clone を seed し、
+    -- ユーザは UI から任意のローカルパスを足せる。 format_key は将来カスタム
+    -- フォーマットを追加するための拡張点 (現状は 'aiformat' のみ)。
+    CREATE TABLE IF NOT EXISTS review_targets (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL UNIQUE,
+      local_path  TEXT NOT NULL UNIQUE,
+      format_key  TEXT NOT NULL DEFAULT 'aiformat',
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_targets_enabled ON review_targets(enabled);
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,
@@ -2308,6 +2322,75 @@ export function gameUsageForDate(db: Db, dateStr: string, limit = 20): GameUsage
     ORDER BY minutes_played DESC
     LIMIT ?
   `).all(dateStr, limit) as GameUsageRow[];
+}
+
+// ─── review_targets ──────────────────────────────────────────────────────────
+export interface ReviewTargetRow {
+  id: number;
+  name: string;
+  local_path: string;
+  format_key: string;
+  enabled: number;          // 1 or 0
+  created_at: string;
+}
+
+export function listReviewTargets(db: Db, { enabledOnly = false }: { enabledOnly?: boolean } = {}): ReviewTargetRow[] {
+  const where = enabledOnly ? 'WHERE enabled = 1' : '';
+  return db.prepare(`
+    SELECT id, name, local_path, format_key, enabled, created_at
+    FROM review_targets
+    ${where}
+    ORDER BY name ASC
+  `).all() as ReviewTargetRow[];
+}
+
+export function getReviewTargetByName(db: Db, name: string): ReviewTargetRow | undefined {
+  return db.prepare(
+    `SELECT id, name, local_path, format_key, enabled, created_at
+     FROM review_targets WHERE name = ?`,
+  ).get(name) as ReviewTargetRow | undefined;
+}
+
+export function insertReviewTarget(
+  db: Db,
+  { name, local_path, format_key = 'aiformat' }: { name: string; local_path: string; format_key?: string },
+): number {
+  const r = db.prepare(
+    `INSERT INTO review_targets (name, local_path, format_key) VALUES (?, ?, ?)`,
+  ).run(name, local_path, format_key);
+  return Number(r.lastInsertRowid);
+}
+
+/** 既存があれば何もしない (= INSERT OR IGNORE)。 戻り値: 新規に挿入したら true */
+export function insertReviewTargetIfMissing(
+  db: Db,
+  { name, local_path, format_key = 'aiformat' }: { name: string; local_path: string; format_key?: string },
+): boolean {
+  const r = db.prepare(
+    `INSERT OR IGNORE INTO review_targets (name, local_path, format_key) VALUES (?, ?, ?)`,
+  ).run(name, local_path, format_key);
+  return r.changes > 0;
+}
+
+export function updateReviewTarget(
+  db: Db,
+  id: number,
+  patch: { name?: string; local_path?: string; format_key?: string; enabled?: 0 | 1 },
+): void {
+  const set: string[] = [];
+  const args: unknown[] = [];
+  if (typeof patch.name === 'string') { set.push('name = ?'); args.push(patch.name); }
+  if (typeof patch.local_path === 'string') { set.push('local_path = ?'); args.push(patch.local_path); }
+  if (typeof patch.format_key === 'string') { set.push('format_key = ?'); args.push(patch.format_key); }
+  if (patch.enabled === 0 || patch.enabled === 1) { set.push('enabled = ?'); args.push(patch.enabled); }
+  if (set.length === 0) return;
+  args.push(id);
+  db.prepare(`UPDATE review_targets SET ${set.join(', ')} WHERE id = ?`).run(...args);
+}
+
+export function deleteReviewTarget(db: Db, id: number): boolean {
+  const r = db.prepare(`DELETE FROM review_targets WHERE id = ?`).run(id);
+  return r.changes > 0;
 }
 
 export function activityEventsForDate(db: Db, dateStr: string): ActivityEventParsed[] {

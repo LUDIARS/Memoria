@@ -1054,7 +1054,7 @@ function jobLabel(item) {
 // 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
 // meals は top-level タブ。
 const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external', 'review']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
 
 function switchTab(tab) {
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
@@ -1085,6 +1085,7 @@ function switchTab(tab) {
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
+  $('reviewView')?.classList.toggle('hidden', tab !== 'review');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
@@ -1100,6 +1101,7 @@ function switchTab(tab) {
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
+  if (tab === 'review') loadReviewRepos();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
@@ -4673,12 +4675,13 @@ function hideModal(panelId) {
   const dictOpen = !$('dictDetail').classList.contains('hidden');
   const domOpen  = !$('domainDetail').classList.contains('hidden');
   const appsOpen = $('appsDetail') ? !$('appsDetail').classList.contains('hidden') : false;
+  const reviewTgtOpen = $('reviewTargetModal') ? !$('reviewTargetModal').classList.contains('hidden') : false;
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
   const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
   const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -4688,6 +4691,7 @@ function closeAllModals() {
   hideModal('dictDetail');
   hideModal('domainDetail');
   if ($('appsDetail')) hideModal('appsDetail');
+  if ($('reviewTargetModal')) hideModal('reviewTargetModal');
   hideModal('taskEditorModal');
   hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
@@ -7679,7 +7683,6 @@ const DB_SUB_VIEWS = {
   domain: 'domainView',
   workplace: 'workplaceView',
   apps: 'appsView',
-  review: 'reviewView',
   queue: 'queueView',
 };
 
@@ -7714,7 +7717,6 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
-  if (sub === 'review') loadReviewRepos();
   if (sub === 'queue') renderQueue();
 }
 
@@ -10247,6 +10249,46 @@ document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
   renderReviewMenu();
   renderReviewCards();
 });
+
+// ── レビュー対象の追加モーダル ─────────────────────────────────
+function openReviewTargetModal() {
+  ($('reviewTargetName') as HTMLInputElement).value = '';
+  ($('reviewTargetPath') as HTMLInputElement).value = '';
+  ($('reviewTargetFormat') as HTMLSelectElement).value = 'aiformat';
+  const err = $('reviewTargetError');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('reviewTargetModal');
+}
+
+async function submitReviewTarget() {
+  const name = ($('reviewTargetName') as HTMLInputElement).value.trim();
+  const local_path = ($('reviewTargetPath') as HTMLInputElement).value.trim();
+  const format_key = ($('reviewTargetFormat') as HTMLSelectElement).value;
+  const err = $('reviewTargetError');
+  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
+  if (!name) return showErr('表示名を入力してください');
+  if (!local_path) return showErr('ローカルパスを入力してください');
+  try {
+    const res = await fetch('/api/review/targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, local_path, format_key }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(body.error || `${res.status}`);
+    }
+    hideModal('reviewTargetModal');
+    flashToast('レビュー対象を追加しました');
+    await loadReviewRepos();
+  } catch (e) {
+    showErr((e as Error).message);
+  }
+}
+
+$('reviewAddTargetBtn')?.addEventListener('click', openReviewTargetModal);
+$('reviewTargetSaveBtn')?.addEventListener('click', () => void submitReviewTarget());
+$('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTargetModal'));
 document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   reviewState.currentDate = ev.target.value;
   void loadReviewFile();
