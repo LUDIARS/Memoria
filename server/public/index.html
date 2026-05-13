@@ -9,7 +9,7 @@
   <title>Memoria</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon-192.svg" />
-  <link rel="stylesheet" href="style.css?v=20260513i" />
+  <link rel="stylesheet" href="style.css?v=20260513k" />
 </head>
 <body>
   <header class="topbar">
@@ -483,12 +483,21 @@
 
       <div id="recommendView" class="hidden">
         <div class="rec-bar">
-          <span>保存済 HTML から外部リンクを抽出し、未訪問のサイトを推薦。スコアは「同じリンクが何件の保存記事に出現したか」。</span>
+          <span id="recBarDescription">直近 1 週間の作業ログ / ブラウザ履歴 / ブクマ / git commit / Claude プロンプト / ゲーム / ノート + Dig を 6 つの AI アナリスト (Sonnet) が並列に分析し、 Opus が統合して「いま打開につながる」 リソースを提示します。</span>
           <span class="grow"></span>
-          <button id="recRefresh" class="ghost">再計算</button>
+          <span id="recRunMeta" class="rec-run-meta"></span>
+          <button id="recRunNow" class="primary">いま生成 (5–30 分)</button>
+        </div>
+        <div id="recDisabled" class="rec-disabled hidden">
+          <p><strong>AI が設定されていません。</strong></p>
+          <p>おすすめは AI 駆動です。 設定 → LLM プロバイダで「<code>recommendation_agent</code>」 (Sonnet 推奨) と「<code>recommendation_synthesize</code>」 (Opus 推奨) を選択してください。</p>
+          <p id="recDisabledReason" class="muted"></p>
+        </div>
+        <div id="recRunning" class="rec-running hidden">
+          <p>AI 分析中… (6 並列 Sonnet → Opus 統合、 通常 5–30 分)</p>
         </div>
         <div id="recList" class="rec-list"></div>
-        <div id="recEmpty" class="queue-empty hidden">推薦できる未訪問リンクがありません。保存記事を増やすと候補が出ます。</div>
+        <div id="recEmpty" class="queue-empty hidden">まだ AI による分析結果がありません。 「いま生成」 を押して最初の run を開始してください。</div>
       </div>
 
       <div id="dictView" class="hidden">
@@ -1549,6 +1558,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260513g"></script>
+  <script src="app.js?v=20260513i"></script>
 </body>
 </html>

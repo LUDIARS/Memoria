@@ -270,7 +270,7 @@ const state: State = {
   visitsSelected: new Set<unknown>(),
   visitsRange: '7',
   trendsRange: '30',
-  recommendations: [],
+  recommendations: { available: true, running: false, items: [], run: null, reason: '' },
   digSession: null,
   digHistory: [],
   digSelected: new Set<unknown>(),
@@ -3794,46 +3794,134 @@ async function saveDiarySettings() {
   }
 }
 
-async function loadRecommendations(force = false) {
+// AI 主導おすすめ。 GET で latest run の結果 + AI availability を取り、
+// 「いま生成」 ボタンで POST /api/recommendations/run を蹴る。 進行中は 5 秒
+// 毎に polling して done になったら再 fetch + render。
+const REC_AGENT_LABELS = {
+  browser_history: 'ブラウザ',
+  bookmarks: 'ブクマ',
+  git_commits: 'git',
+  claude_prompts: 'Claude',
+  games_apps: 'ゲーム/アプリ',
+  notes_digs: 'ノート+Dig',
+};
+
+let recPollTimer = null;
+
+async function loadRecommendations() {
   try {
-    const url = '/api/recommendations' + (force ? '?force=1' : '');
-    const { items } = await api(url);
-    state.recommendations = items;
+    const data = await api('/api/recommendations');
+    state.recommendations = {
+      available: !!data.available,
+      running: !!data.running,
+      items: data.items || [],
+      run: data.run || null,
+      reason: data.reason || '',
+    };
     renderRecommendations();
+    if (state.recommendations.running) startRecPolling();
+    else stopRecPolling();
   } catch (e) {
     console.error('rec load failed', e);
   }
 }
 
+function startRecPolling() {
+  if (recPollTimer) return;
+  recPollTimer = setInterval(() => {
+    loadRecommendations().catch(() => { /* ignore — next tick retries */ });
+  }, 5000);
+}
+
+function stopRecPolling() {
+  if (recPollTimer) { clearInterval(recPollTimer); recPollTimer = null; }
+}
+
+async function triggerRecommendationRun() {
+  const btn = $('recRunNow');
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    await api('/api/recommendations/run', { method: 'POST' });
+    state.recommendations.running = true;
+    renderRecommendations();
+    startRecPolling();
+  } catch (e) {
+    alert(`生成失敗: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderRecommendations() {
-  const items = state.recommendations;
+  const rec = state.recommendations;
   const list = $('recList');
   const empty = $('recEmpty');
   const badge = $('tabRecommendCount');
+  const disabled = $('recDisabled');
+  const running = $('recRunning');
+  const runBtn = $('recRunNow');
+  const runMeta = $('recRunMeta');
+  const reasonEl = $('recDisabledReason');
+
+  // AI 未設定: placeholder のみ表示
+  if (!rec.available) {
+    disabled.classList.remove('hidden');
+    if (reasonEl) reasonEl.textContent = rec.reason || '';
+    running.classList.add('hidden');
+    empty.classList.add('hidden');
+    list.innerHTML = '';
+    if (runBtn) runBtn.disabled = true;
+    badge.classList.add('hidden');
+    if (runMeta) runMeta.textContent = '';
+    return;
+  }
+  disabled.classList.add('hidden');
+  if (runBtn) runBtn.disabled = rec.running;
+
+  if (runMeta) {
+    runMeta.textContent = rec.run
+      ? `最終: ${formatRunMeta(rec.run)}`
+      : '';
+  }
+
+  const items = rec.items || [];
   if (items.length > 0) {
     badge.classList.remove('hidden');
     badge.textContent = String(items.length);
   } else {
     badge.classList.add('hidden');
   }
+
+  if (rec.running) {
+    running.classList.remove('hidden');
+  } else {
+    running.classList.add('hidden');
+  }
+
   if (items.length === 0) {
     list.innerHTML = '';
-    empty.classList.remove('hidden');
+    if (!rec.running) empty.classList.remove('hidden');
+    else empty.classList.add('hidden');
     return;
   }
   empty.classList.add('hidden');
   list.innerHTML = items.map(r => {
-    const sources = (r.sources || []).map(s => escapeHtml(s.title)).slice(0, 3).join(' / ');
+    const kinds = (r.agent_kinds || [])
+      .map(k => `<span class="rec-tag">${escapeHtml(REC_AGENT_LABELS[k] || k)}</span>`)
+      .join('');
     return `
       <div class="rec-card" data-url="${escapeHtml(r.url)}">
-        <div class="domain">${escapeHtml(r.domain)}<span class="rec-score">${r.source_count} 件の記事から</span></div>
-        <div class="anchor">${escapeHtml(r.anchor || r.url)}</div>
-        <div class="url">${escapeHtml(r.url)}</div>
-        <div class="why">参照元: ${sources}${(r.sources || []).length > 3 ? ' …' : ''}</div>
+        <div class="rec-head">
+          <div class="rec-title">${escapeHtml(r.title || r.url)}</div>
+          <div class="rec-kinds">${kinds}</div>
+        </div>
+        <div class="url"><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.url)}</a></div>
+        ${r.why ? `<div class="why"><strong>なぜ:</strong> ${escapeHtml(r.why)}</div>` : ''}
+        ${r.expected_value ? `<div class="why"><strong>得られるもの:</strong> ${escapeHtml(r.expected_value)}</div>` : ''}
         <div class="actions">
           <button class="rec-save">保存</button>
           <a class="ghost rec-open" href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">開く</a>
-          <button class="ghost rec-dismiss">却下</button>
         </div>
       </div>
     `;
@@ -3849,28 +3937,21 @@ function renderRecommendations() {
           body: JSON.stringify({ urls: [url] }),
         });
         card.remove();
-        state.recommendations = state.recommendations.filter(r => r.url !== url);
+        state.recommendations.items = state.recommendations.items.filter(r => r.url !== url);
         renderRecommendations();
         await refreshQueue();
       } catch (e) {
         alert(`保存失敗: ${e.message}`);
       }
     });
-    card.querySelector('.rec-dismiss').addEventListener('click', async () => {
-      try {
-        await api('/api/recommendations/dismiss', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        });
-        card.remove();
-        state.recommendations = state.recommendations.filter(r => r.url !== url);
-        renderRecommendations();
-      } catch (e) {
-        alert(`却下失敗: ${e.message}`);
-      }
-    });
   });
+}
+
+function formatRunMeta(run) {
+  const dt = (run.finished_at || run.started_at || '').slice(0, 16).replace('T', ' ');
+  const dur = run.duration_ms ? ` / ${Math.round(run.duration_ms / 60000)} 分` : '';
+  const n = typeof run.result_count === 'number' ? ` / ${run.result_count} 件` : '';
+  return `${dt}${dur}${n}`;
 }
 
 // ── trends ─────────────────────────────────────────────────────────────
@@ -4552,7 +4633,7 @@ $('trendsRange').addEventListener('change', (e) => {
   state.trendsRange = (e.target as HTMLSelectElement).value;
   loadTrends();
 });
-$('recRefresh').addEventListener('click', () => loadRecommendations(true));
+$('recRunNow')?.addEventListener('click', () => triggerRecommendationRun());
 $('digRun').addEventListener('click', () => startDig());
 $('digRunNewTheme')?.addEventListener('click', () => startDig({ forceNewTheme: true }));
 $('digPickClear')?.addEventListener('click', () => clearDigPick());
