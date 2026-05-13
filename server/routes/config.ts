@@ -114,6 +114,7 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
     if (typeof body.tasks_reminder_minute === 'number') patch['features.tasks.reminder.minute'] = String(Math.max(0, Math.min(59, Math.floor(body.tasks_reminder_minute))));
     if (typeof body.tasks_reminder_nuntius_url === 'string') patch['features.tasks.reminder.nuntius_url'] = body.tasks_reminder_nuntius_url.trim();
     if (typeof body.workplace_match_radius_m === 'number') patch['features.workplace.match.radius_m'] = String(Math.max(20, Math.min(2000, Math.floor(body.workplace_match_radius_m))));
+    if (typeof body.workplace_max_speed_kmh === 'number') patch['features.workplace.max_speed_kmh'] = String(Math.max(0, Math.min(200, body.workplace_max_speed_kmh)));
     if (Object.keys(patch).length) setAppSettings(db, patch);
     if (Object.prototype.hasOwnProperty.call(body, 'mcp_autostart_enabled')) {
       onMcpAutostartChange(privacySettings(db).mcp_autostart_enabled);

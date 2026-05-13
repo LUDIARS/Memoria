@@ -18,6 +18,10 @@ export interface WorkLocationRow {
   /** 1 つだけ true にできる「自宅」 フラグ。 PC が有線接続のとき higher
    *  priority な信号 (GPS / WiFi) が無ければ、 ここを current に置く。 */
   is_home: 0 | 1;
+  /** 場所ごとの GPS 誤差許容半径 (m)。 NULL なら global default
+   *  (`workplace_match_radius_m`) を使う。 都市公園 vs オフィスビル等、
+   *  場所の物理的な大きさに応じて 1〜50_000m の範囲で設定可。 */
+  radius_m: number | null;
   shareable: 0 | 1;
   shared_at: string | null;
   shared_origin: string | null;

@@ -18,6 +18,7 @@ export interface PrivacySettings {
   workplace_geo_enabled: boolean;
   workplace_auto_share_enabled: boolean;
   workplace_match_radius_m: number;     // 20-2000m
+  workplace_max_speed_kmh: number;      // 0-200, 0=disable speed filter
 }
 
 export type PrivacySettingsPatch = Partial<PrivacySettings>;

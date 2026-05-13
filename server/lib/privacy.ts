@@ -23,6 +23,10 @@ export interface PrivacySettings {
   workplace_geo_enabled: boolean;
   workplace_auto_share_enabled: boolean;
   workplace_match_radius_m: number;
+  /** 移動速度の閾値 (km/h)。 これより速い瞬間速度の GPS 点は「移動中」 とみなして
+   *  workplace タグ付けの対象から外す (= 通り過ぎただけの場所を誤検出しない)。
+   *  既定 5 km/h。 0 にすると速度フィルタ無効。 */
+  workplace_max_speed_kmh: number;
   legatus_enabled: boolean;
   // AI 自動処理の opt-out 群。 すべて default true (= 現状維持) で、
   // ローカル運用ユーザは個別に OFF にして「素材は溜まる、 AI は呼ばない」
@@ -75,7 +79,10 @@ export function privacySettings(db: Db): PrivacySettings {
     workplace_auto_share_enabled: settingBool(s, 'features.workplace.share.enabled', false),
     // OwnTracks の locator displacement と整合させやすい 50m を既定に。
     // 屋内ビルや GPS が荒い環境では 100-200m に上げる。
+    // place ごとの radius_m が work_locations に設定されていればそちらが優先。
     workplace_match_radius_m: Number(s['features.workplace.match.radius_m'] ?? 50),
+    // 移動速度の閾値 (km/h)。 0 = フィルタ無効。 既定 5 km/h は徒歩上限近辺。
+    workplace_max_speed_kmh: Number(s['features.workplace.max_speed_kmh'] ?? 5),
     // Legatus 連携は明示 opt-in。 default OFF (= 旧 Legatus 同居 PC を持たないユーザは
     // 何も気にせず UI から消える)。
     legatus_enabled: settingBool(s, 'features.legatus.enabled', false),

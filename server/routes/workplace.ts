@@ -94,7 +94,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     const body = await c.req.json().catch(() => ({})) as
       { name?: unknown; address?: unknown; latitude?: unknown; longitude?: unknown;
         description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown;
-        is_home?: unknown; shareable?: unknown };
+        is_home?: unknown; shareable?: unknown; radius_m?: unknown };
     const name = String(body.name ?? '').trim();
     if (!name) return c.json({ error: 'name required' }, 400);
     const id = insertWorkLocation(db, {
@@ -108,6 +108,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
       wifi_ssids: typeof body.wifi_ssids === 'string' ? body.wifi_ssids.trim() : null,
       is_home: !!body.is_home,
       shareable: !!body.shareable,
+      radius_m: body.radius_m == null || body.radius_m === '' ? null : Number(body.radius_m),
     });
     return c.json({ location: getWorkLocation(db, id) }, 201);
   });
@@ -118,7 +119,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     const body = await c.req.json().catch(() => ({})) as
       { name?: unknown; address?: unknown; latitude?: unknown; longitude?: unknown;
         description?: unknown; url?: unknown; tags?: unknown; wifi_ssids?: unknown;
-        is_home?: unknown; shareable?: unknown };
+        is_home?: unknown; shareable?: unknown; radius_m?: unknown };
     const patch: Record<string, unknown> = {};
     if (typeof body.name === 'string') patch.name = body.name.trim();
     if (typeof body.address === 'string' || body.address === null) patch.address = body.address;
@@ -134,6 +135,12 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     if (typeof body.wifi_ssids === 'string' || body.wifi_ssids === null) patch.wifi_ssids = body.wifi_ssids;
     if (typeof body.is_home === 'boolean') patch.is_home = body.is_home;
     if (typeof body.shareable === 'boolean') patch.shareable = body.shareable;
+    if (body.radius_m === null || body.radius_m === '' || body.radius_m === undefined) {
+      if ('radius_m' in body) patch.radius_m = null;
+    } else {
+      const r = Number(body.radius_m);
+      if (Number.isFinite(r) && r > 0) patch.radius_m = Math.max(1, Math.min(50_000, r));
+    }
     updateWorkLocation(db, id, patch);
     return c.json({ location: getWorkLocation(db, id) });
   });
@@ -207,16 +214,19 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     if (!settings.workplace_geo_enabled) {
       return c.json({ error: 'workplace_geo disabled' }, 403);
     }
-    const radius = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 150));
+    const globalRadius = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 150));
 
-    // Find nearest workplace within radius.
+    // Find nearest workplace within its own radius (per-place `radius_m` column
+    // が NULL なら global default を使う)。 「最も近い」 は「正規化距離 d / r」
+    // ではなく「実距離 d」 で比較する (= 半径が大きい場所が必ず勝つわけではない)。
     const all = listWorkLocations(db, { limit: 500 });
     let matched: typeof all[number] | null = null;
     let matchedDist = Infinity;
     for (const w of all) {
       if (!Number.isFinite(w.latitude) || !Number.isFinite(w.longitude)) continue;
+      const r = (typeof w.radius_m === 'number' && w.radius_m > 0) ? w.radius_m : globalRadius;
       const d = haversineMeters({ lat, lng }, { lat: w.latitude as number, lng: w.longitude as number });
-      if (d <= radius && d < matchedDist) {
+      if (d <= r && d < matchedDist) {
         matched = w;
         matchedDist = d;
       }
@@ -415,14 +425,37 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
     }
 
     const settings = privacySettings(db);
-    const RADIUS_M = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 50));
+    const GLOBAL_RADIUS_M = Math.max(20, Math.min(2000, Number(settings.workplace_match_radius_m) || 50));
+    // 移動速度の閾値 (km/h)。 これより速い瞬間速度の GPS 点は「移動中」 と
+    // 見なして workplace タグ付けの対象から外す (= 通り過ぎただけの場所を誤検出しない)。
+    // 既定 5 km/h (= 徒歩速度上限近辺)。 0 にすると速度フィルタ無効。
+    const MAX_SPEED_KMH = Math.max(0, Number(settings.workplace_max_speed_kmh) || 5);
+    const MAX_SPEED_MPS = MAX_SPEED_KMH > 0 ? (MAX_SPEED_KMH * 1000) / 3600 : Infinity;
 
-    const tagged = points.map((p) => {
+    // 速度計算: 各点について「直前点との距離 / 時間差」 で瞬間速度を出す。
+    // 最初の点は速度不明 → 含める。
+    const tsMs = (s: string): number => {
+      const t = Date.parse(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+      return Number.isFinite(t) ? t : 0;
+    };
+    const speedFiltered = points.map((p, i) => {
+      if (i === 0 || MAX_SPEED_MPS === Infinity) return { p, fast: false };
+      const prev = points[i - 1];
+      const d = distMeters({ lat: p.lat, lon: p.lon }, { lat: prev.lat, lon: prev.lon });
+      const dt = (tsMs(p.recorded_at) - tsMs(prev.recorded_at)) / 1000;
+      if (dt <= 0) return { p, fast: false };
+      const v = d / dt;
+      return { p, fast: v > MAX_SPEED_MPS };
+    });
+
+    const tagged = speedFiltered.map(({ p, fast }) => {
+      if (fast) return { recorded_at: p.recorded_at, workplace_id: null };
       let bestId: number | null = null;
       let bestDist = Infinity;
       for (const w of places) {
+        const r = (typeof w.radius_m === 'number' && w.radius_m > 0) ? w.radius_m : GLOBAL_RADIUS_M;
         const d = distMeters({ lat: p.lat, lon: p.lon }, { lat: w.latitude, lon: w.longitude });
-        if (d <= RADIUS_M && d < bestDist) {
+        if (d <= r && d < bestDist) {
           bestId = w.id;
           bestDist = d;
         }

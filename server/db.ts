@@ -539,6 +539,7 @@ export function openDb(dbPath: string): Db {
       tags           TEXT,
       wifi_ssids     TEXT,
       is_home        INTEGER NOT NULL DEFAULT 0,
+      radius_m       INTEGER,
       shareable      INTEGER NOT NULL DEFAULT 0,
       shared_at      TEXT,
       shared_origin  TEXT,
@@ -695,6 +696,12 @@ export function openDb(dbPath: string): Db {
   // 排他制御、 ここでは制約までは設けない)。
   if (wlCols.length > 0 && !wlCols.includes('is_home')) {
     db.exec(`ALTER TABLE work_locations ADD COLUMN is_home INTEGER NOT NULL DEFAULT 0`);
+  }
+  // radius_m: 場所ごとの GPS 誤差許容半径 (m)。 NULL の場合は global の
+  // `workplace_match_radius_m` 設定を使う。 都市公園 vs オフィスビルなど、
+  // 場所の物理的な大きさに応じて個別に設定できるようにする。
+  if (wlCols.length > 0 && !wlCols.includes('radius_m')) {
+    db.exec(`ALTER TABLE work_locations ADD COLUMN radius_m INTEGER`);
   }
 
   const mealsCols = (db.prepare(`PRAGMA table_info(meals)`).all() as { name: string }[]).map(c => c.name);
@@ -4090,6 +4097,8 @@ export interface InsertWorkLocationInput {
   /** 有線接続時のデフォルト workplace に使う */
   is_home?: boolean | 0 | 1;
   shareable?: boolean | 0 | 1;
+  /** GPS 誤差許容半径 (m)。 null/undefined なら global default を使う */
+  radius_m?: number | string | null;
 }
 
 export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number {
@@ -4099,8 +4108,8 @@ export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number
   }
   const info = db.prepare(`
     INSERT INTO work_locations
-      (name, address, latitude, longitude, description, url, tags, wifi_ssids, is_home, shareable)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (name, address, latitude, longitude, description, url, tags, wifi_ssids, is_home, shareable, radius_m)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     loc.name,
     loc.address ?? null,
@@ -4112,6 +4121,7 @@ export function insertWorkLocation(db: Db, loc: InsertWorkLocationInput): number
     loc.wifi_ssids ?? null,
     loc.is_home ? 1 : 0,
     loc.shareable ? 1 : 0,
+    loc.radius_m == null ? null : Math.max(1, Math.min(50_000, Number(loc.radius_m) || 0)) || null,
   );
   return Number(info.lastInsertRowid);
 }
@@ -4123,7 +4133,7 @@ export function updateWorkLocation(db: Db, id: number, patch: Record<string, unk
   }
   const allowed = new Set([
     'name', 'address', 'latitude', 'longitude', 'description', 'url', 'tags',
-    'wifi_ssids', 'is_home',
+    'wifi_ssids', 'is_home', 'radius_m',
     'shareable', 'shared_at', 'shared_origin',
     'owner_user_id', 'owner_user_name',
   ]);
