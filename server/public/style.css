@@ -5174,7 +5174,10 @@ dialog.loc-edit-modal[open] {
 .wl-subtab {
   background: transparent;
   border: 1px solid var(--border);
-  border-bottom: none;
+  /* inactive にも透明な border-bottom を持たせて高さを active と揃える。
+   * 以前は `border-bottom: none` で active 時に 1px 高さが変わり、
+   * タップごとに行全体が上下にガタついていた。 */
+  border-bottom: 1px solid transparent;
   border-radius: 6px 6px 0 0;
   padding: 6px 12px;
   font-size: 13px;
