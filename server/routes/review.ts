@@ -125,7 +125,7 @@ export function makeReviewRouter(deps: ReviewRouterDeps): Hono {
       name?: unknown; local_path?: unknown; format_key?: unknown;
     } | null;
     const name = typeof body?.name === 'string' ? body.name.trim() : '';
-    let local_path = typeof body?.local_path === 'string' ? body.local_path.trim() : '';
+    const local_path = typeof body?.local_path === 'string' ? body.local_path.trim() : '';
     const format_key = typeof body?.format_key === 'string' ? body.format_key.trim() : 'aiformat';
     if (!name) return c.json({ error: 'name required' }, 400);
     if (!local_path) return c.json({ error: 'local_path required' }, 400);
