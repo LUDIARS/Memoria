@@ -265,6 +265,16 @@ UI 設定が無い限り使うのは port / data dir くらい。
 | `MEMORIA_WIFI_INTERVAL_SEC` | `600` | WiFi 位置の実行間隔 |
 | `MEMORIA_LEGATUS_WS` | (off) | `on` で旧 Legatus 経由 subscriber を opt-in (通常は内蔵 broker のみ) |
 
+## ユーザがやる必要のある設定
+
+各機能を使うには「ユーザ側で鍵を入れる / hook をインストールする」 など必須。
+全部まとめた一覧 → [docs/setup/user-setup.md](docs/setup/user-setup.md)。
+
+特によく聞かれるもの:
+- git post-commit hook (= ローカル commit を活動ログに) → [docs/setup/git-hooks.md](docs/setup/git-hooks.md)
+- Claude Code prompt hook → `server/hooks/claude-code-prompt.mjs` の冒頭コメント参照
+- GitHub PAT / Steam ID / OwnTracks key / LLM provider → アプリの設定パネル
+
 ## ライセンス
 
 MIT
