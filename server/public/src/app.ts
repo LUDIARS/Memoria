@@ -157,6 +157,7 @@ declare global {
 // notes module — esa / DocBase 風 WYSIWYG エディタ。
 // switchTab('notes') で loadNotes() を呼ぶ。
 import { loadNotes as notesLoad } from './notes/index.js';
+import { renderMarkdownBlock } from './markdown-block.js';
 
 // 起動チュートリアル / ページヘルプ drawer。 app.ts 肥大化対策で分離。
 // PAGE_HELP の本文を増やす場合は page-help.ts を編集する。
@@ -10086,42 +10087,36 @@ async function loadReviewRepos() {
   showReviewList();
   const cards = document.getElementById('reviewCards');
   const empty = document.getElementById('reviewEmpty');
-  const catUl = document.getElementById('reviewCategoryList');
-  if (!cards || !catUl) return;
+  if (!cards) return;
   try {
     const r = await api('/api/review/repos');
     reviewState.items = (r.items || []).slice().sort((a, b) =>
       (b.latest_date || '').localeCompare(a.latest_date || ''));
-    renderReviewCategories();
+    renderReviewMenu();
     renderReviewCards();
   } catch (e) {
     cards.innerHTML = '';
     empty?.classList.add('hidden');
-    catUl.innerHTML = `<li class="hint">読み込みエラー: ${escapeHtml(e.message)}</li>`;
+    const menu = document.getElementById('reviewRepoMenu');
+    if (menu) menu.innerHTML = `<option>読み込みエラー: ${escapeHtml(e.message)}</option>`;
   }
 }
 
-function renderReviewCategories() {
-  const ul = document.getElementById('reviewCategoryList');
-  if (!ul) return;
+function renderReviewMenu() {
+  const sel = document.getElementById('reviewRepoMenu') as HTMLSelectElement | null;
+  const count = document.getElementById('reviewListCount');
+  if (!sel) return;
   const total = reviewState.items.length;
-  const allClass = reviewState.filterRepo === null ? ' active' : '';
-  let html = `<li><a href="#" data-review-cat="" class="cat-link${allClass}">全て <span class="tab-count">${total}</span></a></li>`;
-  html += reviewState.items.map((it) => {
-    const active = reviewState.filterRepo === it.repo ? ' active' : '';
+  const opts = [`<option value="">全て (${total})</option>`];
+  for (const it of reviewState.items) {
     const warn = (it.critical_count > 0 || it.high_count > 0) ? ' ⚠' : '';
-    return `<li><a href="#" data-review-cat="${escapeHtml(it.repo)}" class="cat-link${active}">${escapeHtml(it.repo)}${warn} <span class="tab-count">1</span></a></li>`;
-  }).join('');
-  ul.innerHTML = html;
-  ul.querySelectorAll('a[data-review-cat]').forEach((a) => {
-    a.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      const repo = a.getAttribute('data-review-cat') || '';
-      reviewState.filterRepo = repo || null;
-      renderReviewCategories();
-      renderReviewCards();
-    });
-  });
+    opts.push(`<option value="${escapeHtml(it.repo)}"${reviewState.filterRepo === it.repo ? ' selected' : ''}>${escapeHtml(it.repo)}${warn}</option>`);
+  }
+  sel.innerHTML = opts.join('');
+  if (count) {
+    const shown = reviewState.filterRepo ? 1 : total;
+    count.textContent = `${shown} / ${total} 件`;
+  }
 }
 
 function renderReviewCards() {
@@ -10143,16 +10138,20 @@ function renderReviewCards() {
     const date = it.latest_date ? `<small class="muted">${escapeHtml(it.latest_date)}</small>` : '';
     const warn = (it.critical_count > 0 || it.high_count > 0)
       ? `<small style="color:#d97706">⚠ Critical ${it.critical_count} / High ${it.high_count}</small>` : '';
-    const pr = it.fix_pr
-      ? `<small><a href="${escapeHtml(it.fix_pr)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔧 修正 PR</a></small>` : '';
+    // 「現在アクティブな要修正 PR 数」 = latest.json.fix_pr が non-null なら 1。
+    // 履歴 (= 過去日付の fix_pr) を追跡する仕組みは未実装なので暫定で 0 / 1。
+    const activePrCount = it.fix_pr ? 1 : 0;
+    const prBadge = activePrCount > 0
+      ? `<a class="badge review-pr-badge" href="${escapeHtml(it.fix_pr || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="要修正 PR を開く">🔧 ${activePrCount}</a>`
+      : '';
     return `
-      <article class="card" data-review-card="${escapeHtml(it.repo)}" style="cursor:pointer">
-        <header class="card-head">
-          <strong>AIFormat レビュー</strong>
-          <span class="badge category">${escapeHtml(it.repo)}</span>
+      <article class="card review-card" data-review-card="${escapeHtml(it.repo)}">
+        <header class="review-card-head">
+          <strong class="review-card-repo">${escapeHtml(it.repo)}</strong>
+          ${prBadge}
         </header>
-        <div class="card-meta" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
-          ${score} ${date} ${warn} ${pr}
+        <div class="review-card-meta">
+          ${score} ${date} ${warn}
         </div>
       </article>`;
   }).join('');
@@ -10227,10 +10226,14 @@ async function loadReviewFile() {
   const body = document.getElementById('reviewBody');
   if (!body || !reviewState.selected || !reviewState.currentDate) return;
   const url = `/api/review/repos/${encodeURIComponent(reviewState.selected)}/${reviewState.currentDate}/${reviewState.currentFile}`;
+  body.textContent = '読み込み中…';
   try {
     const res = await fetch(url);
     if (!res.ok) { body.textContent = `${res.status}: ${await res.text()}`; return; }
-    body.textContent = await res.text();
+    const md = await res.text();
+    // 見出し + テーブル + リスト + 段落 + コードフェンスを HTML に。
+    // インラインは notes/markdown.ts:renderInline を流用 (bold / italic / code / link)。
+    body.innerHTML = renderMarkdownBlock(md);
   } catch (e) {
     body.textContent = `読み込みエラー: ${e.message}`;
   }
@@ -10238,6 +10241,12 @@ async function loadReviewFile() {
 
 document.getElementById('reviewRefresh')?.addEventListener('click', () => void loadReviewRepos());
 document.getElementById('reviewBackBtn')?.addEventListener('click', () => showReviewList());
+document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
+  const v = (ev.target as HTMLSelectElement).value;
+  reviewState.filterRepo = v || null;
+  renderReviewMenu();
+  renderReviewCards();
+});
 document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   reviewState.currentDate = ev.target.value;
   void loadReviewFile();

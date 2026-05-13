@@ -5319,6 +5319,133 @@ dialog.loc-edit-modal[open] {
 /* 🎮 ゲームログのバッジ */
 .wl-game-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 /* ─── 旧 apps-* (vertical row レイアウト) は 2026-05-13 にカード化で廃止 ─── */
+
+/* 🔍 レビュータブ (DB サブタブ) ──────────────────────────────────────── */
+.review-filter-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.review-filter-bar select {
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+.review-detail-bar {
+  padding: 8px 16px;
+  display: flex; gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+#reviewFileTabs { padding: 0 16px; }
+.review-card {
+  cursor: pointer;
+  padding: 12px 14px;
+}
+.review-card-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.review-card-repo {
+  font-size: 14px;
+  font-weight: 700;
+  flex: 1;
+  word-break: break-word;
+}
+.review-card-meta {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  font-size: 11px;
+}
+.review-pr-badge {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: #fff5e1; color: #8a5a00;
+  border: 1px solid #f0c97a;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.review-pr-badge:hover { filter: brightness(0.95); }
+
+/* markdown body (見出し / 段落 / テーブル / リスト / 引用 / コードフェンス) */
+.review-body {
+  padding: 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-y: auto;
+  max-width: 100%;
+}
+.review-body .md-h1 { font-size: 22px; font-weight: 700; margin: 18px 0 10px; border-bottom: 2px solid var(--border); padding-bottom: 6px; }
+.review-body .md-h2 { font-size: 18px; font-weight: 700; margin: 16px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.review-body .md-h3 { font-size: 16px; font-weight: 700; margin: 14px 0 6px; color: var(--accent); }
+.review-body .md-h4 { font-size: 14px; font-weight: 700; margin: 12px 0 4px; }
+.review-body .md-h5 { font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
+.review-body .md-h6 { font-size: 12px; font-weight: 700; margin: 10px 0 4px; color: var(--muted); }
+.review-body .md-p { margin: 6px 0; }
+.review-body .md-ul, .review-body .md-ol { margin: 6px 0; padding-left: 24px; }
+.review-body .md-ul li, .review-body .md-ol li { margin: 2px 0; }
+.review-body .md-blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-bg);
+  color: var(--text);
+  font-style: normal;
+}
+.review-body .md-hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+.review-body .md-code {
+  background: #2a2f3a;
+  color: #e6e9ef;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.review-body code {
+  background: var(--accent-bg);
+  color: var(--text);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", "Menlo", monospace;
+}
+.review-body .md-table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+.review-body .md-table thead { background: var(--accent-bg); }
+.review-body .md-table th, .review-body .md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.review-body .md-table th { font-weight: 700; }
+.review-body a { color: var(--accent); }
+@media (max-width: 760px) {
+  .review-body { padding: 12px; font-size: 13px; }
+  .review-body .md-h1 { font-size: 20px; }
+  .review-body .md-h2 { font-size: 16px; }
+  .review-body .md-h3 { font-size: 15px; }
+  .review-body .md-table { font-size: 12px; }
+  .review-body .md-table th, .review-body .md-table td { padding: 5px 8px; }
+}
 .wl-game-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
 .wl-game-badge-steam { background: #1b2838; color: #66c0f4; }
 .wl-game-badge-app { background: var(--accent-bg, #eef); color: var(--text); border: 1px solid var(--border); }
