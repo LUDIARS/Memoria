@@ -9,7 +9,7 @@
   <title>Memoria</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon-192.svg" />
-  <link rel="stylesheet" href="style.css?v=20260513f" />
+  <link rel="stylesheet" href="style.css?v=20260513g" />
 </head>
 <body>
   <header class="topbar">
@@ -886,11 +886,13 @@
         </div>
         <div id="reviewDetailLayout" class="hidden">
           <div class="review-detail-bar">
-            <strong id="reviewDetailRepo"></strong>
-            <label class="muted">日付 <select id="reviewDateSel"></select></label>
-            <a id="reviewFixPrLink" href="#" target="_blank" rel="noopener" hidden>🔧 修正 PR</a>
+            <div class="review-detail-title-row">
+              <h2 id="reviewDetailRepo" class="review-detail-title"></h2>
+              <a id="reviewFixPrLink" class="review-pr-badge" href="#" target="_blank" rel="noopener" hidden>🔧 修正 PR</a>
+            </div>
+            <label class="review-detail-date muted">日付 <select id="reviewDateSel"></select></label>
           </div>
-          <nav class="tabs" id="reviewFileTabs"></nav>
+          <nav class="tabs review-file-tabs" id="reviewFileTabs"></nav>
           <div id="reviewBody" class="review-body">読み込み中…</div>
         </div>
       </div>
@@ -1517,6 +1519,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260513d"></script>
+  <script src="app.js?v=20260513e"></script>
 </body>
 </html>

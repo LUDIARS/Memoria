@@ -5335,13 +5335,45 @@ dialog.loc-edit-modal[open] {
   background: var(--panel);
 }
 .review-detail-bar {
-  padding: 8px 16px;
-  display: flex; gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
+  padding: 14px 18px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   border-bottom: 1px solid var(--border);
 }
-#reviewFileTabs { padding: 0 16px; }
+.review-detail-title-row {
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap;
+}
+.review-detail-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.25;
+  word-break: break-word;
+  flex: 1;
+}
+.review-detail-date {
+  font-size: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.review-detail-date select {
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+}
+.review-file-tabs {
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+@media (max-width: 760px) {
+  .review-detail-bar { padding: 12px 14px 8px; }
+  .review-detail-title { font-size: 22px; }
+  .review-file-tabs { padding: 6px 12px 0; }
+}
 .review-card {
   cursor: pointer;
   padding: 12px 14px;
