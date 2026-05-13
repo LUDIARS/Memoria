@@ -43,14 +43,21 @@ function decodeExp(token: string): number | null {
   }
 }
 
-async function fetchProjectToken(userJwt: string, projectKey: string): Promise<CachedToken> {
+async function fetchProjectToken(
+  userJwt: string,
+  projectKey: string,
+  hubUrl: string,
+): Promise<CachedToken> {
+  // Cernere Phase 1 (PR #92) で `hub_url` を audience に入れる仕様になった。
+  // 旧 Cernere は無視するので互換性あり。 新 Cernere は PASETO v4 で発行、
+  // aud claim が hub_url と一致する。
   const res = await fetch(`${CERNERE_BASE_URL}/api/auth/project-token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${userJwt}`,
     },
-    body: JSON.stringify({ project_key: projectKey }),
+    body: JSON.stringify({ project_key: projectKey, hub_url: hubUrl }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -83,7 +90,7 @@ export async function getProjectTokenForHub(
 
   const task = (async () => {
     try {
-      const t = await fetchProjectToken(userJwt, projectKey);
+      const t = await fetchProjectToken(userJwt, projectKey, key);
       cache.set(key, t);
       return t;
     } finally {
