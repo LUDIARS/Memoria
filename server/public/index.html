@@ -302,11 +302,9 @@
           <button class="tab" data-tab="meals">
             <span class="tab-label" data-full="🍽 食事" data-short="🍽 食事">🍽 食事</span>
           </button>
-          <button class="tab" data-tab="review">
-            <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
-          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
-               機能タブからは外す (PC/スマホ共通)。 -->
+               機能タブからは外す (PC/スマホ共通)。
+               🔍 レビュー はデータベースタブのサブタブ (data-db-sub="review") へ移動。 -->
         </div>
         <button type="button" id="tabMoreBtn" class="tab tab-more-btn" aria-haspopup="true" aria-expanded="false" hidden>⋯</button>
         <ul id="tabMoreMenu" class="tab-more-menu" hidden role="menu"></ul>
@@ -646,6 +644,7 @@
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
+          <button class="wl-subtab" data-db-sub="review">🔍 レビュー</button>
           <button class="wl-subtab" data-db-sub="queue">⚙ キュー <span id="dbQueueBadge" class="tab-count hidden">0</span></button>
         </nav>
       </div>
@@ -869,20 +868,29 @@
 
       <div id="reviewView" class="hidden">
         <div class="bookmarks-toolbar">
-          <span class="muted">LUDIARS 全サービスの AIFormat レビュー (skill `ludiars-review` が生成)</span>
+          <span class="muted">LUDIARS 全サービスの AIFormat レビュー (skill <code>/ludiars-review</code> が生成)</span>
           <span class="grow"></span>
+          <button id="reviewBackBtn" class="ghost" type="button" hidden>← 一覧に戻る</button>
           <button id="reviewRefresh" class="ghost" type="button">更新</button>
         </div>
-        <div class="bookmarks-layout">
-          <aside class="bookmarks-categories" id="reviewRepoList">
+        <div id="reviewListLayout" class="bookmarks-layout">
+          <aside class="bookmarks-categories" id="reviewCategoriesPanel">
             <h3>リポジトリ</h3>
-            <ul id="reviewRepoUl"></ul>
+            <ul id="reviewCategoryList"></ul>
           </aside>
           <div class="bookmarks-main">
-            <div id="reviewDetail" class="muted" style="padding:16px">
-              左のリポジトリを選択するとレビューが表示されます。
-            </div>
+            <div id="reviewCards" class="cards"></div>
+            <div id="reviewEmpty" class="empty hidden">レビューが見つかりません。 <code>/ludiars-review</code> を実行してください。</div>
           </div>
+        </div>
+        <div id="reviewDetailLayout" class="hidden">
+          <div style="padding:8px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+            <strong id="reviewDetailRepo"></strong>
+            <label class="muted">日付 <select id="reviewDateSel"></select></label>
+            <a id="reviewFixPrLink" href="#" target="_blank" rel="noopener" hidden>🔧 修正 PR</a>
+          </div>
+          <nav class="tabs" id="reviewFileTabs" style="padding:0 16px"></nav>
+          <pre id="reviewBody" style="padding:16px;white-space:pre-wrap;font-family:var(--mono, monospace);font-size:13px;line-height:1.5">読み込み中…</pre>
         </div>
       </div>
 

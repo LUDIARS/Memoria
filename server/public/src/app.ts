@@ -1053,7 +1053,7 @@ function jobLabel(item) {
 // 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
 // meals は top-level タブ。
 const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external', 'review']);
 
 function switchTab(tab) {
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
@@ -1084,7 +1084,6 @@ function switchTab(tab) {
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
-  $('reviewView')?.classList.toggle('hidden', tab !== 'review');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
@@ -1100,7 +1099,6 @@ function switchTab(tab) {
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
-  if (tab === 'review') loadReviewRepos();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
@@ -7677,6 +7675,7 @@ const DB_SUB_VIEWS = {
   domain: 'domainView',
   workplace: 'workplaceView',
   apps: 'appsView',
+  review: 'reviewView',
   queue: 'queueView',
 };
 
@@ -7711,6 +7710,7 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
+  if (sub === 'review') loadReviewRepos();
   if (sub === 'queue') renderQueue();
 }
 
@@ -10005,8 +10005,11 @@ document.addEventListener('click', (ev) => {
   }).catch(() => {});
 });
 
-// ── review (LUDIARS AIFormat レビュー閲覧) ────────────────────────────────
-const reviewState = { repos: [], selected: null, dates: [], currentDate: null, currentFile: 'REVIEW.md' };
+// ── review (LUDIARS AIFormat レビュー閲覧、 DB タブ内サブタブ) ─────────────
+//
+// 一覧 = カード形式 (1 カード = 1 リポの最新レビュー)、 リポ = 左サイドの
+// カテゴリとして運用 (= bookmarks タブと同じレイアウト)。 カードをクリックで
+// 詳細ビュー (日付セレクト + 6 ファイルタブ) に切替。
 const REVIEW_FILES_UI = [
   ['REVIEW.md', '総合'],
   ['REVIEW_DESIGN.md', '設計'],
@@ -10015,82 +10018,155 @@ const REVIEW_FILES_UI = [
   ['REVIEW_MISSING_FEATURES.md', '不足機能'],
   ['REVIEW_QUALITY.md', '品質'],
 ];
+const reviewState = {
+  items: [],
+  filterRepo: null,            // null = 全カテゴリ
+  selected: null,
+  dates: [],
+  currentDate: null,
+  currentFile: 'REVIEW.md',
+  fixPr: null,
+};
 
 async function loadReviewRepos() {
-  const ul = document.getElementById('reviewRepoUl');
-  if (!ul) return;
+  showReviewList();
+  const cards = document.getElementById('reviewCards');
+  const empty = document.getElementById('reviewEmpty');
+  const catUl = document.getElementById('reviewCategoryList');
+  if (!cards || !catUl) return;
   try {
     const r = await api('/api/review/repos');
-    reviewState.repos = r.items || [];
-    if (reviewState.repos.length === 0) {
-      ul.innerHTML = '<li class="muted">レビューが見つかりません。 <code>/ludiars-review</code> を実行してください。</li>';
-      return;
-    }
-    ul.innerHTML = reviewState.repos.map((it) => {
-      const score = it.weighted_score ? `<span class="badge">${escapeHtml(it.weighted_score)}</span>` : '';
-      const date = it.latest_date ? `<small class="muted">${escapeHtml(it.latest_date)}</small>` : '';
-      const warn = (it.critical_count > 0 || it.high_count > 0)
-        ? `<small style="color:#d97706">⚠ C${it.critical_count}/H${it.high_count}</small>` : '';
-      return `<li><a href="#" data-review-repo="${escapeHtml(it.repo)}">${escapeHtml(it.repo)}</a> ${score} ${date} ${warn}</li>`;
-    }).join('');
-    ul.querySelectorAll('a[data-review-repo]').forEach((a) => {
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        const repo = a.getAttribute('data-review-repo');
-        if (repo) void loadReviewDetail(repo);
-      });
-    });
+    reviewState.items = (r.items || []).slice().sort((a, b) =>
+      (b.latest_date || '').localeCompare(a.latest_date || ''));
+    renderReviewCategories();
+    renderReviewCards();
   } catch (e) {
-    ul.innerHTML = `<li class="hint">読み込みエラー: ${escapeHtml(e.message)}</li>`;
+    cards.innerHTML = '';
+    empty?.classList.add('hidden');
+    catUl.innerHTML = `<li class="hint">読み込みエラー: ${escapeHtml(e.message)}</li>`;
   }
 }
 
-async function loadReviewDetail(repo) {
-  const detail = document.getElementById('reviewDetail');
-  if (!detail) return;
-  detail.innerHTML = '<div class="muted" style="padding:16px">読み込み中…</div>';
+function renderReviewCategories() {
+  const ul = document.getElementById('reviewCategoryList');
+  if (!ul) return;
+  const total = reviewState.items.length;
+  const allClass = reviewState.filterRepo === null ? ' active' : '';
+  let html = `<li><a href="#" data-review-cat="" class="cat-link${allClass}">全て <span class="tab-count">${total}</span></a></li>`;
+  html += reviewState.items.map((it) => {
+    const active = reviewState.filterRepo === it.repo ? ' active' : '';
+    const warn = (it.critical_count > 0 || it.high_count > 0) ? ' ⚠' : '';
+    return `<li><a href="#" data-review-cat="${escapeHtml(it.repo)}" class="cat-link${active}">${escapeHtml(it.repo)}${warn} <span class="tab-count">1</span></a></li>`;
+  }).join('');
+  ul.innerHTML = html;
+  ul.querySelectorAll('a[data-review-cat]').forEach((a) => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const repo = a.getAttribute('data-review-cat') || '';
+      reviewState.filterRepo = repo || null;
+      renderReviewCategories();
+      renderReviewCards();
+    });
+  });
+}
+
+function renderReviewCards() {
+  const cards = document.getElementById('reviewCards');
+  const empty = document.getElementById('reviewEmpty');
+  if (!cards || !empty) return;
+  const filtered = reviewState.filterRepo
+    ? reviewState.items.filter((it) => it.repo === reviewState.filterRepo)
+    : reviewState.items;
+  if (filtered.length === 0) {
+    cards.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  cards.innerHTML = filtered.map((it) => {
+    const score = it.weighted_score
+      ? `<span class="badge" title="総合評価">⭐ ${escapeHtml(it.weighted_score)}</span>` : '';
+    const date = it.latest_date ? `<small class="muted">${escapeHtml(it.latest_date)}</small>` : '';
+    const warn = (it.critical_count > 0 || it.high_count > 0)
+      ? `<small style="color:#d97706">⚠ Critical ${it.critical_count} / High ${it.high_count}</small>` : '';
+    const pr = it.fix_pr
+      ? `<small><a href="${escapeHtml(it.fix_pr)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔧 修正 PR</a></small>` : '';
+    return `
+      <article class="card" data-review-card="${escapeHtml(it.repo)}" style="cursor:pointer">
+        <header class="card-head">
+          <strong>AIFormat レビュー</strong>
+          <span class="badge category">${escapeHtml(it.repo)}</span>
+        </header>
+        <div class="card-meta" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+          ${score} ${date} ${warn} ${pr}
+        </div>
+      </article>`;
+  }).join('');
+  cards.querySelectorAll('article[data-review-card]').forEach((c) => {
+    c.addEventListener('click', () => {
+      const repo = c.getAttribute('data-review-card');
+      if (repo) void openReviewDetail(repo);
+    });
+  });
+}
+
+async function openReviewDetail(repo) {
   try {
     const r = await api(`/api/review/repos/${encodeURIComponent(repo)}`);
     reviewState.selected = repo;
     reviewState.dates = r.dates || [];
     reviewState.currentDate = r.dates?.[0] ?? null;
+    reviewState.currentFile = 'REVIEW.md';
+    reviewState.fixPr = r.latest?.fix_pr ?? null;
     if (!reviewState.currentDate) {
-      detail.innerHTML = `<div class="hint">${escapeHtml(repo)}: レビューフォルダはありますが日付ディレクトリが見つかりません。</div>`;
+      alert(`${repo}: レビューフォルダはありますが日付ディレクトリが見つかりません。`);
       return;
     }
-    renderReviewDetail();
+    showReviewDetail();
+    renderReviewDetailHeader();
+    await loadReviewFile();
   } catch (e) {
-    detail.innerHTML = `<div class="hint">読み込みエラー: ${escapeHtml(e.message)}</div>`;
+    alert(`読み込みエラー: ${e.message}`);
   }
 }
 
-async function renderReviewDetail() {
-  const detail = document.getElementById('reviewDetail');
-  if (!detail || !reviewState.selected || !reviewState.currentDate) return;
-  const dateOptions = reviewState.dates.map((d) =>
+function showReviewList() {
+  document.getElementById('reviewListLayout')?.classList.remove('hidden');
+  document.getElementById('reviewDetailLayout')?.classList.add('hidden');
+  document.getElementById('reviewBackBtn')?.setAttribute('hidden', '');
+}
+
+function showReviewDetail() {
+  document.getElementById('reviewListLayout')?.classList.add('hidden');
+  document.getElementById('reviewDetailLayout')?.classList.remove('hidden');
+  document.getElementById('reviewBackBtn')?.removeAttribute('hidden');
+}
+
+function renderReviewDetailHeader() {
+  const repoEl = document.getElementById('reviewDetailRepo');
+  const dateSel = document.getElementById('reviewDateSel');
+  const fileTabs = document.getElementById('reviewFileTabs');
+  const fixLink = document.getElementById('reviewFixPrLink');
+  if (!repoEl || !dateSel || !fileTabs || !fixLink) return;
+  repoEl.textContent = reviewState.selected || '';
+  dateSel.innerHTML = reviewState.dates.map((d) =>
     `<option value="${escapeHtml(d)}"${d === reviewState.currentDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
-  const fileTabs = REVIEW_FILES_UI.map(([f, label]) =>
-    `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${f}">${escapeHtml(label)}</button>`).join('');
-  detail.innerHTML = `
-    <div style="padding:8px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
-      <strong>${escapeHtml(reviewState.selected)}</strong>
-      <label class="muted">日付 <select id="reviewDateSel">${dateOptions}</select></label>
-    </div>
-    <nav class="tabs" style="padding:0 16px">${fileTabs}</nav>
-    <pre id="reviewBody" style="padding:16px;white-space:pre-wrap;font-family:var(--mono, monospace);font-size:13px;line-height:1.5">読み込み中…</pre>`;
-  document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
-    reviewState.currentDate = ev.target.value;
-    void loadReviewFile();
-  });
-  detail.querySelectorAll('button[data-review-file]').forEach((b) => {
+  fileTabs.innerHTML = REVIEW_FILES_UI.map(([f, label]) =>
+    `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${escapeHtml(f)}">${escapeHtml(label)}</button>`).join('');
+  if (reviewState.fixPr) {
+    fixLink.setAttribute('href', reviewState.fixPr);
+    fixLink.removeAttribute('hidden');
+  } else {
+    fixLink.setAttribute('hidden', '');
+  }
+  fileTabs.querySelectorAll('button[data-review-file]').forEach((b) => {
     b.addEventListener('click', () => {
       reviewState.currentFile = b.getAttribute('data-review-file') || 'REVIEW.md';
-      detail.querySelectorAll('button[data-review-file]').forEach((x) =>
+      fileTabs.querySelectorAll('button[data-review-file]').forEach((x) =>
         x.classList.toggle('active', x.getAttribute('data-review-file') === reviewState.currentFile));
       void loadReviewFile();
     });
   });
-  await loadReviewFile();
 }
 
 async function loadReviewFile() {
@@ -10107,6 +10183,11 @@ async function loadReviewFile() {
 }
 
 document.getElementById('reviewRefresh')?.addEventListener('click', () => void loadReviewRepos());
+document.getElementById('reviewBackBtn')?.addEventListener('click', () => showReviewList());
+document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
+  reviewState.currentDate = ev.target.value;
+  void loadReviewFile();
+});
 
 async function loadMeals() {
   const list = document.getElementById('mealsList');
