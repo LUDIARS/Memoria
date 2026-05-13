@@ -6039,6 +6039,13 @@ dialog.loc-edit-modal[open] {
     overflow: hidden;   /* sidebar の transform: translateX(-100%) を内部に閉じる */
     min-height: 60vh;   /* sidebar が absolute なので layout に高さを与える */
   }
+  /* mobile では sidebar が position: absolute でグリッド外なので、
+   * non-open 状態でも pane を 1fr 維持する (親の 1100px ルール
+   * `grid-template-columns: 0 minmax(0,1fr)` が pane を幅 0 の
+   * 1 列目に詰め込んでしまうのを上書き)。 ページ幅 = pane 幅。 */
+  .notes-layout:not(.notes-sidebar-open) {
+    grid-template-columns: 1fr;
+  }
   .notes-sidebar {
     position: absolute;
     top: 0;
