@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prestart": "npm run build:frontend",
     "start": "tsx --env-file-if-exists=.env --env-file-if-exists=../.env index.ts",
+    "predev": "npm run build:frontend",
     "dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env index.ts",
     "owntracks": "tsx --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",
     "owntracks:dev": "tsx watch --env-file-if-exists=.env --env-file-if-exists=../.env owntracks-server.js",

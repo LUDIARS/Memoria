@@ -850,6 +850,16 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// password 系 input の placeholder を 「設定されてるか」 で切り替える。
+// 値は server から戻ってこない (security best practice) ので、 input の value は
+// 空のまま、 placeholder で「●●●● (設定済み)」 を視覚的に出す。
+// 文字数は実値と一致しない (= 安全)。
+function setTokenPlaceholder(elementId: string, isSet: boolean, emptyPlaceholder: string): void {
+  const el = $(elementId) as HTMLInputElement | null;
+  if (!el) return;
+  el.placeholder = isSet ? '●●●●●●●●●●●● (設定済み・ 再入力で上書き)' : emptyPlaceholder;
+}
+
 // ---- wire up ---------------------------------------------------------------
 
 $('search').addEventListener('input', (e) => {
@@ -3730,6 +3740,7 @@ async function openDiarySettings() {
     const s = await api('/api/diary/settings');
     $('diaryGhUser').value = s.github_user || '';
     $('diaryGhRepos').value = s.github_repos || '';
+    setTokenPlaceholder('diaryGhToken', !!s.github_token_set, 'ghp_...');
     $('diaryGhTokenStatus').textContent = s.github_token_set ? '✓ token 設定済み (再入力で上書き)' : '(未設定)';
   } catch (e) { console.error(e); }
 }
@@ -4788,6 +4799,7 @@ async function openAiSettings() {
     $('aiBinCodex').value  = cfg.bins?.codex  || '';
     $('aiGitBashPath').value = cfg.git_bash_path || '';
     $('aiOpenaiKey').value = '';
+    setTokenPlaceholder('aiOpenaiKey', !!cfg.openai_api_key_set, 'sk-...');
     $('aiOpenaiModel').value = cfg.openai_model || '';
     $('aiOpenaiKeyStatus').textContent = cfg.openai_api_key_set ? '✓ API key 設定済み (再入力で上書き)' : '(未設定)';
     if ($('aiDiaryGlobalMemo')) $('aiDiaryGlobalMemo').value = cfg.diary_global_memo || '';
@@ -4818,6 +4830,7 @@ async function openAiSettings() {
       try {
         const m = await api('/api/maps/config');
         $('mapsApiKey').value = '';
+        setTokenPlaceholder('mapsApiKey', !!m.hasKey, 'AIzaSy...');
         $('mapsApiKeyStatus').textContent = m.hasKey
           ? '✓ 設定済み (再入力で上書き / 空欄保存は維持)'
           : '(未設定)';
@@ -7990,6 +8003,7 @@ async function loadActivityCredentials() {
   const r = await api('/api/activity/settings') as ActivitySettings;
   const k = $('activitySteamApiKey') as HTMLInputElement | null;
   if (k) k.value = ''; // password なので raw 値は返さない
+  setTokenPlaceholder('activitySteamApiKey', !!r.steam_api_key_set, '未設定 = VDF fallback');
   const ks = $('activitySteamApiKeyStatus');
   if (ks) ks.textContent = r.steam_api_key_set ? '✓ API key 設定済み (再入力で上書き、 空欄保存は維持)' : '(未設定 — VDF fallback で動く)';
   const sid = $('activitySteamId') as HTMLInputElement | null;
