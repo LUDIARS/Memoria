@@ -9,7 +9,7 @@
   <title>Memoria</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon-192.svg" />
-  <link rel="stylesheet" href="style.css?v=20260513d" />
+  <link rel="stylesheet" href="style.css?v=20260513e" />
 </head>
 <body>
   <header class="topbar">
@@ -628,13 +628,14 @@
            ドメイン辞書と同じ構造 (= 自動分類 + 手動上書き)。
            data: app_samples (= sampling 元) / applications (= AI 分類済 row) -->
       <div id="appsView" class="hidden">
-        <div class="apps-bar">
+        <div class="dict-bar">
+          <input id="appsSearch" type="search" placeholder="プロセス名・表示名・説明で検索" />
           <span id="appsCount" class="muted"></span>
           <span class="grow"></span>
           <button id="appsRefresh" class="ghost" title="再読込">↻</button>
         </div>
-        <div id="appsEmpty" class="queue-empty hidden">applications カタログがまだ空です。 設定 → 🚦 AI 自動処理 で「💻 PC アプリ使用統計」 を ON にすると、 サンプリングされた process_name が AI 分類されてここに表示されます。</div>
-        <ul id="appsList" class="apps-list"></ul>
+        <div id="appsEmpty" class="dict-empty hidden">applications カタログがまだ空です。 設定 → 🚦 AI 自動処理 で「💻 PC アプリ使用統計」 を ON にすると、 サンプリングされた process_name が AI 分類されてここに表示されます。</div>
+        <ul id="appsList" class="dict-list pin-grid"></ul>
       </div>
 
       <div id="databaseView" class="hidden">
@@ -1232,6 +1233,36 @@
     <ul id="dictLinks" class="dict-links"></ul>
   </div>
 
+  <div id="appsDetail" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <input id="appsKey" type="text" placeholder="process_name" disabled />
+      <button id="appsSaveBtn">保存</button>
+      <button id="appsReclassifyBtn" class="ghost" title="AI に再分類させる">↻ 再分類</button>
+      <button id="appsDetailClose" class="modal-close" title="閉じる">×</button>
+    </div>
+    <div id="appsStatusRow" class="domain-stats">
+      <span class="domain-stat"><b id="appsStatusBadge">—</b><br>状態</span>
+      <span class="domain-stat"><b id="appsEditedBadge">—</b><br>編集済み</span>
+      <span class="domain-stat"><b id="appsClassifiedAt">—</b><br>分類日時</span>
+    </div>
+    <h4>表示名</h4>
+    <input id="appsName" type="text" placeholder="(未分類)" />
+    <h4>種類</h4>
+    <select id="appsKind">
+      <option value="">--</option>
+      <option value="game">🎮 ゲーム</option>
+      <option value="work">💼 仕事</option>
+      <option value="browser">🌐 ブラウザ</option>
+      <option value="messaging">💬 メッセージ</option>
+      <option value="media">🎬 メディア</option>
+      <option value="creative">🎨 クリエイティブ</option>
+      <option value="other">❓ その他</option>
+    </select>
+    <h4>説明</h4>
+    <textarea id="appsDesc" rows="3" placeholder="このアプリの 1〜2 文の説明"></textarea>
+    <div id="appsErrorRow" class="muted" style="margin-top:8px;font-size:11px" hidden></div>
+  </div>
+
   <div id="domainDetail" class="dict-detail modal-panel hidden">
     <div class="dict-detail-head">
       <input id="domainKey" type="text" placeholder="ドメイン" disabled />
@@ -1486,6 +1517,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260513b"></script>
+  <script src="app.js?v=20260513c"></script>
 </body>
 </html>

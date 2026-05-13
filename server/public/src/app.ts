@@ -4671,19 +4671,22 @@ function hideModal(panelId) {
   // If neither panel is open after this hide, drop the backdrop too.
   const dictOpen = !$('dictDetail').classList.contains('hidden');
   const domOpen  = !$('domainDetail').classList.contains('hidden');
+  const appsOpen = $('appsDetail') ? !$('appsDetail').classList.contains('hidden') : false;
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
   const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
   const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
   state.domainDetail = null;
   state.taskDetail = null;
+  appsState.selected = null;
   hideModal('dictDetail');
   hideModal('domainDetail');
+  if ($('appsDetail')) hideModal('appsDetail');
   hideModal('taskEditorModal');
   hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
@@ -7736,84 +7739,135 @@ const APP_KIND_LABELS: Record<string, string> = {
   other: '❓ その他',
 };
 
+// ── アプリカタログ (カード形式) ─────────────────────────────────────
+// ドメインタブと同じ pin-grid カードレイアウト。 詳細編集は appsDetail モーダル。
+const appsState = { items: [] as ApplicationCatalogRow[], search: '', selected: null as string | null };
+
 async function loadApplicationsCatalog() {
   const list = $('appsList');
-  const empty = $('appsEmpty');
   const count = $('appsCount');
   if (!list) return;
   try {
     const r = await api('/api/activity/applications') as { items: ApplicationCatalogRow[] };
-    const items = r.items || [];
-    if (count) count.textContent = `${items.length} 件`;
-    if (items.length === 0) {
-      empty?.classList.remove('hidden');
-      list.innerHTML = '';
-      return;
-    }
-    empty?.classList.add('hidden');
-    list.innerHTML = items.map((it) => {
-      const kindOptions = Object.entries(APP_KIND_LABELS).map(([k, label]) =>
-        `<option value="${k}"${it.kind === k ? ' selected' : ''}>${label}</option>`
-      ).join('');
-      const statusBadge = it.status === 'done' ? '✓' : it.status === 'error' ? '⚠' : '⟳';
-      const edited = it.user_edited ? '<span class="apps-edited" title="手動編集済み">✎</span>' : '';
-      return `<li class="apps-row" data-process="${escapeHtml(it.process_name)}">
-        <div class="apps-row-head">
-          <span class="apps-status">${statusBadge}</span>
-          <code class="apps-process">${escapeHtml(it.process_name)}</code>
-          ${edited}
-          <span class="grow"></span>
-          <button class="ghost apps-reclassify" data-process="${escapeHtml(it.process_name)}" title="AI 分類を再実行">↻ 再分類</button>
-        </div>
-        <div class="apps-row-body">
-          <label class="apps-field">
-            <span>名前</span>
-            <input class="apps-name" type="text" value="${escapeHtml(it.name || '')}" placeholder="(未分類)" />
-          </label>
-          <label class="apps-field">
-            <span>種類</span>
-            <select class="apps-kind">
-              <option value="">--</option>
-              ${kindOptions}
-            </select>
-          </label>
-          <label class="apps-field apps-field-wide">
-            <span>説明</span>
-            <input class="apps-desc" type="text" value="${escapeHtml(it.description || '')}" placeholder="(未分類)" />
-          </label>
-        </div>
-        ${it.error ? `<div class="apps-error muted">⚠ ${escapeHtml(it.error)}</div>` : ''}
-      </li>`;
-    }).join('');
-    // 行ごとに save (blur で自動保存) + 再分類ボタン配線
-    list.querySelectorAll<HTMLLIElement>('.apps-row').forEach((row) => {
-      const processName = row.dataset.process || '';
-      const save = async () => {
-        const name = (row.querySelector<HTMLInputElement>('.apps-name')?.value || '').trim();
-        const kind = row.querySelector<HTMLSelectElement>('.apps-kind')?.value || '';
-        const description = (row.querySelector<HTMLInputElement>('.apps-desc')?.value || '').trim();
-        try {
-          await api(`/api/activity/applications/${encodeURIComponent(processName)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, kind, description }),
-          });
-        } catch (e) { console.warn('app patch failed:', (e as Error).message); }
-      };
-      row.querySelector('.apps-name')?.addEventListener('blur', save);
-      row.querySelector('.apps-desc')?.addEventListener('blur', save);
-      row.querySelector('.apps-kind')?.addEventListener('change', save);
-      row.querySelector('.apps-reclassify')?.addEventListener('click', async () => {
-        try {
-          await api(`/api/activity/applications/${encodeURIComponent(processName)}/classify-now`, { method: 'POST' });
-          await loadApplicationsCatalog();
-        } catch (e) { alert(`再分類失敗: ${(e as Error).message}`); }
-      });
-    });
+    appsState.items = r.items || [];
+    if (count) count.textContent = `${appsState.items.length} 件`;
+    renderAppsList();
   } catch (e) {
     if (count) count.textContent = `取得失敗: ${(e as Error).message}`;
   }
 }
+
+function renderAppsList() {
+  const list = $('appsList');
+  const empty = $('appsEmpty');
+  if (!list || !empty) return;
+  const q = appsState.search.trim().toLowerCase();
+  const filtered = q
+    ? appsState.items.filter((it) =>
+        it.process_name.toLowerCase().includes(q) ||
+        (it.name || '').toLowerCase().includes(q) ||
+        (it.description || '').toLowerCase().includes(q))
+    : appsState.items;
+  if (filtered.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = filtered.map((it) => {
+    const kindLabel = it.kind ? (APP_KIND_LABELS[it.kind] || it.kind) : '';
+    const kindBadge = kindLabel ? `<span class="apps-kind-badge">${escapeHtml(kindLabel)}</span>` : '';
+    const desc = (it.description || '').trim();
+    const status = it.status === 'done' ? '' : it.status === 'error' ? '⚠ 分類失敗' : '⟳ 分類待ち';
+    const edited = it.user_edited ? ' ✎' : '';
+    return `<li class="dict-item${appsState.selected === it.process_name ? ' selected' : ''}" data-app="${escapeHtml(it.process_name)}">
+      <div class="dict-term">${escapeHtml(it.name?.trim() || it.process_name)}${edited} ${kindBadge}</div>
+      <div class="dict-snippet">${escapeHtml(desc.slice(0, 320)) || '<span class="muted">(未分類)</span>'}</div>
+      <div class="dict-meta">
+        <code style="font-size:11px">${escapeHtml(it.process_name)}</code>
+        <span>${escapeHtml(status)}</span>
+      </div>
+    </li>`;
+  }).join('');
+  list.querySelectorAll<HTMLLIElement>('.dict-item').forEach((li) => {
+    li.addEventListener('click', () => {
+      const pn = li.dataset.app;
+      if (pn) openAppDetail(pn);
+    });
+  });
+}
+
+function openAppDetail(processName: string) {
+  const it = appsState.items.find((x) => x.process_name === processName);
+  if (!it) return;
+  appsState.selected = processName;
+  renderAppsList();
+  showModal('appsDetail');
+  ($('appsKey') as HTMLInputElement).value = it.process_name;
+  ($('appsName') as HTMLInputElement).value = it.name || '';
+  ($('appsKind') as HTMLSelectElement).value = it.kind || '';
+  ($('appsDesc') as HTMLTextAreaElement).value = it.description || '';
+  const statusBadge = $('appsStatusBadge');
+  if (statusBadge) statusBadge.textContent = it.status || '—';
+  const editedBadge = $('appsEditedBadge');
+  if (editedBadge) editedBadge.textContent = it.user_edited ? '✓' : '—';
+  const classifiedAt = $('appsClassifiedAt');
+  if (classifiedAt) classifiedAt.textContent = it.classified_at ? new Date(it.classified_at).toLocaleString() : '—';
+  const errRow = $('appsErrorRow');
+  if (errRow) {
+    if (it.error) {
+      errRow.textContent = `⚠ ${it.error}`;
+      errRow.hidden = false;
+    } else {
+      errRow.hidden = true;
+    }
+  }
+}
+
+async function saveAppDetail() {
+  const pn = ($('appsKey') as HTMLInputElement | null)?.value;
+  if (!pn) return;
+  const name = (($('appsName') as HTMLInputElement).value || '').trim();
+  const kind = ($('appsKind') as HTMLSelectElement).value || '';
+  const description = (($('appsDesc') as HTMLTextAreaElement).value || '').trim();
+  try {
+    await api(`/api/activity/applications/${encodeURIComponent(pn)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, kind, description }),
+    });
+    await loadApplicationsCatalog();
+    flashToast('アプリを保存しました');
+  } catch (e) {
+    alert(`保存失敗: ${(e as Error).message}`);
+  }
+}
+
+async function reclassifyApp() {
+  const pn = ($('appsKey') as HTMLInputElement | null)?.value;
+  if (!pn) return;
+  try {
+    await api(`/api/activity/applications/${encodeURIComponent(pn)}/classify-now`, { method: 'POST' });
+    await loadApplicationsCatalog();
+    openAppDetail(pn);
+    flashToast('再分類をキューに積みました');
+  } catch (e) {
+    alert(`再分類失敗: ${(e as Error).message}`);
+  }
+}
+
+$('appsSaveBtn')?.addEventListener('click', () => void saveAppDetail());
+$('appsReclassifyBtn')?.addEventListener('click', () => void reclassifyApp());
+$('appsDetailClose')?.addEventListener('click', () => {
+  appsState.selected = null;
+  hideModal('appsDetail');
+  renderAppsList();
+});
+$('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
+$('appsSearch')?.addEventListener('input', (ev) => {
+  appsState.search = (ev.target as HTMLInputElement).value;
+  renderAppsList();
+});
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
 const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'activity', 'games']);
