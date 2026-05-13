@@ -9,6 +9,14 @@
 // one-entry list with that URL active.
 import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings, setAppSettings } from '../db/index.js';
+import { getProjectTokenForHub, invalidateProjectToken } from '../lib/cernere-session.js';
+
+/**
+ * Hub への Bearer に使う project-token を Cernere から取得 (memory-cached)。
+ * Cernere unreachable 等で失敗したら fall-through せず throw する — 「起動時に
+ * 必ず認証を通す」 ポリシーに従い、 user-JWT を Hub に直送りはしない。
+ */
+const CERNERE_PROJECT_KEY = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
 
 type Db = BetterSqlite3.Database;
 
@@ -246,9 +254,10 @@ export async function multiFetch<T = Record<string, unknown>>(
 ): Promise<T> {
   if (!isConnected(state)) throw new Error('not connected to a multi server');
   const url = `${state.url.replace(/\/$/, '')}${path}`;
+  const bearer = await getProjectTokenForHub(state.url, state.jwt, CERNERE_PROJECT_KEY);
   const headers: Record<string, string> = {
     ...(init.headers || {}),
-    'Authorization': `Bearer ${state.jwt}`,
+    'Authorization': `Bearer ${bearer}`,
     'X-Memoria-Origin': 'local',
   };
   if (init.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
@@ -257,6 +266,7 @@ export async function multiFetch<T = Record<string, unknown>>(
   let body: unknown;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) invalidateProjectToken(state.url);
     const msg = (body && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string')
       ? (body as { error: string }).error
       : `HTTP ${res.status}`;

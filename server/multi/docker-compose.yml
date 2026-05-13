@@ -46,6 +46,9 @@ services:
       CERNERE_SERVICE_CODE: ${CERNERE_SERVICE_CODE:-memoria-hub}
       CERNERE_SERVICE_SECRET: ${CERNERE_SERVICE_SECRET}
       SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET}
+      # Hub の authMiddleware が Bearer JWT を HS256 検証するための共有鍵。
+      # Cernere の JWT_SECRET と必ず同値にする (Infisical 経由で揃えるのが本筋)。
+      CERNERE_JWT_SECRET: ${CERNERE_JWT_SECRET}
       MEMORIA_HUB_ALLOWED_ORIGINS: ${MEMORIA_HUB_ALLOWED_ORIGINS}
     ports:
       - "${MEMORIA_HUB_HOST_PORT:-5280}:5280"
