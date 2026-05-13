@@ -30,7 +30,10 @@ import { resolveUnresolvedBatch, getResolverDebug } from '../lib/place-resolver.
 import { fetchPageHtml } from '../lib/fetch-page.js';
 import { featureEnabled } from '../lib/privacy.js';
 import { checkIngestKey } from '../lib/ingest-auth.js';
+import { getProjectTokenForHub } from '../lib/cernere-session.js';
 import type { LocationBroadcastPoint, PlaceResolveResult } from '../lib/ws-locations.js';
+
+const CERNERE_PROJECT_KEY = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
 
 type Db = BetterSqlite3.Database;
 
@@ -161,10 +164,17 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
     }
     const qs = new URL(c.req.url).search;
     const upstream = `${state.url.replace(/\/$/, '')}${path}${qs}`;
+    let bearer: string;
+    try {
+      bearer = await getProjectTokenForHub(state.url, state.jwt, CERNERE_PROJECT_KEY);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: `cernere project-token failed: ${msg}` }, 502);
+    }
     const init: RequestInit & { headers: Record<string, string> } = {
       method,
       headers: {
-        'Authorization': `Bearer ${state.jwt}`,
+        'Authorization': `Bearer ${bearer}`,
         'Accept': 'application/json',
       },
     };
