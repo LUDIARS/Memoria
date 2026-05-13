@@ -101,6 +101,23 @@ for (const m of listPendingMeals(db, { limit: 50 })) {
   queues.enqueueMealVision(m.id);
 }
 
+// 起動時に pending 日記があれば再投入。 diaryQueue は in-memory なので、
+// 真夜中 cron が走った直後に server が再起動すると stage 0 だけ済んだ
+// status='pending' な行が残ったままになる。 直近 14 日ぶんを限度に拾う
+// (古すぎる pending は metrics 元データが失われている可能性があるので諦める)。
+{
+  const pendingDiaries = db.prepare(
+    `SELECT date FROM diary_entries
+     WHERE status = 'pending'
+       AND date >= date('now', '-14 days', 'localtime')
+     ORDER BY date DESC`,
+  ).all() as { date: string }[];
+  if (pendingDiaries.length > 0) {
+    console.log(`[startup] re-queuing ${pendingDiaries.length} pending diary job(s): ${pendingDiaries.map((d) => d.date).join(', ')}`);
+    for (const { date } of pendingDiaries) queues.enqueueDiary(date);
+  }
+}
+
 // ── App ──────────────────────────────────────────────────────────────────
 const app = new Hono();
 app.use('/api/*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] }));
