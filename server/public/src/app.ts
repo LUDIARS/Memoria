@@ -10115,6 +10115,8 @@ const REVIEW_FILES_UI = [
 ];
 const reviewState = {
   items: [],
+  availableDates: [],          // 全 repo を横断した「レビューが存在する日」 (新しい順)
+  listDate: null,              // 現在カードを絞り込む日付 (null = 未初期化)
   filterRepo: null,            // null = 全カテゴリ
   selected: null,
   dates: [],
@@ -10129,9 +10131,23 @@ async function loadReviewRepos() {
   const empty = document.getElementById('reviewEmpty');
   if (!cards) return;
   try {
-    const r = await api('/api/review/repos');
-    reviewState.items = (r.items || []).slice().sort((a, b) =>
-      (b.latest_date || '').localeCompare(a.latest_date || ''));
+    // 利用可能な日付を取得 → 既定は最新 (= 今日があれば今日)
+    const ds = await api('/api/review/dates') as { dates?: string[] };
+    reviewState.availableDates = ds.dates || [];
+    if (reviewState.availableDates.length === 0) {
+      reviewState.listDate = null;
+      reviewState.items = [];
+      renderReviewListDateMenu();
+      renderReviewMenu();
+      renderReviewCards();
+      return;
+    }
+    if (!reviewState.listDate || !reviewState.availableDates.includes(reviewState.listDate)) {
+      reviewState.listDate = reviewState.availableDates[0];
+    }
+    const r = await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`);
+    reviewState.items = (r.items || []).slice().sort((a, b) => a.repo.localeCompare(b.repo));
+    renderReviewListDateMenu();
     renderReviewMenu();
     renderReviewCards();
   } catch (e) {
@@ -10140,6 +10156,19 @@ async function loadReviewRepos() {
     const menu = document.getElementById('reviewRepoMenu');
     if (menu) menu.innerHTML = `<option>読み込みエラー: ${escapeHtml(e.message)}</option>`;
   }
+}
+
+function renderReviewListDateMenu() {
+  const sel = document.getElementById('reviewListDateSel') as HTMLSelectElement | null;
+  if (!sel) return;
+  if (reviewState.availableDates.length === 0) {
+    sel.innerHTML = '<option value="">(レビューなし)</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = reviewState.availableDates.map((d) =>
+    `<option value="${escapeHtml(d)}"${d === reviewState.listDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
 }
 
 function renderReviewMenu() {
@@ -10286,6 +10315,14 @@ document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
   reviewState.filterRepo = v || null;
   renderReviewMenu();
   renderReviewCards();
+});
+document.getElementById('reviewListDateSel')?.addEventListener('change', (ev) => {
+  const v = (ev.target as HTMLSelectElement).value;
+  if (!v) return;
+  reviewState.listDate = v;
+  // 日付を切り替えると repo フィルタはリセット (= 別日付のリストに移るため)
+  reviewState.filterRepo = null;
+  void loadReviewRepos();
 });
 
 // ── レビュー対象の追加モーダル ─────────────────────────────────

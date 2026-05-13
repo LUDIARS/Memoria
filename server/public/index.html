@@ -878,13 +878,16 @@
         </div>
         <div id="reviewListLayout">
           <div class="review-filter-bar">
+            <label class="muted">日付
+              <select id="reviewListDateSel"></select>
+            </label>
             <label class="muted">リポジトリ
               <select id="reviewRepoMenu"></select>
             </label>
             <span id="reviewListCount" class="muted"></span>
           </div>
           <div id="reviewCards" class="cards"></div>
-          <div id="reviewEmpty" class="dict-empty hidden">レビューが見つかりません。 <code>/ludiars-review</code> を実行してください。</div>
+          <div id="reviewEmpty" class="dict-empty hidden">この日のレビューはありません。 <code>/ludiars-review</code> を実行するか、別の日付を選択してください。</div>
         </div>
         <div id="reviewDetailLayout" class="hidden">
           <div class="review-detail-bar">
