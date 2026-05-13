@@ -55,7 +55,7 @@ import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
-import { makeReviewRouter } from './routes/review.js';
+import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -99,6 +99,35 @@ const mcp = makeMcpServer({ port: PORT, mcpDir: resolve(__dirname, '..', 'mcp-se
 // 起動時に pending 食事があれば解析を再投入 (前回終了時の中断分)
 for (const m of listPendingMeals(db, { limit: 50 })) {
   queues.enqueueMealVision(m.id);
+}
+
+// 起動時に pending 日記があれば再投入。 diaryQueue は in-memory なので、
+// 真夜中 cron が走った直後に server が再起動すると stage 0 だけ済んだ
+// status='pending' な行が残ったままになる。 直近 14 日ぶんを限度に拾う
+// (古すぎる pending は metrics 元データが失われている可能性があるので諦める)。
+{
+  const pendingDiaries = db.prepare(
+    `SELECT date FROM diary_entries
+     WHERE status = 'pending'
+       AND date >= date('now', '-14 days', 'localtime')
+     ORDER BY date DESC`,
+  ).all() as { date: string }[];
+  if (pendingDiaries.length > 0) {
+    console.log(`[startup] re-queuing ${pendingDiaries.length} pending diary job(s): ${pendingDiaries.map((d) => d.date).join(', ')}`);
+    for (const { date } of pendingDiaries) queues.enqueueDiary(date);
+  }
+}
+
+// レビュー対象を LUDIARS clone から自動 seed (= 既存に追加するだけで、 ユーザが
+// UI で追加した行は触らない)。
+try {
+  const seedResult = seedReviewTargets(db);
+  if (seedResult.seeded > 0) {
+    console.log(`[startup] seeded ${seedResult.seeded} review target(s) from LUDIARS clones (${seedResult.skipped} skipped)`);
+  }
+} catch (e) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.warn(`[startup] review target seed failed: ${msg}`);
 }
 
 // ── App ──────────────────────────────────────────────────────────────────
@@ -190,7 +219,7 @@ app.route('/', makeMultiRouter({
   triggerResolveAsync: ws.triggerResolveAsync,
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
-app.route('/', makeReviewRouter());
+app.route('/', makeReviewRouter({ db }));
 
 // ---- static UI ------------------------------------------------------------
 

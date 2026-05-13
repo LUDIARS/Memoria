@@ -157,6 +157,7 @@ declare global {
 // notes module — esa / DocBase 風 WYSIWYG エディタ。
 // switchTab('notes') で loadNotes() を呼ぶ。
 import { loadNotes as notesLoad } from './notes/index.js';
+import { renderMarkdownBlock } from './markdown-block.js';
 
 // 起動チュートリアル / ページヘルプ drawer。 app.ts 肥大化対策で分離。
 // PAGE_HELP の本文を増やす場合は page-help.ts を編集する。
@@ -4673,19 +4674,24 @@ function hideModal(panelId) {
   // If neither panel is open after this hide, drop the backdrop too.
   const dictOpen = !$('dictDetail').classList.contains('hidden');
   const domOpen  = !$('domainDetail').classList.contains('hidden');
+  const appsOpen = $('appsDetail') ? !$('appsDetail').classList.contains('hidden') : false;
+  const reviewTgtOpen = $('reviewTargetModal') ? !$('reviewTargetModal').classList.contains('hidden') : false;
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
   const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
   const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
   state.domainDetail = null;
   state.taskDetail = null;
+  appsState.selected = null;
   hideModal('dictDetail');
   hideModal('domainDetail');
+  if ($('appsDetail')) hideModal('appsDetail');
+  if ($('reviewTargetModal')) hideModal('reviewTargetModal');
   hideModal('taskEditorModal');
   hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
@@ -7736,84 +7742,135 @@ const APP_KIND_LABELS: Record<string, string> = {
   other: '❓ その他',
 };
 
+// ── アプリカタログ (カード形式) ─────────────────────────────────────
+// ドメインタブと同じ pin-grid カードレイアウト。 詳細編集は appsDetail モーダル。
+const appsState = { items: [] as ApplicationCatalogRow[], search: '', selected: null as string | null };
+
 async function loadApplicationsCatalog() {
   const list = $('appsList');
-  const empty = $('appsEmpty');
   const count = $('appsCount');
   if (!list) return;
   try {
     const r = await api('/api/activity/applications') as { items: ApplicationCatalogRow[] };
-    const items = r.items || [];
-    if (count) count.textContent = `${items.length} 件`;
-    if (items.length === 0) {
-      empty?.classList.remove('hidden');
-      list.innerHTML = '';
-      return;
-    }
-    empty?.classList.add('hidden');
-    list.innerHTML = items.map((it) => {
-      const kindOptions = Object.entries(APP_KIND_LABELS).map(([k, label]) =>
-        `<option value="${k}"${it.kind === k ? ' selected' : ''}>${label}</option>`
-      ).join('');
-      const statusBadge = it.status === 'done' ? '✓' : it.status === 'error' ? '⚠' : '⟳';
-      const edited = it.user_edited ? '<span class="apps-edited" title="手動編集済み">✎</span>' : '';
-      return `<li class="apps-row" data-process="${escapeHtml(it.process_name)}">
-        <div class="apps-row-head">
-          <span class="apps-status">${statusBadge}</span>
-          <code class="apps-process">${escapeHtml(it.process_name)}</code>
-          ${edited}
-          <span class="grow"></span>
-          <button class="ghost apps-reclassify" data-process="${escapeHtml(it.process_name)}" title="AI 分類を再実行">↻ 再分類</button>
-        </div>
-        <div class="apps-row-body">
-          <label class="apps-field">
-            <span>名前</span>
-            <input class="apps-name" type="text" value="${escapeHtml(it.name || '')}" placeholder="(未分類)" />
-          </label>
-          <label class="apps-field">
-            <span>種類</span>
-            <select class="apps-kind">
-              <option value="">--</option>
-              ${kindOptions}
-            </select>
-          </label>
-          <label class="apps-field apps-field-wide">
-            <span>説明</span>
-            <input class="apps-desc" type="text" value="${escapeHtml(it.description || '')}" placeholder="(未分類)" />
-          </label>
-        </div>
-        ${it.error ? `<div class="apps-error muted">⚠ ${escapeHtml(it.error)}</div>` : ''}
-      </li>`;
-    }).join('');
-    // 行ごとに save (blur で自動保存) + 再分類ボタン配線
-    list.querySelectorAll<HTMLLIElement>('.apps-row').forEach((row) => {
-      const processName = row.dataset.process || '';
-      const save = async () => {
-        const name = (row.querySelector<HTMLInputElement>('.apps-name')?.value || '').trim();
-        const kind = row.querySelector<HTMLSelectElement>('.apps-kind')?.value || '';
-        const description = (row.querySelector<HTMLInputElement>('.apps-desc')?.value || '').trim();
-        try {
-          await api(`/api/activity/applications/${encodeURIComponent(processName)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, kind, description }),
-          });
-        } catch (e) { console.warn('app patch failed:', (e as Error).message); }
-      };
-      row.querySelector('.apps-name')?.addEventListener('blur', save);
-      row.querySelector('.apps-desc')?.addEventListener('blur', save);
-      row.querySelector('.apps-kind')?.addEventListener('change', save);
-      row.querySelector('.apps-reclassify')?.addEventListener('click', async () => {
-        try {
-          await api(`/api/activity/applications/${encodeURIComponent(processName)}/classify-now`, { method: 'POST' });
-          await loadApplicationsCatalog();
-        } catch (e) { alert(`再分類失敗: ${(e as Error).message}`); }
-      });
-    });
+    appsState.items = r.items || [];
+    if (count) count.textContent = `${appsState.items.length} 件`;
+    renderAppsList();
   } catch (e) {
     if (count) count.textContent = `取得失敗: ${(e as Error).message}`;
   }
 }
+
+function renderAppsList() {
+  const list = $('appsList');
+  const empty = $('appsEmpty');
+  if (!list || !empty) return;
+  const q = appsState.search.trim().toLowerCase();
+  const filtered = q
+    ? appsState.items.filter((it) =>
+        it.process_name.toLowerCase().includes(q) ||
+        (it.name || '').toLowerCase().includes(q) ||
+        (it.description || '').toLowerCase().includes(q))
+    : appsState.items;
+  if (filtered.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = filtered.map((it) => {
+    const kindLabel = it.kind ? (APP_KIND_LABELS[it.kind] || it.kind) : '';
+    const kindBadge = kindLabel ? `<span class="apps-kind-badge">${escapeHtml(kindLabel)}</span>` : '';
+    const desc = (it.description || '').trim();
+    const status = it.status === 'done' ? '' : it.status === 'error' ? '⚠ 分類失敗' : '⟳ 分類待ち';
+    const edited = it.user_edited ? ' ✎' : '';
+    return `<li class="dict-item${appsState.selected === it.process_name ? ' selected' : ''}" data-app="${escapeHtml(it.process_name)}">
+      <div class="dict-term">${escapeHtml(it.name?.trim() || it.process_name)}${edited} ${kindBadge}</div>
+      <div class="dict-snippet">${escapeHtml(desc.slice(0, 320)) || '<span class="muted">(未分類)</span>'}</div>
+      <div class="dict-meta">
+        <code style="font-size:11px">${escapeHtml(it.process_name)}</code>
+        <span>${escapeHtml(status)}</span>
+      </div>
+    </li>`;
+  }).join('');
+  list.querySelectorAll<HTMLLIElement>('.dict-item').forEach((li) => {
+    li.addEventListener('click', () => {
+      const pn = li.dataset.app;
+      if (pn) openAppDetail(pn);
+    });
+  });
+}
+
+function openAppDetail(processName: string) {
+  const it = appsState.items.find((x) => x.process_name === processName);
+  if (!it) return;
+  appsState.selected = processName;
+  renderAppsList();
+  showModal('appsDetail');
+  ($('appsKey') as HTMLInputElement).value = it.process_name;
+  ($('appsName') as HTMLInputElement).value = it.name || '';
+  ($('appsKind') as HTMLSelectElement).value = it.kind || '';
+  ($('appsDesc') as HTMLTextAreaElement).value = it.description || '';
+  const statusBadge = $('appsStatusBadge');
+  if (statusBadge) statusBadge.textContent = it.status || '—';
+  const editedBadge = $('appsEditedBadge');
+  if (editedBadge) editedBadge.textContent = it.user_edited ? '✓' : '—';
+  const classifiedAt = $('appsClassifiedAt');
+  if (classifiedAt) classifiedAt.textContent = it.classified_at ? new Date(it.classified_at).toLocaleString() : '—';
+  const errRow = $('appsErrorRow');
+  if (errRow) {
+    if (it.error) {
+      errRow.textContent = `⚠ ${it.error}`;
+      errRow.hidden = false;
+    } else {
+      errRow.hidden = true;
+    }
+  }
+}
+
+async function saveAppDetail() {
+  const pn = ($('appsKey') as HTMLInputElement | null)?.value;
+  if (!pn) return;
+  const name = (($('appsName') as HTMLInputElement).value || '').trim();
+  const kind = ($('appsKind') as HTMLSelectElement).value || '';
+  const description = (($('appsDesc') as HTMLTextAreaElement).value || '').trim();
+  try {
+    await api(`/api/activity/applications/${encodeURIComponent(pn)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, kind, description }),
+    });
+    await loadApplicationsCatalog();
+    flashToast('アプリを保存しました');
+  } catch (e) {
+    alert(`保存失敗: ${(e as Error).message}`);
+  }
+}
+
+async function reclassifyApp() {
+  const pn = ($('appsKey') as HTMLInputElement | null)?.value;
+  if (!pn) return;
+  try {
+    await api(`/api/activity/applications/${encodeURIComponent(pn)}/classify-now`, { method: 'POST' });
+    await loadApplicationsCatalog();
+    openAppDetail(pn);
+    flashToast('再分類をキューに積みました');
+  } catch (e) {
+    alert(`再分類失敗: ${(e as Error).message}`);
+  }
+}
+
+$('appsSaveBtn')?.addEventListener('click', () => void saveAppDetail());
+$('appsReclassifyBtn')?.addEventListener('click', () => void reclassifyApp());
+$('appsDetailClose')?.addEventListener('click', () => {
+  appsState.selected = null;
+  hideModal('appsDetail');
+  renderAppsList();
+});
+$('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
+$('appsSearch')?.addEventListener('input', (ev) => {
+  appsState.search = (ev.target as HTMLInputElement).value;
+  renderAppsList();
+});
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
 const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'activity', 'games']);
@@ -10005,8 +10062,11 @@ document.addEventListener('click', (ev) => {
   }).catch(() => {});
 });
 
-// ── review (LUDIARS AIFormat レビュー閲覧) ────────────────────────────────
-const reviewState = { repos: [], selected: null, dates: [], currentDate: null, currentFile: 'REVIEW.md' };
+// ── review (LUDIARS AIFormat レビュー閲覧、 DB タブ内サブタブ) ─────────────
+//
+// 一覧 = カード形式 (1 カード = 1 リポの最新レビュー)、 リポ = 左サイドの
+// カテゴリとして運用 (= bookmarks タブと同じレイアウト)。 カードをクリックで
+// 詳細ビュー (日付セレクト + 6 ファイルタブ) に切替。
 const REVIEW_FILES_UI = [
   ['REVIEW.md', '総合'],
   ['REVIEW_DESIGN.md', '設計'],
@@ -10015,98 +10075,224 @@ const REVIEW_FILES_UI = [
   ['REVIEW_MISSING_FEATURES.md', '不足機能'],
   ['REVIEW_QUALITY.md', '品質'],
 ];
+const reviewState = {
+  items: [],
+  filterRepo: null,            // null = 全カテゴリ
+  selected: null,
+  dates: [],
+  currentDate: null,
+  currentFile: 'REVIEW.md',
+  fixPr: null,
+};
 
 async function loadReviewRepos() {
-  const ul = document.getElementById('reviewRepoUl');
-  if (!ul) return;
+  showReviewList();
+  const cards = document.getElementById('reviewCards');
+  const empty = document.getElementById('reviewEmpty');
+  if (!cards) return;
   try {
     const r = await api('/api/review/repos');
-    reviewState.repos = r.items || [];
-    if (reviewState.repos.length === 0) {
-      ul.innerHTML = '<li class="muted">レビューが見つかりません。 <code>/ludiars-review</code> を実行してください。</li>';
-      return;
-    }
-    ul.innerHTML = reviewState.repos.map((it) => {
-      const score = it.weighted_score ? `<span class="badge">${escapeHtml(it.weighted_score)}</span>` : '';
-      const date = it.latest_date ? `<small class="muted">${escapeHtml(it.latest_date)}</small>` : '';
-      const warn = (it.critical_count > 0 || it.high_count > 0)
-        ? `<small style="color:#d97706">⚠ C${it.critical_count}/H${it.high_count}</small>` : '';
-      return `<li><a href="#" data-review-repo="${escapeHtml(it.repo)}">${escapeHtml(it.repo)}</a> ${score} ${date} ${warn}</li>`;
-    }).join('');
-    ul.querySelectorAll('a[data-review-repo]').forEach((a) => {
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        const repo = a.getAttribute('data-review-repo');
-        if (repo) void loadReviewDetail(repo);
-      });
-    });
+    reviewState.items = (r.items || []).slice().sort((a, b) =>
+      (b.latest_date || '').localeCompare(a.latest_date || ''));
+    renderReviewMenu();
+    renderReviewCards();
   } catch (e) {
-    ul.innerHTML = `<li class="hint">読み込みエラー: ${escapeHtml(e.message)}</li>`;
+    cards.innerHTML = '';
+    empty?.classList.add('hidden');
+    const menu = document.getElementById('reviewRepoMenu');
+    if (menu) menu.innerHTML = `<option>読み込みエラー: ${escapeHtml(e.message)}</option>`;
   }
 }
 
-async function loadReviewDetail(repo) {
-  const detail = document.getElementById('reviewDetail');
-  if (!detail) return;
-  detail.innerHTML = '<div class="muted" style="padding:16px">読み込み中…</div>';
+function renderReviewMenu() {
+  const sel = document.getElementById('reviewRepoMenu') as HTMLSelectElement | null;
+  const count = document.getElementById('reviewListCount');
+  if (!sel) return;
+  const total = reviewState.items.length;
+  const opts = [`<option value="">全て (${total})</option>`];
+  for (const it of reviewState.items) {
+    const warn = (it.critical_count > 0 || it.high_count > 0) ? ' ⚠' : '';
+    opts.push(`<option value="${escapeHtml(it.repo)}"${reviewState.filterRepo === it.repo ? ' selected' : ''}>${escapeHtml(it.repo)}${warn}</option>`);
+  }
+  sel.innerHTML = opts.join('');
+  if (count) {
+    const shown = reviewState.filterRepo ? 1 : total;
+    count.textContent = `${shown} / ${total} 件`;
+  }
+}
+
+function renderReviewCards() {
+  const cards = document.getElementById('reviewCards');
+  const empty = document.getElementById('reviewEmpty');
+  if (!cards || !empty) return;
+  const filtered = reviewState.filterRepo
+    ? reviewState.items.filter((it) => it.repo === reviewState.filterRepo)
+    : reviewState.items;
+  if (filtered.length === 0) {
+    cards.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  cards.innerHTML = filtered.map((it) => {
+    const score = it.weighted_score
+      ? `<span class="badge" title="総合評価">⭐ ${escapeHtml(it.weighted_score)}</span>` : '';
+    const date = it.latest_date ? `<small class="muted">${escapeHtml(it.latest_date)}</small>` : '';
+    const warn = (it.critical_count > 0 || it.high_count > 0)
+      ? `<small style="color:#d97706">⚠ Critical ${it.critical_count} / High ${it.high_count}</small>` : '';
+    // 「現在アクティブな要修正 PR 数」 = latest.json.fix_pr が non-null なら 1。
+    // 履歴 (= 過去日付の fix_pr) を追跡する仕組みは未実装なので暫定で 0 / 1。
+    const activePrCount = it.fix_pr ? 1 : 0;
+    const prBadge = activePrCount > 0
+      ? `<a class="badge review-pr-badge" href="${escapeHtml(it.fix_pr || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="要修正 PR を開く">🔧 ${activePrCount}</a>`
+      : '';
+    return `
+      <article class="card review-card" data-review-card="${escapeHtml(it.repo)}">
+        <header class="review-card-head">
+          <strong class="review-card-repo">${escapeHtml(it.repo)}</strong>
+          ${prBadge}
+        </header>
+        <div class="review-card-meta">
+          ${score} ${date} ${warn}
+        </div>
+      </article>`;
+  }).join('');
+  cards.querySelectorAll('article[data-review-card]').forEach((c) => {
+    c.addEventListener('click', () => {
+      const repo = c.getAttribute('data-review-card');
+      if (repo) void openReviewDetail(repo);
+    });
+  });
+}
+
+async function openReviewDetail(repo) {
   try {
     const r = await api(`/api/review/repos/${encodeURIComponent(repo)}`);
     reviewState.selected = repo;
     reviewState.dates = r.dates || [];
     reviewState.currentDate = r.dates?.[0] ?? null;
+    reviewState.currentFile = 'REVIEW.md';
+    reviewState.fixPr = r.latest?.fix_pr ?? null;
     if (!reviewState.currentDate) {
-      detail.innerHTML = `<div class="hint">${escapeHtml(repo)}: レビューフォルダはありますが日付ディレクトリが見つかりません。</div>`;
+      alert(`${repo}: レビューフォルダはありますが日付ディレクトリが見つかりません。`);
       return;
     }
-    renderReviewDetail();
+    showReviewDetail();
+    renderReviewDetailHeader();
+    await loadReviewFile();
   } catch (e) {
-    detail.innerHTML = `<div class="hint">読み込みエラー: ${escapeHtml(e.message)}</div>`;
+    alert(`読み込みエラー: ${e.message}`);
   }
 }
 
-async function renderReviewDetail() {
-  const detail = document.getElementById('reviewDetail');
-  if (!detail || !reviewState.selected || !reviewState.currentDate) return;
-  const dateOptions = reviewState.dates.map((d) =>
+function showReviewList() {
+  document.getElementById('reviewListLayout')?.classList.remove('hidden');
+  document.getElementById('reviewDetailLayout')?.classList.add('hidden');
+  document.getElementById('reviewBackBtn')?.setAttribute('hidden', '');
+}
+
+function showReviewDetail() {
+  document.getElementById('reviewListLayout')?.classList.add('hidden');
+  document.getElementById('reviewDetailLayout')?.classList.remove('hidden');
+  document.getElementById('reviewBackBtn')?.removeAttribute('hidden');
+}
+
+function renderReviewDetailHeader() {
+  const repoEl = document.getElementById('reviewDetailRepo');
+  const dateSel = document.getElementById('reviewDateSel');
+  const fileTabs = document.getElementById('reviewFileTabs');
+  const fixLink = document.getElementById('reviewFixPrLink');
+  if (!repoEl || !dateSel || !fileTabs || !fixLink) return;
+  repoEl.textContent = reviewState.selected || '';
+  dateSel.innerHTML = reviewState.dates.map((d) =>
     `<option value="${escapeHtml(d)}"${d === reviewState.currentDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
-  const fileTabs = REVIEW_FILES_UI.map(([f, label]) =>
-    `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${f}">${escapeHtml(label)}</button>`).join('');
-  detail.innerHTML = `
-    <div style="padding:8px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
-      <strong>${escapeHtml(reviewState.selected)}</strong>
-      <label class="muted">日付 <select id="reviewDateSel">${dateOptions}</select></label>
-    </div>
-    <nav class="tabs" style="padding:0 16px">${fileTabs}</nav>
-    <pre id="reviewBody" style="padding:16px;white-space:pre-wrap;font-family:var(--mono, monospace);font-size:13px;line-height:1.5">読み込み中…</pre>`;
-  document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
-    reviewState.currentDate = ev.target.value;
-    void loadReviewFile();
-  });
-  detail.querySelectorAll('button[data-review-file]').forEach((b) => {
+  fileTabs.innerHTML = REVIEW_FILES_UI.map(([f, label]) =>
+    `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${escapeHtml(f)}">${escapeHtml(label)}</button>`).join('');
+  if (reviewState.fixPr) {
+    fixLink.setAttribute('href', reviewState.fixPr);
+    fixLink.removeAttribute('hidden');
+  } else {
+    fixLink.setAttribute('hidden', '');
+  }
+  fileTabs.querySelectorAll('button[data-review-file]').forEach((b) => {
     b.addEventListener('click', () => {
       reviewState.currentFile = b.getAttribute('data-review-file') || 'REVIEW.md';
-      detail.querySelectorAll('button[data-review-file]').forEach((x) =>
+      fileTabs.querySelectorAll('button[data-review-file]').forEach((x) =>
         x.classList.toggle('active', x.getAttribute('data-review-file') === reviewState.currentFile));
       void loadReviewFile();
     });
   });
-  await loadReviewFile();
 }
 
 async function loadReviewFile() {
   const body = document.getElementById('reviewBody');
   if (!body || !reviewState.selected || !reviewState.currentDate) return;
   const url = `/api/review/repos/${encodeURIComponent(reviewState.selected)}/${reviewState.currentDate}/${reviewState.currentFile}`;
+  body.textContent = '読み込み中…';
   try {
     const res = await fetch(url);
     if (!res.ok) { body.textContent = `${res.status}: ${await res.text()}`; return; }
-    body.textContent = await res.text();
+    const md = await res.text();
+    // 見出し + テーブル + リスト + 段落 + コードフェンスを HTML に。
+    // インラインは notes/markdown.ts:renderInline を流用 (bold / italic / code / link)。
+    body.innerHTML = renderMarkdownBlock(md);
   } catch (e) {
     body.textContent = `読み込みエラー: ${e.message}`;
   }
 }
 
 document.getElementById('reviewRefresh')?.addEventListener('click', () => void loadReviewRepos());
+document.getElementById('reviewBackBtn')?.addEventListener('click', () => showReviewList());
+document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
+  const v = (ev.target as HTMLSelectElement).value;
+  reviewState.filterRepo = v || null;
+  renderReviewMenu();
+  renderReviewCards();
+});
+
+// ── レビュー対象の追加モーダル ─────────────────────────────────
+function openReviewTargetModal() {
+  ($('reviewTargetName') as HTMLInputElement).value = '';
+  ($('reviewTargetPath') as HTMLInputElement).value = '';
+  ($('reviewTargetFormat') as HTMLSelectElement).value = 'aiformat';
+  const err = $('reviewTargetError');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('reviewTargetModal');
+}
+
+async function submitReviewTarget() {
+  const name = ($('reviewTargetName') as HTMLInputElement).value.trim();
+  const local_path = ($('reviewTargetPath') as HTMLInputElement).value.trim();
+  const format_key = ($('reviewTargetFormat') as HTMLSelectElement).value;
+  const err = $('reviewTargetError');
+  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
+  if (!name) return showErr('表示名を入力してください');
+  if (!local_path) return showErr('ローカルパスを入力してください');
+  try {
+    const res = await fetch('/api/review/targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, local_path, format_key }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(body.error || `${res.status}`);
+    }
+    hideModal('reviewTargetModal');
+    flashToast('レビュー対象を追加しました');
+    await loadReviewRepos();
+  } catch (e) {
+    showErr((e as Error).message);
+  }
+}
+
+$('reviewAddTargetBtn')?.addEventListener('click', openReviewTargetModal);
+$('reviewTargetSaveBtn')?.addEventListener('click', () => void submitReviewTarget());
+$('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTargetModal'));
+document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
+  reviewState.currentDate = ev.target.value;
+  void loadReviewFile();
+});
 
 async function loadMeals() {
   const list = document.getElementById('mealsList');
@@ -11605,6 +11791,55 @@ initTutorial({
 document.getElementById('topbarHelpBtn')?.addEventListener('click', () => {
   openHelpFor(state.tab as string);
 });
+
+// topbar (ページの頭) をタップで最上部にスクロール。 iOS のステータスバー
+// タップ慣習と同じ。 内部にボタンを含むので、 button / interactive 要素を
+// クリックしたときは伝播させない (= scroll しない)。
+function scrollPageToTop() {
+  const opts: ScrollToOptions = { top: 0, behavior: 'smooth' };
+  window.scrollTo(opts);
+  // Memoria のメイン scroll container は `.layout > .content`。
+  document.querySelector('.layout > .content')?.scrollTo(opts);
+  // 各タブ内部に独自スクロール container を持つビューも先頭に戻す
+  // (notes-pane / notes-comments / bookmarks-main / mealsList 等)。
+  const selectors = [
+    '.notes-pane', '.notes-comments', '.notes-sidebar',
+    '.bookmarks-main', '.bookmarks-categories',
+    '#cards', '#mealsList', '#reviewCards', '#reviewBody',
+    '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView', '#implView',
+  ];
+  document.querySelectorAll(selectors.join(',')).forEach((el) => {
+    if ((el as HTMLElement).scrollTop > 0) (el as HTMLElement).scrollTop = 0;
+  });
+}
+document.querySelector('.topbar')?.addEventListener('click', (ev) => {
+  // ボタン / リンク / 設定パネル等のインタラクティブ要素をクリックしたときは無視
+  const target = ev.target as HTMLElement | null;
+  if (target?.closest('button, a, input, select, textarea, [role="button"]')) return;
+  scrollPageToTop();
+});
+
+// iOS の status-bar tap (= 「画面最上部に戻る」 ジェスチャ) を捕まえる。
+// body には CSS で min-height: calc(100vh + 1px) を入れて 1px の scroll
+// バッファを作っており、 ここでは初期位置を scrollTop=1 にしておく。
+// status-bar tap → iOS が window を scrollTop=0 に戻そうとする → scroll
+// イベント発火 → scrollPageToTop() を呼んで .content も先頭に戻し、
+// window は再び 1 に戻して次の tap に備える。
+(function setupStatusBarTapToTop() {
+  if (!window.matchMedia('(max-width: 760px)').matches) return;
+  // 起動直後に 1px ぶん下にずらしておく (= status-bar tap 検出の土俵)
+  const park = () => window.scrollTo(0, 1);
+  requestAnimationFrame(() => requestAnimationFrame(park));
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  window.addEventListener('scroll', () => {
+    if (window.scrollY !== 0) return;
+    // window が 0 に戻った = status-bar tap (or 初回ロード時の同期問題)。
+    // .content も連動して先頭へ。
+    scrollPageToTop();
+    if (pending !== null) clearTimeout(pending);
+    pending = setTimeout(() => { park(); pending = null; }, 250);
+  }, { passive: true });
+})();
 
 
 // ── Legatus WS client (loopback ws://127.0.0.1:17320/ws) ─────────────

@@ -596,6 +596,8 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
           highlights: ctx.highlights,
           digs,
           activity: ctx.metrics?.activity ?? null,
+          apps: ctx.metrics?.apps ?? null,
+          games: ctx.metrics?.games ?? null,
         });
         upsertDiary(db, {
           date: dateStr,
@@ -730,9 +732,19 @@ interface ComposeSummaryArgs {
     kinds?: Partial<Record<string, number>>;
     items?: { occurred_at?: string | null; kind: string; source?: string | null; content?: string | null }[];
   } | null;
+  apps?: {
+    total_minutes: number;
+    active_minutes: number;
+    by_kind: { kind: string; minutes: number; active_minutes: number }[];
+    top: { display_name: string; kind: string | null; minutes: number; active_minutes: number }[];
+  } | null;
+  games?: {
+    total_minutes: number;
+    items: { name: string; minutes: number; first_at: string; last_at: string }[];
+  } | null;
 }
 
-function composeDiarySummary({ workContent, githubByRepo, highlights, digs, activity }: ComposeSummaryArgs): string {
+function composeDiarySummary({ workContent, githubByRepo, highlights, digs, activity, apps, games }: ComposeSummaryArgs): string {
   const parts: string[] = [];
   if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
   if (digs && digs.length > 0) {
@@ -763,6 +775,28 @@ function composeDiarySummary({ workContent, githubByRepo, highlights, digs, acti
       ? `\n- … ほか ${(activity.items ?? []).length - 10} 件`
       : '';
     parts.push(`## 開発活動\n合計: ${head}\n${items.join('\n')}${tail}`);
+  }
+  if (apps && apps.top.length > 0) {
+    const fmt = (m: number) => m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`.replace(' 0m', '');
+    const kindStr = (apps.by_kind || [])
+      .filter((k) => k.minutes >= 1)
+      .slice(0, 6)
+      .map((k) => `${k.kind} ${fmt(k.minutes)}`)
+      .join(' / ');
+    const topLines = apps.top.slice(0, 8).map((it) =>
+      `- ${it.display_name} (${it.kind || '?'}): ${fmt(it.minutes)}`
+    );
+    parts.push(`## アプリ使用 (${fmt(apps.total_minutes)})${kindStr ? `\n${kindStr}` : ''}\n${topLines.join('\n')}`);
+  }
+  if (games && games.items.length > 0) {
+    const fmt = (m: number) => m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`.replace(' 0m', '');
+    const lines = games.items.map((g) => {
+      const startHH = g.first_at?.slice(11, 16);
+      const endHH = g.last_at?.slice(11, 16);
+      const span = (startHH && endHH && startHH !== endHH) ? ` (${startHH}〜${endHH})` : '';
+      return `- 🎮 ${g.name}: ${fmt(g.minutes)}${span}`;
+    });
+    parts.push(`## ゲームプレイ (${fmt(games.total_minutes)})\n${lines.join('\n')}`);
   }
   if (highlights) parts.push(`## ハイライト\n${highlights.trim()}`);
   return parts.join('\n\n');
