@@ -5478,6 +5478,11 @@ let ensureMemoriaFeatureViews = function () {
             <span>🏠 自宅 (有線接続時のデフォルト)</span>
           </label>
           <small class="muted" style="margin-top:-4px">PC が有線で繋がっていて WiFi / GPS で他の場所が判定できないとき、 ここを current にします。 1 つだけ true にできます (= 別の場所を 🏠 にすると自動的に解除)。</small>
+          <label class="simple-field">
+            <span>GPS 誤差許容半径 (m、 空欄 = global 既定)</span>
+            <input id="workplaceEditorRadius" type="number" min="1" max="50000" step="1" placeholder="50 (空欄: 設定の既定値を使う)" />
+            <small class="muted">場所の物理的な大きさに応じて個別に設定。 例: 自宅 = 30m / 駅前広場 = 200m / 大学キャンパス = 500m。 0 や空欄なら全体設定の値 (設定 → プライバシー → 場所判定の半径) を使う。</small>
+          </label>
           <label class="simple-check-row">
             <input id="workplaceEditorShareable" type="checkbox" />
             <span>シェア可能にする</span>
@@ -5538,13 +5543,23 @@ let ensureMemoriaFeatureViews = function () {
       <label class="check-inline"><input id="workplaceAutoShareEnabled" type="checkbox" /> 作業場所が切り替わったとき Hub に共有する (オプトイン)</label>
       <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径 (作業場所判定 / 1 日の作業セッション検出):
         <input id="workplaceMatchRadiusM" type="number" min="20" max="2000" step="10" style="width:80px" />
-        m
+        m (= global 既定)
       </label>
       <p class="diary-settings-help" style="margin-top:6px">
         OwnTracks の locator displacement (移動 N m ごとに送信) と GPS の精度を考慮した距離。
         既定 50m。 OwnTracks 側を 50m に設定しているならここも 50-100m が目安。
         屋内ビル (室内 GPS オフセット) で取りこぼす場合は 100-200m に上げてください。
         この半径を超えた点で「離脱」と判定し、 セッションがそこで終了します。
+        場所ごとに <code>radius_m</code> を個別設定すると、 そちらが優先されます (= 作業場所編集画面で入力)。
+      </p>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">移動速度の閾値:
+        <input id="workplaceMaxSpeedKmh" type="number" min="0" max="200" step="1" style="width:80px" />
+        km/h
+      </label>
+      <p class="diary-settings-help" style="margin-top:6px">
+        これより速い瞬間速度 (= 直前 GPS 点との距離 / 時間差) の点は「移動中」とみなして
+        場所タグ付けの対象から外します。 通り過ぎただけの場所を誤検出しないため。
+        既定 5 km/h (= 徒歩速度の上限近辺)。 0 を入れるとフィルタ無効。
       </p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
     footer.parentNode.insertBefore(sec, footer);
@@ -5805,6 +5820,7 @@ async function loadPrivacySettings() {
   if ($('workplaceGeoEnabled')) $('workplaceGeoEnabled').checked = !!s.workplace_geo_enabled;
   if ($('workplaceAutoShareEnabled')) $('workplaceAutoShareEnabled').checked = !!s.workplace_auto_share_enabled;
   if ($('workplaceMatchRadiusM')) $('workplaceMatchRadiusM').value = s.workplace_match_radius_m ?? 50;
+  if ($('workplaceMaxSpeedKmh')) $('workplaceMaxSpeedKmh').value = s.workplace_max_speed_kmh ?? 5;
   if ($('aiLegatusEnabled')) $('aiLegatusEnabled').checked = !!s.legatus_enabled;
   applyLegatusEnabled(!!s.legatus_enabled);
   // AI 自動処理 opt-out 群
@@ -5845,6 +5861,7 @@ async function savePrivacySettings() {
       workplace_geo_enabled: !!($('workplaceGeoEnabled')?.checked),
       workplace_auto_share_enabled: !!($('workplaceAutoShareEnabled')?.checked),
       workplace_match_radius_m: Number($('workplaceMatchRadiusM')?.value ?? 150),
+      workplace_max_speed_kmh: Number($('workplaceMaxSpeedKmh')?.value ?? 5),
       legatus_enabled: !!($('aiLegatusEnabled')?.checked),
       bookmarks_auto_summarize: !!($('aiAutoBookmarkSummarize')?.checked),
       page_metadata_auto_fetch: !!($('aiAutoPageMetadata')?.checked),
@@ -6461,6 +6478,7 @@ function openWorkplaceEditor(w = null) {
   $('workplaceEditorTags').value = w?.tags || '';
   if ($('workplaceEditorWifiSsids')) $('workplaceEditorWifiSsids').value = w?.wifi_ssids || '';
   if ($('workplaceEditorIsHome')) $('workplaceEditorIsHome').checked = !!w?.is_home;
+  if ($('workplaceEditorRadius')) $('workplaceEditorRadius').value = (w?.radius_m == null ? '' : String(w.radius_m));
   $('workplaceEditorDescription').value = w?.description || '';
   $('workplaceEditorShareable').checked = !!w?.shareable;
   // 「現在の WiFi を追加」 ボタンは server 側 /api/wifi/current が返してくれる
@@ -6988,6 +7006,12 @@ async function saveWorkLocationFromForm() {
     is_home: !!$('workplaceEditorIsHome')?.checked,
     description: $('workplaceEditorDescription')?.value.trim() || null,
     shareable: !!$('workplaceEditorShareable')?.checked,
+    radius_m: ((): number | null => {
+      const v = ($('workplaceEditorRadius')?.value || '').trim();
+      if (!v) return null;
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    })(),
   };
   try {
     if (editId) {
