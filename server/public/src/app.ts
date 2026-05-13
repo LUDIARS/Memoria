@@ -11714,6 +11714,28 @@ document.querySelector('.topbar')?.addEventListener('click', (ev) => {
   scrollPageToTop();
 });
 
+// iOS の status-bar tap (= 「画面最上部に戻る」 ジェスチャ) を捕まえる。
+// body には CSS で min-height: calc(100vh + 1px) を入れて 1px の scroll
+// バッファを作っており、 ここでは初期位置を scrollTop=1 にしておく。
+// status-bar tap → iOS が window を scrollTop=0 に戻そうとする → scroll
+// イベント発火 → scrollPageToTop() を呼んで .content も先頭に戻し、
+// window は再び 1 に戻して次の tap に備える。
+(function setupStatusBarTapToTop() {
+  if (!window.matchMedia('(max-width: 760px)').matches) return;
+  // 起動直後に 1px ぶん下にずらしておく (= status-bar tap 検出の土俵)
+  const park = () => window.scrollTo(0, 1);
+  requestAnimationFrame(() => requestAnimationFrame(park));
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  window.addEventListener('scroll', () => {
+    if (window.scrollY !== 0) return;
+    // window が 0 に戻った = status-bar tap (or 初回ロード時の同期問題)。
+    // .content も連動して先頭へ。
+    scrollPageToTop();
+    if (pending !== null) clearTimeout(pending);
+    pending = setTimeout(() => { park(); pending = null; }, 250);
+  }, { passive: true });
+})();
+
 
 // ── Legatus WS client (loopback ws://127.0.0.1:17320/ws) ─────────────
 // 接続状態 / MQTT 受信 / relay 成否を live で取り込む。

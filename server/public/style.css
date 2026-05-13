@@ -19,6 +19,16 @@ body {
   font-size: 14px;
 }
 
+/* iOS の status-bar tap (= 最上部に戻すジェスチャ) は window を scrollTop=0
+ * に向けて scroll させる動作。 Memoria は実スクロールが `.layout > .content`
+ * 側にあるため、 window が常に 0 のままだと status-bar tap で何も起きない。
+ * mobile では body に 1px だけ余白を持たせて window scroll が成立する状態を
+ * 作り、 起動時に scrollTo(0, 1) で待機させておく (app.ts の setup 側)。
+ * 見た目への影響は 1px ぶん下にスクロール可能になるだけで実用上ゼロ。 */
+@media (max-width: 760px) {
+  body { min-height: calc(100vh + 1px); }
+}
+
 .topbar {
   display: flex;
   align-items: center;
