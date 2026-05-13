@@ -11687,6 +11687,33 @@ document.getElementById('topbarHelpBtn')?.addEventListener('click', () => {
   openHelpFor(state.tab as string);
 });
 
+// topbar (ページの頭) をタップで最上部にスクロール。 iOS のステータスバー
+// タップ慣習と同じ。 内部にボタンを含むので、 button / interactive 要素を
+// クリックしたときは伝播させない (= scroll しない)。
+function scrollPageToTop() {
+  const opts: ScrollToOptions = { top: 0, behavior: 'smooth' };
+  window.scrollTo(opts);
+  // Memoria のメイン scroll container は `.layout > .content`。
+  document.querySelector('.layout > .content')?.scrollTo(opts);
+  // 各タブ内部に独自スクロール container を持つビューも先頭に戻す
+  // (notes-pane / notes-comments / bookmarks-main / mealsList 等)。
+  const selectors = [
+    '.notes-pane', '.notes-comments', '.notes-sidebar',
+    '.bookmarks-main', '.bookmarks-categories',
+    '#cards', '#mealsList', '#reviewCards', '#reviewBody',
+    '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView', '#implView',
+  ];
+  document.querySelectorAll(selectors.join(',')).forEach((el) => {
+    if ((el as HTMLElement).scrollTop > 0) (el as HTMLElement).scrollTop = 0;
+  });
+}
+document.querySelector('.topbar')?.addEventListener('click', (ev) => {
+  // ボタン / リンク / 設定パネル等のインタラクティブ要素をクリックしたときは無視
+  const target = ev.target as HTMLElement | null;
+  if (target?.closest('button, a, input, select, textarea, [role="button"]')) return;
+  scrollPageToTop();
+});
+
 
 // ── Legatus WS client (loopback ws://127.0.0.1:17320/ws) ─────────────
 // 接続状態 / MQTT 受信 / relay 成否を live で取り込む。
