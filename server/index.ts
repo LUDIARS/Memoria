@@ -56,6 +56,7 @@ import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
 import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
+import { makeWeatherRouter } from './routes/weather.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -220,6 +221,7 @@ app.route('/', makeMultiRouter({
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
 app.route('/', makeReviewRouter({ db }));
+app.route('/', makeWeatherRouter({ db }));
 
 // ---- static UI ------------------------------------------------------------
 

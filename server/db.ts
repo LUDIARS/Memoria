@@ -412,6 +412,22 @@ export function openDb(dbPath: string): Db {
       not_found       INTEGER NOT NULL DEFAULT 0
     );
 
+    -- 天気スナップショット。 1 fetch = 1 行 append。 同じ date に複数行入る
+    -- (= 朝・昼・夜と再 fetch しても履歴は残す)。 日記生成は date の最新行を読む。
+    -- current/hourly/daily は Open-Meteo の payload を分割して保存。
+    CREATE TABLE IF NOT EXISTS weather_snapshots (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      fetched_at   INTEGER NOT NULL,
+      date         TEXT NOT NULL,
+      lat          REAL NOT NULL,
+      lon          REAL NOT NULL,
+      current_json TEXT,
+      hourly_json  TEXT,
+      daily_json   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_weather_snapshots_date
+      ON weather_snapshots(date DESC, fetched_at DESC);
+
     -- レビュー対象リポジトリ。 ludiars-review skill (= cloud routine) が
     -- iterate するリスト。 起動時に LUDIARS_ROOT 配下の git clone を seed し、
     -- ユーザは UI から任意のローカルパスを足せる。 format_key は将来カスタム

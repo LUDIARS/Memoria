@@ -8,6 +8,10 @@ import { yesterdayLocal, formatLocalDate, weekRangeFor } from '../diary.js';
 import { listTasks, getAppSettings, setAppSettings } from '../db.js';
 import { sendPushToAll } from '../push.js';
 import { featureEnabled } from './privacy.js';
+import {
+  fetchForecast, insertWeatherSnapshot, readLatestGpsLatLon,
+  isRainingNow, nextRainStart, describeCode,
+} from './weather.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -29,6 +33,7 @@ export function startSchedulers(deps: SchedulerDeps): void {
   scheduleMidnight(deps);
   scheduleSundayEvening(deps);
   startTaskReminderInterval(deps);
+  startWeatherRainAlertInterval(deps);
 }
 
 // Midnight scheduler — fires at next 00:00:05 local, generates the previous
@@ -136,4 +141,95 @@ function startTaskReminderInterval(deps: SchedulerDeps): void {
       console.error('[reminder] unexpected error:', msg);
     }
   }, 60_000).unref?.();
+}
+
+// 「日中に晴れ → 雨」 通知。 30 分おきに forecast を fetch して、
+//   - 今日まだ雨アラートを送っていない
+//   - かつ 「今 raining」 or 「これから lookAheadHours 以内に雨」
+// のとき 1 回だけ push。 cron は process が生きている間ずっと走る。
+//
+// 朝 5 時 -> 22 時の活動時間帯だけ動かす (深夜の通知音を避ける)。
+function startWeatherRainAlertInterval(deps: SchedulerDeps): void {
+  const INTERVAL_MS = 30 * 60 * 1000;     // 30 min
+  const ACTIVE_HOUR_START = 5;
+  const ACTIVE_HOUR_END = 22;             // 22:00 まで
+
+  const tick = async () => {
+    try {
+      if (!featureEnabled(deps.db, 'weather_enabled')) return;
+      if (!featureEnabled(deps.db, 'weather_rain_alert_enabled')) return;
+
+      const now = new Date();
+      const hour = now.getHours();
+      if (hour < ACTIVE_HOUR_START || hour >= ACTIVE_HOUR_END) return;
+
+      const today = formatLocalDate(now);
+      const appS = getAppSettings(deps.db);
+      const lastSentDate = appS['weather.rain_alert.last_sent_date'];
+      // 既に同じ日に送っていれば skip
+      if (lastSentDate === today) return;
+
+      // 位置解決: 固定 lat/lon > GPS 最新。 どちらも無ければ skip。
+      const fLat = Number(appS['weather.fixed_lat']);
+      const fLon = Number(appS['weather.fixed_lon']);
+      let loc: { lat: number; lon: number } | null = null;
+      if (Number.isFinite(fLat) && Number.isFinite(fLon) && (fLat !== 0 || fLon !== 0)) {
+        loc = { lat: fLat, lon: fLon };
+      } else {
+        loc = readLatestGpsLatLon(deps.db);
+      }
+      if (!loc) return;
+
+      const forecast = await fetchForecast(loc.lat, loc.lon);
+      insertWeatherSnapshot(deps.db, today, forecast);
+
+      const raining = isRainingNow(forecast);
+      const nextStart = nextRainStart(forecast, { todayDateLocal: today, lookAheadHours: 6 });
+
+      // 「日中に晴れ→雨」 = いま晴れてて、 今後 6h 以内に降水予報。
+      // 「降っている」 = いま既に降水中。
+      let title = '';
+      let body = '';
+      if (raining) {
+        const c = forecast.current!;
+        const desc = describeCode(c.weather_code);
+        title = `${desc.icon} 雨が降っています`;
+        body = `${desc.label} (降水 ${c.precipitation.toFixed(1)}mm) — 外出時は傘を`;
+      } else if (nextStart) {
+        const t = new Date(nextStart);
+        const hh = String(t.getHours()).padStart(2, '0');
+        const mm = String(t.getMinutes()).padStart(2, '0');
+        // どのコードで降る予想か (= hourly の該当 index)
+        const idx = forecast.hourly.time.indexOf(nextStart);
+        const code = idx >= 0 ? forecast.hourly.weather_code[idx] : 61;
+        const desc = describeCode(code);
+        const prob = idx >= 0 ? forecast.hourly.precipitation_probability[idx] : null;
+        const probStr = prob != null ? ` (降水確率 ${prob}%)` : '';
+        title = `${desc.icon} ${hh}:${mm} 頃から${desc.label}`;
+        body = `今日この後${desc.label}の予報${probStr} — 出発前に傘の用意を`;
+      } else {
+        return;   // 今日は雨無し
+      }
+
+      await sendPushToAll(deps.db, {
+        title,
+        body,
+        tag: `memoria-weather-rain-${today}`,
+        url: '/?tab=weather',
+      }).catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error('[weather alert] push failed:', msg);
+      });
+      setAppSettings(deps.db, { 'weather.rain_alert.last_sent_date': today });
+      console.log(`[weather alert] sent for ${today}: ${title}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Open-Meteo の一時的な失敗は log だけ、 次の tick で retry。
+      console.warn('[weather alert] tick failed:', msg);
+    }
+  };
+
+  // 起動直後にも 1 回 (= 朝起動して即チェック)、 以後 30 分おき。
+  setTimeout(() => { void tick(); }, 15_000).unref?.();
+  setInterval(() => { void tick(); }, INTERVAL_MS).unref?.();
 }
