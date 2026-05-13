@@ -1,0 +1,14 @@
+#!/bin/sh
+# Memoria git post-commit shim.
+#
+# 内容は server/hooks/post-commit.mjs (Node 実装) に丸投げ。
+# git は拡張子のない実行ファイル (`post-commit`) を呼ぶ必要があるので、
+# この shell スクリプトが薄い wrapper として存在する。
+#
+# 環境変数:
+#   MEMORIA_HOOK_DIR — このスクリプトと post-commit.mjs が同じ場所にある前提で、
+#                      自動解決される。 明示したい場合のみ設定。
+
+set -e
+SCRIPT_DIR="${MEMORIA_HOOK_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+exec node "$SCRIPT_DIR/post-commit.mjs" "$@"
