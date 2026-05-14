@@ -10767,7 +10767,15 @@ document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
 // 駅検索は from / to のテキスト入力に debounce auto-complete を付け、
 // 候補から選ぶと code を hidden input に詰める。
 
-interface TransitStation { code: string; name: string; secondary?: string }
+interface TransitStation {
+  /** Directions の origin/destination に渡す値。 ローカルなら "lat,lon" 形式。 */
+  code: string;
+  name: string;
+  secondary?: string;
+  /** 路線サマリ (= 乗入路線を 「JR山手線 ほか 3 路線」 風に表示) */
+  lines_label?: string;
+  distance_m?: number;
+}
 interface TransitSegment {
   line: string; company?: string; train_type?: string;
   from_station: string; to_station: string;
@@ -10838,7 +10846,7 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
   function clearList() { ul!.innerHTML = ''; ul!.hidden = true; }
   function setPick(s: TransitStation | null) {
     if (codeEl) codeEl.value = s?.code ?? '';
-    if (pickEl) pickEl.textContent = s ? `✓ ${s.name}${s.secondary ? ` (${s.secondary})` : ''}` : '';
+    if (pickEl) pickEl.textContent = s ? `✓ ${s.name}${s.secondary ? ` (${s.secondary})` : ''}${s.lines_label ? ` — ${s.lines_label}` : ''}` : '';
   }
   inEl.addEventListener('input', () => {
     const q = inEl.value.trim();
@@ -10848,27 +10856,36 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
     if (!q) { clearList(); return; }
     if (timer) window.clearTimeout(timer);
     timer = window.setTimeout(async () => {
-      if (!transitState.hasKey) {
-        ul!.innerHTML = `<li class="transit-autocomplete-empty">Maps API key 未設定 — 設定 → AI / 連携 から登録してください</li>`;
-        ul!.hidden = false;
-        return;
-      }
       try {
-        const r = await api(`/api/transit/stations?q=${encodeURIComponent(q)}`) as { items: TransitStation[]; error?: string };
-        if (r.error) {
-          ul!.innerHTML = `<li class="transit-autocomplete-empty">${escapeHtml(r.error)}</li>`;
-          ul!.hidden = false;
-          return;
-        }
-        const items = (r.items || []).slice(0, 20);
+        interface LocalStationItem { name: string; prefecture: string; lines: string[]; lat: number; lon: number; is_terminal: boolean; distance_m?: number }
+        // ローカル DB (HeartRails seed) を最初に試す。 GPS は backend が直近 row を使う。
+        const localR = (await api(`/api/transit/stations/local?q=${encodeURIComponent(q)}&limit=20`)) as { items: LocalStationItem[]; error?: string };
+        const items: TransitStation[] = (localR.items || []).map((s) => {
+          const linesLabel = s.lines.length === 0 ? ''
+            : s.lines.length === 1 ? s.lines[0]
+            : `${s.lines[0]} ほか ${s.lines.length - 1} 路線`;
+          return {
+            code: `${s.lat},${s.lon}`,
+            name: s.name,
+            secondary: s.prefecture,
+            lines_label: linesLabel,
+            distance_m: s.distance_m,
+          };
+        });
         if (items.length === 0) {
-          ul!.innerHTML = `<li class="transit-autocomplete-empty">候補なし</li>`;
+          ul!.innerHTML = `<li class="transit-autocomplete-empty">候補なし — そのままテキスト入力で検索すれば Google が解釈します</li>`;
           ul!.hidden = false;
           return;
         }
-        ul!.innerHTML = items.map((s) =>
-          `<li data-code="${escapeHtml(s.code)}" data-name="${escapeHtml(s.name)}" data-secondary="${escapeHtml(s.secondary ?? '')}">${escapeHtml(s.name)}${s.secondary ? ` <small class="muted">${escapeHtml(s.secondary)}</small>` : ''}</li>`
-        ).join('');
+        ul!.innerHTML = items.map((s) => {
+          const dist = s.distance_m != null
+            ? (s.distance_m < 1000 ? `${Math.round(s.distance_m)}m` : `${(s.distance_m / 1000).toFixed(1)}km`)
+            : '';
+          return `<li data-code="${escapeHtml(s.code)}" data-name="${escapeHtml(s.name)}" data-secondary="${escapeHtml(s.secondary ?? '')}" data-lines="${escapeHtml(s.lines_label ?? '')}">
+            <strong>${escapeHtml(s.name)}</strong>${s.secondary ? ` <small class="muted">${escapeHtml(s.secondary)}</small>` : ''}
+            ${s.lines_label ? `<div class="transit-autocomplete-sub">${escapeHtml(s.lines_label)}${dist ? ` · ${dist}` : ''}</div>` : (dist ? `<div class="transit-autocomplete-sub">${dist}</div>` : '')}
+          </li>`;
+        }).join('');
         ul!.hidden = false;
       } catch (e: unknown) {
         ul!.innerHTML = `<li class="transit-autocomplete-empty">エラー: ${escapeHtml((e as Error).message)}</li>`;
@@ -10880,7 +10897,12 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
     const li = (ev.target as HTMLElement).closest('li');
     if (!li || !li.dataset.code) return;
     inEl.value = li.dataset.name ?? '';
-    setPick({ code: li.dataset.code, name: li.dataset.name ?? '', secondary: li.dataset.secondary });
+    setPick({
+      code: li.dataset.code,
+      name: li.dataset.name ?? '',
+      secondary: li.dataset.secondary,
+      lines_label: li.dataset.lines,
+    });
     clearList();
   });
   inEl.addEventListener('blur', () => setTimeout(clearList, 200));

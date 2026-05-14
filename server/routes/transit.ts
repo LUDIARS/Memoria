@@ -13,6 +13,7 @@ import {
 } from '../lib/transit-google.js';
 import { getAppSettings } from '../db.js';
 import { runDetection } from '../lib/transit-detect.js';
+import { searchStationsLocal } from '../lib/transit-stations-seed.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -59,7 +60,7 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     return c.json({ hasKey: !!cfg.apiKey, source: 'maps.api_key' });
   });
 
-  // ── 駅検索 (= Places Autocomplete) ───────────────────────────────────
+  // ── 駅検索 (Places Autocomplete fallback)。 通常はローカル DB を使う。 ─────
   r.get('/api/transit/stations', async (c: Context) => {
     const url = new URL(c.req.url);
     const q = url.searchParams.get('q') ?? '';
@@ -71,6 +72,34 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
       const msg = e instanceof Error ? e.message : String(e);
       return c.json({ error: msg }, 502);
     }
+  });
+
+  // ── 駅検索: ローカル DB (HeartRails seed 由来) + GPS 近さ + ターミナル優先 ─
+  // ?q=新宿&lat=35.69&lon=139.69&limit=20
+  // lat/lon を省略すると 直近 gps_locations を使う (= 「いまどこにいるか」 を
+  // 自動推定して近い順)。
+  r.get('/api/transit/stations/local', (c: Context) => {
+    const url = new URL(c.req.url);
+    const q = url.searchParams.get('q') ?? '';
+    if (!q.trim()) return c.json({ items: [] });
+    let lat = Number(url.searchParams.get('lat'));
+    let lon = Number(url.searchParams.get('lon'));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      const row = db.prepare(`SELECT lat, lon FROM gps_locations ORDER BY recorded_at DESC LIMIT 1`).get() as { lat: number; lon: number } | undefined;
+      if (row) { lat = row.lat; lon = row.lon; }
+    }
+    const limit = Number(url.searchParams.get('limit'));
+    const items = searchStationsLocal(db, {
+      q,
+      lat: Number.isFinite(lat) ? lat : undefined,
+      lon: Number.isFinite(lon) ? lon : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+    });
+    return c.json({
+      items,
+      gps_source: Number.isFinite(lat) && Number.isFinite(lon)
+        ? (url.searchParams.get('lat') ? 'query' : 'gps') : null,
+    });
   });
 
   // ── 経路検索 (= Directions mode=transit) ───────────────────────────────

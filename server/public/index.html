@@ -988,9 +988,10 @@
               <button id="transitSearchBtn" type="button">検索</button>
             </div>
             <p class="muted" style="font-size:11px;margin:4px 2px">
-              Google Directions の real-time 遅延が到着時刻に反映されます。 ⚠ アイコンは Directions が返した運休/遅延の警告です。
+              駅候補は <strong>ローカル DB</strong> (HeartRails Express 由来、 起動時に bulk import) から GPS 近い順 + ターミナル駅優先で出します。
+              経路は Google Directions が担当し、 real-time 遅延が到着時刻に反映されます。
               <br>
-              ※ 403 が出る場合は <code>MEMORIA_PLACES_API_KEY</code> env (Referer 制限なしの server-side key) を設定してください。 既存 GPS の地名解決と同じ key で OK。
+              ※ 検索時に 403 が出る場合は <code>MEMORIA_PLACES_API_KEY</code> env (Referer 制限なしの server-side key) を設定してください。
             </p>
           </div>
           <div id="transitResults" class="transit-results"></div>

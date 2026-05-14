@@ -4959,9 +4959,14 @@ dialog.meal-modal[open] {
   padding: 6px 10px;
   cursor: pointer;
   font-size: 13px;
+  line-height: 1.35;
 }
 .transit-autocomplete li:hover { background: var(--bg-hover, #eef); }
 .transit-autocomplete .transit-autocomplete-empty { cursor: default; color: var(--muted, #6b7280); }
+.transit-autocomplete-sub {
+  color: var(--muted, #6b7280);
+  font-size: 11px;
+}
 .transit-results { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .transit-course, .transit-ride {
   border: 1px solid var(--border);

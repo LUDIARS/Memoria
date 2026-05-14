@@ -420,6 +420,31 @@ export function openDb(dbPath: string): Db {
       not_found       INTEGER NOT NULL DEFAULT 0
     );
 
+    -- ローカル駅マスタ (HeartRails Express から起動時に bulk import)。
+    -- transit autocomplete を Places API に依存せず、 GPS 近い順 + ターミナル駅
+    -- 優先で候補を出すための索引。 同一 「駅名 + 路線 + 都道府県」 で UNIQUE
+    -- (= 同じ駅名でも複数路線が乗り入れる場合は別行)。
+    --
+    -- is_terminal: 同一 line 内で prev_station もしくは next_station が NULL
+    -- (= 路線の端) なら 1。 ヒューリスティック。
+    CREATE TABLE IF NOT EXISTS stations (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      name          TEXT NOT NULL,
+      line          TEXT NOT NULL,
+      prefecture    TEXT,
+      lat           REAL NOT NULL,
+      lon           REAL NOT NULL,
+      postal        TEXT,
+      prev_station  TEXT,
+      next_station  TEXT,
+      is_terminal   INTEGER NOT NULL DEFAULT 0,
+      imported_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(name, line, prefecture)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stations_name        ON stations(name);
+    CREATE INDEX IF NOT EXISTS idx_stations_prefecture  ON stations(prefecture);
+    CREATE INDEX IF NOT EXISTS idx_stations_latlon      ON stations(lat, lon);
+
     -- 乗った電車/バスの記録。 検索結果 (= ekispert 経路) からそのまま取り込んでも、
     -- 手動入力でも作れる。 segments_json は SearchSegment[] と互換 (= 1 経路に
     -- 複数 line 乗換が入る)。 from_lat/lon は記録時点の GPS (= 開始駅周辺)、
