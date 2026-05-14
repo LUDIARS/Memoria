@@ -116,15 +116,11 @@ body {
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
-.bookmarks-toolbar select,
-.bookmarks-toolbar input[type=search] {
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  font-size: 13px;
-}
+/* select / search の base スタイルは .foundation-form ルール側で定義。
+   ここでは toolbar 固有のサイズ調整だけ。 */
 .bookmarks-toolbar input[type=search] { min-width: 240px; flex: 0 1 320px; }
+.bookmarks-toolbar select { width: auto; }
+.bookmarks-toolbar input[type=url] { width: auto; }
 .bookmarks-toolbar .categories-toggle { display: none; }
 
 /* Pagination footer — sits under the card grid. Shows "M / N 件表示中" and
@@ -513,13 +509,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   font-size: 18px;
 }
 .trends-bar .grow { flex: 1; }
-.trends-bar select {
-  padding: 8px 14px;
-  font-size: 16px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-}
+/* select の base スタイルは .foundation-form ルールから継承。 */
+.trends-bar select { width: auto; }
 .trends-grid {
   display: grid;
   /* User asked the trend cards to be 2x — was minmax(420px, 1fr). */
@@ -737,18 +728,14 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-bottom: 8px;
   align-items: stretch;
 }
+/* textarea の base スタイルは .foundation-form から継承。 */
 .dig-input textarea {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 14px;
   font-family: inherit;
   line-height: 1.5;
-  resize: vertical;
 }
-.dig-input textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.dig-engine-label .dig-engine { width: auto; }
 .dig-input .dig-run-btn {
   padding: 0 22px;
   font-size: 15px;
@@ -1363,7 +1350,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-bottom: 12px;
   align-items: center;
 }
-.dict-bar input { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
+/* input の base スタイルは .foundation-form から継承。 ここは flex の振る舞いだけ。 */
+.dict-bar input { flex: 1; }
+.dict-bar input[type=text] { flex: 0 1 auto; }
 /* Dictionary + domain catalog: Pinterest-style tile grid filling the
  * viewport. Each entry is a card; clicking opens the edit form as a
  * modal overlay (.dict-detail.modal-panel). */
@@ -1485,14 +1474,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   align-items: center;
   margin-bottom: 12px;
 }
-.dict-detail-head input {
-  flex: 1;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 16px;
-  font-weight: 600;
-}
+/* input の base は .foundation-form から継承。 ヘッダ専有のタイトル size だけ上書き。 */
+.dict-detail-head input { flex: 1; font-size: 16px; font-weight: 600; }
 .dict-detail h4 {
   margin: 12px 0 6px;
   font-size: 12px;
@@ -1500,15 +1483,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.dict-detail textarea {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 13px;
-  resize: vertical;
-}
+/* textarea の base は .foundation-form から継承。 */
+.dict-detail textarea { font-family: inherit; }
 .dict-links {
   list-style: none;
   padding: 0;
@@ -1787,14 +1763,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .detail a#dUrl { font-size: 12px; word-break: break-all; color: var(--accent); }
 .detail .meta { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
 .detail .summary { font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
-.detail input, .detail textarea {
-  width: 100%;
-  padding: 8px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-family: inherit;
-}
+/* input / textarea の base は .foundation-form から継承。 */
+.detail input, .detail textarea { font-family: inherit; }
 .detail-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
 .accesses { list-style: none; padding: 0; margin: 0; max-height: 160px; overflow-y: auto; font-size: 12px; color: var(--muted); }
 .accesses li { padding: 2px 0; border-bottom: 1px solid var(--border); }
@@ -2010,15 +1980,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin: 0 4px;
 }
 .diary-gh-repo { color: var(--muted); font-size: 11px; margin-right: 4px; }
-.diary-detail textarea {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 13px;
-  resize: vertical;
-}
+/* textarea の base スタイルは .foundation-form から継承。 */
+.diary-detail textarea { font-family: inherit; }
 .diary-detail-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 .diary-settings {
@@ -2037,22 +2000,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   z-index: 50;
 }
 .diary-settings h4 { margin: 0 0 8px; }
-.diary-settings label {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 10px;
-}
-.diary-settings label input {
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-top: 4px;
-  font-size: 13px;
-  font-family: inherit;
-}
+/* .simple-field 構造に統一済。 input の base は .foundation-form から。 */
+.diary-settings label { display: block; margin-bottom: 10px; }
+.diary-settings label input { font-family: inherit; }
 
 .ai-settings {
   position: fixed;
@@ -2193,22 +2143,10 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   font-size: 12px;
 }
 .ai-task-row label { color: var(--text); font-family: ui-monospace, monospace; }
-.ai-task-row select, .ai-task-row input { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; }
-.ai-settings label {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-.ai-settings label input {
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-top: 4px;
-  font-size: 13px;
-}
+/* select / input の base は .foundation-form から継承。 */
+/* input の base は .foundation-form から継承。 label レイアウトだけ。 */
+.ai-settings label { display: block; margin-bottom: 8px; }
+.ai-settings label input { margin-top: 4px; }
 .diary-settings-help { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
 .diary-settings-tokenstatus { font-size: 11px; color: var(--muted); display: block; margin-top: -6px; margin-bottom: 8px; }
 .diary-settings-actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -2460,13 +2398,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   color: var(--muted);
   margin-left: 4px;
 }
-.dig-engine {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: white;
-  font-size: 13px;
-}
+/* select の base スタイルは .foundation-form から継承。 */
+.dig-engine { width: auto; }
 .ai-keystatus { font-size: 11px; color: var(--muted); display: block; margin-top: -4px; margin-bottom: 8px; }
 .ai-settings-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 .ai-runtime-info {
@@ -2811,7 +2744,6 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
    * 過剰なので、 mobile のときだけ従来のコンパクトな寸法に戻す。 */
   .trends-grid { grid-template-columns: 1fr; gap: 12px; }
   .trends-bar { font-size: 13px; gap: 8px; margin-bottom: 12px; }
-  .trends-bar select { font-size: 13px; padding: 4px 8px; }
   .trend-card { padding: 12px 16px; }
   .trend-card h3 { font-size: 12px; margin: 0 0 12px; }
   .trend-help { font-size: 11px; margin: 0 0 8px; }
@@ -2998,16 +2930,8 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   padding: 0 4px;
   font-size: 11px;
 }
-#diaryImproveInput,
-#aiDiaryGlobalMemo {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 13px;
-  resize: vertical;
-}
+/* textarea の base は .foundation-form から継承。 */
+#diaryImproveInput, #aiDiaryGlobalMemo { font-family: inherit; }
 
 /* ──────────────────────────────────────────────────────────────────────
  * Trends — extra cards + line chart tooltips
@@ -3410,6 +3334,7 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   flex-wrap: wrap;
   padding: 8px 0;
 }
+.meals-bar input[type="date"] { width: auto; }
 .meals-upload-btn {
   display: inline-flex;
   align-items: center;
@@ -3957,20 +3882,8 @@ button.meal-desc > .meal-inline-pencil {
   color: #c00;
   margin-left: 2px;
 }
-.meal-modal-row input[type="datetime-local"],
-.meal-modal-row input[type="number"],
-.meal-modal-row textarea {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 14px;
-  font-family: inherit;
-  background: var(--bg);
-}
-.meal-modal-row textarea {
-  resize: vertical;
-  min-height: 50px;
-}
+/* input / textarea の base は .foundation-form から継承。 */
+.meal-modal-row textarea { min-height: 50px; font-family: inherit; }
 .meal-modal-hint {
   font-size: 11px;
 }
@@ -5141,13 +5054,8 @@ dialog.loc-edit-modal[open] {
   gap: 6px;
   padding: 8px 14px 4px;
 }
-.loc-edit-search input {
-  flex: 1;
-  padding: 6px 10px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
+/* input の base は .foundation-form から継承。 */
+.loc-edit-search input { flex: 1; }
 .loc-edit-search button { padding: 4px 10px; font-size: 13px; }
 .loc-edit-search-results {
   list-style: none;
@@ -5203,12 +5111,7 @@ dialog.loc-edit-modal[open] {
   font-size: 11px;
   color: var(--text-muted);
 }
-.loc-edit-pin-coord input {
-  padding: 4px 8px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-}
+/* input の base は .foundation-form から継承。 */
 .loc-edit-pin-name {
   flex: 1 1 220px;
   display: flex;
@@ -5217,12 +5120,7 @@ dialog.loc-edit-modal[open] {
   font-size: 11px;
   color: var(--text-muted);
 }
-.loc-edit-pin-name input {
-  padding: 4px 8px;
-  font-size: 13px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-}
+/* input の base は .foundation-form から継承。 */
 .loc-edit-suggest {
   display: flex;
   flex-wrap: wrap;
@@ -5270,14 +5168,8 @@ dialog.loc-edit-modal[open] {
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
-.worklog-daynav input[type="date"] {
-  padding: 4px 6px;
-  font-size: 14px;
-  background: var(--card);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
+/* date input の base は .foundation-form から継承。 ここはサイズだけ。 */
+.worklog-daynav input[type="date"] { width: auto; }
 .worklog-daynav .grow { flex: 1; min-width: 8px; }
 .worklog-summary {
   font-size: 12px;
@@ -5834,13 +5726,8 @@ dialog.loc-edit-modal[open] {
   border-bottom: 1px solid var(--border);
   align-items: center;
 }
-.notes-toolbar input[type="search"] {
-  flex: 0 1 320px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-}
+/* search input の base は .foundation-form から継承。 */
+.notes-toolbar input[type="search"] { flex: 0 1 320px; }
 .notes-layout {
   display: grid;
   grid-template-columns: 280px 1fr;
