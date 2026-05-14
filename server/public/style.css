@@ -4923,6 +4923,76 @@ dialog.meal-modal[open] {
   .tracks-wifi-grid { grid-template-columns: 1fr 1fr; }
 }
 
+/* Transit タブ */
+.transit-subtabs { margin: 8px 0; }
+.transit-panel { padding: 8px 0; }
+.transit-search-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+.transit-station-input { position: relative; }
+.transit-station-input label { display: block; }
+.transit-station-input input[type="search"] { width: 100%; }
+.transit-search-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+.transit-autocomplete {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-surface, #fff);
+  position: absolute;
+  width: 100%;
+  z-index: 50;
+}
+.transit-autocomplete li {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.transit-autocomplete li:hover { background: var(--bg-hover, #eef); }
+.transit-autocomplete .transit-autocomplete-empty { cursor: default; color: var(--muted, #6b7280); }
+.transit-results { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.transit-course, .transit-ride, .transit-line {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--bg-surface, var(--panel));
+}
+.transit-course header, .transit-ride header, .transit-line header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.transit-course-segments {
+  margin: 4px 0 0; padding-left: 18px; font-size: 12px;
+}
+.transit-rides-bar, .transit-lines-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.transit-rides-list, .transit-lines-list {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.transit-manual-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .transit-search-form { grid-template-columns: 1fr; }
+  .transit-manual-grid { grid-template-columns: 1fr; }
+}
+
 /* 天気カードの hourly 12h ストリップ */
 .tracks-weather-hourly {
   display: grid;

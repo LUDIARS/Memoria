@@ -1096,6 +1096,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
+  $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
@@ -1112,6 +1113,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
+  if (tab === 'transit') loadTransit();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
@@ -10532,6 +10534,372 @@ $('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTarg
 document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   reviewState.currentDate = ev.target.value;
   void loadReviewFile();
+});
+
+// ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────
+//
+// 3 つの sub-panel を切替: 検索 / 乗車履歴 / 運行情報。 API key は modal で。
+// 駅検索は from / to のテキスト入力に debounce auto-complete を付け、
+// 候補から選ぶと code を hidden input に詰める。
+
+interface TransitStation { code: string; name: string; yomi?: string; type?: string; prefecture?: string }
+interface TransitSegment { line: string; company?: string; train_type?: string; from_station: string; to_station: string; departure_at: string | null; arrival_at: string | null }
+interface TransitCourse { duration_min: number; fare_yen: number; transfer_count: number; segments: TransitSegment[] }
+interface TransitRide {
+  id: number; recorded_at: string;
+  from_station: string; to_station: string;
+  line_name: string | null; train_type: string | null;
+  departure_at: string | null; arrival_at: string | null;
+  duration_min: number | null; fare_yen: number | null;
+  transfer_count: number; segments: TransitSegment[]; notes: string | null;
+}
+interface TransitOperationLine { code: string; name: string; status: string | null; description: string | null; status_image: string | null }
+
+const transitState = {
+  sub: 'search' as 'search' | 'rides' | 'lines',
+  hasKey: false,
+  courses: [] as TransitCourse[],
+  rides: [] as TransitRide[],
+  lines: [] as TransitOperationLine[],
+};
+
+async function loadTransit() {
+  // API key の有無を確認
+  try {
+    const cfg = await api('/api/transit/config') as { hasKey: boolean };
+    transitState.hasKey = !!cfg.hasKey;
+  } catch { transitState.hasKey = false; }
+  switchTransitSub(transitState.sub);
+}
+
+function switchTransitSub(sub: 'search' | 'rides' | 'lines') {
+  transitState.sub = sub;
+  document.querySelectorAll('.transit-subtabs .tab').forEach((t) => {
+    (t as HTMLElement).classList.toggle('active', (t as HTMLElement).dataset.transitSub === sub);
+  });
+  $('transitSearchPanel')?.classList.toggle('hidden', sub !== 'search');
+  $('transitRidesPanel')?.classList.toggle('hidden', sub !== 'rides');
+  $('transitLinesPanel')?.classList.toggle('hidden', sub !== 'lines');
+  if (sub === 'rides') void loadTransitRides();
+  if (sub === 'lines') void loadTransitLines();
+}
+
+document.querySelectorAll('.transit-subtabs .tab').forEach((t) => {
+  t.addEventListener('click', () => {
+    const sub = (t as HTMLElement).dataset.transitSub as 'search' | 'rides' | 'lines';
+    switchTransitSub(sub);
+  });
+});
+
+// 駅 auto-complete: input → 300ms debounce → /api/transit/stations
+function attachStationLookup(opts: { input: string; candidates: string; codeInput: string; pickLabel: string }) {
+  const inEl = document.getElementById(opts.input) as HTMLInputElement | null;
+  const ul = document.getElementById(opts.candidates) as HTMLUListElement | null;
+  const codeEl = document.getElementById(opts.codeInput) as HTMLInputElement | null;
+  const pickEl = document.getElementById(opts.pickLabel);
+  if (!inEl || !ul || !codeEl) return;
+  let timer: number | null = null;
+  let lastQuery = '';
+  function clearList() { ul!.innerHTML = ''; ul!.hidden = true; }
+  function setPick(s: TransitStation | null) {
+    if (codeEl) codeEl.value = s?.code ?? '';
+    if (pickEl) pickEl.textContent = s ? `✓ ${s.name}${s.prefecture ? ` (${s.prefecture})` : ''}` : '';
+  }
+  inEl.addEventListener('input', () => {
+    const q = inEl.value.trim();
+    if (q === lastQuery) return;
+    lastQuery = q;
+    setPick(null);
+    if (!q) { clearList(); return; }
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      if (!transitState.hasKey) {
+        ul!.innerHTML = `<li class="transit-autocomplete-empty">API key 未設定 — 右上 ⚙ から登録してください</li>`;
+        ul!.hidden = false;
+        return;
+      }
+      try {
+        const r = await api(`/api/transit/stations?q=${encodeURIComponent(q)}`) as { items: TransitStation[]; error?: string };
+        if (r.error) {
+          ul!.innerHTML = `<li class="transit-autocomplete-empty">${escapeHtml(r.error)}</li>`;
+          ul!.hidden = false;
+          return;
+        }
+        const items = (r.items || []).slice(0, 20);
+        if (items.length === 0) {
+          ul!.innerHTML = `<li class="transit-autocomplete-empty">候補なし</li>`;
+          ul!.hidden = false;
+          return;
+        }
+        ul!.innerHTML = items.map((s) =>
+          `<li data-code="${escapeHtml(s.code)}" data-name="${escapeHtml(s.name)}" data-pref="${escapeHtml(s.prefecture ?? '')}">${escapeHtml(s.name)}${s.prefecture ? ` <small class="muted">${escapeHtml(s.prefecture)}</small>` : ''}</li>`
+        ).join('');
+        ul!.hidden = false;
+      } catch (e: unknown) {
+        ul!.innerHTML = `<li class="transit-autocomplete-empty">エラー: ${escapeHtml((e as Error).message)}</li>`;
+        ul!.hidden = false;
+      }
+    }, 300);
+  });
+  ul.addEventListener('click', (ev) => {
+    const li = (ev.target as HTMLElement).closest('li');
+    if (!li || !li.dataset.code) return;
+    inEl.value = li.dataset.name ?? '';
+    setPick({ code: li.dataset.code, name: li.dataset.name ?? '', prefecture: li.dataset.pref });
+    clearList();
+  });
+  inEl.addEventListener('blur', () => setTimeout(clearList, 200));
+}
+
+attachStationLookup({ input: 'transitFromName', candidates: 'transitFromCandidates', codeInput: 'transitFromCode', pickLabel: 'transitFromPick' });
+attachStationLookup({ input: 'transitToName', candidates: 'transitToCandidates', codeInput: 'transitToCode', pickLabel: 'transitToPick' });
+
+document.getElementById('transitSearchBtn')?.addEventListener('click', () => void runTransitSearch());
+
+async function runTransitSearch() {
+  const fromCode = ($('transitFromCode') as HTMLInputElement).value.trim();
+  const toCode = ($('transitToCode') as HTMLInputElement).value.trim();
+  const resultsEl = $('transitResults');
+  if (!resultsEl) return;
+  if (!fromCode || !toCode) {
+    resultsEl.innerHTML = `<div class="hint">出発駅・到着駅の候補から駅を選んでください。</div>`;
+    return;
+  }
+  const date = ($('transitDate') as HTMLInputElement).value;
+  const time = ($('transitTime') as HTMLInputElement).value;
+  const searchType = ($('transitSearchType') as HTMLSelectElement).value;
+  const params = new URLSearchParams({ from: fromCode, to: toCode, searchType });
+  if (date) params.set('date', date.replace(/-/g, ''));
+  if (time && searchType === 'plain') params.set('time', time.replace(':', ''));
+  resultsEl.innerHTML = '<div class="hint">検索中…</div>';
+  try {
+    const r = await api(`/api/transit/search?${params.toString()}`) as { courses: TransitCourse[]; error?: string };
+    if (r.error) {
+      resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml(r.error)}</div>`;
+      return;
+    }
+    transitState.courses = r.courses || [];
+    renderTransitCourses();
+  } catch (e: unknown) {
+    resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
+  }
+}
+
+function renderTransitCourses() {
+  const resultsEl = $('transitResults');
+  if (!resultsEl) return;
+  if (transitState.courses.length === 0) {
+    resultsEl.innerHTML = `<div class="hint">該当する経路がありません。</div>`;
+    return;
+  }
+  resultsEl.innerHTML = transitState.courses.map((c, idx) => {
+    const segLines = c.segments.map((s) => {
+      const time = s.departure_at ? new Date(s.departure_at).toTimeString().slice(0, 5) : '';
+      return `<li>${escapeHtml(time)} ${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(s.line)}${s.train_type ? ` (${escapeHtml(s.train_type)})` : ''}</small></li>`;
+    }).join('');
+    return `<article class="transit-course" data-idx="${idx}">
+      <header>
+        <strong>${c.duration_min} 分 / ${c.fare_yen ? c.fare_yen + '円' : '—'}</strong>
+        <small class="muted">乗換 ${c.transfer_count} 回</small>
+        <span class="grow"></span>
+        <button class="ghost transit-record-btn" data-idx="${idx}">✅ 乗ったと記録</button>
+      </header>
+      <ol class="transit-course-segments">${segLines}</ol>
+    </article>`;
+  }).join('');
+  resultsEl.querySelectorAll('.transit-record-btn').forEach((b) => {
+    b.addEventListener('click', () => {
+      const idx = Number((b as HTMLElement).dataset.idx);
+      void recordRideFromCourse(idx);
+    });
+  });
+}
+
+async function recordRideFromCourse(idx: number) {
+  const course = transitState.courses[idx];
+  if (!course) return;
+  try {
+    const res = await fetch('/api/transit/rides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ course }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      alert(`保存失敗: ${body.error || res.status}`);
+      return;
+    }
+    flashToast('🚆 乗車を記録しました');
+  } catch (e: unknown) {
+    alert(`保存失敗: ${(e as Error).message}`);
+  }
+}
+
+// 乗車履歴
+async function loadTransitRides() {
+  const list = $('transitRidesList');
+  if (!list) return;
+  const dateEl = $('transitRidesDate') as HTMLInputElement;
+  const params = new URLSearchParams();
+  if (dateEl?.value) params.set('date', dateEl.value);
+  list.innerHTML = '<div class="hint">読み込み中…</div>';
+  try {
+    const r = await api(`/api/transit/rides?${params.toString()}`) as { items: TransitRide[] };
+    transitState.rides = r.items || [];
+    renderTransitRides();
+  } catch (e: unknown) {
+    list.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
+  }
+}
+
+function renderTransitRides() {
+  const list = $('transitRidesList');
+  if (!list) return;
+  if (transitState.rides.length === 0) {
+    list.innerHTML = '<div class="hint">まだ乗車記録がありません。</div>';
+    return;
+  }
+  list.innerHTML = transitState.rides.map((ride) => {
+    const dep = ride.departure_at ? new Date(ride.departure_at).toLocaleString('ja-JP') : '';
+    const arr = ride.arrival_at ? new Date(ride.arrival_at).toLocaleString('ja-JP') : '';
+    const fare = ride.fare_yen != null ? `${ride.fare_yen} 円` : '';
+    const dur = ride.duration_min != null ? `${ride.duration_min} 分` : '';
+    const segs = ride.segments?.length
+      ? `<ol class="transit-course-segments">${ride.segments.map((s) => `<li>${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(s.line)}</small></li>`).join('')}</ol>`
+      : '';
+    return `<article class="transit-ride">
+      <header>
+        <strong>${escapeHtml(ride.from_station)} → ${escapeHtml(ride.to_station)}</strong>
+        <small class="muted">${escapeHtml(ride.line_name ?? '')}</small>
+        <span class="grow"></span>
+        <button class="ghost transit-ride-delete" data-id="${ride.id}" title="削除">×</button>
+      </header>
+      <div class="muted" style="font-size:11px">${dep} 〜 ${arr} ${dur ? '/ ' + dur : ''} ${fare ? '/ ' + fare : ''}</div>
+      ${segs}
+      ${ride.notes ? `<p class="muted" style="font-size:12px">${escapeHtml(ride.notes)}</p>` : ''}
+    </article>`;
+  }).join('');
+  list.querySelectorAll('.transit-ride-delete').forEach((b) => {
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const id = Number((b as HTMLElement).dataset.id);
+      if (!Number.isFinite(id)) return;
+      if (!confirm('この乗車記録を削除しますか?')) return;
+      await fetch(`/api/transit/rides/${id}`, { method: 'DELETE' });
+      void loadTransitRides();
+    });
+  });
+}
+
+$('transitRidesRefresh')?.addEventListener('click', () => void loadTransitRides());
+$('transitRidesDate')?.addEventListener('change', () => void loadTransitRides());
+$('transitRidesClear')?.addEventListener('click', () => {
+  ($('transitRidesDate') as HTMLInputElement).value = '';
+  void loadTransitRides();
+});
+$('transitRidesAddBtn')?.addEventListener('click', () => {
+  ['rideFromStation', 'rideToStation', 'rideLineName', 'rideTrainType',
+    'rideDepartureAt', 'rideArrivalAt', 'rideFareYen', 'rideDurationMin', 'rideNotes']
+    .forEach((id) => { const el = $(id); if (el) (el as HTMLInputElement | HTMLTextAreaElement).value = ''; });
+  const err = $('transitRideManualError'); if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('transitRideManualModal');
+});
+$('transitRideManualCloseBtn')?.addEventListener('click', () => hideModal('transitRideManualModal'));
+$('transitRideManualSaveBtn')?.addEventListener('click', async () => {
+  const err = $('transitRideManualError');
+  const showErr = (m: string) => { if (err) { err.textContent = `⚠ ${m}`; err.hidden = false; } };
+  const from = ($('rideFromStation') as HTMLInputElement).value.trim();
+  const to = ($('rideToStation') as HTMLInputElement).value.trim();
+  if (!from || !to) return showErr('出発駅 / 到着駅を入力してください');
+  const body: Record<string, unknown> = {
+    from_station: from, to_station: to,
+    line_name: ($('rideLineName') as HTMLInputElement).value.trim() || undefined,
+    train_type: ($('rideTrainType') as HTMLInputElement).value.trim() || undefined,
+    departure_at: ($('rideDepartureAt') as HTMLInputElement).value || undefined,
+    arrival_at: ($('rideArrivalAt') as HTMLInputElement).value || undefined,
+    fare_yen: Number(($('rideFareYen') as HTMLInputElement).value) || undefined,
+    duration_min: Number(($('rideDurationMin') as HTMLInputElement).value) || undefined,
+    notes: ($('rideNotes') as HTMLTextAreaElement).value.trim() || undefined,
+  };
+  try {
+    const res = await fetch('/api/transit/rides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(b.error || `${res.status}`);
+    }
+    hideModal('transitRideManualModal');
+    void loadTransitRides();
+    flashToast('🚆 乗車を記録しました');
+  } catch (e: unknown) {
+    showErr((e as Error).message);
+  }
+});
+
+// 運行情報
+async function loadTransitLines() {
+  const list = $('transitLinesList');
+  if (!list) return;
+  const onlyDelay = ($('transitLinesOnlyDelay') as HTMLInputElement)?.checked;
+  list.innerHTML = '<div class="hint">読み込み中…</div>';
+  try {
+    const r = await api(`/api/transit/lines${onlyDelay ? '?only_delay=1' : ''}`) as { items: TransitOperationLine[]; error?: string };
+    if (r.error) {
+      list.innerHTML = `<div class="hint">エラー: ${escapeHtml(r.error)}</div>`;
+      return;
+    }
+    transitState.lines = r.items || [];
+    if (transitState.lines.length === 0) {
+      list.innerHTML = `<div class="hint">${onlyDelay ? '現在、 遅延・運休はありません。' : '路線情報が取得できませんでした。'}</div>`;
+      return;
+    }
+    list.innerHTML = transitState.lines.map((ln) => `
+      <article class="transit-line">
+        <header>
+          <strong>${escapeHtml(ln.name)}</strong>
+          <span class="grow"></span>
+          <span class="muted">${escapeHtml(ln.status ?? '—')}</span>
+        </header>
+        ${ln.description ? `<p style="font-size:12px">${escapeHtml(ln.description)}</p>` : `<p class="muted" style="font-size:11px">詳細は Ekispert premium 契約 / または公式サイト</p>`}
+      </article>`).join('');
+  } catch (e: unknown) {
+    list.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
+  }
+}
+
+$('transitLinesRefresh')?.addEventListener('click', () => void loadTransitLines());
+$('transitLinesOnlyDelay')?.addEventListener('change', () => void loadTransitLines());
+
+// API key settings modal
+$('transitSettingsBtn')?.addEventListener('click', () => {
+  ($('transitApiKeyInput') as HTMLInputElement).value = '';
+  const err = $('transitSettingsError'); if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('transitSettingsModal');
+});
+$('transitSettingsCloseBtn')?.addEventListener('click', () => hideModal('transitSettingsModal'));
+$('transitSettingsSaveBtn')?.addEventListener('click', async () => {
+  const key = ($('transitApiKeyInput') as HTMLInputElement).value.trim();
+  const err = $('transitSettingsError');
+  const showErr = (m: string) => { if (err) { err.textContent = `⚠ ${m}`; err.hidden = false; } };
+  if (!key) return showErr('API key を入力してください');
+  try {
+    const res = await fetch('/api/transit/config', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: key }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(b.error || `${res.status}`);
+    }
+    hideModal('transitSettingsModal');
+    transitState.hasKey = true;
+    flashToast('🚆 API key を保存しました');
+  } catch (e: unknown) {
+    showErr((e as Error).message);
+  }
 });
 
 async function loadMeals() {
