@@ -4742,6 +4742,84 @@ setInterval(async () => {
 refreshQueue();
 refreshVisitsBadge();
 
+// ── Staleness 監視 ────────────────────────────────────────────────────────
+//
+// 「逐次発行されるけど WS push されてない」 機能 (review / weather /
+// transit_rides) を 60s おきに /api/staleness で確認して、 signature
+// (= 不透明文字列) が変わっていたら該当機能だけ再 load する。
+//
+// trigger:
+//   1. setInterval(60s)            … document visible のときだけ
+//   2. visibilitychange → visible  … タブ復帰時に即座に反映
+//   3. switchTab / sub-tab 切替直後 … 既存 load*() で初回 stamp される。
+//      初回 stamp 後は不要な reload は起きない。
+//
+// stamp: 各 load*() の末尾で stampLoadSig(feature) を呼んで、 「UI に乗っている
+// データの signature」 を LOAD_SIGS に焼き付ける。 STALE_SIGS と一致してれば
+// 何もしない (= no reload)。
+const STALE_SIGS: Record<string, string> = {};
+const LOAD_SIGS: Record<string, string> = {};
+let _stalenessPingInFlight = false;
+
+async function pingStaleness(): Promise<void> {
+  if (_stalenessPingInFlight) return;
+  _stalenessPingInFlight = true;
+  try {
+    const r = await api('/api/staleness') as Record<string, unknown>;
+    for (const k of ['review', 'weather', 'transit_rides']) {
+      const v = r[k];
+      if (typeof v === 'string') STALE_SIGS[k] = v;
+    }
+  } catch { /* swallow */ }
+  finally { _stalenessPingInFlight = false; }
+}
+
+/** 機能 → 「いま画面にその機能が出ているか」 判定 + 再 load。 */
+const STALE_FEATURE_HANDLERS: Record<string, { visible: () => boolean; reload: () => void }> = {
+  review: {
+    visible: () => state.tab === 'review',
+    reload: () => { void loadReviewRepos(); },
+  },
+  weather: {
+    visible: () => state.tab === 'worklog' && state.worklog?.sub === 'tracks',
+    reload: () => { void loadTracksWeather(); },
+  },
+  transit_rides: {
+    visible: () => state.tab === 'transit' && transitState?.sub === 'rides',
+    reload: () => { void loadTransitRides(); },
+  },
+};
+
+async function applyStalenessChecks(): Promise<void> {
+  if (document.visibilityState !== 'visible') return;
+  await pingStaleness();
+  for (const [feature, h] of Object.entries(STALE_FEATURE_HANDLERS)) {
+    if (!STALE_SIGS[feature]) continue;
+    if (STALE_SIGS[feature] === LOAD_SIGS[feature]) continue;
+    if (!h.visible()) continue;
+    LOAD_SIGS[feature] = STALE_SIGS[feature];
+    h.reload();
+  }
+}
+
+/** load*() の末尾で呼んで、 「いま表示している」 signature を焼き付ける。
+ *  STALE_SIGS が未取得なら ping を 1 度走らせる (= 初回 load 直後の余計な
+ *  reload を回避)。 */
+function stampLoadSig(feature: string): void {
+  if (STALE_SIGS[feature]) {
+    LOAD_SIGS[feature] = STALE_SIGS[feature];
+    return;
+  }
+  void pingStaleness().then(() => {
+    if (STALE_SIGS[feature]) LOAD_SIGS[feature] = STALE_SIGS[feature];
+  });
+}
+
+setInterval(() => { void applyStalenessChecks(); }, 60_000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void applyStalenessChecks();
+});
+
 // ── AI / LLM settings panel ───────────────────────────────────────────
 async function openAiSettings() {
   $('aiSettingsPanel').classList.remove('hidden');
@@ -10144,6 +10222,7 @@ async function loadTracksWeather(opts: { force?: boolean } = {}) {
       const ts = new Date(r.fetched_at);
       pill.textContent = `更新 ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
     }
+    stampLoadSig('weather');
   } catch (e: unknown) {
     if (pill) {
       pill.classList.remove('ext-cfg-pill-loading');
@@ -10317,6 +10396,7 @@ async function loadReviewRepos() {
     renderReviewListDateMenu();
     renderReviewMenu();
     renderReviewCards();
+    stampLoadSig('review');
   } catch (e) {
     cards.innerHTML = '';
     empty?.classList.add('hidden');
@@ -10749,6 +10829,7 @@ async function loadTransitRides() {
     const r = await api(`/api/transit/rides?${params.toString()}`) as { items: TransitRide[] };
     transitState.rides = r.items || [];
     renderTransitRides();
+    stampLoadSig('transit_rides');
   } catch (e: unknown) {
     list.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
   }
