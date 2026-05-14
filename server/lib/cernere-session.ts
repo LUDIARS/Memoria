@@ -14,7 +14,15 @@
  */
 
 const REFRESH_LEEWAY_SEC = 60;
-const CERNERE_BASE_URL = (process.env.CERNERE_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '');
+
+/**
+ * Cernere の base URL を毎回 process.env から読む (= module load 時に固定しない)。
+ * 専用セットアップ画面で Infisical を後から繋いだとき、 再起動なしで
+ * CERNERE_BASE_URL の inject を反映させるため。
+ */
+function cernereBaseUrl(): string {
+  return (process.env.CERNERE_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '');
+}
 
 interface CachedToken {
   accessToken: string;
@@ -51,7 +59,7 @@ async function fetchProjectToken(
   // Cernere Phase 1 (PR #92) で `hub_url` を audience に入れる仕様になった。
   // 旧 Cernere は無視するので互換性あり。 新 Cernere は PASETO v4 で発行、
   // aud claim が hub_url と一致する。
-  const res = await fetch(`${CERNERE_BASE_URL}/api/auth/project-token`, {
+  const res = await fetch(`${cernereBaseUrl()}/api/auth/project-token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -435,10 +435,59 @@ interface ApiResp extends Loose {
   results?: Loose[];
 }
 
+// ── グローバル読み込みインジケータ ───────────────────────────────────────
+//
+// api() 経由の fetch が in-flight のあいだ、 画面上部に非ブロッキングな
+// 「⏳ 読み込み中…」 pill を出す。 pointer-events:none なので他の操作は
+// 一切妨げない。
+//
+// 250ms の遅延を入れてあるので:
+//   - 2 秒ごとの queue/visits poll や staleness ping のような速い fetch は
+//     出さない (= チラつかない)
+//   - diary 生成 / review file / transit 検索 等の重い読み込みだけ出る
+let _apiInflight = 0;
+let _apiLoadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showLoadingPill() {
+  let el = document.getElementById('memLoading');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'memLoading';
+    el.className = 'mem-loading';
+    el.textContent = '⏳ 読み込み中…';
+    document.body.appendChild(el);
+  }
+  el.classList.add('show');
+}
+function hideLoadingPill() {
+  document.getElementById('memLoading')?.classList.remove('show');
+}
+function apiInflightStart() {
+  _apiInflight++;
+  if (_apiInflight === 1 && _apiLoadingTimer == null) {
+    _apiLoadingTimer = setTimeout(() => {
+      _apiLoadingTimer = null;
+      if (_apiInflight > 0) showLoadingPill();
+    }, 250);
+  }
+}
+function apiInflightEnd() {
+  _apiInflight = Math.max(0, _apiInflight - 1);
+  if (_apiInflight === 0) {
+    if (_apiLoadingTimer != null) { clearTimeout(_apiLoadingTimer); _apiLoadingTimer = null; }
+    hideLoadingPill();
+  }
+}
+
 async function api<T = ApiResp>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(path, opts);
-  if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
-  return await res.json() as T;
+  apiInflightStart();
+  try {
+    const res = await fetch(path, opts);
+    if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
+    return await res.json() as T;
+  } finally {
+    apiInflightEnd();
+  }
 }
 
 // 元 JS で `funcName = function () {...}` の形で宣言なしに代入 + 後段で再代入
@@ -5054,15 +5103,11 @@ async function toggleMultiActive(url) {
   const set = new Set(active);
   if (set.has(url)) set.delete(url);
   else set.add(url);
-  // If the server isn't yet authenticated, kick off OAuth instead.
+  // 未認証の server を active にしようとした場合は、 Multi タブの
+  // Cernere ログインフォームに誘導する (= OAuth dance は廃止)。
   const target = (s.servers || []).find(x => x.url === url);
   if (target && set.has(url) && !target.connected) {
-    const r = await api('/api/multi/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
-    });
-    location.href = r.authorize_url;
+    switchTab('multi');
     return;
   }
   await api('/api/multi/active', {
@@ -5112,12 +5157,11 @@ function renderMultiServersList(s) {
 
 async function multiServerAction(action, url) {
   if (action === 'connect') {
-    const r = await api('/api/multi/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
-    });
-    location.href = r.authorize_url;
+    // Cernere ログインは Multi タブのフォームで行う (= OAuth dance 廃止)。
+    // URL を pre-fill しておいてタブを切り替える。
+    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+    if (urlInput) urlInput.value = url;
+    switchTab('multi');
     return;
   }
   if (action === 'disconnect') {
@@ -8770,10 +8814,37 @@ function isCurrentUserModerator() {
 
 async function loadMulti() {
   refreshMultiTabVisibility();
-  if (!state.multi?.connected) {
-    $('multiList').innerHTML = '<div class="queue-empty">マルチサーバに接続されていません。⚙ AI から接続してください。</div>';
+  // Multi Mode は Cernere 認証 (= Infisical 由来の CERNERE_BASE_URL) 前提。
+  // 未設定なら Hub の中身ではなく Infisical setup フォームを出す。
+  // status 取得失敗時は素通り (= 旧 server 互換、 Local 機能を妨げない)。
+  let infiConfigured = true;
+  try {
+    const st = await api('/api/setup/infisical/status') as { configured?: boolean };
+    infiConfigured = st.configured !== false;
+  } catch { infiConfigured = true; }
+  const setupEl = $('multiInfisicalSetup');
+  const loginEl = $('multiCernereLogin');
+  const mainEl = $('multiMainContent');
+  // gate 1: Infisical 未設定 → setup フォーム
+  if (!infiConfigured) {
+    setupEl?.classList.remove('hidden');
+    loginEl?.classList.add('hidden');
+    mainEl?.classList.add('hidden');
     return;
   }
+  setupEl?.classList.add('hidden');
+  // gate 2: Infisical OK だが Hub 未接続 → Cernere ログインフォーム
+  if (!state.multi?.connected) {
+    loginEl?.classList.remove('hidden');
+    mainEl?.classList.add('hidden');
+    // Hub URL 欄に登録済 server を pre-fill
+    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+    const firstUrl = state.multi?.servers?.[0]?.url;
+    if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
+    return;
+  }
+  loginEl?.classList.add('hidden');
+  mainEl?.classList.remove('hidden');
   const sub = state.multiSubtab;
   document.querySelectorAll('.multi-subtab').forEach(b => {
     b.classList.toggle('active', b.dataset.mtab === sub);
@@ -8822,6 +8893,80 @@ async function loadMulti() {
     btn.addEventListener('click', () => moderate('hide', btn.dataset.hide, Number(btn.dataset.id)));
   });
 }
+
+// Cernere ログインフォーム (Multi view 内) の送信。 成功で Hub に接続済みになり、
+// loadMulti を呼び直して通常の Hub 内容へ。
+document.getElementById('multiLoginSubmit')?.addEventListener('click', async () => {
+  const btn = $('multiLoginSubmit') as HTMLButtonElement | null;
+  const msg = $('multiLoginMsg');
+  const setMsg = (text: string, ok = false) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
+    msg.hidden = false;
+  };
+  const url = ($('multiLoginUrl') as HTMLInputElement).value.trim();
+  const email = ($('multiLoginEmail') as HTMLInputElement).value.trim();
+  const password = ($('multiLoginPassword') as HTMLInputElement).value;
+  if (!url || !email || !password) {
+    return setMsg('⚠ Hub URL / メールアドレス / パスワードは必須');
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'ログイン中…'; }
+  try {
+    const res = await fetch('/api/multi/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, email, password }),
+    });
+    const j = await res.json() as { user?: { displayName?: string }; error?: string };
+    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
+    setMsg(`✓ ${j.user?.displayName || ''} としてログインしました`, true);
+    ($('multiLoginPassword') as HTMLInputElement).value = '';
+    await refreshMultiStatus();
+    setTimeout(() => { void loadMulti(); }, 600);
+  } catch (e: unknown) {
+    setMsg(`⚠ ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'ログイン'; }
+  }
+});
+
+// Infisical setup フォーム (Multi view 内) の送信。 成功したら loadMulti を
+// 呼び直して通常の Hub 内容に切り替える。
+document.getElementById('infiSetupSubmit')?.addEventListener('click', async () => {
+  const btn = $('infiSetupSubmit') as HTMLButtonElement | null;
+  const msg = $('infiSetupMsg');
+  const setMsg = (text: string, ok = false) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
+    msg.hidden = false;
+  };
+  const body = {
+    siteUrl: ($('infiSiteUrl') as HTMLInputElement).value.trim(),
+    projectId: ($('infiProjectId') as HTMLInputElement).value.trim(),
+    environment: ($('infiEnvironment') as HTMLInputElement).value.trim() || 'dev',
+    clientId: ($('infiClientId') as HTMLInputElement).value.trim(),
+    clientSecret: ($('infiClientSecret') as HTMLInputElement).value.trim(),
+  };
+  if (!body.siteUrl || !body.projectId || !body.clientId || !body.clientSecret) {
+    return setMsg('⚠ Site URL / Project ID / Client ID / Client Secret は必須');
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '接続中…'; }
+  try {
+    const res = await fetch('/api/setup/infisical', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json() as { injected?: number; error?: string };
+    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
+    setMsg(`✓ ${j.injected ?? 0} 件の secret を取得しました`, true);
+    setTimeout(() => { void loadMulti(); }, 900);
+  } catch (e: unknown) {
+    setMsg(`⚠ ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '接続して保存'; }
+  }
+});
 
 async function moderate(action, kind, id) {
   if (action === 'hide') {
@@ -10799,7 +10944,7 @@ document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
 // 候補から選ぶと code を hidden input に詰める。
 
 interface TransitStation {
-  /** Directions の origin/destination に渡す値。 ローカルなら "lat,lon" 形式。 */
+  /** 候補から選んだとき入る "lat,lon" 形式。 表示名は別途 input.value。 */
   code: string;
   name: string;
   secondary?: string;
@@ -10814,14 +10959,6 @@ interface TransitSegment {
   num_stops?: number; headsign?: string;
   travel_mode?: string;
 }
-interface TransitCourse {
-  duration_min: number; fare_yen: number; transfer_count: number;
-  segments: TransitSegment[];
-  warnings?: string[];
-  has_delay_hint?: boolean;
-  departure_at?: string | null;
-  arrival_at?: string | null;
-}
 interface TransitRide {
   id: number; recorded_at: string;
   from_station: string; to_station: string;
@@ -10835,16 +10972,10 @@ interface TransitRide {
 
 const transitState = {
   sub: 'search' as 'search' | 'rides',
-  hasKey: false,
-  courses: [] as TransitCourse[],
   rides: [] as TransitRide[],
 };
 
 async function loadTransit() {
-  try {
-    const cfg = await api('/api/transit/config') as { hasKey: boolean };
-    transitState.hasKey = !!cfg.hasKey;
-  } catch { transitState.hasKey = false; }
   switchTransitSub(transitState.sub);
 }
 
@@ -10942,94 +11073,50 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
 attachStationLookup({ input: 'transitFromName', candidates: 'transitFromCandidates', codeInput: 'transitFromCode', pickLabel: 'transitFromPick' });
 attachStationLookup({ input: 'transitToName', candidates: 'transitToCandidates', codeInput: 'transitToCode', pickLabel: 'transitToPick' });
 
-document.getElementById('transitSearchBtn')?.addEventListener('click', () => void runTransitSearch());
-document.getElementById('transitSearchNowBtn')?.addEventListener('click', () => {
-  ($('transitDateTime') as HTMLInputElement).value = '';
-  void runTransitSearch();
-});
+document.getElementById('transitSearchBtn')?.addEventListener('click', () => runTransitSearch());
 
-async function runTransitSearch() {
-  const fromCode = ($('transitFromCode') as HTMLInputElement).value.trim()
-    || ($('transitFromName') as HTMLInputElement).value.trim();
-  const toCode = ($('transitToCode') as HTMLInputElement).value.trim()
-    || ($('transitToName') as HTMLInputElement).value.trim();
+// Google Routes API は日本の鉄道に非対応なので、 経路探索は Google Maps を
+// 新タブで開く deep-link 方式。 駅名 (autocomplete の表示名 or 直接入力) を
+// origin/destination に渡す。 Google Maps は日本の駅名を正しく geocode する。
+function runTransitSearch() {
+  const from = ($('transitFromName') as HTMLInputElement).value.trim();
+  const to = ($('transitToName') as HTMLInputElement).value.trim();
   const resultsEl = $('transitResults');
   if (!resultsEl) return;
-  if (!fromCode || !toCode) {
+  if (!from || !to) {
     resultsEl.innerHTML = `<div class="hint">出発・到着を入力してください (候補から選ぶ or 駅名/住所を直接入力)。</div>`;
     return;
   }
-  const mode = ($('transitTimeMode') as HTMLSelectElement).value;
-  const dt = ($('transitDateTime') as HTMLInputElement).value;
-  const params = new URLSearchParams({ from: fromCode, to: toCode, mode });
-  if (dt) params.set('datetime', new Date(dt).toISOString());
-  resultsEl.innerHTML = '<div class="hint">検索中…</div>';
-  try {
-    const r = await api(`/api/transit/search?${params.toString()}`) as { courses: TransitCourse[]; error?: string };
-    if (r.error) {
-      resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml(r.error)}</div>`;
-      return;
-    }
-    transitState.courses = r.courses || [];
-    renderTransitCourses();
-  } catch (e: unknown) {
-    resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
-  }
-}
-
-function renderTransitCourses() {
-  const resultsEl = $('transitResults');
-  if (!resultsEl) return;
-  if (transitState.courses.length === 0) {
-    resultsEl.innerHTML = `<div class="hint">該当する経路がありません。</div>`;
-    return;
-  }
-  resultsEl.innerHTML = transitState.courses.map((c, idx) => {
-    const segLines = c.segments.map((s) => {
-      const time = s.departure_at ? new Date(s.departure_at).toTimeString().slice(0, 5) : '';
-      const isWalk = s.travel_mode === 'WALKING';
-      const lineLbl = isWalk ? '徒歩' : `${s.line}${s.train_type ? ` (${s.train_type})` : ''}`;
-      return `<li>${escapeHtml(time)} ${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(lineLbl)}${s.headsign ? ` ・${escapeHtml(s.headsign)}方面` : ''}</small></li>`;
-    }).join('');
-    const dep = c.departure_at ? new Date(c.departure_at).toTimeString().slice(0, 5) : '';
-    const arr = c.arrival_at ? new Date(c.arrival_at).toTimeString().slice(0, 5) : '';
-    const range = (dep || arr) ? `<small class="muted">${dep} → ${arr}</small>` : '';
-    const delayBadge = c.has_delay_hint
-      ? `<span class="transit-delay-badge" title="${escapeHtml((c.warnings || []).join(' / '))}">⚠ 遅延/運休</span>` : '';
-    const warningsBlock = (c.warnings && c.warnings.length > 0 && !c.has_delay_hint)
-      ? `<p class="muted" style="font-size:11px;margin:4px 0">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
-      : (c.has_delay_hint
-        ? `<p class="transit-warning-text">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
-        : '');
-    return `<article class="transit-course${c.has_delay_hint ? ' transit-course-warn' : ''}" data-idx="${idx}">
+  const url = `https://www.google.com/maps/dir/?api=1`
+    + `&origin=${encodeURIComponent(from)}`
+    + `&destination=${encodeURIComponent(to)}`
+    + `&travelmode=transit`;
+  window.open(url, '_blank', 'noopener');
+  // 開いた区間を 「乗った」 と記録できるよう、 結果欄に記録ボタンを出す。
+  resultsEl.innerHTML = `
+    <article class="transit-course">
       <header>
-        <strong>${c.duration_min} 分 / ${c.fare_yen ? c.fare_yen + '円' : '—'}</strong>
-        ${range}
-        <small class="muted">乗換 ${c.transfer_count} 回</small>
-        ${delayBadge}
+        <strong>🗺 ${escapeHtml(from)} → ${escapeHtml(to)}</strong>
+        <small class="muted">Google Maps を新しいタブで開きました</small>
         <span class="grow"></span>
-        <button class="ghost transit-record-btn" data-idx="${idx}">✅ 乗ったと記録</button>
+        <button class="ghost" id="transitRecordOpened" type="button">✅ この区間を乗ったと記録</button>
       </header>
-      ${warningsBlock}
-      <ol class="transit-course-segments">${segLines}</ol>
+      <p class="muted" style="font-size:11px;margin:4px 0">
+        遅延加味の乗換・時刻は Google Maps 側で確認してください。 実際に乗ったらこのボタンで履歴に残せます。
+      </p>
     </article>`;
-  }).join('');
-  resultsEl.querySelectorAll('.transit-record-btn').forEach((b) => {
-    b.addEventListener('click', () => {
-      const idx = Number((b as HTMLElement).dataset.idx);
-      void recordRideFromCourse(idx);
-    });
+  document.getElementById('transitRecordOpened')?.addEventListener('click', () => {
+    void recordRideManual(from, to);
   });
 }
 
-async function recordRideFromCourse(idx: number) {
-  const course = transitState.courses[idx];
-  if (!course) return;
+// 検索した区間を最小情報 (from/to 駅名) で履歴に記録。
+async function recordRideManual(fromStation: string, toStation: string) {
   try {
     const res = await fetch('/api/transit/rides', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ course }),
+      body: JSON.stringify({ from_station: fromStation, to_station: toStation }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({})) as { error?: string };

@@ -743,12 +743,23 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-bottom: 8px;
   align-items: stretch;
 }
-/* textarea の base スタイルは .foundation-form (.dig-input に付与) から継承。 */
+/* .dig-input は横並びレイアウト (textarea | ボタン) なので foundation-form
+   ではなく自前スタイル。 width:100% を入れると flex で間延びする。 */
 .dig-input textarea {
   flex: 1 1 auto;
   min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
   font-family: inherit;
   line-height: 1.5;
+  resize: vertical;
+}
+.dig-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .dig-input .dig-run-btn {
   padding: 0 22px;
@@ -1546,6 +1557,29 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   z-index: 9999;
 }
 .mem-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* グローバル読み込み pill — 画面上部中央。 pointer-events:none で
+   他の操作を一切ブロックしない。 250ms 以上の api() 読み込み中だけ表示。 */
+.mem-loading {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  background: rgba(31, 86, 192, 0.95);
+  color: #fff;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 9998;
+}
+.mem-loading.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -2868,6 +2902,15 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-bottom: 12px;
   color: var(--muted);
   font-size: 13px;
+}
+/* Multi view 内の Infisical setup フォーム (= 未設定時のみ表示)。 */
+.multi-infisical-setup {
+  max-width: 480px;
+  margin: 8px auto;
+  background: var(--bg-surface, var(--panel));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
 }
 .multi-bar .grow { flex: 1; }
 .multi-user-badge {
