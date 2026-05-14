@@ -1,28 +1,40 @@
 // env-bootstrap — Hub のアプリ設定値を Infisical から取得する。
 //
-// Hub は自分の Infisical project を持ち、 自分が属する Cernere
-// (CERNERE_BASE_URL 等) をそこから知る。 machine identity (INFISICAL_*) は
-// Infisical に入れられない (chicken-and-egg) ので、 以下のどれかで渡す:
+// Hub は自分の Infisical project を持ち、 アプリ設定値 (MEMORIA_PG_URL /
+// CERNERE_BASE_URL 等) を全部そこから取る。 machine identity (INFISICAL_*) だけは
+// Infisical に入れられない (chicken-and-egg) ので、 以下のどちらかで渡す:
 //
 //   (A) Excubitor inject / host shell env
-//   (B) Hub の app_settings (= GET / の Infisical 設定フォーム入力)
-//       → bootstrap.js が起動時に Postgres から読んで process.env に載せる
+//   (B) creds ファイル (= GET / の Infisical 設定フォーム入力 → creds-store.js)
+//       → bootstrap.js が起動時に読んで process.env に載せる
 //
-// ローカル Memoria の server/lib/env-bootstrap.ts と同じ設計の JS 版。
+// MEMORIA_PG_URL も Infisical 経由で来る。 ローカル Memoria の
+// server/lib/env-bootstrap.ts と同じ設計の JS 版。
 
 /** Infisical から取れていてほしい設定キー (揃わなければ起動ログで警告)。 */
 const WANTED_KEYS = [
+  'MEMORIA_PG_URL',   // Hub の Postgres 接続 URL — Infra 系も Infisical 集約
   'CERNERE_BASE_URL', // Cernere の base URL — auth login 代理 + PASETO 公開鍵 fetch
 ];
 
-/** app_settings のキー名 ↔ INFISICAL_* env 名 の対応。 */
-export const INFISICAL_SETTING_KEYS = {
-  'infisical.site_url': 'INFISICAL_SITE_URL',
-  'infisical.project_id': 'INFISICAL_PROJECT_ID',
-  'infisical.environment': 'INFISICAL_ENVIRONMENT',
-  'infisical.client_id': 'INFISICAL_CLIENT_ID',
-  'infisical.client_secret': 'INFISICAL_CLIENT_SECRET',
-};
+/**
+ * creds オブジェクト ({siteUrl,projectId,environment,clientId,clientSecret}) を
+ * process.env.INFISICAL_* に載せる (既存値は上書きしない = host env 優先)。
+ * fetch はしない — その後 ensureEnv() を呼ぶこと。
+ */
+export function seedCredsFromObject(creds) {
+  if (!creds) return;
+  const map = {
+    INFISICAL_SITE_URL: creds.siteUrl,
+    INFISICAL_PROJECT_ID: creds.projectId,
+    INFISICAL_ENVIRONMENT: creds.environment,
+    INFISICAL_CLIENT_ID: creds.clientId,
+    INFISICAL_CLIENT_SECRET: creds.clientSecret,
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if (v && !process.env[k]) process.env[k] = String(v);
+  }
+}
 
 /** process.env から machine identity を組み立て (足りなければ null)。 */
 function credsFromEnv() {

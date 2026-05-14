@@ -26,33 +26,6 @@ export async function query(text, values = []) {
   return p.query(text, values);
 }
 
-// ── app_settings (key-value 設定ストア — 主に Infisical machine identity) ───
-//
-// migration 006 適用前に呼ばれる可能性がある (bootstrap.js が migrate より先に
-// 走る構成も許す) ので、 table 不在は空オブジェクト扱いにする。
-
-export async function getAppSettings() {
-  try {
-    const r = await query('SELECT key, value FROM app_settings');
-    const out = {};
-    for (const row of r.rows) out[row.key] = row.value;
-    return out;
-  } catch (err) {
-    if (err?.code === '42P01') return {}; // undefined_table — migration 未適用
-    throw err;
-  }
-}
-
-export async function setAppSettings(patch) {
-  for (const [key, value] of Object.entries(patch)) {
-    await query(
-      `INSERT INTO app_settings (key, value) VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [key, value],
-    );
-  }
-}
-
 // ── shareable resources ────────────────────────────────────────────────────
 
 export async function listSharedBookmarks({ limit = 50, before = null } = {}) {

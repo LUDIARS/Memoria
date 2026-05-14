@@ -47,11 +47,11 @@ import {
   insertWorkplacePresence, listRecentWorkplacePresence, listCurrentWorkplacePresence,
   hideShared, unhideShared, listHidden, listShareLog,
   recordShareEvent,
-  setAppSettings,
 } from './db.js';
 import {
   applyInfisicalCreds, hasInfisicalCreds, missingWantedKeys,
 } from './env-bootstrap.js';
+import { writeCreds } from './creds-store.js';
 import { cernereLogin, cernereProjectToken } from './cernere-login.js';
 import {
   DATA_TYPES, listData, getData, createData, updateData, deleteData,
@@ -228,15 +228,11 @@ app.post('/api/setup/infisical', async (c) => {
     return c.json({ error: `Infisical 接続失敗: ${err.message}` }, 502);
   }
   try {
-    await setAppSettings({
-      'infisical.site_url': siteUrl,
-      'infisical.project_id': projectId,
-      'infisical.environment': environment,
-      'infisical.client_id': clientId,
-      'infisical.client_secret': clientSecret,
-    });
+    // creds はファイルに保存 (Postgres は不可 — MEMORIA_PG_URL 自体が
+    // Infisical 経由で来るため循環依存になる)。
+    writeCreds(creds);
   } catch (err) {
-    return c.json({ error: `DB 保存失敗 (migration 未適用?): ${err.message}` }, 500);
+    return c.json({ error: `creds ファイル保存失敗: ${err.message}` }, 500);
   }
   return c.json({ ok: true, injected: result.injected });
 });
