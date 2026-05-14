@@ -8819,6 +8819,24 @@ function isCurrentUserModerator() {
 
 async function loadMulti() {
   refreshMultiTabVisibility();
+  // Multi Mode は Cernere 認証 (= Infisical 由来の CERNERE_BASE_URL) 前提。
+  // 未設定なら Hub の中身ではなく Infisical setup フォームを出す。
+  // status 取得失敗時は素通り (= 旧 server 互換、 Local 機能を妨げない)。
+  let infiConfigured = true;
+  try {
+    const st = await api('/api/setup/infisical/status') as { configured?: boolean };
+    infiConfigured = st.configured !== false;
+  } catch { infiConfigured = true; }
+  const setupEl = $('multiInfisicalSetup');
+  const mainEl = $('multiMainContent');
+  if (!infiConfigured) {
+    setupEl?.classList.remove('hidden');
+    mainEl?.classList.add('hidden');
+    return;
+  }
+  setupEl?.classList.add('hidden');
+  mainEl?.classList.remove('hidden');
+
   if (!state.multi?.connected) {
     $('multiList').innerHTML = '<div class="queue-empty">マルチサーバに接続されていません。⚙ AI から接続してください。</div>';
     return;
@@ -8871,6 +8889,44 @@ async function loadMulti() {
     btn.addEventListener('click', () => moderate('hide', btn.dataset.hide, Number(btn.dataset.id)));
   });
 }
+
+// Infisical setup フォーム (Multi view 内) の送信。 成功したら loadMulti を
+// 呼び直して通常の Hub 内容に切り替える。
+document.getElementById('infiSetupSubmit')?.addEventListener('click', async () => {
+  const btn = $('infiSetupSubmit') as HTMLButtonElement | null;
+  const msg = $('infiSetupMsg');
+  const setMsg = (text: string, ok = false) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
+    msg.hidden = false;
+  };
+  const body = {
+    siteUrl: ($('infiSiteUrl') as HTMLInputElement).value.trim(),
+    projectId: ($('infiProjectId') as HTMLInputElement).value.trim(),
+    environment: ($('infiEnvironment') as HTMLInputElement).value.trim() || 'dev',
+    clientId: ($('infiClientId') as HTMLInputElement).value.trim(),
+    clientSecret: ($('infiClientSecret') as HTMLInputElement).value.trim(),
+  };
+  if (!body.siteUrl || !body.projectId || !body.clientId || !body.clientSecret) {
+    return setMsg('⚠ Site URL / Project ID / Client ID / Client Secret は必須');
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '接続中…'; }
+  try {
+    const res = await fetch('/api/setup/infisical', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json() as { injected?: number; error?: string };
+    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
+    setMsg(`✓ ${j.injected ?? 0} 件の secret を取得しました`, true);
+    setTimeout(() => { void loadMulti(); }, 900);
+  } catch (e: unknown) {
+    setMsg(`⚠ ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '接続して保存'; }
+  }
+});
 
 async function moderate(action, kind, id) {
   if (action === 'hide') {

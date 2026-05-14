@@ -1281,19 +1281,48 @@
       </dialog>
 
       <div id="multiView" class="hidden">
-        <div class="multi-bar">
-          <span id="multiUserBadge" class="multi-user-badge"></span>
-          <span class="grow"></span>
-          <button id="multiRefresh" class="ghost">更新</button>
+        <!-- Infisical setup — Multi Mode (Hub 連携) は Cernere 認証が要り、
+             その CERNERE_BASE_URL 等を Infisical から取る。 未設定のときだけ表示。
+             Local Mode では Infisical は一切使わない。 -->
+        <section id="multiInfisicalSetup" class="multi-infisical-setup foundation-form hidden">
+          <h3 style="margin:0 0 4px">🔑 Infisical セットアップ (Multi Mode に必要)</h3>
+          <p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6">
+            Multi Mode は Hub への Cernere 認証を行うため、 設定値 (Cernere URL 等) を
+            Infisical から取得します。 この PC の machine identity を入力してください。
+            値は SQLite (<code>app_settings</code>) に保存され、 次回からは自動接続します。
+            Excubitor 経由で起動する場合はこの画面は出ません。 Local Mode の機能には影響しません。
+          </p>
+          <label class="simple-field"><span>Site URL</span>
+            <input id="infiSiteUrl" type="url" value="https://infisical.vtn-game.com" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>Project ID</span>
+            <input id="infiProjectId" type="text" placeholder="xxxxxxxx-xxxx-..." /></label>
+          <label class="simple-field" style="margin-top:8px"><span>Environment</span>
+            <input id="infiEnvironment" type="text" value="dev" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>Machine Identity — Client ID</span>
+            <input id="infiClientId" type="text" placeholder="Universal Auth client id" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>Machine Identity — Client Secret</span>
+            <input id="infiClientSecret" type="password" placeholder="Universal Auth client secret" /></label>
+          <div class="simple-actions" style="margin-top:14px">
+            <button id="infiSetupSubmit" type="button">接続して保存</button>
+          </div>
+          <div id="infiSetupMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
+        </section>
+
+        <div id="multiMainContent">
+          <div class="multi-bar">
+            <span id="multiUserBadge" class="multi-user-badge"></span>
+            <span class="grow"></span>
+            <button id="multiRefresh" class="ghost">更新</button>
+          </div>
+          <nav class="multi-subtabs">
+            <button class="multi-subtab active" data-mtab="bookmarks">📑 ブックマーク</button>
+            <button class="multi-subtab" data-mtab="digs">⛏ ディグ</button>
+            <button class="multi-subtab" data-mtab="dictionary">📖 辞書</button>
+            <button class="multi-subtab multi-mod-only" data-mtab="moderation" hidden>🛡 モデレーション</button>
+          </nav>
+          <div id="multiList" class="multi-list"></div>
+          <div id="multiEmpty" class="queue-empty hidden">該当エントリなし</div>
         </div>
-        <nav class="multi-subtabs">
-          <button class="multi-subtab active" data-mtab="bookmarks">📑 ブックマーク</button>
-          <button class="multi-subtab" data-mtab="digs">⛏ ディグ</button>
-          <button class="multi-subtab" data-mtab="dictionary">📖 辞書</button>
-          <button class="multi-subtab multi-mod-only" data-mtab="moderation" hidden>🛡 モデレーション</button>
-        </nav>
-        <div id="multiList" class="multi-list"></div>
-        <div id="multiEmpty" class="queue-empty hidden">該当エントリなし</div>
       </div>
     </section>
 

@@ -2903,6 +2903,15 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   color: var(--muted);
   font-size: 13px;
 }
+/* Multi view 内の Infisical setup フォーム (= 未設定時のみ表示)。 */
+.multi-infisical-setup {
+  max-width: 480px;
+  margin: 8px auto;
+  background: var(--bg-surface, var(--panel));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
 .multi-bar .grow { flex: 1; }
 .multi-user-badge {
   background: var(--accent-bg);
