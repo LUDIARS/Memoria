@@ -300,7 +300,15 @@ const state: State = {
   domainEntries: [],
   domainDetail: null,
   domainSearch: '',
+  // 二層設計: データソース (Local / 特定 Hub)。 ログ下のスイッチャで排他切替。
+  dataSource: { mode: 'local', hubUrl: null },
 };
+
+// Multi モードで触れないタブ (= 個人ログ系。 [個人データ保管禁止])。
+// Multi 対応は database (bookmark/dict/domain/impl) / dig / notes / worklog のみ。
+const LOCAL_ONLY_TABS = new Set([
+  'diary', 'meals', 'recommend', 'review', 'transit', 'trends',
+]);
 
 // `$()` は永らく document.getElementById のショートハンド。
 //
@@ -1116,6 +1124,12 @@ const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
 const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
 
 function switchTab(tab) {
+  // Multi モード時、 個人ログ系タブはグレーアウト = 切替を弾く。
+  const ds = state.dataSource as { mode: string; hubUrl: string | null };
+  if (ds?.mode === 'multi' && LOCAL_ONLY_TABS.has(tab)) {
+    showShareToast('この機能は Local モード専用です');
+    return;
+  }
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
     const sub = tab;
     if (state.worklog) state.worklog.sub = sub;
@@ -5063,9 +5077,12 @@ async function refreshMultiStatus() {
     });
     if (!anyConnected && $('digShareBar')) $('digShareBar').hidden = true;
     if (typeof refreshMultiTabVisibility === 'function') refreshMultiTabVisibility();
+    // 二層モード状態を読み直してスイッチャ + タブ gating に反映。
+    void refreshDataSource();
   } catch (e) { console.error(e); }
 }
 
+// 二層設計のデータソース セレクタ。 排他選択 (= ローカル か、 特定 Hub 1 つ)。
 function renderMultiSwitch(s) {
   const root = $('multiSwitch');
   if (!root) return;
@@ -5076,46 +5093,87 @@ function renderMultiSwitch(s) {
     return;
   }
   root.hidden = false;
-  // ローカル baseline pill (always-on, just visual reminder) +
-  // one toggleable pill per registered remote.
+  const ds = state.dataSource as { mode: string; hubUrl: string | null };
+  const localActive = !ds || ds.mode !== 'multi';
   const items = [
-    `<span class="ms-pill ms-local active" title="ローカル DB は常に有効">🏠 ローカル</span>`,
+    `<button type="button" class="ms-pill ms-local ${localActive ? 'active' : ''}" data-local="1" title="ローカル SQLite を使う">🏠 ローカル</button>`,
     ...servers.map(sv => {
-      const cls = sv.active ? 'active' : '';
+      const active = ds?.mode === 'multi' && ds.hubUrl === sv.url;
       const labelTxt = sv.label || sv.url;
       const tip = sv.connected
         ? `${sv.url} (${sv.user?.name || ''})`
-        : `${sv.url} — 未認証`;
-      return `<button type="button" class="ms-pill ${cls}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
+        : `${sv.url} — 未ログイン (クリックでログイン)`;
+      return `<button type="button" class="ms-pill ${active ? 'active' : ''}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
     }),
   ];
   root.innerHTML = items.join('');
+  const localBtn = root.querySelector('.ms-pill[data-local]');
+  if (localBtn) localBtn.addEventListener('click', () => selectDataSource(null));
   root.querySelectorAll('.ms-pill[data-url]').forEach(btn => {
-    btn.addEventListener('click', () => toggleMultiActive(btn.dataset.url));
+    btn.addEventListener('click', () => selectDataSource(btn.dataset.url));
   });
 }
 
-async function toggleMultiActive(url) {
-  // Multi-select: clicking flips this server's membership in the active set.
-  const s = state.multi;
-  if (!s) return;
-  const active = (s.servers || []).filter(x => x.active).map(x => x.url);
-  const set = new Set(active);
-  if (set.has(url)) set.delete(url);
-  else set.add(url);
-  // 未認証の server を active にしようとした場合は、 Multi タブの
-  // Cernere ログインフォームに誘導する (= OAuth dance は廃止)。
-  const target = (s.servers || []).find(x => x.url === url);
-  if (target && set.has(url) && !target.connected) {
-    switchTab('multi');
-    return;
+// データソースを切り替える。 url=null で Local、 url 指定で その Hub。
+// 未ログイン Hub を選んだら Multi タブのログインフォームへ誘導する。
+async function selectDataSource(url) {
+  try {
+    const res = await fetch('/api/multi/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(url ? { mode: 'multi', url } : { mode: 'local' }),
+    });
+    const j = await res.json() as {
+      ok?: boolean; mode?: string; hubUrl?: string | null;
+      needs_login?: boolean; url?: string; error?: string;
+    };
+    if (j.needs_login) {
+      const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+      if (urlInput && j.url) urlInput.value = j.url;
+      switchTab('multi');
+      return;
+    }
+    if (!res.ok || !j.ok) {
+      alert(`データソース切替に失敗: ${j.error || res.status}`);
+      return;
+    }
+    state.dataSource = { mode: j.mode || 'local', hubUrl: j.hubUrl ?? null };
+    applyModeGating();
+    renderMultiSwitch(state.multi);
+    // 現タブを Multi モードで触れないなら database に逃がしつつ、 データを再取得。
+    const cur = state.tab as string;
+    if (state.dataSource.mode === 'multi' && LOCAL_ONLY_TABS.has(cur)) {
+      switchTab('database');
+    } else {
+      switchTab(cur);
+    }
+  } catch (e: unknown) {
+    alert(`データソース切替に失敗: ${(e as Error).message}`);
   }
-  await api('/api/multi/active', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls: [...set] }),
+}
+
+// Multi モード時、 個人ログ系タブに mode-locked クラスを付けてグレーアウト。
+function applyModeGating() {
+  const multi = (state.dataSource as { mode?: string })?.mode === 'multi';
+  document.querySelectorAll('.tab[data-tab]').forEach(t => {
+    const el = t as HTMLElement;
+    const locked = multi && LOCAL_ONLY_TABS.has(el.dataset.tab || '');
+    el.classList.toggle('mode-locked', locked);
+    if (locked) el.title = 'Local モード専用 (Multi モードでは利用不可)';
+    else if (el.title === 'Local モード専用 (Multi モードでは利用不可)') el.title = '';
   });
-  await refreshMultiStatus();
+}
+
+// 現在のモードを backend から読んで state に反映。 起動時 + status 更新時に呼ぶ。
+async function refreshDataSource() {
+  try {
+    const m = await api('/api/multi/mode') as { mode?: string; hubUrl?: string | null };
+    state.dataSource = { mode: m.mode || 'local', hubUrl: m.hubUrl ?? null };
+  } catch {
+    state.dataSource = { mode: 'local', hubUrl: null };
+  }
+  applyModeGating();
+  renderMultiSwitch(state.multi);
 }
 
 function renderMultiServersList(s) {
@@ -5130,10 +5188,12 @@ function renderMultiServersList(s) {
     const status = sv.connected
       ? `<span class="ms-status ok">✓ ${escapeHtml(sv.user?.name || '')} (${escapeHtml(sv.user?.role || '')})</span>`
       : '<span class="ms-status">未認証</span>';
+    const ds = state.dataSource as { mode: string; hubUrl: string | null };
+    const isCurrent = ds?.mode === 'multi' && ds.hubUrl === sv.url;
     return `<li class="multi-server-row" data-url="${escapeHtml(sv.url)}">
       <label class="ms-active-toggle">
-        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${sv.active ? 'checked' : ''} />
-        有効
+        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${isCurrent ? 'checked' : ''} />
+        使用中
       </label>
       <div class="ms-row-body">
         <div class="ms-label">${escapeHtml(sv.label)}</div>
@@ -5141,14 +5201,18 @@ function renderMultiServersList(s) {
         <div>${status}</div>
       </div>
       <div class="ms-row-actions">
-        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : '接続'}</button>
-        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>切断</button>
+        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : 'ログイン'}</button>
+        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>ログアウト</button>
         <button class="danger ghost-sm" data-action="remove" data-url="${escapeHtml(sv.url)}">削除</button>
       </div>
     </li>`;
   }).join('');
+  // チェックボックス: ON でその Hub をデータソースに、 OFF で Local に戻す。
   list.querySelectorAll('input[type=checkbox][data-url]').forEach(cb => {
-    cb.addEventListener('change', () => toggleMultiActive(cb.dataset.url));
+    cb.addEventListener('change', () => {
+      const el = cb as HTMLInputElement;
+      selectDataSource(el.checked ? el.dataset.url : null);
+    });
   });
   list.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => multiServerAction(btn.dataset.action, btn.dataset.url));
@@ -5165,13 +5229,14 @@ async function multiServerAction(action, url) {
     return;
   }
   if (action === 'disconnect') {
-    if (!confirm(`「${url}」から切断しますか?`)) return;
-    await api('/api/multi/disconnect', {
+    if (!confirm(`「${url}」からログアウトしますか?`)) return;
+    await api('/api/multi/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
     await refreshMultiStatus();
+    await refreshDataSource();
     return;
   }
   if (action === 'remove') {
@@ -8922,7 +8987,8 @@ document.getElementById('multiLoginSubmit')?.addEventListener('click', async () 
     setMsg(`✓ ${j.user?.displayName || ''} としてログインしました`, true);
     ($('multiLoginPassword') as HTMLInputElement).value = '';
     await refreshMultiStatus();
-    setTimeout(() => { void loadMulti(); }, 600);
+    // ログイン成功 → そのままその Hub をデータソースに切り替える (Multi モードへ)。
+    setTimeout(() => { void selectDataSource(url); }, 400);
   } catch (e: unknown) {
     setMsg(`⚠ ${(e as Error).message}`);
   } finally {
