@@ -65,6 +65,16 @@ if (ALLOWED.length > 0) {
 
 app.get('/healthz', (c) => c.text('ok'));
 
+// ルート — Hub は API 専用サーバなので web UI は無い。 ただし直接ブラウザで
+// 開いたとき bare 404 だと「壊れている」 ように見えるので、 稼働状況を返す。
+// 実際の利用は ローカル Memoria の Multi view から (= この URL を直接は使わない)。
+app.get('/', (c) => c.json({
+  service: 'memoria-hub',
+  status: 'ok',
+  note: 'API-only server. Use the Memoria app (Multi view) to connect — do not browse this URL directly.',
+  endpoints: ['/healthz', '/api/me', '/api/shared/*'],
+}));
+
 // ── Cernere bridge: /ws/service に常時接続 (admission push、 future API) ──
 //
 // NOTE (2026-05-09): 現在の Cernere には /ws/service エンドポイントが未実装。

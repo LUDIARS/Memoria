@@ -1,15 +1,17 @@
-// /api/transit/* — Google Directions ベースの経路検索 + 乗った電車の記録。
+// /api/transit/* — 駅検索 (ローカル DB) + 乗った電車の記録 + GPS 自動検出。
 //
-// Ekispert free 廃止に伴い切替。 経路 + 駅 (Place) は Memoria 既設の
-// maps.api_key を流用。 Directions は real-time の遅延を到着時刻に反映するので
-// 「いま見て次の電車」 用途では Ekispert より使い勝手が良い。
-// 運行情報の独立リストは廃止 (= 検索結果に warnings として出る)。
+// 経路探索は frontend で Google Maps へ deep-link するだけ (= サーバ API なし)。
+// Google Routes API は日本の鉄道に非対応 (TRANSIT mode が 0 件) のため。
+// Ekispert は free 廃止。 結果として:
+//   - 駅 autocomplete: ローカル stations 表 (HeartRails seed)。 Places は fallback
+//   - 経路探索: Google Maps deep-link (frontend)
+//   - 乗車記録: 手動 / GPS 自動検出
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
-  searchStations, searchRoutes,
-  type GoogleTransitConfig, type SearchCourse, type SearchSegment,
+  searchStations,
+  type GoogleTransitConfig, type SearchSegment,
 } from '../lib/transit-google.js';
 import { getAppSettings } from '../db.js';
 import { runDetection } from '../lib/transit-detect.js';
@@ -106,50 +108,12 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     return c.json({ items, gps_source: source });
   });
 
-  // ── 経路検索 (= Routes API mode=TRANSIT) ───────────────────────────────
-  // ?from=<lat,lng | place_id:xxx | 駅名/住所>&to=<...>&datetime=ISO&mode=departure|arrival
-  // datetime 未指定なら 'now' (= 現在出発、 遅延加味済の到着時刻が返る)。
-  r.get('/api/transit/search', async (c: Context) => {
-    const url = new URL(c.req.url);
-    const from = url.searchParams.get('from') ?? '';
-    const to = url.searchParams.get('to') ?? '';
-    if (!from || !to) return c.json({ error: 'from / to required' }, 400);
-    const datetime = url.searchParams.get('datetime');
-    const mode = url.searchParams.get('mode') === 'arrival' ? 'arrival' : 'departure';
-    let when: Date | undefined;
-    if (datetime) {
-      const d = new Date(datetime);
-      if (Number.isNaN(d.getTime())) return c.json({ error: 'datetime invalid ISO' }, 400);
-      when = d;
-    }
-    try {
-      const courses = await searchRoutes(loadGoogleConfig(db), {
-        origin: from, destination: to, timeMode: mode, when,
-      });
-      return c.json({ courses });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // 既知パターンを 「より分かるエラー」 に翻訳
-      if (/API_KEY_HTTP_REFERRER_BLOCKED|Requests from referer/.test(msg)) {
-        return c.json({
-          error: 'Routes API key が Referer 制限付きで server-side からは使えません。 MEMORIA_PLACES_API_KEY env に Referer 制限なしの key を設定してください (place-resolver と同じ key で OK)。',
-          underlying: msg,
-        }, 403);
-      }
-      if (/legacy API|LegacyApiNotActivated/.test(msg)) {
-        return c.json({
-          error: 'Google Cloud Console で Routes API を有効化してください (= 新 API)。 旧 Directions API は disabled です。',
-          underlying: msg,
-        }, 503);
-      }
-      return c.json({ error: msg }, 502);
-    }
-  });
+  // 経路検索 API は廃止 (= Google Routes API が日本の鉄道に非対応)。
+  // frontend が Google Maps へ deep-link する。
 
   // ── 乗った電車の記録 (= rides) ────────────────────────────────────────
   //
-  // 検索結果 (= SearchCourse) を post して 「乗った」 と記録するのが王道。
-  // 手動入力 (= 駅名 / 路線名 / 時刻) でも作れる。
+  // 手動入力 (= 駅名 / 路線名 / 時刻) で作る。 GPS 自動検出は別経路 (detect)。
 
   interface CreateRideBody {
     from_station?: string;
@@ -167,37 +131,20 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     arrival_lat?: number;
     arrival_lon?: number;
     notes?: string;
-    /** SearchCourse をそのまま投げてもいい。 segments + duration + fare を抽出 */
-    course?: SearchCourse;
   }
 
   r.post('/api/transit/rides', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as CreateRideBody;
-    let from_station = body.from_station;
-    let to_station = body.to_station;
-    let segments: SearchSegment[] | undefined = body.segments;
-    let line_name = body.line_name;
-    let train_type = body.train_type;
-    let departure_at = body.departure_at;
-    let arrival_at = body.arrival_at;
-    let duration_min = body.duration_min;
-    let fare_yen = body.fare_yen;
-    let transfer_count = body.transfer_count ?? 0;
-    // SearchCourse をそのまま渡された場合の抽出
-    if (body.course) {
-      segments = body.course.segments;
-      duration_min = body.course.duration_min;
-      fare_yen = body.course.fare_yen;
-      transfer_count = body.course.transfer_count ?? 0;
-      const first = body.course.segments[0];
-      const last = body.course.segments[body.course.segments.length - 1];
-      from_station ??= first?.from_station;
-      to_station ??= last?.to_station;
-      line_name ??= first?.line;
-      train_type ??= first?.train_type;
-      departure_at ??= first?.departure_at ?? undefined;
-      arrival_at ??= last?.arrival_at ?? undefined;
-    }
+    const from_station = body.from_station;
+    const to_station = body.to_station;
+    const segments: SearchSegment[] | undefined = body.segments;
+    const line_name = body.line_name;
+    const train_type = body.train_type;
+    const departure_at = body.departure_at;
+    const arrival_at = body.arrival_at;
+    const duration_min = body.duration_min;
+    const fare_yen = body.fare_yen;
+    const transfer_count = body.transfer_count ?? 0;
     if (!from_station || !to_station) return c.json({ error: 'from_station / to_station required' }, 400);
     const stmt = db.prepare(
       `INSERT INTO transit_rides

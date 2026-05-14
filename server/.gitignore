@@ -2,6 +2,10 @@ node_modules/
 *.log
 test-payload.json
 
+# Infisical machine identity — npm start が --env-file-if-exists で読む。
+# アプリ設定値は Infisical 本体に置く (= env-bootstrap.ts が fetch)。
+.env.secrets
+
 # esbuild bundle of public/src/app.ts (build artifact)
 public/app.js
 public/app.js.map
