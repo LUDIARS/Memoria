@@ -37,7 +37,7 @@
        閉じても tutorial.completed_at は書き込まれる (= 自動再表示は二度
        としない、 再表示は手動から)。 -->
   <div id="tutorialOverlay" class="modal-backdrop tutorial-overlay" hidden>
-    <div class="modal-panel tutorial-modal">
+    <div class="modal-panel tutorial-modal foundation-form">
       <header class="tutorial-head">
         <h2>🎓 はじめての Memoria</h2>
         <div class="tutorial-progress"><span id="tutorialStepLabel">1</span> / 6</div>
@@ -305,6 +305,9 @@
           <button class="tab" data-tab="review">
             <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
           </button>
+          <button class="tab" data-tab="transit">
+            <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -452,7 +455,7 @@
               <span class="dig-pick-text"></span>
               <button type="button" id="digPickClear" class="dig-pick-clear" title="この語の選択を解除">×</button>
             </div>
-            <div class="dig-input">
+            <div class="dig-input foundation-form">
               <textarea id="digQuery" rows="5"
                 placeholder="例: WebGPU の compute shader で readback を効率化する方法は? ベンチマークやベストプラクティスを集めたい"></textarea>
               <div class="dig-input-actions">
@@ -543,9 +546,10 @@
             <ul id="weeklyGithub" class="diary-github"></ul>
           </div>
 
-          <div id="diaryDetail" class="diary-detail hidden">
+          <div id="diaryDetail" class="diary-detail hidden foundation-form">
             <div class="diary-detail-head">
               <h3 id="diaryDate"></h3>
+              <span id="diaryWeather" class="diary-weather-tag" hidden></span>
               <span id="diaryStatus" class="diary-status-tag"></span>
               <span id="diaryWorkMinutes" class="diary-status-tag" hidden></span>
               <span class="grow"></span>
@@ -602,12 +606,12 @@
             </div>
           </div>
         </div>
-        <div id="diarySettingsPanel" class="diary-settings hidden">
+        <div id="diarySettingsPanel" class="diary-settings hidden foundation-form">
           <h4>GitHub 設定</h4>
           <p class="diary-settings-help">GitHub の commit ツリーを日報に取り込むときだけ設定してください。トークンはサーバーの SQLite に保存されます。</p>
-          <label>ユーザ名 <input id="diaryGhUser" type="text" placeholder="example" /></label>
-          <label>リポジトリ (カンマ区切り。空欄なら全リポ) <input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
-          <label>Personal access token (公開リポのみなら不要) <input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
+          <label class="simple-field"><span>ユーザ名</span><input id="diaryGhUser" type="text" placeholder="example" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>リポジトリ (カンマ区切り。空欄なら全リポ)</span><input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>Personal access token (公開リポのみなら不要)</span><input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
           <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
           <div class="diary-settings-actions">
             <button id="diarySettingsSave">保存</button>
@@ -847,6 +851,30 @@
           </div>
           <p class="ext-cfg-help" id="tracksWifiHint">優先度: OwnTracks GPS &gt; WiFi SSID &gt; 有線 (= 自宅)。 高優先度のソースで判定できなければ次の段に fallback します。</p>
         </div>
+        <!-- 天気カード: Open-Meteo の forecast を 「位置 (GPS / 固定 lat/lon)」 で取得。
+             位置情報 UI の隣に置くのは GPS 不在時の確認動線として自然なので。 -->
+        <div id="tracksWeatherCard" class="tracks-source-card">
+          <div class="ext-cfg-row">
+            <strong>🌤 今日の天気</strong>
+            <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksWeatherPill">取得中…</span>
+            <button id="tracksWeatherRefresh" class="ghost" type="button" title="再取得 (force)">↻</button>
+          </div>
+          <div class="ext-cfg-stats" id="tracksWeatherStats">
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">天気</span><span id="tracksWeatherLabel" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最高/最低</span><span id="tracksWeatherTemp" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">降水合計</span><span id="tracksWeatherPrecip" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">雨予報</span><span id="tracksWeatherRain" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">位置</span><span id="tracksWeatherLoc" class="ext-cfg-stat-val">—</span></div>
+          </div>
+          <details id="tracksWeatherHourlyWrap" style="margin-top:6px">
+            <summary class="muted" style="font-size:11px;cursor:pointer">時間別予報 (12h)</summary>
+            <div id="tracksWeatherHourly" class="tracks-weather-hourly"></div>
+          </details>
+          <p class="ext-cfg-help" id="tracksWeatherHint">
+            位置は <code>?lat=&amp;lon=</code> &gt; 設定 <code>weather.fixed_lat/lon</code> &gt; 直近 GPS の順。
+            <button id="tracksWeatherSettingsBtn" class="ghost" type="button" style="margin-left:4px">📍 固定座標</button>
+          </p>
+        </div>
 
         <div id="tracksMissingKey" class="tracks-missing-key hidden">
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
@@ -877,26 +905,129 @@
           <button id="reviewRefresh" class="ghost" type="button">更新</button>
         </div>
         <div id="reviewListLayout">
-          <div class="review-filter-bar">
-            <label class="muted">リポジトリ
+          <div class="review-filter-bar foundation-form">
+            <label class="simple-field" style="max-width:220px">
+              <span>日付</span>
+              <select id="reviewListDateSel"></select>
+            </label>
+            <label class="simple-field" style="max-width:260px">
+              <span>リポジトリ</span>
               <select id="reviewRepoMenu"></select>
             </label>
             <span id="reviewListCount" class="muted"></span>
           </div>
           <div id="reviewCards" class="cards"></div>
-          <div id="reviewEmpty" class="dict-empty hidden">レビューが見つかりません。 <code>/ludiars-review</code> を実行してください。</div>
+          <div id="reviewEmpty" class="dict-empty hidden">この日のレビューはありません。 <code>/ludiars-review</code> を実行するか、別の日付を選択してください。</div>
         </div>
         <div id="reviewDetailLayout" class="hidden">
-          <div class="review-detail-bar">
+          <div class="review-detail-bar foundation-form">
             <div class="review-detail-title-row">
               <h2 id="reviewDetailRepo" class="review-detail-title"></h2>
               <a id="reviewFixPrLink" class="review-pr-badge" href="#" target="_blank" rel="noopener" hidden>🔧 修正 PR</a>
             </div>
-            <label class="review-detail-date muted">日付 <select id="reviewDateSel"></select></label>
+            <label class="review-detail-date simple-field" style="max-width:200px">
+              <span>日付</span>
+              <select id="reviewDateSel"></select>
+            </label>
           </div>
           <nav class="tabs review-file-tabs" id="reviewFileTabs"></nav>
           <div id="reviewBody" class="review-body">読み込み中…</div>
+          <!-- レビューファイル末尾の Dig UI (= 問題を深堀するきっかけ)。
+               入力欄 + 「ディグる」 ボタン + 過去 dig 履歴。 dig session は
+               dig タブの履歴とも同期される。 -->
+          <section id="reviewDigSection" class="review-dig-section foundation-form hidden">
+            <h3 class="review-dig-head">🔎 このレビューをディグる</h3>
+            <p class="muted" style="font-size:12px;margin:4px 0 8px">
+              気になる指摘を選んでさらに調べる。 「ディグる」 を押すと Memoria の Dig 履歴にも残り、 ここからも続きを確認できます。
+            </p>
+            <div class="review-dig-input">
+              <textarea id="reviewDigQuery" rows="2" placeholder="どこを深堀するか — 例: 「OWASP A07 該当ライブラリの代替案」 「指摘された SRE Gap の業界例」"></textarea>
+              <button id="reviewDigSubmit" type="button">🔎 ディグる</button>
+            </div>
+            <div id="reviewDigError" class="muted" style="font-size:11px;color:#c0392b;margin-top:4px" hidden></div>
+            <div class="review-dig-history">
+              <h4 class="review-dig-history-head">過去のディグ <small id="reviewDigHistoryCount" class="muted"></small></h4>
+              <ul id="reviewDigHistoryList" class="review-dig-history-list"></ul>
+            </div>
+          </section>
         </div>
+      </div>
+
+      <div id="transitView" class="hidden">
+        <div class="bookmarks-toolbar">
+          <span class="muted">🚆 Google 経路検索 (遅延加味) / 乗車記録</span>
+          <span class="grow"></span>
+        </div>
+        <nav class="tabs transit-subtabs">
+          <button class="tab active" data-transit-sub="search" type="button">🔎 検索</button>
+          <button class="tab" data-transit-sub="rides" type="button">📋 乗車履歴</button>
+        </nav>
+
+        <!-- 検索 -->
+        <section id="transitSearchPanel" class="transit-panel">
+          <div class="transit-search-form foundation-form">
+            <div class="transit-station-input">
+              <label class="simple-field">
+                <span>出発</span>
+                <input id="transitFromName" type="search" placeholder="駅名 / 住所…" autocomplete="off" />
+              </label>
+              <ul id="transitFromCandidates" class="transit-autocomplete" hidden></ul>
+              <input id="transitFromCode" type="hidden" />
+              <small id="transitFromPick" class="muted"></small>
+            </div>
+            <div class="transit-station-input">
+              <label class="simple-field">
+                <span>到着</span>
+                <input id="transitToName" type="search" placeholder="駅名 / 住所…" autocomplete="off" />
+              </label>
+              <ul id="transitToCandidates" class="transit-autocomplete" hidden></ul>
+              <input id="transitToCode" type="hidden" />
+              <small id="transitToPick" class="muted"></small>
+            </div>
+            <div class="transit-search-meta">
+              <label class="simple-field">
+                <span>基準</span>
+                <select id="transitTimeMode">
+                  <option value="departure">出発時刻</option>
+                  <option value="arrival">到着時刻</option>
+                </select>
+              </label>
+              <label class="simple-field">
+                <span>日時</span>
+                <input id="transitDateTime" type="datetime-local" />
+              </label>
+              <button id="transitSearchNowBtn" class="ghost" type="button" title="いますぐ出発">🕐 いま</button>
+              <button id="transitSearchBtn" type="button">検索</button>
+            </div>
+            <p class="muted" style="font-size:11px;margin:4px 2px">
+              駅候補は <strong>ローカル DB</strong> (HeartRails Express 由来、 起動時に bulk import) から GPS 近い順 + ターミナル駅優先で出します。
+              経路は Google Directions が担当し、 real-time 遅延が到着時刻に反映されます。
+              <br>
+              ※ 検索時に 403 が出る場合は <code>MEMORIA_PLACES_API_KEY</code> env (Referer 制限なしの server-side key) を設定してください。
+            </p>
+          </div>
+          <div id="transitResults" class="transit-results"></div>
+        </section>
+
+        <!-- 乗車履歴 -->
+        <section id="transitRidesPanel" class="transit-panel hidden">
+          <div class="transit-rides-bar foundation-form">
+            <label class="simple-field" style="max-width:200px">
+              <span>日付</span>
+              <input id="transitRidesDate" type="date" />
+            </label>
+            <button id="transitRidesClear" class="ghost" type="button" title="絞り込み解除">×</button>
+            <span class="grow"></span>
+            <button id="transitRidesDetectBtn" class="ghost" type="button" title="GPS 履歴から自動検出を即実行">🛰 GPS 再検出</button>
+            <button id="transitRidesAddBtn" class="ghost" type="button">＋ 手動で追加</button>
+            <button id="transitRidesRefresh" class="ghost" type="button">更新</button>
+          </div>
+          <p class="muted" style="font-size:11px;margin:4px 2px">
+            🛰 自動検出: 速度 25 km/h 以上が 3 分以上続き、 5 km/h 未満が 3 分以上続いたら 「乗車完了」 とみなして駅を Google Places で特定します。 1 時間おきにバックグラウンド実行。
+          </p>
+          <div id="transitRidesList" class="transit-rides-list"></div>
+        </section>
+
       </div>
 
       <div id="mealsView" class="hidden">
@@ -1059,7 +1190,7 @@
             </div>
           </div>
 
-          <form id="mealModalForm" class="meal-modal-form" onsubmit="return false;">
+          <form id="mealModalForm" class="meal-modal-form foundation-form" onsubmit="return false;">
             <label class="meal-modal-row">
               <span class="meal-modal-label">食事内容 <span class="required">*</span></span>
               <textarea id="mealModalDesc" rows="2" placeholder="例: カレーライスとサラダ" required></textarea>
@@ -1108,7 +1239,7 @@
       </dialog>
 
       <!-- ── 場所編集ダイアログ — 軌跡 / 食事 / その他で再利用される共通 modal -->
-      <dialog id="locationEditModal" class="loc-edit-modal" aria-labelledby="locationEditTitle">
+      <dialog id="locationEditModal" class="loc-edit-modal foundation-form" aria-labelledby="locationEditTitle">
         <div class="loc-edit-card">
           <header class="loc-edit-head">
             <h3 id="locationEditTitle">場所を編集</h3>
@@ -1180,7 +1311,7 @@
       </div>
     </section>
 
-    <aside id="detail" class="detail hidden">
+    <aside id="detail" class="detail hidden foundation-form">
       <div class="detail-head">
         <button id="detailClose" class="ghost">×</button>
       </div>
@@ -1220,7 +1351,7 @@
        Click on the backdrop or Escape closes whichever modal is open. -->
   <div id="modalBackdrop" class="modal-backdrop" hidden></div>
 
-  <div id="dictDetail" class="dict-detail modal-panel hidden">
+  <div id="dictDetail" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
       <input id="dictTerm" type="text" placeholder="単語" />
       <button id="dictSaveBtn">保存</button>
@@ -1237,7 +1368,49 @@
     <ul id="dictLinks" class="dict-links"></ul>
   </div>
 
-  <div id="reviewTargetModal" class="dict-detail modal-panel hidden">
+  <div id="transitRideManualModal" class="dict-detail modal-panel hidden foundation-form">
+    <div class="dict-detail-head">
+      <h3 style="margin:0;flex:1">📝 乗車記録を手動で追加</h3>
+      <button id="transitRideManualSaveBtn">保存</button>
+      <button id="transitRideManualCloseBtn" class="modal-close" title="閉じる">×</button>
+    </div>
+    <div class="transit-manual-grid">
+      <label class="simple-field"><span>出発駅</span><input id="rideFromStation" type="text" /></label>
+      <label class="simple-field"><span>到着駅</span><input id="rideToStation" type="text" /></label>
+      <label class="simple-field"><span>路線名</span><input id="rideLineName" type="text" placeholder="例 JR山手線" /></label>
+      <label class="simple-field"><span>列車種別</span><input id="rideTrainType" type="text" placeholder="例 快速" /></label>
+      <label class="simple-field"><span>出発時刻</span><input id="rideDepartureAt" type="datetime-local" /></label>
+      <label class="simple-field"><span>到着時刻</span><input id="rideArrivalAt" type="datetime-local" /></label>
+      <label class="simple-field"><span>運賃 (円)</span><input id="rideFareYen" type="number" min="0" step="10" /></label>
+      <label class="simple-field"><span>所要 (分)</span><input id="rideDurationMin" type="number" min="0" /></label>
+    </div>
+    <label class="simple-field" style="margin-top:8px"><span>メモ</span><textarea id="rideNotes" rows="2"></textarea></label>
+    <div id="transitRideManualError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
+  </div>
+
+  <div id="weatherSettingsModal" class="dict-detail modal-panel hidden foundation-form">
+    <div class="dict-detail-head">
+      <h3 style="margin:0;flex:1">📍 天気の固定座標</h3>
+      <button id="weatherSettingsSaveBtn">保存</button>
+      <button id="weatherSettingsClearBtn" class="ghost">解除</button>
+      <button id="weatherSettingsCloseBtn" class="modal-close" title="閉じる">×</button>
+    </div>
+    <p class="muted" style="margin:8px 0;font-size:12px">
+      GPS が無い PC で天気カードを使うとき、 ここに緯度/経度を入れると
+      Open-Meteo はそこを基準に予報を返す。 空欄保存で 「GPS 優先」 に戻る。
+    </p>
+    <label class="simple-field">
+      <span>緯度 (latitude)</span>
+      <input id="weatherSettingsLat" type="number" step="0.0001" placeholder="例 35.6586" />
+    </label>
+    <label class="simple-field" style="margin-top:8px">
+      <span>経度 (longitude)</span>
+      <input id="weatherSettingsLon" type="number" step="0.0001" placeholder="例 139.7454" />
+    </label>
+    <div id="weatherSettingsError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
+  </div>
+
+  <div id="reviewTargetModal" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
       <h3 style="margin:0;flex:1">🔍 レビュー対象リポを追加</h3>
       <button id="reviewTargetSaveBtn">保存</button>
@@ -1248,24 +1421,30 @@
       <code>ludiars-review-daily</code> は登録済の対象を読み、 指定フォーマットに
       従って <code>review/&lt;date&gt;/</code> を生成します。
     </p>
-    <h4>表示名</h4>
-    <input id="reviewTargetName" type="text" placeholder="例: Memoria" />
-    <h4>ローカルパス</h4>
-    <input id="reviewTargetPath" type="text" placeholder="例: E:/Document/Ars/Memoria" />
+    <label class="simple-field" style="margin-top:8px">
+      <span>表示名</span>
+      <input id="reviewTargetName" type="text" placeholder="例: Memoria" />
+    </label>
+    <label class="simple-field" style="margin-top:8px">
+      <span>ローカルパス</span>
+      <input id="reviewTargetPath" type="text" placeholder="例: E:/Document/Ars/Memoria" />
+    </label>
     <p class="muted" style="font-size:11px;margin:4px 0">
       LUDIARS_ROOT (既定 <code>E:/Document/Ars</code>) からの相対パスでも、 絶対パスでも可。
     </p>
-    <h4>フォーマット</h4>
-    <select id="reviewTargetFormat">
-      <option value="aiformat">AIFormat (5 観点 + 総合)</option>
-    </select>
+    <label class="simple-field" style="margin-top:8px">
+      <span>フォーマット</span>
+      <select id="reviewTargetFormat">
+        <option value="aiformat">AIFormat (5 観点 + 総合)</option>
+      </select>
+    </label>
     <p class="muted" style="font-size:11px;margin:4px 0">
       現在は AIFormat のみ。 カスタムフォーマットは将来対応。
     </p>
     <div id="reviewTargetError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
   </div>
 
-  <div id="appsDetail" class="dict-detail modal-panel hidden">
+  <div id="appsDetail" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
       <input id="appsKey" type="text" placeholder="process_name" disabled />
       <button id="appsSaveBtn">保存</button>
@@ -1295,7 +1474,7 @@
     <div id="appsErrorRow" class="muted" style="margin-top:8px;font-size:11px" hidden></div>
   </div>
 
-  <div id="domainDetail" class="dict-detail modal-panel hidden">
+  <div id="domainDetail" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
       <input id="domainKey" type="text" placeholder="ドメイン" disabled />
       <button id="domainSaveBtn">保存</button>
@@ -1316,7 +1495,7 @@
     <textarea id="domainNotes" rows="3" placeholder="自分用のメモ"></textarea>
   </div>
 
-  <div id="aiSettingsPanel" class="ai-settings hidden">
+  <div id="aiSettingsPanel" class="ai-settings hidden foundation-form">
     <div class="ai-settings-head">
       <h3>設定</h3>
       <button id="aiSettingsClose" class="ghost">×</button>

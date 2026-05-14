@@ -39,6 +39,10 @@ export interface PrivacySettings {
   // PC 活動 / Steam 取り込み。 どちらも default false (= 明示 opt-in)。
   activity_app_sampling_enabled: boolean;
   activity_steam_enabled: boolean;
+  // 天気カード + 雨アラート + 日記差し込み。 default true。 GPS / 固定 lat/lon が
+  // 無ければそもそも fetch しないので OFF は明示的に切りたい場合のみ。
+  weather_enabled: boolean;
+  weather_rain_alert_enabled: boolean;
 }
 
 export type PrivacyBoolKey = keyof Pick<PrivacySettings,
@@ -52,6 +56,7 @@ export type PrivacyBoolKey = keyof Pick<PrivacySettings,
   | 'domain_catalog_auto_classify' | 'meals_auto_vision'
   | 'diary_auto_generate'
   | 'activity_app_sampling_enabled' | 'activity_steam_enabled'
+  | 'weather_enabled' | 'weather_rain_alert_enabled'
 >;
 
 export function settingBool(settings: Record<string, string | null>, key: string, fallback = true): boolean {
@@ -98,6 +103,9 @@ export function privacySettings(db: Db): PrivacySettings {
     // PC 活動 / Steam — default OFF。 設定 → AI / モデル の opt-out グループから ON。
     activity_app_sampling_enabled: settingBool(s, 'features.activity.app_sampling.enabled', false),
     activity_steam_enabled: settingBool(s, 'features.activity.steam.enabled', false),
+    // 天気 (Open-Meteo)。 default true、 GPS / 固定 lat/lon が無ければ自動 skip。
+    weather_enabled: settingBool(s, 'features.weather.enabled', true),
+    weather_rain_alert_enabled: settingBool(s, 'features.weather.rain_alert.enabled', true),
   };
 }
 

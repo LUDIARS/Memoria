@@ -44,6 +44,9 @@ import {
 } from '../diary.js';
 import { sendPushToAll } from '../push.js';
 import type { GithubByRepo, AggregatedDay } from '../diary.js';
+import {
+  getLatestSnapshotForDate, rowToForecast, describeCode, type Forecast,
+} from './weather.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -591,6 +594,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
           improve: ctx.improve,
         });
         const summary = composeDiarySummary({
+          weatherBlock: buildWeatherBlock(db, dateStr),
           workContent: ctx.workContent,
           githubByRepo: ctx.githubByRepo,
           highlights: ctx.highlights,
@@ -723,6 +727,9 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
 // Mirror of `composeSummary` from diary.js — extracted here so we can run
 // the highlights stage independently in the queue chain.
 interface ComposeSummaryArgs {
+  /** その日の天気サマリーブロック (markdown 1 段落)。 weather snapshot が
+   *  無い date では undefined (= 出さない)。 */
+  weatherBlock?: string;
   workContent: string;
   githubByRepo: GithubByRepo | null;
   highlights: string;
@@ -744,8 +751,61 @@ interface ComposeSummaryArgs {
   } | null;
 }
 
-function composeDiarySummary({ workContent, githubByRepo, highlights, digs, activity, apps, games }: ComposeSummaryArgs): string {
+/** 「## 天気」 セクションを 1 ブロック返す。 weather snapshot が無ければ '' 。
+ *  date は YYYY-MM-DD (local)。 hourly が空でも daily だけで線形に組む。 */
+function buildWeatherBlock(db: BetterSqlite3.Database, date: string): string {
+  const row = getLatestSnapshotForDate(db, date);
+  if (!row) return '';
+  const f: Forecast = rowToForecast(row);
+  // daily の該当 index (Open-Meteo は forecast_days=2 で取るので 1 行目が today)
+  const idx = f.daily.time.indexOf(date);
+  if (idx < 0) return '';
+  const code = f.daily.weather_code[idx] ?? 0;
+  const desc = describeCode(code);
+  const tMax = f.daily.temperature_max[idx];
+  const tMin = f.daily.temperature_min[idx];
+  const precip = f.daily.precipitation_sum[idx];
+  const pieces: string[] = [`${desc.icon} ${desc.label}`];
+  if (Number.isFinite(tMax) && Number.isFinite(tMin)) {
+    pieces.push(`最高 ${Math.round(tMax)}℃ / 最低 ${Math.round(tMin)}℃`);
+  }
+  if (Number.isFinite(precip) && precip > 0) {
+    pieces.push(`降水 ${precip.toFixed(1)}mm`);
+  }
+  // hourly があれば雨だった時間帯を 1 行で添える (= 「12:00〜15:00 雨」)
+  const rainHours = collectRainHours(f, date);
+  const lines = [pieces.join(' / ')];
+  if (rainHours) lines.push(rainHours);
+  return `## 天気\n${lines.join('\n')}`;
+}
+
+function collectRainHours(f: Forecast, date: string): string {
+  if (!f.hourly?.time?.length) return '';
+  const ranges: { start: string; end: string }[] = [];
+  let curStart: string | null = null;
+  let curEnd: string | null = null;
+  for (let i = 0; i < f.hourly.time.length; i++) {
+    const t = f.hourly.time[i];
+    if (!t.startsWith(date)) continue;
+    const precip = f.hourly.precipitation[i] ?? 0;
+    const code = f.hourly.weather_code[i] ?? 0;
+    const rain = precip >= 0.5 || (code >= 51 && code <= 99 && code < 71);
+    if (rain) {
+      if (!curStart) curStart = t.slice(11, 16);
+      curEnd = t.slice(11, 16);
+    } else if (curStart && curEnd) {
+      ranges.push({ start: curStart, end: curEnd });
+      curStart = null; curEnd = null;
+    }
+  }
+  if (curStart && curEnd) ranges.push({ start: curStart, end: curEnd });
+  if (ranges.length === 0) return '';
+  return '雨: ' + ranges.map((r) => r.start === r.end ? r.start : `${r.start}〜${r.end}`).join(', ');
+}
+
+function composeDiarySummary({ weatherBlock, workContent, githubByRepo, highlights, digs, activity, apps, games }: ComposeSummaryArgs): string {
   const parts: string[] = [];
+  if (weatherBlock) parts.push(weatherBlock);
   if (workContent) parts.push(`## 作業内容\n${workContent.trim()}`);
   if (digs && digs.length > 0) {
     const digLines = digs.map((d) => {
