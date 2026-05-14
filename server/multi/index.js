@@ -52,6 +52,7 @@ import {
 import {
   applyInfisicalCreds, hasInfisicalCreds, missingWantedKeys,
 } from './env-bootstrap.js';
+import { cernereLogin, cernereProjectToken } from './cernere-login.js';
 
 const PORT = Number(process.env.MEMORIA_HUB_PORT ?? 5280);
 const ALLOWED = (process.env.MEMORIA_HUB_ALLOWED_ORIGINS || '')
@@ -136,25 +137,61 @@ f.addEventListener('submit', async (e) => {
 </script>
 </body></html>`;
 
-function statusPage() {
-  return `<!doctype html>
+const LOGIN_PAGE = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Memoria Hub</title>
-<style>body{font-family:system-ui,sans-serif;max-width:460px;margin:8vh auto;padding:0 20px;line-height:1.7;}
-h1{font-size:1.3rem;} code{background:#8884;padding:1px 5px;border-radius:4px;} .note{color:#888;font-size:.88rem;}</style>
-</head><body>
+<title>Memoria Hub — ログイン</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 380px; margin: 9vh auto; padding: 0 20px; line-height: 1.6; }
+  h1 { font-size: 1.3rem; }
+  p.note { color: #888; font-size: .85rem; }
+  label { display: block; margin-top: 14px; font-size: .85rem; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 10px 12px;
+          border: 1px solid #bbb; border-radius: 8px; font-size: 14px; }
+  button { margin-top: 20px; width: 100%; padding: 11px; border: 0; border-radius: 8px;
+           background: #4a6cf7; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .msg { margin-top: 14px; font-size: .88rem; }
+  .msg.err { color: #d33; }
+  .msg.ok { color: #2a8; }
+</style></head><body>
 <h1>Memoria Hub</h1>
-<p>Infisical: <strong>設定済み</strong></p>
-<p class="note">ログイン画面は Phase 2 で実装予定です。 当面この Hub はローカル
-Memoria の Multi スイッチャから利用します。</p>
-<p class="note">未取得の設定キー: <code>${missingWantedKeys().join(', ') || '(なし)'}</code></p>
+<p class="note">この Hub にログインします。 認証は Hub が内部で Cernere に
+代理ログインします。 通常はローカル Memoria の Multi スイッチャから繋ぐので、
+この画面は動作確認用です。</p>
+<form id="f">
+  <label>メールアドレス <input name="email" type="email" required></label>
+  <label>パスワード <input name="password" type="password" required></label>
+  <button type="submit">ログイン</button>
+  <div id="msg" class="msg"></div>
+</form>
+<script>
+const f = document.getElementById('f'), msg = document.getElementById('msg');
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = f.querySelector('button');
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = 'ログイン中…';
+  const body = Object.fromEntries(new FormData(f).entries());
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { msg.className = 'msg err'; msg.textContent = j.error || ('HTTP ' + res.status); btn.disabled = false; return; }
+    msg.className = 'msg ok';
+    msg.textContent = 'ログイン成功: ' + (j.user && j.user.displayName || '(unknown)');
+  } catch (err) {
+    msg.className = 'msg err'; msg.textContent = String(err); btn.disabled = false;
+  }
+});
+</script>
 </body></html>`;
-}
 
 app.get('/', (c) => {
   if (!hasInfisicalCreds()) return c.html(SETUP_PAGE);
-  return c.html(statusPage());
+  return c.html(LOGIN_PAGE);
 });
 
 // ── /api/setup/infisical — Infisical machine identity の設定 ───────────────
@@ -200,6 +237,60 @@ app.post('/api/setup/infisical', async (c) => {
   }
   return c.json({ ok: true, injected: result.injected });
 });
+
+// ── /api/auth/* — Cernere 代理ログイン + session ───────────────────────────
+//
+// session token はステートレス: Cernere の project-token (PASETO v4) か、
+// 取得失敗時は Cernere accessToken (HS256) をそのまま session token とする。
+// どちらも authMiddleware が検証できる。 サーバ側 session ストアは持たない。
+
+function hubPublicUrl(c) {
+  if (process.env.MEMORIA_HUB_PUBLIC_URL) {
+    return process.env.MEMORIA_HUB_PUBLIC_URL.replace(/\/$/, '');
+  }
+  const proto = c.req.header('x-forwarded-proto') || 'http';
+  const host = c.req.header('host') || `localhost:${PORT}`;
+  return `${proto}://${host}`;
+}
+
+app.post('/api/auth/login', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const email = body?.email?.trim();
+  const password = body?.password;
+  if (!email || !password) return c.json({ error: 'email + password は必須です' }, 400);
+  if (!hasInfisicalCreds()) {
+    return c.json({ error: 'Hub が未設定です (Infisical)' }, 503);
+  }
+
+  let login;
+  try {
+    login = await cernereLogin(email, password);
+  } catch (err) {
+    return c.json({ error: err.message, detail: err.detail }, err.status || 502);
+  }
+
+  const accessToken = login.accessToken;
+  const u = login.user || {};
+  let sessionToken = accessToken;
+  try {
+    const pt = await cernereProjectToken(accessToken, hubPublicUrl(c));
+    if (pt?.accessToken) sessionToken = pt.accessToken;
+  } catch (err) {
+    console.warn(`[auth] project-token 取得失敗、 accessToken を session token に転用: ${err.message}`);
+  }
+
+  return c.json({
+    sessionToken,
+    user: {
+      userId: u.id || u.userId || null,
+      displayName: u.displayName || u.name || u.email || email,
+      role: u.role || 'general',
+    },
+  });
+});
+
+// /api/auth/me, /api/auth/logout は authMiddleware に依存するため、
+// その定義の後 (= /api/me の隣) で登録する。
 
 // ── Cernere bridge: /ws/service に常時接続 (admission push、 future API) ──
 //
@@ -305,6 +396,17 @@ app.get('/api/me', authMiddleware, (c) => {
   if (!u) return c.json({ error: 'unauthorized' }, 401);
   return c.json(u);
 });
+
+// /api/auth/me — /api/me と同じ (二層設計の新 path 名)。
+app.get('/api/auth/me', authMiddleware, (c) => {
+  const u = authedUser(c);
+  if (!u) return c.json({ error: 'unauthorized' }, 401);
+  return c.json(u);
+});
+
+// /api/auth/logout — session token はステートレス (PASETO/JWT)。 サーバ側破棄は
+// 無く、 クライアントが token を捨てることでログアウトが成立する。
+app.post('/api/auth/logout', authMiddleware, (c) => c.json({ ok: true }));
 
 // ── /api/shared/* に認証ガードを適用 ───────────────────────────────────────
 //
