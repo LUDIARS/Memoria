@@ -4982,6 +4982,18 @@ dialog.meal-modal[open] {
 .transit-rides-list, .transit-lines-list {
   display: flex; flex-direction: column; gap: 8px;
 }
+.transit-ride-auto {
+  border-left: 3px solid var(--accent, #2a6df4);
+}
+.transit-ride-badge {
+  background: var(--accent-bg, #e6f0ff);
+  color: var(--accent, #2a6df4);
+  border: 1px solid var(--accent, #2a6df4);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  margin-left: 4px;
+}
 .transit-manual-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

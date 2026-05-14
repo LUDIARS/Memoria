@@ -10552,6 +10552,8 @@ interface TransitRide {
   departure_at: string | null; arrival_at: string | null;
   duration_min: number | null; fare_yen: number | null;
   transfer_count: number; segments: TransitSegment[]; notes: string | null;
+  detected_from_gps?: boolean;
+  max_speed_kmh?: number | null;
 }
 interface TransitOperationLine { code: string; name: string; status: string | null; description: string | null; status_image: string | null }
 
@@ -10767,10 +10769,14 @@ function renderTransitRides() {
     const segs = ride.segments?.length
       ? `<ol class="transit-course-segments">${ride.segments.map((s) => `<li>${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(s.line)}</small></li>`).join('')}</ol>`
       : '';
-    return `<article class="transit-ride">
+    const badge = ride.detected_from_gps
+      ? `<span class="transit-ride-badge" title="GPS 履歴から自動検出">🛰 自動${ride.max_speed_kmh != null ? ` (max ${Math.round(ride.max_speed_kmh)} km/h)` : ''}</span>`
+      : '';
+    return `<article class="transit-ride${ride.detected_from_gps ? ' transit-ride-auto' : ''}">
       <header>
         <strong>${escapeHtml(ride.from_station)} → ${escapeHtml(ride.to_station)}</strong>
         <small class="muted">${escapeHtml(ride.line_name ?? '')}</small>
+        ${badge}
         <span class="grow"></span>
         <button class="ghost transit-ride-delete" data-id="${ride.id}" title="削除">×</button>
       </header>
@@ -10792,6 +10798,24 @@ function renderTransitRides() {
 }
 
 $('transitRidesRefresh')?.addEventListener('click', () => void loadTransitRides());
+$('transitRidesDetectBtn')?.addEventListener('click', async () => {
+  const btn = $('transitRidesDetectBtn') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '🛰 検出中…'; }
+  try {
+    const res = await fetch('/api/transit/detect', { method: 'POST' });
+    const r = await res.json() as { inserted?: number; windows?: number; scanned?: number; skipped_dup?: number; error?: string };
+    if (r.error) {
+      flashToast(`❌ 検出失敗: ${r.error}`);
+    } else {
+      flashToast(`🛰 ${r.inserted ?? 0} 件追加 (検出 ${r.windows} / 重複 ${r.skipped_dup})`);
+      void loadTransitRides();
+    }
+  } catch (e: unknown) {
+    flashToast(`❌ 検出失敗: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🛰 GPS 再検出'; }
+  }
+});
 $('transitRidesDate')?.addEventListener('change', () => void loadTransitRides());
 $('transitRidesClear')?.addEventListener('click', () => {
   ($('transitRidesDate') as HTMLInputElement).value = '';

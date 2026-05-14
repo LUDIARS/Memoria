@@ -982,9 +982,13 @@
             <label class="muted">日付 <input id="transitRidesDate" type="date" /></label>
             <button id="transitRidesClear" class="ghost" type="button" title="絞り込み解除">×</button>
             <span class="grow"></span>
+            <button id="transitRidesDetectBtn" class="ghost" type="button" title="GPS 履歴から自動検出を即実行">🛰 GPS 再検出</button>
             <button id="transitRidesAddBtn" class="ghost" type="button">＋ 手動で追加</button>
             <button id="transitRidesRefresh" class="ghost" type="button">更新</button>
           </div>
+          <p class="muted" style="font-size:11px;margin:4px 2px">
+            🛰 自動検出: 速度 25 km/h 以上が 3 分以上続き、 5 km/h 未満が 3 分以上続いたら 「乗車完了」 とみなして駅を Google Places で特定します。 1 時間おきにバックグラウンド実行。
+          </p>
           <div id="transitRidesList" class="transit-rides-list"></div>
         </section>
 

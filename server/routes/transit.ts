@@ -10,6 +10,7 @@ import {
   type EkispertConfig, type SearchCourse, type SearchSegment,
 } from '../lib/transit-ekispert.js';
 import { getAppSettings, setAppSettings } from '../db.js';
+import { runDetection } from '../lib/transit-detect.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -33,6 +34,10 @@ interface TransitRideRow {
   transfer_count: number;
   segments_json: string | null;
   notes: string | null;
+  detected_from_gps: number;
+  gps_start_id: number | null;
+  gps_end_id: number | null;
+  max_speed_kmh: number | null;
 }
 
 function loadEkispertConfig(db: Db): EkispertConfig {
@@ -234,6 +239,19 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     return c.json({ items: rows.map(toRideOutput) });
   });
 
+  /** GPS 履歴からの一括検出を手動トリガ。 ?since=ISO で起点を変えられる。 */
+  r.post('/api/transit/detect', async (c: Context) => {
+    const url = new URL(c.req.url);
+    const since = url.searchParams.get('since') ?? undefined;
+    try {
+      const r2 = await runDetection(db, { since });
+      return c.json(r2);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: msg }, 500);
+    }
+  });
+
   r.delete('/api/transit/rides/:id', (c: Context) => {
     const id = Number(c.req.param('id'));
     if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
@@ -262,6 +280,8 @@ interface RideOutput {
   transfer_count: number;
   segments: SearchSegment[];
   notes: string | null;
+  detected_from_gps: boolean;
+  max_speed_kmh: number | null;
 }
 
 function toRideOutput(row: TransitRideRow): RideOutput {
@@ -287,5 +307,7 @@ function toRideOutput(row: TransitRideRow): RideOutput {
     transfer_count: row.transfer_count,
     segments,
     notes: row.notes,
+    detected_from_gps: !!row.detected_from_gps,
+    max_speed_kmh: row.max_speed_kmh,
   };
 }

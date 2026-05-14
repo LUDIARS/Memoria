@@ -418,28 +418,36 @@ export function openDb(dbPath: string): Db {
     -- 移動経路 (= tracks) と時系列でマージする際に使う。 終了駅側の lat/lon は
     -- arrival_lat/lon に保持。
     CREATE TABLE IF NOT EXISTS transit_rides (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      from_station    TEXT NOT NULL,
-      to_station      TEXT NOT NULL,
-      line_name       TEXT,
-      train_type      TEXT,
-      departure_at    TEXT,
-      arrival_at      TEXT,
-      duration_min    INTEGER,
-      fare_yen        INTEGER,
-      from_lat        REAL,
-      from_lon        REAL,
-      arrival_lat     REAL,
-      arrival_lon     REAL,
-      transfer_count  INTEGER NOT NULL DEFAULT 0,
-      segments_json   TEXT,
-      notes           TEXT
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      recorded_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      from_station      TEXT NOT NULL,
+      to_station        TEXT NOT NULL,
+      line_name         TEXT,
+      train_type        TEXT,
+      departure_at      TEXT,
+      arrival_at        TEXT,
+      duration_min      INTEGER,
+      fare_yen          INTEGER,
+      from_lat          REAL,
+      from_lon          REAL,
+      arrival_lat       REAL,
+      arrival_lon       REAL,
+      transfer_count    INTEGER NOT NULL DEFAULT 0,
+      segments_json     TEXT,
+      notes             TEXT,
+      -- GPS 自動検出の出自を保持 (= detector からのみセット):
+      detected_from_gps INTEGER NOT NULL DEFAULT 0,
+      gps_start_id      INTEGER,
+      gps_end_id        INTEGER,
+      max_speed_kmh     REAL
     );
     CREATE INDEX IF NOT EXISTS idx_transit_rides_departure
       ON transit_rides(departure_at DESC);
     CREATE INDEX IF NOT EXISTS idx_transit_rides_recorded
       ON transit_rides(recorded_at DESC);
+    -- gps_end_id 一意化で detector 再実行時の重複作成を防ぐ。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_transit_rides_gps_end
+      ON transit_rides(gps_end_id) WHERE gps_end_id IS NOT NULL;
 
     -- 天気スナップショット。 1 fetch = 1 行 append。 同じ date に複数行入る
     -- (= 朝・昼・夜と再 fetch しても履歴は残す)。 日記生成は date の最新行を読む。
@@ -844,6 +852,21 @@ export function openDb(dbPath: string): Db {
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_locations_unresolved
            ON gps_locations(place_resolved_at) WHERE place_resolved_at IS NULL`);
+
+  // transit_rides: GPS 自動検出由来のカラムを後付け。
+  //   detected_from_gps : 1 なら検出器が作った行 (= UI で🛰 バッジ)
+  //   gps_start_id      : 出発駅相当 (= 移動開始直前の settled 点) gps_locations.id
+  //   gps_end_id        : 到着駅相当 (= 移動完了後の settled 点) gps_locations.id
+  //   max_speed_kmh     : 移動中の最大速度 (= 列車/バス/自動車の判別ヒント)
+  const trCols = (db.prepare(`PRAGMA table_info(transit_rides)`).all() as { name: string }[]).map(c => c.name);
+  if (trCols.length > 0) {
+    if (!trCols.includes('detected_from_gps')) db.exec(`ALTER TABLE transit_rides ADD COLUMN detected_from_gps INTEGER NOT NULL DEFAULT 0`);
+    if (!trCols.includes('gps_start_id'))      db.exec(`ALTER TABLE transit_rides ADD COLUMN gps_start_id INTEGER`);
+    if (!trCols.includes('gps_end_id'))        db.exec(`ALTER TABLE transit_rides ADD COLUMN gps_end_id INTEGER`);
+    if (!trCols.includes('max_speed_kmh'))     db.exec(`ALTER TABLE transit_rides ADD COLUMN max_speed_kmh REAL`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_transit_rides_gps_end
+             ON transit_rides(gps_end_id) WHERE gps_end_id IS NOT NULL`);
+  }
 
   const dcCols = (db.prepare(`PRAGMA table_info(domain_catalog)`).all() as { name: string }[]).map(c => c.name);
   if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);

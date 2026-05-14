@@ -12,6 +12,7 @@ import {
   fetchForecast, insertWeatherSnapshot, readLatestGpsLatLon,
   isRainingNow, nextRainStart, describeCode,
 } from './weather.js';
+import { runDetection as runTransitDetection } from './transit-detect.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -34,6 +35,7 @@ export function startSchedulers(deps: SchedulerDeps): void {
   scheduleSundayEvening(deps);
   startTaskReminderInterval(deps);
   startWeatherRainAlertInterval(deps);
+  startTransitDetectionInterval(deps);
 }
 
 // Midnight scheduler — fires at next 00:00:05 local, generates the previous
@@ -231,5 +233,28 @@ function startWeatherRainAlertInterval(deps: SchedulerDeps): void {
 
   // 起動直後にも 1 回 (= 朝起動して即チェック)、 以後 30 分おき。
   setTimeout(() => { void tick(); }, 15_000).unref?.();
+  setInterval(() => { void tick(); }, INTERVAL_MS).unref?.();
+}
+
+// 乗車自動検出 — 1 時間おきに直近 24h の GPS を走査して transit_rides に
+// 確定済み window を append。 完了したばかりの移動 (= 終端 settled に MIN_SETTLED_MS
+// 経過) を拾う設計なので、 cron 間隔と settled しきい値が同等以下なら漏れない。
+function startTransitDetectionInterval(deps: SchedulerDeps): void {
+  const INTERVAL_MS = 60 * 60 * 1000;
+  const tick = async () => {
+    try {
+      if (!featureEnabled(deps.db, 'tracks_enabled')) return;
+      const since = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString();
+      const r = await runTransitDetection(deps.db, { since });
+      if (r.inserted > 0) {
+        console.log(`[transit-detect] inserted ${r.inserted} (scanned=${r.scanned} windows=${r.windows} dup=${r.skipped_dup})`);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn('[transit-detect] tick failed:', msg);
+    }
+  };
+  // 起動から 30s 後に 1 度走らせて以後 1 時間おき。
+  setTimeout(() => { void tick(); }, 30_000).unref?.();
   setInterval(() => { void tick(); }, INTERVAL_MS).unref?.();
 }
