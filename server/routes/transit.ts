@@ -106,8 +106,8 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     return c.json({ items, gps_source: source });
   });
 
-  // ── 経路検索 (= Directions mode=transit) ───────────────────────────────
-  // ?from=<place_id:... or 駅名>&to=<...>&datetime=ISO&mode=departure|arrival
+  // ── 経路検索 (= Routes API mode=TRANSIT) ───────────────────────────────
+  // ?from=<lat,lng | place_id:xxx | 駅名/住所>&to=<...>&datetime=ISO&mode=departure|arrival
   // datetime 未指定なら 'now' (= 現在出発、 遅延加味済の到着時刻が返る)。
   r.get('/api/transit/search', async (c: Context) => {
     const url = new URL(c.req.url);
@@ -129,6 +129,19 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
       return c.json({ courses });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      // 既知パターンを 「より分かるエラー」 に翻訳
+      if (/API_KEY_HTTP_REFERRER_BLOCKED|Requests from referer/.test(msg)) {
+        return c.json({
+          error: 'Routes API key が Referer 制限付きで server-side からは使えません。 MEMORIA_PLACES_API_KEY env に Referer 制限なしの key を設定してください (place-resolver と同じ key で OK)。',
+          underlying: msg,
+        }, 403);
+      }
+      if (/legacy API|LegacyApiNotActivated/.test(msg)) {
+        return c.json({
+          error: 'Google Cloud Console で Routes API を有効化してください (= 新 API)。 旧 Directions API は disabled です。',
+          underlying: msg,
+        }, 503);
+      }
       return c.json({ error: msg }, 502);
     }
   });

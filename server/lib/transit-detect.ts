@@ -7,17 +7,17 @@
 //   - 「終点」 として採用する位置は settled に入った最初の点 (= 駅で降車 → 改札に向かう前)
 //   - 「始点」 として採用する位置は移動開始の直前まで安定していた settled 点 (= 入線直前の改札周辺)
 //
-// 駅特定: Google Places (New) で includedTypes=train_station,subway_station,
-// bus_station を指定した nearby search。 半径 200m / 上位 1 件。 既存
-// place-resolver と同じ API key 解決ルールを使う (= MEMORIA_PLACES_API_KEY >
-// GOOGLE_MAPS_API_KEY > app_settings)。
+// 駅特定: ローカル DB (HeartRails seed 済の stations 表) で 50m 半径の
+// 最近傍を検索。 Google Places を叩かないので API 課金 / referer 制限が無く、
+// 駅判定が毎回安定する。 50m は OwnTracks の locator displacement と整合し、
+// かつ複数駅が同じ円に入りにくい現実的な誤差幅。
 //
 // dedupe: gps_end_id を UNIQUE 索引で保護しているので 「同じ終点 GPS row」
 // に対しては 2 行作られない (= 検出器を何度走らせても idempotent)。
 
 import type BetterSqlite3 from 'better-sqlite3';
 import {
-  listGpsLocationsInRange, getAppSettings,
+  listGpsLocationsInRange,
   type GpsLocationInRangeRow,
 } from '../db.js';
 
@@ -38,9 +38,10 @@ const MIN_TRAVEL_SPEED = 25;             // km/h
 const SETTLED_SPEED = 5;                 // km/h
 const MIN_TRAVEL_MS = 3 * 60_000;
 const MIN_SETTLED_MS = 3 * 60_000;
-const STATION_RADIUS_M = 200;
-const PLACES_TIMEOUT_MS = 5_000;
-const PLACES_NEW_URL = 'https://places.googleapis.com/v1/places:searchNearby';
+/** 終点 GPS 点からの「ここはこの駅」 判定半径。 OwnTracks locator
+ *  displacement と整合する 50m を採用 (= 改札を出てから周辺を歩いて
+ *  settled に入る程度の誤差幅)。 */
+const STATION_RADIUS_M = 50;
 
 export interface DetectedWindow {
   start_point: GpsLocationInRangeRow;
@@ -101,71 +102,71 @@ export function detectWindows(points: GpsLocationInRangeRow[]): DetectedWindow[]
   return out;
 }
 
-// ── 駅特定 (Google Places New) ──────────────────────────────────────────
-
-interface PlacesNearbyResponse {
-  places?: Array<{
-    id?: string;
-    displayName?: { text?: string };
-    formattedAddress?: string;
-    shortFormattedAddress?: string;
-    types?: string[];
-  }>;
-}
+// ── 駅特定 (ローカル DB: stations 表) ─────────────────────────────────
 
 export interface StationLookupResult {
   name: string | null;
-  address: string | null;
-  types: string[];
+  /** 「都道府県」 (= 利用者がどこで降りたかの粗いラベル) */
+  prefecture: string | null;
+  /** 該当した路線名 (= 距離 50m 以内に複数路線あれば代表 1 件) */
+  line: string | null;
+  /** マッチした駅の lat/lon (= GPS 点との直線距離は別途付与) */
+  lat: number;
+  lon: number;
+  distance_m: number;
 }
 
-function readPlacesApiKey(db: Db): string {
-  const env = process.env.MEMORIA_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
-  if (env) return env;
-  const settings = getAppSettings(db);
-  return settings?.['maps.api_key'] || '';
-}
+/**
+ * 与えた lat/lon の半径 STATION_RADIUS_M (= 50m) 以内で 一番近い駅を 1 件返す。
+ *
+ * - bounding box で候補を粗く絞り (= SQL の lat/lon 不等号、 索引で高速)、
+ *   JS で Haversine 厳密化 → 50m 以内かつ最短を選ぶ。
+ * - 同じ駅名で複数 line がある場合は最も近い row を採用 (= 駅自体の座標は
+ *   普通 1 点なのでどの line でも同じ座標)。
+ * - 駅が見つからなければ null。
+ */
+export function lookupNearestStation(db: Db, lat: number, lon: number): StationLookupResult | null {
+  // 緯度 1 度 ≒ 111 km、 経度 1 度 ≒ 111*cos(lat) km。
+  // 50m 検索なら bbox を 1 km 角に広く取って候補に上げる (= 索引で速い + 余裕)。
+  const dLat = STATION_RADIUS_M * 4 / 111_000;
+  const dLon = STATION_RADIUS_M * 4 / (111_000 * Math.cos(lat * Math.PI / 180));
+  const minLat = lat - dLat, maxLat = lat + dLat;
+  const minLon = lon - dLon, maxLon = lon + dLon;
 
-/** lat/lon の半径 200m 以内で 一番近い train/subway/bus station を 1 件取る。 */
-export async function lookupNearestStation(db: Db, lat: number, lon: number): Promise<StationLookupResult | null> {
-  const apiKey = readPlacesApiKey(db);
-  if (!apiKey) return null;
-  const body = {
-    maxResultCount: 1,
-    locationRestriction: {
-      circle: {
-        center: { latitude: lat, longitude: lon },
-        radius: STATION_RADIUS_M,
-      },
-    },
-    includedTypes: ['train_station', 'subway_station', 'bus_station', 'transit_station', 'light_rail_station'],
-    languageCode: 'ja',
-    regionCode: 'JP',
-    rankPreference: 'DISTANCE',
-  };
-  try {
-    const res = await fetch(PLACES_NEW_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,places.types',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(PLACES_TIMEOUT_MS),
-    });
-    if (!res.ok) return null;
-    const j = await res.json() as PlacesNearbyResponse;
-    const r = j.places?.[0];
-    if (!r) return null;
-    return {
-      name: r.displayName?.text ?? null,
-      address: r.shortFormattedAddress ?? r.formattedAddress ?? null,
-      types: r.types ?? [],
-    };
-  } catch {
-    return null;
+  const rows = db.prepare(
+    `SELECT name, line, prefecture, lat, lon
+       FROM stations
+      WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`,
+  ).all(minLat, maxLat, minLon, maxLon) as Array<{
+    name: string; line: string; prefecture: string | null; lat: number; lon: number;
+  }>;
+  if (rows.length === 0) return null;
+
+  let best: { row: typeof rows[number]; dist: number } | null = null;
+  for (const r of rows) {
+    const d = haversine(lat, lon, r.lat, r.lon);
+    if (d > STATION_RADIUS_M) continue;
+    if (!best || d < best.dist) best = { row: r, dist: d };
   }
+  if (!best) return null;
+  return {
+    name: best.row.name,
+    prefecture: best.row.prefecture,
+    line: best.row.line,
+    lat: best.row.lat,
+    lon: best.row.lon,
+    distance_m: Math.round(best.dist),
+  };
+}
+
+function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const s = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
 }
 
 // ── 検出器を回す ──────────────────────────────────────────────────────
@@ -218,18 +219,23 @@ export async function runDetection(db: Db, opts: RunDetectionOptions = {}): Prom
 
   for (const w of windows) {
     if (existsStmt.get(w.end_point.id)) { result.skipped_dup++; continue; }
-    const [from, to] = await Promise.all([
-      lookupNearestStation(db, w.start_point.lat, w.start_point.lon),
-      lookupNearestStation(db, w.end_point.lat, w.end_point.lon),
-    ]);
+    const from = lookupNearestStation(db, w.start_point.lat, w.start_point.lon);
+    const to = lookupNearestStation(db, w.end_point.lat, w.end_point.lon);
     if (!from?.name || !to?.name) continue;
     result.station_resolved += 2;
     const durationMin = Math.round(w.duration_ms / 60_000);
-    const lineGuess = guessLineFromSpeed(w.max_speed_kmh);
-    const notes = `🛰 GPS 自動検出 (max ${Math.round(w.max_speed_kmh)} km/h)`;
+    // 駅 DB から取れた両端の line を優先採用 (両端で同じ路線なら確度高)、
+    // 違えば速度ヒューリスティックに fallback。
+    let lineName = guessLineFromSpeed(w.max_speed_kmh);
+    if (from.line && to.line && from.line === to.line) {
+      lineName = from.line;
+    } else if (from.line && to.line) {
+      lineName = `${from.line} → ${to.line}`;
+    }
+    const notes = `🛰 GPS 自動検出 (max ${Math.round(w.max_speed_kmh)} km/h, ${from.distance_m}m + ${to.distance_m}m 駅近傍)`;
     try {
       insertStmt.run(
-        from.name, to.name, lineGuess,
+        from.name, to.name, lineName,
         w.travel_start_at, w.end_point.recorded_at, durationMin,
         w.start_point.lat, w.start_point.lon, w.end_point.lat, w.end_point.lon,
         notes,
