@@ -245,6 +245,104 @@ export function setActive(db: Db, urls: string[]): void {
   persistServers(db, servers, [...urls].filter((u) => valid.has(u)));
 }
 
+// ── 二層モード (Local / Multi) ───────────────────────────────────────────
+//
+// 旧 multi-server era は「複数 Hub を同時 active」 だったが、 二層再設計では
+// データソースは排他 (= Local か、 特定 Hub 1 つ)。 app_settings に保持する:
+//   multi_mode      = 'local' | 'multi'
+//   multi_mode_url  = Multi モード時に向き先の Hub URL
+
+export type MultiMode = 'local' | 'multi';
+
+export interface ModeState {
+  mode: MultiMode;
+  hubUrl: string | null;
+}
+
+export function readMode(db: Db): ModeState {
+  const s = getAppSettings(db);
+  const mode: MultiMode = s.multi_mode === 'multi' ? 'multi' : 'local';
+  const hubUrl = mode === 'multi' && s.multi_mode_url ? s.multi_mode_url.replace(/\/$/, '') : null;
+  return { mode, hubUrl };
+}
+
+export function setMode(db: Db, mode: MultiMode, url?: string | null): void {
+  if (mode === 'multi') {
+    setAppSettings(db, {
+      multi_mode: 'multi',
+      multi_mode_url: String(url || '').replace(/\/$/, ''),
+    });
+  } else {
+    setAppSettings(db, { multi_mode: 'local', multi_mode_url: '' });
+  }
+}
+
+export interface HubResponse {
+  status: number;
+  body: unknown;
+  contentType: string;
+}
+
+/**
+ * Hub に直接話す (= 二層設計の proxy 経路)。 旧 multiFetch と違い Cernere を
+ * 一切経由しない: Hub の `/api/auth/login` が返した session token をそのまま
+ * Bearer に使う。 ステータスとボディを呼び出し側にそのまま返す (proxy のため)。
+ */
+export async function hubFetch(
+  hubUrl: string,
+  sessionToken: string,
+  pathWithQuery: string,
+  init: FetchInit = {},
+): Promise<HubResponse> {
+  const url = `${hubUrl.replace(/\/$/, '')}${pathWithQuery}`;
+  const headers: Record<string, string> = {
+    ...(init.headers || {}),
+    'Authorization': `Bearer ${sessionToken}`,
+    'X-Memoria-Origin': 'local',
+  };
+  if (init.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const res = await fetch(url, { ...init, headers });
+  const text = await res.text();
+  let body: unknown;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  return {
+    status: res.status,
+    body,
+    contentType: res.headers.get('content-type') || 'application/json',
+  };
+}
+
+/** Hub の `/api/auth/login` に email/password を渡す (Hub が Cernere に代理ログイン)。 */
+export async function hubLogin(
+  hubUrl: string,
+  email: string,
+  password: string,
+): Promise<{ sessionToken: string; user: { userId: string | null; displayName: string; role: string } }> {
+  const res = await fetch(`${hubUrl.replace(/\/$/, '')}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json().catch(() => ({})) as {
+    sessionToken?: string;
+    user?: { userId?: string | null; displayName?: string; role?: string };
+    error?: string;
+  };
+  if (!res.ok || !data.sessionToken) {
+    const err = new Error(data.error || `Hub login failed: HTTP ${res.status}`) as Error & { status?: number };
+    err.status = res.status === 401 ? 401 : 502;
+    throw err;
+  }
+  return {
+    sessionToken: data.sessionToken,
+    user: {
+      userId: data.user?.userId ?? null,
+      displayName: data.user?.displayName || '(unknown)',
+      role: data.user?.role || 'general',
+    },
+  };
+}
+
 // ── HTTP helpers ─────────────────────────────────────────────────────────
 
 export async function multiFetch<T = Record<string, unknown>>(

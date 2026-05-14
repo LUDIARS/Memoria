@@ -58,6 +58,7 @@ import { makePushRouter } from './routes/push.js';
 import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
+import { makeMultiProxyMiddleware } from './local/multi-proxy.js';
 import { makeMiscRouter } from './routes/misc.js';
 import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
 import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
@@ -228,6 +229,13 @@ app.post('/api/setup/infisical', async (c) => {
   console.log(`[infisical] 接続成功 — ${injected} secrets inject`);
   return c.json({ ok: true, injected });
 });
+
+// ── Multi モード proxy 層 ─────────────────────────────────────────────────
+//
+// Multi モード時、 Multi 対応 7 型の CRUD を Hub の /api/data/* に転送し、
+// 個人ログ系は 503 local_only を返す。 Local モードでは素通り。 feature
+// router より前に置く必要がある (= router に届く前に横取りする)。
+app.use('/api/*', makeMultiProxyMiddleware(db));
 
 // ── routers (mount with absolute /api/... paths inside each) ──────────────
 const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSummary };

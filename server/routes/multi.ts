@@ -22,9 +22,10 @@ import {
   readMultiState, isConnected,
   readMultiServers, persistServers, upsertServer, removeServer, findServerByUrl,
   saveServerSession, clearServerSession, setActive,
-  fetchMe, shareBookmark, shareDig, shareDictionary,
+  shareBookmark, shareDig, shareDictionary,
   shareImplementationNote, shareWorkLocation,
   multiFetch,
+  readMode, setMode, hubFetch, hubLogin,
 } from '../local/multi-client.js';
 import { resolveUnresolvedBatch, getResolverDebug } from '../lib/place-resolver.js';
 import { fetchPageHtml } from '../lib/fetch-page.js';
@@ -101,15 +102,14 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
     return c.json({ ok: true });
   });
 
-  // Cernere email/password 直ログイン。
+  // ── 二層設計: Hub に対するログイン ────────────────────────────────────
   //
-  // Hub には認証 endpoint が無い (= Cernere 発行トークンを検証するだけ)。
-  // 旧 /api/multi/connect は <hub>/api/auth/start へ飛ばしていたが Hub に
-  // その route は無く 404 になっていた。 正しい流れ:
-  //   1. Cernere POST /api/auth/login {email,password} → accessToken
-  //   2. accessToken を user-JWT として保存
-  //   3. fetchMe() = multiFetch('/api/me') が Cernere /api/auth/project-token
-  //      で project-token に交換 → Hub の authMiddleware が PASETO 検証
+  // 旧: ローカルが Cernere に直ログイン (CERNERE_BASE_URL を 1 つしか持てず、
+  //     複数拠点 Hub に対応できなかった)。
+  // 新: ローカルは Cernere を一切知らない。 Hub の /api/auth/login に
+  //     email/password を渡すだけ。 Hub が自分の Infisical 由来の
+  //     CERNERE_BASE_URL で Cernere に代理ログインし、 session token を返す。
+  //     ローカルはその session token を per-hub に保存する。
   r.post('/api/multi/login', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as
       { url?: unknown; email?: unknown; password?: unknown; label?: unknown } | null;
@@ -119,61 +119,89 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
     if (!url) return c.json({ error: 'url required' }, 400);
     if (!email || !password) return c.json({ error: 'email / password required' }, 400);
 
-    const cernereBase = (process.env.CERNERE_BASE_URL ?? '').replace(/\/$/, '');
-    if (!cernereBase) {
-      return c.json({
-        error: 'CERNERE_BASE_URL 未設定 — Multi view の Infisical セットアップを先に完了してください',
-      }, 400);
-    }
-
-    // 1. Cernere に email/password ログイン
-    let accessToken: string;
-    try {
-      const res = await fetch(`${cernereBase}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json().catch(() => ({})) as {
-        accessToken?: string; mfaRequired?: boolean; error?: string;
-      };
-      if (data.mfaRequired) {
-        return c.json({ error: 'MFA が有効なアカウントは現状未対応です' }, 400);
-      }
-      if (!res.ok || !data.accessToken) {
-        return c.json({ error: `Cernere ログイン失敗: ${data.error || `HTTP ${res.status}`}` }, 401);
-      }
-      accessToken = data.accessToken;
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `Cernere 到達失敗: ${msg}` }, 502);
-    }
-
-    // 2. server を登録 (未登録なら) + accessToken で Hub /api/me を検証
+    // 1. server を登録 (未登録なら)
     const { servers, active } = readMultiServers(db);
     const label = typeof body?.label === 'string' && body.label
       ? body.label : (findServerByUrl(servers, url)?.label || url);
-    const updated = upsertServer(servers, { url, label });
-    persistServers(db, updated, active);
-    const target = findServerByUrl(updated, url);
-    if (!target) return c.json({ error: 'server register failed' }, 500);
+    persistServers(db, upsertServer(servers, { url, label }), active);
 
-    let me;
+    // 2. Hub の /api/auth/login に代理ログインを依頼
+    let result;
     try {
-      me = await fetchMe({ ...target, jwt: accessToken });
+      result = await hubLogin(url, email, password);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `Hub 検証失敗: ${msg}` }, 401);
+      const status = (e as { status?: number })?.status ?? 502;
+      return c.json({ error: `Hub ログイン失敗: ${msg}` }, status as 401);
     }
 
-    // 3. session 保存 (= jwt + user 情報を app_settings に)
+    // 3. session token を per-hub に保存
     saveServerSession(db, url, {
-      jwt: accessToken,
-      userId: me.userId,
-      userName: me.displayName,
-      role: me.role,
+      jwt: result.sessionToken,
+      userId: result.user.userId,
+      userName: result.user.displayName,
+      role: result.user.role,
     });
-    return c.json({ ok: true, url, user: me });
+    return c.json({ ok: true, url, user: result.user });
+  });
+
+  // ── 二層モード: データソース (Local / Multi) の状態 ───────────────────
+
+  r.get('/api/multi/mode', (c: Context) => c.json(readMode(db)));
+
+  // Body: { mode: 'local' | 'multi', url? }
+  // Multi にしたい Hub が未ログインなら切り替えず { needs_login: true } を返す。
+  r.post('/api/multi/mode', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as { mode?: unknown; url?: unknown } | null;
+    const mode = body?.mode === 'multi' ? 'multi' : body?.mode === 'local' ? 'local' : null;
+    if (!mode) return c.json({ error: "mode は 'local' か 'multi'" }, 400);
+    if (mode === 'local') {
+      setMode(db, 'local');
+      return c.json({ ok: true, mode: 'local', hubUrl: null });
+    }
+    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
+    if (!url) return c.json({ error: 'multi モードには url が必要' }, 400);
+    const { servers } = readMultiServers(db);
+    const s = findServerByUrl(servers, url);
+    if (!s || !s.jwt || !s.userId) {
+      // 未ログイン — モードは切り替えず frontend にログインを促す
+      return c.json({ ok: false, needs_login: true, url });
+    }
+    setMode(db, 'multi', url);
+    return c.json({ ok: true, mode: 'multi', hubUrl: url });
+  });
+
+  // 指定 Hub にログイン済か。 ?url=<hub>
+  r.get('/api/multi/session', (c: Context) => {
+    const url = c.req.query('url') || '';
+    if (!url) return c.json({ error: 'url query required' }, 400);
+    const { servers } = readMultiServers(db);
+    const s = findServerByUrl(servers, url);
+    if (s && s.jwt && s.userId) {
+      return c.json({
+        connected: true,
+        user: { id: s.userId, name: s.userName, role: s.role },
+      });
+    }
+    return c.json({ connected: false });
+  });
+
+  // Body: { url? } — 指定 Hub の session を破棄。 そのモードに居たら Local に戻す。
+  r.post('/api/multi/logout', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
+    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
+    if (!url) return c.json({ error: 'url required' }, 400);
+    const { servers } = readMultiServers(db);
+    const s = findServerByUrl(servers, url);
+    if (s && s.jwt) {
+      try {
+        await hubFetch(s.url, s.jwt, '/api/auth/logout', { method: 'POST' });
+      } catch { /* Hub 側破棄はステートレスなので失敗しても続行 */ }
+    }
+    clearServerSession(db, url);
+    const m = readMode(db);
+    if (m.mode === 'multi' && m.hubUrl === url) setMode(db, 'local');
+    return c.json({ ok: true });
   });
 
   r.post('/api/multi/disconnect', async (c: Context) => {
