@@ -8917,9 +8917,10 @@ async function loadTracks() {
       }
     });
   }
-  // GPS source status / WiFi info を毎回 (タブ切替で再表示するたび) 更新する。
+  // GPS source status / WiFi info / 天気 を毎回 (タブ切替で再表示するたび) 更新する。
   loadTracksGpsStatus().catch(() => { /* swallow */ });
   loadTracksWifiInfo().catch(() => { /* swallow */ });
+  loadTracksWeather().catch(() => { /* swallow */ });
 
   try {
     const [{ apiKey, hasKey }, { days }, ts] = await Promise.all([
@@ -10086,6 +10087,170 @@ async function loadTracksWifiInfo() {
     console.debug('[tracks-wifi] failed:', (e as Error).message);
   }
 }
+
+// ── 天気カード (tracks タブ 内、 WiFi カードの隣) ───────────────────────
+//
+// /api/weather/today を叩いて 「今日の天気 + 雨予報 + 時間別 12h」 を表示。
+// 位置は backend が解決 (= ?lat=&lon= > 固定 > GPS の順)。
+async function loadTracksWeather(opts: { force?: boolean } = {}) {
+  const card = document.getElementById('tracksWeatherCard');
+  const pill = document.getElementById('tracksWeatherPill');
+  if (!card) return;
+  if (pill) {
+    pill.classList.remove('ext-cfg-pill-active', 'ext-cfg-pill-configured', 'ext-cfg-pill-inactive');
+    pill.classList.add('ext-cfg-pill-loading');
+    pill.textContent = '取得中…';
+  }
+  try {
+    const params = opts.force ? '?force=1' : '';
+    const r = await api(`/api/weather/today${params}`) as {
+      date: string; lat: number; lon: number; fetched_at: number; source: string;
+      forecast: { current: { weather_code: number; temperature: number; precipitation: number } | null;
+        hourly: { time: string[]; temperature: number[]; precipitation: number[];
+          precipitation_probability: number[]; weather_code: number[] };
+        daily: { temperature_max: number[]; temperature_min: number[]; precipitation_sum: number[] };
+      };
+      summary: {
+        date: string; icon: string; label: string;
+        temp_max: number | null; temp_min: number | null;
+        precipitation_sum: number | null;
+        is_raining_now: boolean; next_rain_start: string | null;
+      };
+    };
+    const s = r.summary;
+    setText('tracksWeatherLabel', `${s.icon} ${s.label}`);
+    setText('tracksWeatherTemp',
+      (s.temp_max != null && s.temp_min != null)
+        ? `${Math.round(s.temp_max)}℃ / ${Math.round(s.temp_min)}℃` : '—');
+    setText('tracksWeatherPrecip',
+      s.precipitation_sum != null ? `${s.precipitation_sum.toFixed(1)} mm` : '—');
+    if (s.is_raining_now) {
+      setText('tracksWeatherRain', '🌧 降っています');
+    } else if (s.next_rain_start) {
+      const t = s.next_rain_start.slice(11, 16);
+      setText('tracksWeatherRain', `⛈ ${t} 頃から雨予報`);
+    } else {
+      setText('tracksWeatherRain', '今日は雨なし');
+    }
+    const srcLabel = r.source === 'gps' ? '直近 GPS' : r.source === 'fixed' ? '固定座標' : r.source === 'cache' ? 'キャッシュ' : r.source;
+    setText('tracksWeatherLoc', `${r.lat.toFixed(3)}, ${r.lon.toFixed(3)} (${srcLabel})`);
+    // hourly 描画
+    renderWeatherHourly(r.forecast.hourly, s.date);
+    if (pill) {
+      pill.classList.remove('ext-cfg-pill-loading');
+      pill.classList.add(s.is_raining_now ? 'ext-cfg-pill-configured' : 'ext-cfg-pill-active');
+      const ts = new Date(r.fetched_at);
+      pill.textContent = `更新 ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+    }
+  } catch (e: unknown) {
+    if (pill) {
+      pill.classList.remove('ext-cfg-pill-loading');
+      pill.classList.add('ext-cfg-pill-inactive');
+      pill.textContent = '取得失敗';
+    }
+    const msg = (e as Error)?.message || '';
+    setText('tracksWeatherLabel', '—');
+    setText('tracksWeatherRain', '—');
+    setText('tracksWeatherLoc', /no location/i.test(msg) ? '位置情報なし' : '取得失敗');
+  }
+}
+
+function renderWeatherHourly(hourly: { time: string[]; temperature: number[];
+  precipitation: number[]; precipitation_probability: number[]; weather_code: number[] }, date: string) {
+  const host = document.getElementById('tracksWeatherHourly');
+  if (!host) return;
+  const now = Date.now();
+  // 「今 (= 直近 hour) 〜 12h」 を選ぶ
+  const slice: string[] = [];
+  for (let i = 0; i < hourly.time.length && slice.length < 12; i++) {
+    const t = hourly.time[i];
+    const ts = new Date(t).getTime();
+    if (Number.isNaN(ts)) continue;
+    if (ts < now - 30 * 60 * 1000) continue;
+    if (!t.startsWith(date) && slice.length === 0) continue;
+    slice.push(t);
+    if (slice.length >= 12) break;
+  }
+  const items = slice.map((t) => {
+    const i = hourly.time.indexOf(t);
+    const hh = t.slice(11, 13);
+    const code = hourly.weather_code[i] ?? 0;
+    const icon = weatherIconForCode(code);
+    const temp = Math.round(hourly.temperature[i] ?? 0);
+    const prob = hourly.precipitation_probability[i] ?? 0;
+    const probLabel = prob > 0 ? `${prob}%` : '';
+    return `<div class="tracks-weather-hour" title="${escapeHtml(t)}">
+      <div class="tracks-weather-hour-time">${hh}</div>
+      <div class="tracks-weather-hour-icon">${icon}</div>
+      <div class="tracks-weather-hour-temp">${temp}°</div>
+      <div class="tracks-weather-hour-prob">${probLabel}</div>
+    </div>`;
+  });
+  host.innerHTML = items.join('');
+}
+
+function weatherIconForCode(code: number): string {
+  if (code === 0) return '☀️';
+  if (code <= 3) return '⛅';
+  if (code === 45 || code === 48) return '🌫';
+  if (code >= 51 && code <= 57) return '🌦';
+  if (code >= 61 && code <= 67) return '🌧';
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '🌨';
+  if (code >= 80 && code <= 82) return '🌧';
+  if (code >= 95 && code <= 99) return '⛈';
+  return '🌡';
+}
+
+function setText(id: string, v: string) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = v;
+}
+
+// 固定 lat/lon モーダル
+async function openWeatherSettings() {
+  const r = await api('/api/weather/config') as { fixed_lat: number | null; fixed_lon: number | null };
+  ($('weatherSettingsLat') as HTMLInputElement).value = r.fixed_lat != null ? String(r.fixed_lat) : '';
+  ($('weatherSettingsLon') as HTMLInputElement).value = r.fixed_lon != null ? String(r.fixed_lon) : '';
+  const err = $('weatherSettingsError');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('weatherSettingsModal');
+}
+
+async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
+  const err = $('weatherSettingsError');
+  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
+  let payload: { lat: number | null; lon: number | null };
+  if (opts.clear) {
+    payload = { lat: null, lon: null };
+  } else {
+    const latStr = ($('weatherSettingsLat') as HTMLInputElement).value.trim();
+    const lonStr = ($('weatherSettingsLon') as HTMLInputElement).value.trim();
+    if (!latStr || !lonStr) return showErr('lat / lon の両方を入力してください (空欄保存は ✖ 解除 ボタン)');
+    const lat = Number(latStr); const lon = Number(lonStr);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return showErr('数値を入力してください');
+    payload = { lat, lon };
+  }
+  try {
+    const res = await fetch('/api/weather/config', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(body.error || `${res.status}`);
+    }
+    hideModal('weatherSettingsModal');
+    void loadTracksWeather({ force: true });
+  } catch (e) {
+    showErr((e as Error).message);
+  }
+}
+
+document.getElementById('tracksWeatherRefresh')?.addEventListener('click', () => void loadTracksWeather({ force: true }));
+document.getElementById('tracksWeatherSettingsBtn')?.addEventListener('click', () => void openWeatherSettings());
+document.getElementById('weatherSettingsSaveBtn')?.addEventListener('click', () => void saveWeatherSettings());
+document.getElementById('weatherSettingsClearBtn')?.addEventListener('click', () => void saveWeatherSettings({ clear: true }));
+document.getElementById('weatherSettingsCloseBtn')?.addEventListener('click', () => hideModal('weatherSettingsModal'));
 
 // コピーボタン (data-copy-env="legatus" / "dnsmasq")
 document.addEventListener('click', (ev) => {

@@ -24,7 +24,7 @@ import {
   nextRainStart,
   type Forecast,
 } from '../lib/weather.js';
-import { getAppSettings } from '../db.js';
+import { getAppSettings, setAppSettings } from '../db.js';
 import { featureEnabled } from '../lib/privacy.js';
 
 type Db = BetterSqlite3.Database;
@@ -128,6 +128,41 @@ export function makeWeatherRouter(deps: WeatherRouterDeps): Hono {
       date, lat: row.lat, lon: row.lon, fetched_at: row.fetched_at,
       forecast: f, summary: summarize(f, date),
     });
+  });
+
+  /** 固定 lat/lon の設定読み出し + 更新。 UI から GPS 無し環境で天気を使うため。 */
+  r.get('/api/weather/config', (c: Context) => {
+    const s = getAppSettings(db);
+    const fLat = Number(s['weather.fixed_lat']);
+    const fLon = Number(s['weather.fixed_lon']);
+    const hasFixed = Number.isFinite(fLat) && Number.isFinite(fLon) && (fLat !== 0 || fLon !== 0);
+    return c.json({
+      fixed_lat: hasFixed ? fLat : null,
+      fixed_lon: hasFixed ? fLon : null,
+      rain_alert_enabled: featureEnabled(db, 'weather_rain_alert_enabled'),
+    });
+  });
+
+  r.patch('/api/weather/config', async (c: Context) => {
+    const body = await c.req.json().catch(() => ({})) as { lat?: unknown; lon?: unknown };
+    const patch: Record<string, string> = {};
+    if (body.lat === null || body.lat === '') {
+      patch['weather.fixed_lat'] = '';
+    } else if (body.lat !== undefined) {
+      const v = Number(body.lat);
+      if (!Number.isFinite(v) || v < -90 || v > 90) return c.json({ error: 'lat must be -90..90' }, 400);
+      patch['weather.fixed_lat'] = String(v);
+    }
+    if (body.lon === null || body.lon === '') {
+      patch['weather.fixed_lon'] = '';
+    } else if (body.lon !== undefined) {
+      const v = Number(body.lon);
+      if (!Number.isFinite(v) || v < -180 || v > 180) return c.json({ error: 'lon must be -180..180' }, 400);
+      patch['weather.fixed_lon'] = String(v);
+    }
+    if (Object.keys(patch).length === 0) return c.json({ error: 'lat or lon required' }, 400);
+    setAppSettings(db, patch);
+    return c.json({ ok: true });
   });
 
   /** 直近の snapshot (= どの date でもいいので最も新しい行)。 */

@@ -305,6 +305,9 @@
           <button class="tab" data-tab="review">
             <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
           </button>
+          <button class="tab" data-tab="transit">
+            <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -847,6 +850,30 @@
           </div>
           <p class="ext-cfg-help" id="tracksWifiHint">優先度: OwnTracks GPS &gt; WiFi SSID &gt; 有線 (= 自宅)。 高優先度のソースで判定できなければ次の段に fallback します。</p>
         </div>
+        <!-- 天気カード: Open-Meteo の forecast を 「位置 (GPS / 固定 lat/lon)」 で取得。
+             位置情報 UI の隣に置くのは GPS 不在時の確認動線として自然なので。 -->
+        <div id="tracksWeatherCard" class="tracks-source-card">
+          <div class="ext-cfg-row">
+            <strong>🌤 今日の天気</strong>
+            <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksWeatherPill">取得中…</span>
+            <button id="tracksWeatherRefresh" class="ghost" type="button" title="再取得 (force)">↻</button>
+          </div>
+          <div class="ext-cfg-stats" id="tracksWeatherStats">
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">天気</span><span id="tracksWeatherLabel" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最高/最低</span><span id="tracksWeatherTemp" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">降水合計</span><span id="tracksWeatherPrecip" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">雨予報</span><span id="tracksWeatherRain" class="ext-cfg-stat-val">—</span></div>
+            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">位置</span><span id="tracksWeatherLoc" class="ext-cfg-stat-val">—</span></div>
+          </div>
+          <details id="tracksWeatherHourlyWrap" style="margin-top:6px">
+            <summary class="muted" style="font-size:11px;cursor:pointer">時間別予報 (12h)</summary>
+            <div id="tracksWeatherHourly" class="tracks-weather-hourly"></div>
+          </details>
+          <p class="ext-cfg-help" id="tracksWeatherHint">
+            位置は <code>?lat=&amp;lon=</code> &gt; 設定 <code>weather.fixed_lat/lon</code> &gt; 直近 GPS の順。
+            <button id="tracksWeatherSettingsBtn" class="ghost" type="button" style="margin-left:4px">📍 固定座標</button>
+          </p>
+        </div>
 
         <div id="tracksMissingKey" class="tracks-missing-key hidden">
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
@@ -1238,6 +1265,26 @@
     <textarea id="dictNotes" rows="4" placeholder="追加メモ"></textarea>
     <h4>リンクされた調査記録</h4>
     <ul id="dictLinks" class="dict-links"></ul>
+  </div>
+
+  <div id="weatherSettingsModal" class="dict-detail modal-panel hidden">
+    <div class="dict-detail-head">
+      <h3 style="margin:0;flex:1">📍 天気の固定座標</h3>
+      <button id="weatherSettingsSaveBtn">保存</button>
+      <button id="weatherSettingsClearBtn" class="ghost">解除</button>
+      <button id="weatherSettingsCloseBtn" class="modal-close" title="閉じる">×</button>
+    </div>
+    <p class="muted" style="margin:8px 0;font-size:12px">
+      GPS が無い PC で天気カードを使うとき、 ここに緯度/経度を入れると
+      Open-Meteo はそこを基準に予報を返す。 空欄保存で 「GPS 優先」 に戻る。
+    </p>
+    <label class="muted">緯度 (latitude)
+      <input id="weatherSettingsLat" type="number" step="0.0001" placeholder="例 35.6586" />
+    </label>
+    <label class="muted">経度 (longitude)
+      <input id="weatherSettingsLon" type="number" step="0.0001" placeholder="例 139.7454" />
+    </label>
+    <div id="weatherSettingsError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
   </div>
 
   <div id="reviewTargetModal" class="dict-detail modal-panel hidden">

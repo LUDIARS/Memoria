@@ -4923,6 +4923,28 @@ dialog.meal-modal[open] {
   .tracks-wifi-grid { grid-template-columns: 1fr 1fr; }
 }
 
+/* 天気カードの hourly 12h ストリップ */
+.tracks-weather-hourly {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+.tracks-weather-hour {
+  background: var(--bg-surface, var(--panel));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 2px;
+  text-align: center;
+  font-size: 11px;
+}
+.tracks-weather-hour-icon { font-size: 14px; line-height: 1.2; }
+.tracks-weather-hour-temp { font-weight: 600; }
+.tracks-weather-hour-prob { color: var(--muted, #6b7280); font-size: 10px; }
+@media (max-width: 760px) {
+  .tracks-weather-hourly { grid-template-columns: repeat(6, 1fr); }
+}
+
 .ext-cfg-howto {
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border);
