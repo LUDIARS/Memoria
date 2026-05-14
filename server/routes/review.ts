@@ -80,8 +80,24 @@ function listDates(target: ReviewTargetRow): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((n) => safeDate(n) && statSync(join(dir, n)).isDirectory())
+    .filter((d) => hasReviewFile(join(dir, d)))
     .sort()
     .reverse();
+}
+
+/**
+ * 日付ディレクトリ内に「実体としてのレビュー成果物」 (= REVIEW*.md) が
+ * 1 本でも存在するか。 autofix step (= AUTOFIX.md) だけで review step が
+ * 失敗 / スキップされた日のディレクトリを除外するため。
+ *
+ * 期待される命名: REVIEW.md, REVIEW_DESIGN.md, REVIEW_VULNERABILITY.md, ...
+ */
+function hasReviewFile(dateDir: string): boolean {
+  try {
+    return readdirSync(dateDir).some((f) => /^REVIEW(_[A-Z_]+)?\.md$/.test(f));
+  } catch {
+    return false;
+  }
 }
 
 /** 起動時に LUDIARS_ROOT 配下の git clone を walk し、 github.com/LUDIARS/<Name>
