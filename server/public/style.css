@@ -743,12 +743,23 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-bottom: 8px;
   align-items: stretch;
 }
-/* textarea の base スタイルは .foundation-form (.dig-input に付与) から継承。 */
+/* .dig-input は横並びレイアウト (textarea | ボタン) なので foundation-form
+   ではなく自前スタイル。 width:100% を入れると flex で間延びする。 */
 .dig-input textarea {
   flex: 1 1 auto;
   min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
   font-family: inherit;
   line-height: 1.5;
+  resize: vertical;
+}
+.dig-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .dig-input .dig-run-btn {
   padding: 0 22px;
