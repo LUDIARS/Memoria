@@ -47,7 +47,11 @@ import {
   insertWorkplacePresence, listRecentWorkplacePresence, listCurrentWorkplacePresence,
   hideShared, unhideShared, listHidden, listShareLog,
   recordShareEvent,
+  setAppSettings,
 } from './db.js';
+import {
+  applyInfisicalCreds, hasInfisicalCreds, missingWantedKeys,
+} from './env-bootstrap.js';
 
 const PORT = Number(process.env.MEMORIA_HUB_PORT ?? 5280);
 const ALLOWED = (process.env.MEMORIA_HUB_ALLOWED_ORIGINS || '')
@@ -65,15 +69,137 @@ if (ALLOWED.length > 0) {
 
 app.get('/healthz', (c) => c.text('ok'));
 
-// ルート — Hub は API 専用サーバなので web UI は無い。 ただし直接ブラウザで
-// 開いたとき bare 404 だと「壊れている」 ように見えるので、 稼働状況を返す。
-// 実際の利用は ローカル Memoria の Multi view から (= この URL を直接は使わない)。
-app.get('/', (c) => c.json({
-  service: 'memoria-hub',
-  status: 'ok',
-  note: 'API-only server. Use the Memoria app (Multi view) to connect — do not browse this URL directly.',
-  endpoints: ['/healthz', '/api/me', '/api/shared/*'],
-}));
+// ── ルート (GET /) — Hub が持つ唯一の web UI ───────────────────────────────
+//
+// Hub は「データベースハブ」 であり UI は 2 画面しか持たない:
+//   1. Infisical 未設定 → Infisical machine identity の設定フォーム
+//   2. 設定済み        → ログイン画面 (Phase 2 で実装。 当面は稼働状況を表示)
+// それ以外は全部 JSON を返す。
+
+const SETUP_PAGE = `<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memoria Hub — Infisical 設定</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 460px; margin: 6vh auto; padding: 0 20px; line-height: 1.6; }
+  h1 { font-size: 1.3rem; }
+  p.note { color: #888; font-size: .88rem; }
+  label { display: block; margin-top: 14px; font-size: .85rem; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 10px 12px;
+          border: 1px solid #bbb; border-radius: 8px; font-size: 14px; }
+  button { margin-top: 20px; width: 100%; padding: 11px; border: 0; border-radius: 8px;
+           background: #4a6cf7; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .msg { margin-top: 14px; font-size: .88rem; }
+  .msg.err { color: #d33; }
+  .msg.ok { color: #2a8; }
+</style></head><body>
+<h1>Memoria Hub — Infisical 設定</h1>
+<p class="note">この Hub の Infisical machine identity を登録します。 Hub は自分の
+Infisical project から接続先 Cernere 等の設定を取得します。 値は Hub の DB に
+保存され、 client_secret は二度と画面に表示されません。</p>
+<form id="f">
+  <label>Infisical Site URL
+    <input name="siteUrl" placeholder="https://infisical.vtn-game.com" required></label>
+  <label>Project ID
+    <input name="projectId" placeholder="xxxxxxxx-xxxx-..." required></label>
+  <label>Environment
+    <input name="environment" value="prod" required></label>
+  <label>Client ID
+    <input name="clientId" required></label>
+  <label>Client Secret
+    <input name="clientSecret" type="password" required></label>
+  <button type="submit">接続して保存</button>
+  <div id="msg" class="msg"></div>
+</form>
+<script>
+const f = document.getElementById('f'), msg = document.getElementById('msg');
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = f.querySelector('button');
+  btn.disabled = true; msg.className = 'msg'; msg.textContent = '接続中…';
+  const body = Object.fromEntries(new FormData(f).entries());
+  try {
+    const res = await fetch('/api/setup/infisical', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { msg.className = 'msg err'; msg.textContent = j.error || ('HTTP ' + res.status); btn.disabled = false; return; }
+    msg.className = 'msg ok';
+    msg.textContent = '保存しました (' + j.injected + ' 件の secret を取得)。 Hub を再起動すると完全に反映されます。';
+  } catch (err) {
+    msg.className = 'msg err'; msg.textContent = String(err); btn.disabled = false;
+  }
+});
+</script>
+</body></html>`;
+
+function statusPage() {
+  return `<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memoria Hub</title>
+<style>body{font-family:system-ui,sans-serif;max-width:460px;margin:8vh auto;padding:0 20px;line-height:1.7;}
+h1{font-size:1.3rem;} code{background:#8884;padding:1px 5px;border-radius:4px;} .note{color:#888;font-size:.88rem;}</style>
+</head><body>
+<h1>Memoria Hub</h1>
+<p>Infisical: <strong>設定済み</strong></p>
+<p class="note">ログイン画面は Phase 2 で実装予定です。 当面この Hub はローカル
+Memoria の Multi スイッチャから利用します。</p>
+<p class="note">未取得の設定キー: <code>${missingWantedKeys().join(', ') || '(なし)'}</code></p>
+</body></html>`;
+}
+
+app.get('/', (c) => {
+  if (!hasInfisicalCreds()) return c.html(SETUP_PAGE);
+  return c.html(statusPage());
+});
+
+// ── /api/setup/infisical — Infisical machine identity の設定 ───────────────
+
+app.get('/api/setup/infisical/status', (c) => {
+  return c.json({
+    configured: hasInfisicalCreds(),
+    siteUrl: process.env.INFISICAL_SITE_URL || null,
+    projectId: process.env.INFISICAL_PROJECT_ID || null,
+    environment: process.env.INFISICAL_ENVIRONMENT || null,
+    missingKeys: missingWantedKeys(),
+  });
+});
+
+app.post('/api/setup/infisical', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const siteUrl = body?.siteUrl?.trim();
+  const projectId = body?.projectId?.trim();
+  const environment = body?.environment?.trim() || 'prod';
+  const clientId = body?.clientId?.trim();
+  const clientSecret = body?.clientSecret?.trim();
+  if (!siteUrl || !projectId || !clientId || !clientSecret) {
+    return c.json({ error: 'siteUrl / projectId / clientId / clientSecret は必須です' }, 400);
+  }
+  const creds = { siteUrl, projectId, environment, clientId, clientSecret };
+  let result;
+  try {
+    // まず接続検証 + process.env に inject (= 失敗したら保存しない)。
+    result = await applyInfisicalCreds(creds);
+  } catch (err) {
+    return c.json({ error: `Infisical 接続失敗: ${err.message}` }, 502);
+  }
+  try {
+    await setAppSettings({
+      'infisical.site_url': siteUrl,
+      'infisical.project_id': projectId,
+      'infisical.environment': environment,
+      'infisical.client_id': clientId,
+      'infisical.client_secret': clientSecret,
+    });
+  } catch (err) {
+    return c.json({ error: `DB 保存失敗 (migration 未適用?): ${err.message}` }, 500);
+  }
+  return c.json({ ok: true, injected: result.injected });
+});
 
 // ── Cernere bridge: /ws/service に常時接続 (admission push、 future API) ──
 //
