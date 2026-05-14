@@ -82,24 +82,28 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     const url = new URL(c.req.url);
     const q = url.searchParams.get('q') ?? '';
     if (!q.trim()) return c.json({ items: [] });
-    let lat = Number(url.searchParams.get('lat'));
-    let lon = Number(url.searchParams.get('lon'));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      const row = db.prepare(`SELECT lat, lon FROM gps_locations ORDER BY recorded_at DESC LIMIT 1`).get() as { lat: number; lon: number } | undefined;
-      if (row) { lat = row.lat; lon = row.lon; }
+    const latStr = url.searchParams.get('lat');
+    const lonStr = url.searchParams.get('lon');
+    let lat: number | undefined;
+    let lon: number | undefined;
+    let source: 'query' | 'gps' | null = null;
+    if (latStr != null && lonStr != null) {
+      const ql = Number(latStr); const qg = Number(lonStr);
+      if (Number.isFinite(ql) && Number.isFinite(qg)) { lat = ql; lon = qg; source = 'query'; }
     }
-    const limit = Number(url.searchParams.get('limit'));
+    if (lat === undefined) {
+      const row = db.prepare(`SELECT lat, lon FROM gps_locations ORDER BY recorded_at DESC LIMIT 1`).get() as { lat: number; lon: number } | undefined;
+      if (row && Number.isFinite(row.lat) && Number.isFinite(row.lon)) {
+        lat = row.lat; lon = row.lon; source = 'gps';
+      }
+    }
+    const limitStr = url.searchParams.get('limit');
+    const limitN = limitStr != null ? Number(limitStr) : NaN;
     const items = searchStationsLocal(db, {
-      q,
-      lat: Number.isFinite(lat) ? lat : undefined,
-      lon: Number.isFinite(lon) ? lon : undefined,
-      limit: Number.isFinite(limit) ? limit : undefined,
+      q, lat, lon,
+      limit: Number.isFinite(limitN) ? limitN : undefined,
     });
-    return c.json({
-      items,
-      gps_source: Number.isFinite(lat) && Number.isFinite(lon)
-        ? (url.searchParams.get('lat') ? 'query' : 'gps') : null,
-    });
+    return c.json({ items, gps_source: source });
   });
 
   // ── 経路検索 (= Directions mode=transit) ───────────────────────────────
