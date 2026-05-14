@@ -3947,6 +3947,10 @@ dialog.meal-modal {
   width: auto;
   height: auto;
 }
+/* user-agent stylesheet が overridden された場合の保険。 */
+dialog.meal-modal:not([open]) {
+  display: none !important;
+}
 dialog.meal-modal::backdrop {
   background: rgba(0, 0, 0, 0.45);
 }
@@ -5010,6 +5014,11 @@ dialog.loc-edit-modal {
   max-height: none;
   width: auto;
   height: auto;
+}
+/* user-agent の dialog:not([open]) { display: none } を上書きされる可能性に備えて
+ * 明示的に閉じている dialog は display: none を強制する。 */
+dialog.loc-edit-modal:not([open]) {
+  display: none !important;
 }
 dialog.loc-edit-modal::backdrop {
   background: rgba(0, 0, 0, 0.55);
