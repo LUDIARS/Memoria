@@ -10848,7 +10848,7 @@ document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
 // 候補から選ぶと code を hidden input に詰める。
 
 interface TransitStation {
-  /** Directions の origin/destination に渡す値。 ローカルなら "lat,lon" 形式。 */
+  /** 候補から選んだとき入る "lat,lon" 形式。 表示名は別途 input.value。 */
   code: string;
   name: string;
   secondary?: string;
@@ -10863,14 +10863,6 @@ interface TransitSegment {
   num_stops?: number; headsign?: string;
   travel_mode?: string;
 }
-interface TransitCourse {
-  duration_min: number; fare_yen: number; transfer_count: number;
-  segments: TransitSegment[];
-  warnings?: string[];
-  has_delay_hint?: boolean;
-  departure_at?: string | null;
-  arrival_at?: string | null;
-}
 interface TransitRide {
   id: number; recorded_at: string;
   from_station: string; to_station: string;
@@ -10884,16 +10876,10 @@ interface TransitRide {
 
 const transitState = {
   sub: 'search' as 'search' | 'rides',
-  hasKey: false,
-  courses: [] as TransitCourse[],
   rides: [] as TransitRide[],
 };
 
 async function loadTransit() {
-  try {
-    const cfg = await api('/api/transit/config') as { hasKey: boolean };
-    transitState.hasKey = !!cfg.hasKey;
-  } catch { transitState.hasKey = false; }
   switchTransitSub(transitState.sub);
 }
 
@@ -10991,94 +10977,50 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
 attachStationLookup({ input: 'transitFromName', candidates: 'transitFromCandidates', codeInput: 'transitFromCode', pickLabel: 'transitFromPick' });
 attachStationLookup({ input: 'transitToName', candidates: 'transitToCandidates', codeInput: 'transitToCode', pickLabel: 'transitToPick' });
 
-document.getElementById('transitSearchBtn')?.addEventListener('click', () => void runTransitSearch());
-document.getElementById('transitSearchNowBtn')?.addEventListener('click', () => {
-  ($('transitDateTime') as HTMLInputElement).value = '';
-  void runTransitSearch();
-});
+document.getElementById('transitSearchBtn')?.addEventListener('click', () => runTransitSearch());
 
-async function runTransitSearch() {
-  const fromCode = ($('transitFromCode') as HTMLInputElement).value.trim()
-    || ($('transitFromName') as HTMLInputElement).value.trim();
-  const toCode = ($('transitToCode') as HTMLInputElement).value.trim()
-    || ($('transitToName') as HTMLInputElement).value.trim();
+// Google Routes API は日本の鉄道に非対応なので、 経路探索は Google Maps を
+// 新タブで開く deep-link 方式。 駅名 (autocomplete の表示名 or 直接入力) を
+// origin/destination に渡す。 Google Maps は日本の駅名を正しく geocode する。
+function runTransitSearch() {
+  const from = ($('transitFromName') as HTMLInputElement).value.trim();
+  const to = ($('transitToName') as HTMLInputElement).value.trim();
   const resultsEl = $('transitResults');
   if (!resultsEl) return;
-  if (!fromCode || !toCode) {
+  if (!from || !to) {
     resultsEl.innerHTML = `<div class="hint">出発・到着を入力してください (候補から選ぶ or 駅名/住所を直接入力)。</div>`;
     return;
   }
-  const mode = ($('transitTimeMode') as HTMLSelectElement).value;
-  const dt = ($('transitDateTime') as HTMLInputElement).value;
-  const params = new URLSearchParams({ from: fromCode, to: toCode, mode });
-  if (dt) params.set('datetime', new Date(dt).toISOString());
-  resultsEl.innerHTML = '<div class="hint">検索中…</div>';
-  try {
-    const r = await api(`/api/transit/search?${params.toString()}`) as { courses: TransitCourse[]; error?: string };
-    if (r.error) {
-      resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml(r.error)}</div>`;
-      return;
-    }
-    transitState.courses = r.courses || [];
-    renderTransitCourses();
-  } catch (e: unknown) {
-    resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
-  }
-}
-
-function renderTransitCourses() {
-  const resultsEl = $('transitResults');
-  if (!resultsEl) return;
-  if (transitState.courses.length === 0) {
-    resultsEl.innerHTML = `<div class="hint">該当する経路がありません。</div>`;
-    return;
-  }
-  resultsEl.innerHTML = transitState.courses.map((c, idx) => {
-    const segLines = c.segments.map((s) => {
-      const time = s.departure_at ? new Date(s.departure_at).toTimeString().slice(0, 5) : '';
-      const isWalk = s.travel_mode === 'WALKING';
-      const lineLbl = isWalk ? '徒歩' : `${s.line}${s.train_type ? ` (${s.train_type})` : ''}`;
-      return `<li>${escapeHtml(time)} ${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(lineLbl)}${s.headsign ? ` ・${escapeHtml(s.headsign)}方面` : ''}</small></li>`;
-    }).join('');
-    const dep = c.departure_at ? new Date(c.departure_at).toTimeString().slice(0, 5) : '';
-    const arr = c.arrival_at ? new Date(c.arrival_at).toTimeString().slice(0, 5) : '';
-    const range = (dep || arr) ? `<small class="muted">${dep} → ${arr}</small>` : '';
-    const delayBadge = c.has_delay_hint
-      ? `<span class="transit-delay-badge" title="${escapeHtml((c.warnings || []).join(' / '))}">⚠ 遅延/運休</span>` : '';
-    const warningsBlock = (c.warnings && c.warnings.length > 0 && !c.has_delay_hint)
-      ? `<p class="muted" style="font-size:11px;margin:4px 0">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
-      : (c.has_delay_hint
-        ? `<p class="transit-warning-text">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
-        : '');
-    return `<article class="transit-course${c.has_delay_hint ? ' transit-course-warn' : ''}" data-idx="${idx}">
+  const url = `https://www.google.com/maps/dir/?api=1`
+    + `&origin=${encodeURIComponent(from)}`
+    + `&destination=${encodeURIComponent(to)}`
+    + `&travelmode=transit`;
+  window.open(url, '_blank', 'noopener');
+  // 開いた区間を 「乗った」 と記録できるよう、 結果欄に記録ボタンを出す。
+  resultsEl.innerHTML = `
+    <article class="transit-course">
       <header>
-        <strong>${c.duration_min} 分 / ${c.fare_yen ? c.fare_yen + '円' : '—'}</strong>
-        ${range}
-        <small class="muted">乗換 ${c.transfer_count} 回</small>
-        ${delayBadge}
+        <strong>🗺 ${escapeHtml(from)} → ${escapeHtml(to)}</strong>
+        <small class="muted">Google Maps を新しいタブで開きました</small>
         <span class="grow"></span>
-        <button class="ghost transit-record-btn" data-idx="${idx}">✅ 乗ったと記録</button>
+        <button class="ghost" id="transitRecordOpened" type="button">✅ この区間を乗ったと記録</button>
       </header>
-      ${warningsBlock}
-      <ol class="transit-course-segments">${segLines}</ol>
+      <p class="muted" style="font-size:11px;margin:4px 0">
+        遅延加味の乗換・時刻は Google Maps 側で確認してください。 実際に乗ったらこのボタンで履歴に残せます。
+      </p>
     </article>`;
-  }).join('');
-  resultsEl.querySelectorAll('.transit-record-btn').forEach((b) => {
-    b.addEventListener('click', () => {
-      const idx = Number((b as HTMLElement).dataset.idx);
-      void recordRideFromCourse(idx);
-    });
+  document.getElementById('transitRecordOpened')?.addEventListener('click', () => {
+    void recordRideManual(from, to);
   });
 }
 
-async function recordRideFromCourse(idx: number) {
-  const course = transitState.courses[idx];
-  if (!course) return;
+// 検索した区間を最小情報 (from/to 駅名) で履歴に記録。
+async function recordRideManual(fromStation: string, toStation: string) {
   try {
     const res = await fetch('/api/transit/rides', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ course }),
+      body: JSON.stringify({ from_station: fromStation, to_station: toStation }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({})) as { error?: string };
