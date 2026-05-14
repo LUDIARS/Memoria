@@ -1589,7 +1589,7 @@ export interface GenerateWorkContentArgs {
  * 適切に推定されるようにする。
  */
 export async function generateWorkContent({
-  db, dateStr, metrics, globalMemo, improve, timeoutMs = 180_000,
+  db, dateStr, metrics, globalMemo, improve, timeoutMs = 600_000,
 }: GenerateWorkContentArgs): Promise<WorkMinutesExtraction> {
   const urlList = buildUrlList(db, dateStr);
   const activityList = buildActivityList(metrics.activity);
@@ -1664,7 +1664,7 @@ export interface GenerateHighlightsArgs {
 /** Stage 3: Opus 1M (default) integrates work content + bookmark count + commits + dig into highlights. */
 export async function generateHighlights({
   dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
-  globalMemo, improve, timeoutMs = 240_000,
+  globalMemo, improve, timeoutMs = 600_000,
 }: GenerateHighlightsArgs): Promise<string> {
   const base = HIGHLIGHTS_PROMPT({
     dateStr, workContent, githubByRepo, bookmarkSummary, digs, notes, metrics,
