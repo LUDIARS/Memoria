@@ -10622,9 +10622,22 @@ document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
 // 駅検索は from / to のテキスト入力に debounce auto-complete を付け、
 // 候補から選ぶと code を hidden input に詰める。
 
-interface TransitStation { code: string; name: string; yomi?: string; type?: string; prefecture?: string }
-interface TransitSegment { line: string; company?: string; train_type?: string; from_station: string; to_station: string; departure_at: string | null; arrival_at: string | null }
-interface TransitCourse { duration_min: number; fare_yen: number; transfer_count: number; segments: TransitSegment[] }
+interface TransitStation { code: string; name: string; secondary?: string }
+interface TransitSegment {
+  line: string; company?: string; train_type?: string;
+  from_station: string; to_station: string;
+  departure_at: string | null; arrival_at: string | null;
+  num_stops?: number; headsign?: string;
+  travel_mode?: string;
+}
+interface TransitCourse {
+  duration_min: number; fare_yen: number; transfer_count: number;
+  segments: TransitSegment[];
+  warnings?: string[];
+  has_delay_hint?: boolean;
+  departure_at?: string | null;
+  arrival_at?: string | null;
+}
 interface TransitRide {
   id: number; recorded_at: string;
   from_station: string; to_station: string;
@@ -10635,18 +10648,15 @@ interface TransitRide {
   detected_from_gps?: boolean;
   max_speed_kmh?: number | null;
 }
-interface TransitOperationLine { code: string; name: string; status: string | null; description: string | null; status_image: string | null }
 
 const transitState = {
-  sub: 'search' as 'search' | 'rides' | 'lines',
+  sub: 'search' as 'search' | 'rides',
   hasKey: false,
   courses: [] as TransitCourse[],
   rides: [] as TransitRide[],
-  lines: [] as TransitOperationLine[],
 };
 
 async function loadTransit() {
-  // API key の有無を確認
   try {
     const cfg = await api('/api/transit/config') as { hasKey: boolean };
     transitState.hasKey = !!cfg.hasKey;
@@ -10654,21 +10664,19 @@ async function loadTransit() {
   switchTransitSub(transitState.sub);
 }
 
-function switchTransitSub(sub: 'search' | 'rides' | 'lines') {
+function switchTransitSub(sub: 'search' | 'rides') {
   transitState.sub = sub;
   document.querySelectorAll('.transit-subtabs .tab').forEach((t) => {
     (t as HTMLElement).classList.toggle('active', (t as HTMLElement).dataset.transitSub === sub);
   });
   $('transitSearchPanel')?.classList.toggle('hidden', sub !== 'search');
   $('transitRidesPanel')?.classList.toggle('hidden', sub !== 'rides');
-  $('transitLinesPanel')?.classList.toggle('hidden', sub !== 'lines');
   if (sub === 'rides') void loadTransitRides();
-  if (sub === 'lines') void loadTransitLines();
 }
 
 document.querySelectorAll('.transit-subtabs .tab').forEach((t) => {
   t.addEventListener('click', () => {
-    const sub = (t as HTMLElement).dataset.transitSub as 'search' | 'rides' | 'lines';
+    const sub = (t as HTMLElement).dataset.transitSub as 'search' | 'rides';
     switchTransitSub(sub);
   });
 });
@@ -10685,7 +10693,7 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
   function clearList() { ul!.innerHTML = ''; ul!.hidden = true; }
   function setPick(s: TransitStation | null) {
     if (codeEl) codeEl.value = s?.code ?? '';
-    if (pickEl) pickEl.textContent = s ? `✓ ${s.name}${s.prefecture ? ` (${s.prefecture})` : ''}` : '';
+    if (pickEl) pickEl.textContent = s ? `✓ ${s.name}${s.secondary ? ` (${s.secondary})` : ''}` : '';
   }
   inEl.addEventListener('input', () => {
     const q = inEl.value.trim();
@@ -10696,7 +10704,7 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
     if (timer) window.clearTimeout(timer);
     timer = window.setTimeout(async () => {
       if (!transitState.hasKey) {
-        ul!.innerHTML = `<li class="transit-autocomplete-empty">API key 未設定 — 右上 ⚙ から登録してください</li>`;
+        ul!.innerHTML = `<li class="transit-autocomplete-empty">Maps API key 未設定 — 設定 → AI / 連携 から登録してください</li>`;
         ul!.hidden = false;
         return;
       }
@@ -10714,7 +10722,7 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
           return;
         }
         ul!.innerHTML = items.map((s) =>
-          `<li data-code="${escapeHtml(s.code)}" data-name="${escapeHtml(s.name)}" data-pref="${escapeHtml(s.prefecture ?? '')}">${escapeHtml(s.name)}${s.prefecture ? ` <small class="muted">${escapeHtml(s.prefecture)}</small>` : ''}</li>`
+          `<li data-code="${escapeHtml(s.code)}" data-name="${escapeHtml(s.name)}" data-secondary="${escapeHtml(s.secondary ?? '')}">${escapeHtml(s.name)}${s.secondary ? ` <small class="muted">${escapeHtml(s.secondary)}</small>` : ''}</li>`
         ).join('');
         ul!.hidden = false;
       } catch (e: unknown) {
@@ -10727,7 +10735,7 @@ function attachStationLookup(opts: { input: string; candidates: string; codeInpu
     const li = (ev.target as HTMLElement).closest('li');
     if (!li || !li.dataset.code) return;
     inEl.value = li.dataset.name ?? '';
-    setPick({ code: li.dataset.code, name: li.dataset.name ?? '', prefecture: li.dataset.pref });
+    setPick({ code: li.dataset.code, name: li.dataset.name ?? '', secondary: li.dataset.secondary });
     clearList();
   });
   inEl.addEventListener('blur', () => setTimeout(clearList, 200));
@@ -10737,22 +10745,26 @@ attachStationLookup({ input: 'transitFromName', candidates: 'transitFromCandidat
 attachStationLookup({ input: 'transitToName', candidates: 'transitToCandidates', codeInput: 'transitToCode', pickLabel: 'transitToPick' });
 
 document.getElementById('transitSearchBtn')?.addEventListener('click', () => void runTransitSearch());
+document.getElementById('transitSearchNowBtn')?.addEventListener('click', () => {
+  ($('transitDateTime') as HTMLInputElement).value = '';
+  void runTransitSearch();
+});
 
 async function runTransitSearch() {
-  const fromCode = ($('transitFromCode') as HTMLInputElement).value.trim();
-  const toCode = ($('transitToCode') as HTMLInputElement).value.trim();
+  const fromCode = ($('transitFromCode') as HTMLInputElement).value.trim()
+    || ($('transitFromName') as HTMLInputElement).value.trim();
+  const toCode = ($('transitToCode') as HTMLInputElement).value.trim()
+    || ($('transitToName') as HTMLInputElement).value.trim();
   const resultsEl = $('transitResults');
   if (!resultsEl) return;
   if (!fromCode || !toCode) {
-    resultsEl.innerHTML = `<div class="hint">出発駅・到着駅の候補から駅を選んでください。</div>`;
+    resultsEl.innerHTML = `<div class="hint">出発・到着を入力してください (候補から選ぶ or 駅名/住所を直接入力)。</div>`;
     return;
   }
-  const date = ($('transitDate') as HTMLInputElement).value;
-  const time = ($('transitTime') as HTMLInputElement).value;
-  const searchType = ($('transitSearchType') as HTMLSelectElement).value;
-  const params = new URLSearchParams({ from: fromCode, to: toCode, searchType });
-  if (date) params.set('date', date.replace(/-/g, ''));
-  if (time && searchType === 'plain') params.set('time', time.replace(':', ''));
+  const mode = ($('transitTimeMode') as HTMLSelectElement).value;
+  const dt = ($('transitDateTime') as HTMLInputElement).value;
+  const params = new URLSearchParams({ from: fromCode, to: toCode, mode });
+  if (dt) params.set('datetime', new Date(dt).toISOString());
   resultsEl.innerHTML = '<div class="hint">検索中…</div>';
   try {
     const r = await api(`/api/transit/search?${params.toString()}`) as { courses: TransitCourse[]; error?: string };
@@ -10777,15 +10789,30 @@ function renderTransitCourses() {
   resultsEl.innerHTML = transitState.courses.map((c, idx) => {
     const segLines = c.segments.map((s) => {
       const time = s.departure_at ? new Date(s.departure_at).toTimeString().slice(0, 5) : '';
-      return `<li>${escapeHtml(time)} ${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(s.line)}${s.train_type ? ` (${escapeHtml(s.train_type)})` : ''}</small></li>`;
+      const isWalk = s.travel_mode === 'WALKING';
+      const lineLbl = isWalk ? '徒歩' : `${s.line}${s.train_type ? ` (${s.train_type})` : ''}`;
+      return `<li>${escapeHtml(time)} ${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(lineLbl)}${s.headsign ? ` ・${escapeHtml(s.headsign)}方面` : ''}</small></li>`;
     }).join('');
-    return `<article class="transit-course" data-idx="${idx}">
+    const dep = c.departure_at ? new Date(c.departure_at).toTimeString().slice(0, 5) : '';
+    const arr = c.arrival_at ? new Date(c.arrival_at).toTimeString().slice(0, 5) : '';
+    const range = (dep || arr) ? `<small class="muted">${dep} → ${arr}</small>` : '';
+    const delayBadge = c.has_delay_hint
+      ? `<span class="transit-delay-badge" title="${escapeHtml((c.warnings || []).join(' / '))}">⚠ 遅延/運休</span>` : '';
+    const warningsBlock = (c.warnings && c.warnings.length > 0 && !c.has_delay_hint)
+      ? `<p class="muted" style="font-size:11px;margin:4px 0">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
+      : (c.has_delay_hint
+        ? `<p class="transit-warning-text">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
+        : '');
+    return `<article class="transit-course${c.has_delay_hint ? ' transit-course-warn' : ''}" data-idx="${idx}">
       <header>
         <strong>${c.duration_min} 分 / ${c.fare_yen ? c.fare_yen + '円' : '—'}</strong>
+        ${range}
         <small class="muted">乗換 ${c.transfer_count} 回</small>
+        ${delayBadge}
         <span class="grow"></span>
         <button class="ghost transit-record-btn" data-idx="${idx}">✅ 乗ったと記録</button>
       </header>
+      ${warningsBlock}
       <ol class="transit-course-segments">${segLines}</ol>
     </article>`;
   }).join('');
@@ -10939,69 +10966,6 @@ $('transitRideManualSaveBtn')?.addEventListener('click', async () => {
     hideModal('transitRideManualModal');
     void loadTransitRides();
     flashToast('🚆 乗車を記録しました');
-  } catch (e: unknown) {
-    showErr((e as Error).message);
-  }
-});
-
-// 運行情報
-async function loadTransitLines() {
-  const list = $('transitLinesList');
-  if (!list) return;
-  const onlyDelay = ($('transitLinesOnlyDelay') as HTMLInputElement)?.checked;
-  list.innerHTML = '<div class="hint">読み込み中…</div>';
-  try {
-    const r = await api(`/api/transit/lines${onlyDelay ? '?only_delay=1' : ''}`) as { items: TransitOperationLine[]; error?: string };
-    if (r.error) {
-      list.innerHTML = `<div class="hint">エラー: ${escapeHtml(r.error)}</div>`;
-      return;
-    }
-    transitState.lines = r.items || [];
-    if (transitState.lines.length === 0) {
-      list.innerHTML = `<div class="hint">${onlyDelay ? '現在、 遅延・運休はありません。' : '路線情報が取得できませんでした。'}</div>`;
-      return;
-    }
-    list.innerHTML = transitState.lines.map((ln) => `
-      <article class="transit-line">
-        <header>
-          <strong>${escapeHtml(ln.name)}</strong>
-          <span class="grow"></span>
-          <span class="muted">${escapeHtml(ln.status ?? '—')}</span>
-        </header>
-        ${ln.description ? `<p style="font-size:12px">${escapeHtml(ln.description)}</p>` : `<p class="muted" style="font-size:11px">詳細は Ekispert premium 契約 / または公式サイト</p>`}
-      </article>`).join('');
-  } catch (e: unknown) {
-    list.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
-  }
-}
-
-$('transitLinesRefresh')?.addEventListener('click', () => void loadTransitLines());
-$('transitLinesOnlyDelay')?.addEventListener('change', () => void loadTransitLines());
-
-// API key settings modal
-$('transitSettingsBtn')?.addEventListener('click', () => {
-  ($('transitApiKeyInput') as HTMLInputElement).value = '';
-  const err = $('transitSettingsError'); if (err) { err.hidden = true; err.textContent = ''; }
-  showModal('transitSettingsModal');
-});
-$('transitSettingsCloseBtn')?.addEventListener('click', () => hideModal('transitSettingsModal'));
-$('transitSettingsSaveBtn')?.addEventListener('click', async () => {
-  const key = ($('transitApiKeyInput') as HTMLInputElement).value.trim();
-  const err = $('transitSettingsError');
-  const showErr = (m: string) => { if (err) { err.textContent = `⚠ ${m}`; err.hidden = false; } };
-  if (!key) return showErr('API key を入力してください');
-  try {
-    const res = await fetch('/api/transit/config', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey: key }),
-    });
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({})) as { error?: string };
-      return showErr(b.error || `${res.status}`);
-    }
-    hideModal('transitSettingsModal');
-    transitState.hasKey = true;
-    flashToast('🚆 API key を保存しました');
   } catch (e: unknown) {
     showErr((e as Error).message);
   }

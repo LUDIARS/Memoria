@@ -4963,23 +4963,43 @@ dialog.meal-modal[open] {
 .transit-autocomplete li:hover { background: var(--bg-hover, #eef); }
 .transit-autocomplete .transit-autocomplete-empty { cursor: default; color: var(--muted, #6b7280); }
 .transit-results { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
-.transit-course, .transit-ride, .transit-line {
+.transit-course, .transit-ride {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px;
   background: var(--bg-surface, var(--panel));
 }
-.transit-course header, .transit-ride header, .transit-line header {
+.transit-course-warn {
+  border-left: 3px solid #d97706;
+}
+.transit-delay-badge {
+  background: #fff5e6;
+  color: #d97706;
+  border: 1px solid #d97706;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  margin-left: 4px;
+}
+.transit-warning-text {
+  color: #b45309;
+  background: #fef3c7;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin: 4px 0;
+}
+.transit-course header, .transit-ride header {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 4px;
 }
 .transit-course-segments {
   margin: 4px 0 0; padding-left: 18px; font-size: 12px;
 }
-.transit-rides-bar, .transit-lines-bar {
+.transit-rides-bar {
   display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
 }
-.transit-rides-list, .transit-lines-list {
+.transit-rides-list {
   display: flex; flex-direction: column; gap: 8px;
 }
 .transit-ride-auto {

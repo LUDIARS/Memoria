@@ -931,47 +931,49 @@
 
       <div id="transitView" class="hidden">
         <div class="bookmarks-toolbar">
-          <span class="muted">🚆 Ekispert 経路検索 / 乗車記録 / 運行情報</span>
+          <span class="muted">🚆 Google 経路検索 (遅延加味) / 乗車記録</span>
           <span class="grow"></span>
-          <button id="transitSettingsBtn" class="ghost" type="button" title="Ekispert API key 設定">⚙ API key</button>
         </div>
         <nav class="tabs transit-subtabs">
           <button class="tab active" data-transit-sub="search" type="button">🔎 検索</button>
           <button class="tab" data-transit-sub="rides" type="button">📋 乗車履歴</button>
-          <button class="tab" data-transit-sub="lines" type="button">⚠️ 運行情報</button>
         </nav>
 
         <!-- 検索 -->
         <section id="transitSearchPanel" class="transit-panel">
           <div class="transit-search-form">
             <div class="transit-station-input">
-              <label class="muted">出発駅
-                <input id="transitFromName" type="search" placeholder="駅名…" autocomplete="off" />
+              <label class="muted">出発
+                <input id="transitFromName" type="search" placeholder="駅名 / 住所…" autocomplete="off" />
               </label>
               <ul id="transitFromCandidates" class="transit-autocomplete" hidden></ul>
               <input id="transitFromCode" type="hidden" />
               <small id="transitFromPick" class="muted"></small>
             </div>
             <div class="transit-station-input">
-              <label class="muted">到着駅
-                <input id="transitToName" type="search" placeholder="駅名…" autocomplete="off" />
+              <label class="muted">到着
+                <input id="transitToName" type="search" placeholder="駅名 / 住所…" autocomplete="off" />
               </label>
               <ul id="transitToCandidates" class="transit-autocomplete" hidden></ul>
               <input id="transitToCode" type="hidden" />
               <small id="transitToPick" class="muted"></small>
             </div>
             <div class="transit-search-meta">
-              <label class="muted">日付 <input id="transitDate" type="date" /></label>
-              <label class="muted">時刻 <input id="transitTime" type="time" /></label>
-              <label class="muted">種別
-                <select id="transitSearchType">
-                  <option value="plain">出発時刻</option>
-                  <option value="firstTrain">始発</option>
-                  <option value="lastTrain">終電</option>
+              <label class="muted">基準
+                <select id="transitTimeMode">
+                  <option value="departure">出発時刻</option>
+                  <option value="arrival">到着時刻</option>
                 </select>
               </label>
+              <label class="muted">日時 <input id="transitDateTime" type="datetime-local" /></label>
+              <button id="transitSearchNowBtn" class="ghost" type="button" title="いますぐ出発">🕐 いま</button>
               <button id="transitSearchBtn" type="button">検索</button>
             </div>
+            <p class="muted" style="font-size:11px;margin:4px 2px">
+              Google Directions の real-time 遅延が到着時刻に反映されます。 ⚠ アイコンは Directions が返した運休/遅延の警告です。
+              <br>
+              ※ 403 が出る場合は <code>MEMORIA_PLACES_API_KEY</code> env (Referer 制限なしの server-side key) を設定してください。 既存 GPS の地名解決と同じ key で OK。
+            </p>
           </div>
           <div id="transitResults" class="transit-results"></div>
         </section>
@@ -992,17 +994,6 @@
           <div id="transitRidesList" class="transit-rides-list"></div>
         </section>
 
-        <!-- 運行情報 -->
-        <section id="transitLinesPanel" class="transit-panel hidden">
-          <div class="transit-lines-bar">
-            <label class="muted">
-              <input id="transitLinesOnlyDelay" type="checkbox" checked /> 遅延のみ
-            </label>
-            <span class="grow"></span>
-            <button id="transitLinesRefresh" class="ghost" type="button">更新</button>
-          </div>
-          <div id="transitLinesList" class="transit-lines-list"></div>
-        </section>
       </div>
 
       <div id="mealsView" class="hidden">
@@ -1341,23 +1332,6 @@
     <textarea id="dictNotes" rows="4" placeholder="追加メモ"></textarea>
     <h4>リンクされた調査記録</h4>
     <ul id="dictLinks" class="dict-links"></ul>
-  </div>
-
-  <div id="transitSettingsModal" class="dict-detail modal-panel hidden">
-    <div class="dict-detail-head">
-      <h3 style="margin:0;flex:1">🚆 Ekispert API key</h3>
-      <button id="transitSettingsSaveBtn">保存</button>
-      <button id="transitSettingsCloseBtn" class="modal-close" title="閉じる">×</button>
-    </div>
-    <p class="muted" style="margin:8px 0;font-size:12px">
-      <a href="https://docs.ekispert.com/v1/" target="_blank" rel="noopener">Ekispert Web Service</a>
-      の API key を入力。 free tier は 50 req/日。 経路検索 / 駅検索 / 始終電は free 範囲内。
-      運行情報詳細 (Description) は premium 限定。
-    </p>
-    <label class="muted">API key
-      <input id="transitApiKeyInput" type="password" autocomplete="off" />
-    </label>
-    <div id="transitSettingsError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
   </div>
 
   <div id="transitRideManualModal" class="dict-detail modal-panel hidden">

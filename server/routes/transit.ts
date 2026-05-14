@@ -1,15 +1,17 @@
-// /api/transit/* — Ekispert ベースの経路検索 + 乗った電車の記録。
+// /api/transit/* — Google Directions ベースの経路検索 + 乗った電車の記録。
 //
-// 検索系 (stations / search / first / last / lines) は Ekispert API key 必須。
-// 記録系 (rides) は key 無しでも動く (= 手動入力 + 検索結果取り込みの両対応)。
+// Ekispert free 廃止に伴い切替。 経路 + 駅 (Place) は Memoria 既設の
+// maps.api_key を流用。 Directions は real-time の遅延を到着時刻に反映するので
+// 「いま見て次の電車」 用途では Ekispert より使い勝手が良い。
+// 運行情報の独立リストは廃止 (= 検索結果に warnings として出る)。
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
-  searchStations, searchRoutes, firstTrain, lastTrain, listOperationLines,
-  type EkispertConfig, type SearchCourse, type SearchSegment,
-} from '../lib/transit-ekispert.js';
-import { getAppSettings, setAppSettings } from '../db.js';
+  searchStations, searchRoutes,
+  type GoogleTransitConfig, type SearchCourse, type SearchSegment,
+} from '../lib/transit-google.js';
+import { getAppSettings } from '../db.js';
 import { runDetection } from '../lib/transit-detect.js';
 
 type Db = BetterSqlite3.Database;
@@ -40,34 +42,30 @@ interface TransitRideRow {
   max_speed_kmh: number | null;
 }
 
-function loadEkispertConfig(db: Db): EkispertConfig {
+function loadGoogleConfig(db: Db): GoogleTransitConfig {
+  const env = process.env.MEMORIA_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
+  if (env) return { apiKey: env };
   const s = getAppSettings(db);
-  return { apiKey: s['transit.ekispert_api_key'] || process.env.EKISPERT_API_KEY || '' };
+  return { apiKey: s['maps.api_key'] || '' };
 }
 
 export function makeTransitRouter(deps: TransitRouterDeps): Hono {
   const { db } = deps;
   const r = new Hono();
 
-  // ── 設定: API key の保存/取得 ─────────────────────────────────────────
+  // ── 設定状態。 maps.api_key を使い回すので独自 key は持たない。 ─────────
   r.get('/api/transit/config', (c: Context) => {
-    const cfg = loadEkispertConfig(db);
-    return c.json({ hasKey: !!cfg.apiKey });
-  });
-  r.patch('/api/transit/config', async (c: Context) => {
-    const body = await c.req.json().catch(() => ({})) as { apiKey?: unknown };
-    if (typeof body.apiKey !== 'string') return c.json({ error: 'apiKey (string) required' }, 400);
-    setAppSettings(db, { 'transit.ekispert_api_key': body.apiKey.trim() });
-    return c.json({ ok: true });
+    const cfg = loadGoogleConfig(db);
+    return c.json({ hasKey: !!cfg.apiKey, source: 'maps.api_key' });
   });
 
-  // ── 駅検索 ────────────────────────────────────────────────────────────
+  // ── 駅検索 (= Places Autocomplete) ───────────────────────────────────
   r.get('/api/transit/stations', async (c: Context) => {
     const url = new URL(c.req.url);
     const q = url.searchParams.get('q') ?? '';
     if (!q.trim()) return c.json({ items: [] });
     try {
-      const stations = await searchStations(loadEkispertConfig(db), q);
+      const stations = await searchStations(loadGoogleConfig(db), q);
       return c.json({ items: stations });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -75,69 +73,27 @@ export function makeTransitRouter(deps: TransitRouterDeps): Hono {
     }
   });
 
-  // ── 経路検索 ──────────────────────────────────────────────────────────
-  // ?from=<code>&to=<code>&date=YYYYMMDD&time=HHMM&searchType=plain|firstTrain|lastTrain
+  // ── 経路検索 (= Directions mode=transit) ───────────────────────────────
+  // ?from=<place_id:... or 駅名>&to=<...>&datetime=ISO&mode=departure|arrival
+  // datetime 未指定なら 'now' (= 現在出発、 遅延加味済の到着時刻が返る)。
   r.get('/api/transit/search', async (c: Context) => {
     const url = new URL(c.req.url);
     const from = url.searchParams.get('from') ?? '';
     const to = url.searchParams.get('to') ?? '';
-    if (!from || !to) return c.json({ error: 'from / to (station code) required' }, 400);
-    const searchType = url.searchParams.get('searchType') ?? 'plain';
+    if (!from || !to) return c.json({ error: 'from / to required' }, 400);
+    const datetime = url.searchParams.get('datetime');
+    const mode = url.searchParams.get('mode') === 'arrival' ? 'arrival' : 'departure';
+    let when: Date | undefined;
+    if (datetime) {
+      const d = new Date(datetime);
+      if (Number.isNaN(d.getTime())) return c.json({ error: 'datetime invalid ISO' }, 400);
+      when = d;
+    }
     try {
-      const courses = await searchRoutes(loadEkispertConfig(db), {
-        viaCodes: [from, to],
-        date: url.searchParams.get('date') ?? undefined,
-        time: url.searchParams.get('time') ?? undefined,
-        searchType: searchType as 'plain' | 'departure' | 'arrival' | 'firstTrain' | 'lastTrain',
+      const courses = await searchRoutes(loadGoogleConfig(db), {
+        origin: from, destination: to, timeMode: mode, when,
       });
       return c.json({ courses });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: msg }, 502);
-    }
-  });
-
-  // ── 始発検索 (= 翌朝最初の電車) ───────────────────────────────────────
-  r.get('/api/transit/first', async (c: Context) => {
-    const url = new URL(c.req.url);
-    const from = url.searchParams.get('from') ?? '';
-    const to = url.searchParams.get('to') ?? '';
-    if (!from || !to) return c.json({ error: 'from / to required' }, 400);
-    try {
-      const courses = await firstTrain(loadEkispertConfig(db), from, to, url.searchParams.get('date') ?? undefined);
-      return c.json({ courses });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: msg }, 502);
-    }
-  });
-
-  // ── 終電検索 ──────────────────────────────────────────────────────────
-  r.get('/api/transit/last', async (c: Context) => {
-    const url = new URL(c.req.url);
-    const from = url.searchParams.get('from') ?? '';
-    const to = url.searchParams.get('to') ?? '';
-    if (!from || !to) return c.json({ error: 'from / to required' }, 400);
-    try {
-      const courses = await lastTrain(loadEkispertConfig(db), from, to, url.searchParams.get('date') ?? undefined);
-      return c.json({ courses });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: msg }, 502);
-    }
-  });
-
-  // ── 運行情報 (= 遅延一覧)。 free tier では status null になる。 ───────────
-  r.get('/api/transit/lines', async (c: Context) => {
-    try {
-      const lines = await listOperationLines(loadEkispertConfig(db));
-      // delay 表示用にフィルタ: status が non-null かつ '平常運転' でない行だけ
-      const url = new URL(c.req.url);
-      const onlyDelay = url.searchParams.get('only_delay') === '1';
-      const filtered = onlyDelay
-        ? lines.filter((ln) => ln.status && !/平常|運転中/.test(ln.status))
-        : lines;
-      return c.json({ items: filtered });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       return c.json({ error: msg }, 502);
