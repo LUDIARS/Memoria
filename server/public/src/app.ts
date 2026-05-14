@@ -978,20 +978,20 @@ async function refreshQueue() {
     if (totalDepth === 0) totalDepth = snap.depth || 0;
     const badge = $('queueBadge');
     const tabCount = $('tabQueueCount');
-    const dbBadge = $('dbQueueBadge');
+    const tabBadge = $('tabQueueBadge'); // queue が top-level タブに昇格 (2026-05-13)
     if (totalDepth > 0) {
       badge.classList.remove('hidden');
       tabCount?.classList.remove('hidden');
-      dbBadge?.classList.remove('hidden');
+      tabBadge?.classList.remove('hidden');
       $('queueCount').textContent = String(totalDepth);
       if (tabCount) tabCount.textContent = String(totalDepth);
-      if (dbBadge) dbBadge.textContent = String(totalDepth);
+      if (tabBadge) tabBadge.textContent = String(totalDepth);
     } else {
       badge.classList.add('hidden');
       tabCount?.classList.add('hidden');
-      dbBadge?.classList.add('hidden');
+      tabBadge?.classList.add('hidden');
     }
-    if (state.tab === 'database' && state.database?.sub === 'queue') renderQueue();
+    if (state.tab === 'queue') renderQueue();
     return totalDepth;
   } catch { return 0; }
 }
@@ -1113,7 +1113,7 @@ function jobLabel(item) {
 // 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
 // meals は top-level タブ。
 const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'external']);
 
 function switchTab(tab) {
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
@@ -1146,6 +1146,7 @@ function switchTab(tab) {
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
+  $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
@@ -1163,6 +1164,7 @@ function switchTab(tab) {
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
   if (tab === 'transit') loadTransit();
+  if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
@@ -4898,7 +4900,7 @@ setInterval(async () => {
   const depth = await refreshQueue();
   await refreshVisitsBadge();
   if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
-  if (state.tab === 'database' && state.database?.sub === 'queue') renderQueue();
+  if (state.tab === 'queue') renderQueue();
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
@@ -7956,7 +7958,6 @@ const DB_SUB_VIEWS = {
   domain: 'domainView',
   workplace: 'workplaceView',
   apps: 'appsView',
-  queue: 'queueView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -7990,7 +7991,6 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
-  if (sub === 'queue') renderQueue();
 }
 
 interface ApplicationCatalogRow {

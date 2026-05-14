@@ -308,6 +308,10 @@
           <button class="tab" data-tab="transit">
             <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
           </button>
+          <button class="tab" data-tab="queue">
+            <span class="tab-label" data-full="⚙ キュー" data-short="⚙ キュー">⚙ キュー</span>
+            <span id="tabQueueBadge" class="tab-count hidden">0</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -660,7 +664,6 @@
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
-          <button class="wl-subtab" data-db-sub="queue">⚙ キュー <span id="dbQueueBadge" class="tab-count hidden">0</span></button>
         </nav>
       </div>
 
@@ -1774,6 +1777,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260513i"></script>
+  <script src="app.js?v=20260513j"></script>
 </body>
 </html>
