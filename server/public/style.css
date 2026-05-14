@@ -4116,8 +4116,31 @@ dialog.meal-modal[open] {
   color: var(--muted);
   letter-spacing: 0.02em;
 }
+/* Foundation 入力ルール — Memoria 全体の text 系入力 / select / textarea の
+ * 標準スタイル。 角丸 8px、 padding 10/12、 font 14、 focus で accent 色ボーダー
+ * + 3px ring。 ボックス角は固く感じない柔らかさ。
+ *
+ * 適用方法: 入力を含む container に class="foundation-form" を付ける。
+ * 個別の input / textarea / select に class を付ける必要なし。
+ *
+ * 対象 input type: text, search, password, email, tel, url, number,
+ *   date, time, datetime-local, month, week, および無指定 (= text 扱い)。
+ *
+ * 対象外: checkbox / radio / file / range / color / submit (= 別ルール)。
+ */
 .foundation-form input[type="text"],
+.foundation-form input[type="search"],
+.foundation-form input[type="password"],
+.foundation-form input[type="email"],
+.foundation-form input[type="tel"],
+.foundation-form input[type="url"],
+.foundation-form input[type="number"],
+.foundation-form input[type="date"],
+.foundation-form input[type="time"],
 .foundation-form input[type="datetime-local"],
+.foundation-form input[type="month"],
+.foundation-form input[type="week"],
+.foundation-form input:not([type]),
 .foundation-form textarea,
 .foundation-form select {
   width: 100%;
@@ -4933,8 +4956,6 @@ dialog.meal-modal[open] {
   align-items: start;
 }
 .transit-station-input { position: relative; }
-.transit-station-input label { display: block; }
-.transit-station-input input[type="search"] { width: 100%; }
 .transit-search-meta {
   grid-column: 1 / -1;
   display: flex;
@@ -4942,6 +4963,8 @@ dialog.meal-modal[open] {
   gap: 8px;
   align-items: end;
 }
+.transit-search-meta button { align-self: end; }
+.transit-search-meta .simple-field { flex: 0 0 200px; }
 .transit-autocomplete {
   list-style: none;
   margin: 2px 0 0;
@@ -5522,13 +5545,9 @@ dialog.loc-edit-modal[open] {
 .review-dig-input textarea {
   flex: 1;
   font-family: inherit;
-  font-size: 13px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  resize: vertical;
-  min-height: 48px;
+  /* base style は .foundation-form textarea から継承。 ここでは min-height だけ
+     セクション専有のサイズに上書き。 */
+  min-height: 56px;
 }
 .review-dig-input button {
   white-space: nowrap;
