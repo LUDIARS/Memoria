@@ -56,6 +56,10 @@ import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
 import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
+import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
+import { makeWeatherRouter } from './routes/weather.js';
+import { makeTransitRouter } from './routes/transit.js';
+import { makeStalenessRouter } from './routes/staleness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -129,6 +133,17 @@ try {
   const msg = e instanceof Error ? e.message : String(e);
   console.warn(`[startup] review target seed failed: ${msg}`);
 }
+
+// stations マスタを HeartRails Express から非同期 import (初回起動時のみ)。
+// 47 都道府県 × 0.4s で約 20 秒。 リクエストは server listen 後に流すので
+// 起動 sequence を遅らせない。 完了するまで /api/transit/stations/local は
+// 空配列を返す (フロントは Google Places にも fallback 可)。
+setTimeout(() => {
+  void seedStationsIfEmpty(db).catch((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[startup] stations seed failed: ${msg}`);
+  });
+}, 10_000);
 
 // ── App ──────────────────────────────────────────────────────────────────
 const app = new Hono();
@@ -220,6 +235,9 @@ app.route('/', makeMultiRouter({
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
 app.route('/', makeReviewRouter({ db }));
+app.route('/', makeWeatherRouter({ db }));
+app.route('/', makeTransitRouter({ db }));
+app.route('/', makeStalenessRouter({ db }));
 
 // ---- static UI ------------------------------------------------------------
 

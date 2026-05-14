@@ -68,13 +68,36 @@ function readLatest(target: ReviewTargetRow): LatestJson | null {
   try { return JSON.parse(readFileSync(p, 'utf8')) as LatestJson; } catch { return null; }
 }
 
+/** 指定日付の `review/<date>/latest.json` を読む。 無ければ null。 */
+function readDateLatest(target: ReviewTargetRow, date: string): LatestJson | null {
+  const p = join(reviewDir(target), date, 'latest.json');
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf8')) as LatestJson; } catch { return null; }
+}
+
 function listDates(target: ReviewTargetRow): string[] {
   const dir = reviewDir(target);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((n) => safeDate(n) && statSync(join(dir, n)).isDirectory())
+    .filter((d) => hasReviewFile(join(dir, d)))
     .sort()
     .reverse();
+}
+
+/**
+ * 日付ディレクトリ内に「実体としてのレビュー成果物」 (= REVIEW*.md) が
+ * 1 本でも存在するか。 autofix step (= AUTOFIX.md) だけで review step が
+ * 失敗 / スキップされた日のディレクトリを除外するため。
+ *
+ * 期待される命名: REVIEW.md, REVIEW_DESIGN.md, REVIEW_VULNERABILITY.md, ...
+ */
+function hasReviewFile(dateDir: string): boolean {
+  try {
+    return readdirSync(dateDir).some((f) => /^REVIEW(_[A-Z_]+)?\.md$/.test(f));
+  } catch {
+    return false;
+  }
 }
 
 /** 起動時に LUDIARS_ROOT 配下の git clone を walk し、 github.com/LUDIARS/<Name>
@@ -171,30 +194,46 @@ export function makeReviewRouter(deps: ReviewRouterDeps): Hono {
     return c.json({ ok });
   });
 
+  // ── 全 enabled ターゲットを横断したレビュー日付一覧。 新しい順。
+  // UI の 「日付フィルタ」 を populate するのに使う。
+  r.get('/api/review/dates', (c: Context) => {
+    const targets = listReviewTargets(db, { enabledOnly: true });
+    const seen = new Set<string>();
+    for (const t of targets) {
+      for (const d of listDates(t)) seen.add(d);
+    }
+    const dates = [...seen].sort().reverse();
+    return c.json({ dates });
+  });
+
   // ── public listing API (= レビューカード一覧) ─────────────────────────
+  // `?date=YYYY-MM-DD` が付いた場合は 「その日にレビューがあった repo だけ」 を
+  // その日の per-date `latest.json` で返す。 無指定なら全体の latest を返す。
   r.get('/api/review/repos', (c: Context) => {
     const targets = listReviewTargets(db, { enabledOnly: true });
+    const dateParam = safeDate(c.req.query('date') ?? '');
     const items = targets
       .map((t) => {
         const dates = listDates(t);
-        const latest = readLatest(t);
+        const meta = dateParam ? readDateLatest(t, dateParam) : readLatest(t);
+        // dateParam 指定時: その日のディレクトリ自体が無ければ除外。
+        const matchesDate = dateParam ? dates.includes(dateParam) : dates.length > 0;
         return {
           repo: t.name,
           target_id: t.id,
           local_path: resolveTargetPath(t),
           format_key: t.format_key,
           has_dates: dates.length > 0,
-          latest_date: latest?.date ?? (dates[0] ?? null),
-          weighted_score: latest?.weighted_score ?? null,
-          critical_count: latest?.critical_count ?? 0,
-          high_count: latest?.high_count ?? 0,
-          fix_pr: latest?.fix_pr ?? null,
+          matches_date: matchesDate,
+          latest_date: meta?.date ?? (dateParam ?? dates[0] ?? null),
+          weighted_score: meta?.weighted_score ?? null,
+          critical_count: meta?.critical_count ?? 0,
+          high_count: meta?.high_count ?? 0,
+          fix_pr: meta?.fix_pr ?? null,
         };
       })
-      // 日付ディレクトリ無しのターゲットは UI 側で 「未生成」 表示にしたいが、
-      // とりあえず latest.json も無いものは抑制 (= まだレビュー走ってない repo は出さない)。
-      .filter((it) => it.has_dates);
-    return c.json({ items, root: LUDIARS_ROOT });
+      .filter((it) => it.matches_date);
+    return c.json({ items, root: LUDIARS_ROOT, date: dateParam ?? null });
   });
 
   r.get('/api/review/repos/:repo', (c: Context) => {

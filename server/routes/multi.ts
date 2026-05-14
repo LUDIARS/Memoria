@@ -686,7 +686,16 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
         return c.json({ error: 'date must be YYYY-MM-DD' }, 400);
       }
       const points = listGpsLocationsForDate(db, date);
-      return c.json({ date, points });
+      // 同じ日付の transit_rides も時系列に乗せて返す (UI 側で別レイヤとして描画)。
+      const rides = db.prepare(
+        `SELECT id, from_station, to_station, line_name, train_type,
+                departure_at, arrival_at, duration_min, fare_yen,
+                from_lat, from_lon, arrival_lat, arrival_lon
+           FROM transit_rides
+          WHERE date(coalesce(departure_at, recorded_at)) = ?
+          ORDER BY coalesce(departure_at, recorded_at) ASC`,
+      ).all(date);
+      return c.json({ date, points, transit_rides: rides });
     }
     const from = url.searchParams.get('from') ?? undefined;
     const to   = url.searchParams.get('to') ?? undefined;

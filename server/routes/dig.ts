@@ -5,7 +5,8 @@ import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   insertDigSession, getDigSession, listDigSessions, deleteDigSession,
-  listDigThemes,
+  listDigThemes, listDigsForReview,
+  type DigOriginReview,
 } from '../db.js';
 import { listSearchEngines, deriveDigTheme } from '../dig.js';
 import type { BulkSaveDeps, BulkSaveResult } from '../lib/bulk-save.js';
@@ -26,7 +27,8 @@ export function makeDigRouter(deps: DigRouterDeps): Hono {
 
   r.post('/api/dig', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as
-      | { query?: unknown; search_engine?: unknown; theme?: unknown }
+      | { query?: unknown; search_engine?: unknown; theme?: unknown;
+          origin?: { kind?: unknown; repo?: unknown; date?: unknown; file?: unknown } | null }
       | null;
     const query = body?.query;
     if (!query || typeof query !== 'string') return c.json({ error: 'query required' }, 400);
@@ -36,9 +38,27 @@ export function makeDigRouter(deps: DigRouterDeps): Hono {
     const theme = (typeof body?.theme === 'string' && body.theme.trim())
       ? body.theme.trim().slice(0, 60)
       : deriveDigTheme(query);
-    const id = insertDigSession(db, query, theme);
+    let origin: DigOriginReview | null = null;
+    const o = body?.origin;
+    if (o && o.kind === 'review'
+      && typeof o.repo === 'string' && typeof o.date === 'string' && typeof o.file === 'string'
+      && /^\d{4}-\d{2}-\d{2}$/.test(o.date)) {
+      origin = { kind: 'review', repo: o.repo, date: o.date, file: o.file };
+    }
+    const id = insertDigSession(db, query, theme, origin);
     enqueueDig(id, query, { searchEngine, theme });
-    return c.json({ id, queued: true, theme, search_engine: searchEngine });
+    return c.json({ id, queued: true, theme, search_engine: searchEngine, origin });
+  });
+
+  /** レビューファイル発の dig 履歴一覧 (新しい順)。 レビュー画面の各タブで再表示用。 */
+  r.get('/api/dig/by-review', (c: Context) => {
+    const url = new URL(c.req.url);
+    const repo = url.searchParams.get('repo') ?? '';
+    const date = url.searchParams.get('date') ?? '';
+    const file = url.searchParams.get('file') ?? '';
+    if (!repo || !date || !file) return c.json({ error: 'repo / date / file required' }, 400);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'date YYYY-MM-DD' }, 400);
+    return c.json({ items: listDigsForReview(db, { repo, date, file }) });
   });
 
   r.get('/api/dig/engines', (c: Context) => {

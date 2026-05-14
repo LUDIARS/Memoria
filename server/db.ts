@@ -113,7 +113,15 @@ export function openDb(dbPath: string): Db {
       status        TEXT NOT NULL DEFAULT 'pending',
       error         TEXT,
       result_json   TEXT,
-      preview_json  TEXT
+      preview_json  TEXT,
+      raw_results_json TEXT,
+      theme         TEXT,
+      -- レビュー画面から起こした dig の出自 (= レビュー画面の対応するファイル下に
+      -- 再表示するため)。 origin_kind = 'review' / NULL のいずれか。
+      origin_kind   TEXT,
+      origin_repo   TEXT,
+      origin_date   TEXT,
+      origin_file   TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_dig_sessions_created
@@ -411,6 +419,84 @@ export function openDb(dbPath: string): Db {
       fetched_at      TEXT NOT NULL DEFAULT (datetime('now')),
       not_found       INTEGER NOT NULL DEFAULT 0
     );
+
+    -- ローカル駅マスタ (HeartRails Express から起動時に bulk import)。
+    -- transit autocomplete を Places API に依存せず、 GPS 近い順 + ターミナル駅
+    -- 優先で候補を出すための索引。 同一 「駅名 + 路線 + 都道府県」 で UNIQUE
+    -- (= 同じ駅名でも複数路線が乗り入れる場合は別行)。
+    --
+    -- is_terminal: 同一 line 内で prev_station もしくは next_station が NULL
+    -- (= 路線の端) なら 1。 ヒューリスティック。
+    CREATE TABLE IF NOT EXISTS stations (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      name          TEXT NOT NULL,
+      line          TEXT NOT NULL,
+      prefecture    TEXT,
+      lat           REAL NOT NULL,
+      lon           REAL NOT NULL,
+      postal        TEXT,
+      prev_station  TEXT,
+      next_station  TEXT,
+      is_terminal   INTEGER NOT NULL DEFAULT 0,
+      imported_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(name, line, prefecture)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stations_name        ON stations(name);
+    CREATE INDEX IF NOT EXISTS idx_stations_prefecture  ON stations(prefecture);
+    CREATE INDEX IF NOT EXISTS idx_stations_latlon      ON stations(lat, lon);
+
+    -- 乗った電車/バスの記録。 検索結果 (= ekispert 経路) からそのまま取り込んでも、
+    -- 手動入力でも作れる。 segments_json は SearchSegment[] と互換 (= 1 経路に
+    -- 複数 line 乗換が入る)。 from_lat/lon は記録時点の GPS (= 開始駅周辺)、
+    -- 移動経路 (= tracks) と時系列でマージする際に使う。 終了駅側の lat/lon は
+    -- arrival_lat/lon に保持。
+    CREATE TABLE IF NOT EXISTS transit_rides (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      recorded_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      from_station      TEXT NOT NULL,
+      to_station        TEXT NOT NULL,
+      line_name         TEXT,
+      train_type        TEXT,
+      departure_at      TEXT,
+      arrival_at        TEXT,
+      duration_min      INTEGER,
+      fare_yen          INTEGER,
+      from_lat          REAL,
+      from_lon          REAL,
+      arrival_lat       REAL,
+      arrival_lon       REAL,
+      transfer_count    INTEGER NOT NULL DEFAULT 0,
+      segments_json     TEXT,
+      notes             TEXT,
+      -- GPS 自動検出の出自を保持 (= detector からのみセット):
+      detected_from_gps INTEGER NOT NULL DEFAULT 0,
+      gps_start_id      INTEGER,
+      gps_end_id        INTEGER,
+      max_speed_kmh     REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_transit_rides_departure
+      ON transit_rides(departure_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_transit_rides_recorded
+      ON transit_rides(recorded_at DESC);
+    -- gps_end_id 一意化で detector 再実行時の重複作成を防ぐ。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_transit_rides_gps_end
+      ON transit_rides(gps_end_id) WHERE gps_end_id IS NOT NULL;
+
+    -- 天気スナップショット。 1 fetch = 1 行 append。 同じ date に複数行入る
+    -- (= 朝・昼・夜と再 fetch しても履歴は残す)。 日記生成は date の最新行を読む。
+    -- current/hourly/daily は Open-Meteo の payload を分割して保存。
+    CREATE TABLE IF NOT EXISTS weather_snapshots (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      fetched_at   INTEGER NOT NULL,
+      date         TEXT NOT NULL,
+      lat          REAL NOT NULL,
+      lon          REAL NOT NULL,
+      current_json TEXT,
+      hourly_json  TEXT,
+      daily_json   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_weather_snapshots_date
+      ON weather_snapshots(date DESC, fetched_at DESC);
 
     -- レビュー対象リポジトリ。 ludiars-review skill (= cloud routine) が
     -- iterate するリスト。 起動時に LUDIARS_ROOT 配下の git clone を seed し、
@@ -767,6 +853,20 @@ export function openDb(dbPath: string): Db {
   if (!dsCols.includes('raw_results_json')) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN raw_results_json TEXT`);
   }
+  // レビュー画面から発生した dig の出自を保存。
+  //   origin_kind  : 'review' のみ (将来別の発生源を足すための拡張)
+  //   origin_repo  : 'Memoria' 等の repo 名
+  //   origin_date  : 'YYYY-MM-DD' のレビュー日付
+  //   origin_file  : 'REVIEW.md' / 'REVIEW_DESIGN.md' 等
+  // dig タブ側は無視して良い。 レビュー画面で同じ repo×date×file の dig
+  // を再表示するために使う。
+  if (!dsCols.includes('origin_kind'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_kind TEXT`);
+  if (!dsCols.includes('origin_repo'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_repo TEXT`);
+  if (!dsCols.includes('origin_date'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_date TEXT`);
+  if (!dsCols.includes('origin_file'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_file TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_dig_sessions_origin_review
+            ON dig_sessions(origin_kind, origin_repo, origin_date, origin_file, created_at DESC)
+           WHERE origin_kind = 'review'`);
 
   const deCols = (db.prepare(`PRAGMA table_info(diary_entries)`).all() as { name: string }[]).map(c => c.name);
   if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
@@ -799,6 +899,21 @@ export function openDb(dbPath: string): Db {
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_locations_unresolved
            ON gps_locations(place_resolved_at) WHERE place_resolved_at IS NULL`);
+
+  // transit_rides: GPS 自動検出由来のカラムを後付け。
+  //   detected_from_gps : 1 なら検出器が作った行 (= UI で🛰 バッジ)
+  //   gps_start_id      : 出発駅相当 (= 移動開始直前の settled 点) gps_locations.id
+  //   gps_end_id        : 到着駅相当 (= 移動完了後の settled 点) gps_locations.id
+  //   max_speed_kmh     : 移動中の最大速度 (= 列車/バス/自動車の判別ヒント)
+  const trCols = (db.prepare(`PRAGMA table_info(transit_rides)`).all() as { name: string }[]).map(c => c.name);
+  if (trCols.length > 0) {
+    if (!trCols.includes('detected_from_gps')) db.exec(`ALTER TABLE transit_rides ADD COLUMN detected_from_gps INTEGER NOT NULL DEFAULT 0`);
+    if (!trCols.includes('gps_start_id'))      db.exec(`ALTER TABLE transit_rides ADD COLUMN gps_start_id INTEGER`);
+    if (!trCols.includes('gps_end_id'))        db.exec(`ALTER TABLE transit_rides ADD COLUMN gps_end_id INTEGER`);
+    if (!trCols.includes('max_speed_kmh'))     db.exec(`ALTER TABLE transit_rides ADD COLUMN max_speed_kmh REAL`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_transit_rides_gps_end
+             ON transit_rides(gps_end_id) WHERE gps_end_id IS NOT NULL`);
+  }
 
   const dcCols = (db.prepare(`PRAGMA table_info(domain_catalog)`).all() as { name: string }[]).map(c => c.name);
   if (!dcCols.includes('site_name'))   db.exec(`ALTER TABLE domain_catalog ADD COLUMN site_name TEXT`);
@@ -1210,11 +1325,49 @@ export function listSuggestedVisits(db: Db, { sinceDays = 30 }: { sinceDays?: nu
 
 // ── dig sessions ----------------------------------------------------------
 
-export function insertDigSession(db: Db, query: string, theme: string | null = null): number {
+export interface DigOriginReview {
+  kind: 'review';
+  repo: string;
+  date: string;
+  file: string;
+}
+
+export function insertDigSession(
+  db: Db,
+  query: string,
+  theme: string | null = null,
+  origin: DigOriginReview | null = null,
+): number {
   const info = db
-    .prepare(`INSERT INTO dig_sessions (query, theme) VALUES (?, ?)`)
-    .run(query, theme || null);
+    .prepare(`INSERT INTO dig_sessions (query, theme, origin_kind, origin_repo, origin_date, origin_file)
+              VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(
+      query,
+      theme || null,
+      origin?.kind ?? null,
+      origin?.repo ?? null,
+      origin?.date ?? null,
+      origin?.file ?? null,
+    );
   return Number(info.lastInsertRowid);
+}
+
+/** 指定 repo×date×file から発生した dig session を新しい順で返す。
+ *  レビュー画面の各ファイル末尾で 「過去のディグ履歴」 として再表示する用。 */
+export function listDigsForReview(
+  db: Db,
+  { repo, date, file }: { repo: string; date: string; file: string },
+): DigSessionRow[] {
+  return db.prepare(
+    `SELECT id, query, theme, status, error, result_json, preview_json, raw_results_json,
+            created_at, origin_kind, origin_repo, origin_date, origin_file
+       FROM dig_sessions
+      WHERE origin_kind = 'review'
+        AND origin_repo = ?
+        AND origin_date = ?
+        AND origin_file = ?
+      ORDER BY created_at DESC`,
+  ).all(repo, date, file) as DigSessionRow[];
 }
 
 export interface SetDigResultInput {

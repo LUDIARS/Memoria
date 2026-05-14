@@ -1096,6 +1096,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
+  $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
@@ -1112,6 +1113,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
+  if (tab === 'transit') loadTransit();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
@@ -3099,6 +3101,36 @@ async function loadDiaryDetail(date) {
   }
 }
 
+// 日記詳細ヘッダの日付の横に、 その日の天気スナップショットを 1 行で出す。
+// snapshot が無い日 (= 天気取得前の過去日 / 機能 OFF) は span を隠す。
+async function renderDiaryWeatherTag(date: string) {
+  const el = document.getElementById('diaryWeather');
+  if (!el) return;
+  try {
+    const r = await api(`/api/weather/snapshot/${encodeURIComponent(date)}`) as {
+      summary?: {
+        icon: string; label: string;
+        temp_max: number | null; temp_min: number | null;
+        precipitation_sum: number | null;
+      };
+    };
+    const s = r.summary;
+    if (!s) { el.hidden = true; return; }
+    const parts = [`${s.icon} ${s.label}`];
+    if (s.temp_max != null && s.temp_min != null) {
+      parts.push(`${Math.round(s.temp_max)}/${Math.round(s.temp_min)}℃`);
+    }
+    if (s.precipitation_sum != null && s.precipitation_sum > 0) {
+      parts.push(`☔${s.precipitation_sum.toFixed(1)}mm`);
+    }
+    el.textContent = parts.join(' ');
+    el.hidden = false;
+  } catch {
+    // snapshot 404 等 = その日は天気記録なし。 静かに隠す。
+    el.hidden = true;
+  }
+}
+
 function pollDiary(date) {
   if (state.diaryPolling) clearInterval(state.diaryPolling);
   state.diaryPolling = setInterval(async () => {
@@ -3120,6 +3152,7 @@ function renderDiaryDetail() {
   const d = state.diaryDetail;
   if (!d) return;
   $('diaryDate').textContent = d.date;
+  void renderDiaryWeatherTag(d.date);
   const status = d.status || 'absent';
   const statusEl = $('diaryStatus');
   const statusLabels = { absent: '未作成', pending: '生成中…', done: '完了', error: 'エラー' };
@@ -4739,6 +4772,84 @@ setInterval(async () => {
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
+
+// ── Staleness 監視 ────────────────────────────────────────────────────────
+//
+// 「逐次発行されるけど WS push されてない」 機能 (review / weather /
+// transit_rides) を 60s おきに /api/staleness で確認して、 signature
+// (= 不透明文字列) が変わっていたら該当機能だけ再 load する。
+//
+// trigger:
+//   1. setInterval(60s)            … document visible のときだけ
+//   2. visibilitychange → visible  … タブ復帰時に即座に反映
+//   3. switchTab / sub-tab 切替直後 … 既存 load*() で初回 stamp される。
+//      初回 stamp 後は不要な reload は起きない。
+//
+// stamp: 各 load*() の末尾で stampLoadSig(feature) を呼んで、 「UI に乗っている
+// データの signature」 を LOAD_SIGS に焼き付ける。 STALE_SIGS と一致してれば
+// 何もしない (= no reload)。
+const STALE_SIGS: Record<string, string> = {};
+const LOAD_SIGS: Record<string, string> = {};
+let _stalenessPingInFlight = false;
+
+async function pingStaleness(): Promise<void> {
+  if (_stalenessPingInFlight) return;
+  _stalenessPingInFlight = true;
+  try {
+    const r = await api('/api/staleness') as Record<string, unknown>;
+    for (const k of ['review', 'weather', 'transit_rides']) {
+      const v = r[k];
+      if (typeof v === 'string') STALE_SIGS[k] = v;
+    }
+  } catch { /* swallow */ }
+  finally { _stalenessPingInFlight = false; }
+}
+
+/** 機能 → 「いま画面にその機能が出ているか」 判定 + 再 load。 */
+const STALE_FEATURE_HANDLERS: Record<string, { visible: () => boolean; reload: () => void }> = {
+  review: {
+    visible: () => state.tab === 'review',
+    reload: () => { void loadReviewRepos(); },
+  },
+  weather: {
+    visible: () => state.tab === 'worklog' && state.worklog?.sub === 'tracks',
+    reload: () => { void loadTracksWeather(); },
+  },
+  transit_rides: {
+    visible: () => state.tab === 'transit' && transitState?.sub === 'rides',
+    reload: () => { void loadTransitRides(); },
+  },
+};
+
+async function applyStalenessChecks(): Promise<void> {
+  if (document.visibilityState !== 'visible') return;
+  await pingStaleness();
+  for (const [feature, h] of Object.entries(STALE_FEATURE_HANDLERS)) {
+    if (!STALE_SIGS[feature]) continue;
+    if (STALE_SIGS[feature] === LOAD_SIGS[feature]) continue;
+    if (!h.visible()) continue;
+    LOAD_SIGS[feature] = STALE_SIGS[feature];
+    h.reload();
+  }
+}
+
+/** load*() の末尾で呼んで、 「いま表示している」 signature を焼き付ける。
+ *  STALE_SIGS が未取得なら ping を 1 度走らせる (= 初回 load 直後の余計な
+ *  reload を回避)。 */
+function stampLoadSig(feature: string): void {
+  if (STALE_SIGS[feature]) {
+    LOAD_SIGS[feature] = STALE_SIGS[feature];
+    return;
+  }
+  void pingStaleness().then(() => {
+    if (STALE_SIGS[feature]) LOAD_SIGS[feature] = STALE_SIGS[feature];
+  });
+}
+
+setInterval(() => { void applyStalenessChecks(); }, 60_000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void applyStalenessChecks();
+});
 
 // ── AI / LLM settings panel ───────────────────────────────────────────
 async function openAiSettings() {
@@ -8917,9 +9028,10 @@ async function loadTracks() {
       }
     });
   }
-  // GPS source status / WiFi info を毎回 (タブ切替で再表示するたび) 更新する。
+  // GPS source status / WiFi info / 天気 を毎回 (タブ切替で再表示するたび) 更新する。
   loadTracksGpsStatus().catch(() => { /* swallow */ });
   loadTracksWifiInfo().catch(() => { /* swallow */ });
+  loadTracksWeather().catch(() => { /* swallow */ });
 
   try {
     const [{ apiKey, hasKey }, { days }, ts] = await Promise.all([
@@ -10087,6 +10199,171 @@ async function loadTracksWifiInfo() {
   }
 }
 
+// ── 天気カード (tracks タブ 内、 WiFi カードの隣) ───────────────────────
+//
+// /api/weather/today を叩いて 「今日の天気 + 雨予報 + 時間別 12h」 を表示。
+// 位置は backend が解決 (= ?lat=&lon= > 固定 > GPS の順)。
+async function loadTracksWeather(opts: { force?: boolean } = {}) {
+  const card = document.getElementById('tracksWeatherCard');
+  const pill = document.getElementById('tracksWeatherPill');
+  if (!card) return;
+  if (pill) {
+    pill.classList.remove('ext-cfg-pill-active', 'ext-cfg-pill-configured', 'ext-cfg-pill-inactive');
+    pill.classList.add('ext-cfg-pill-loading');
+    pill.textContent = '取得中…';
+  }
+  try {
+    const params = opts.force ? '?force=1' : '';
+    const r = await api(`/api/weather/today${params}`) as {
+      date: string; lat: number; lon: number; fetched_at: number; source: string;
+      forecast: { current: { weather_code: number; temperature: number; precipitation: number } | null;
+        hourly: { time: string[]; temperature: number[]; precipitation: number[];
+          precipitation_probability: number[]; weather_code: number[] };
+        daily: { temperature_max: number[]; temperature_min: number[]; precipitation_sum: number[] };
+      };
+      summary: {
+        date: string; icon: string; label: string;
+        temp_max: number | null; temp_min: number | null;
+        precipitation_sum: number | null;
+        is_raining_now: boolean; next_rain_start: string | null;
+      };
+    };
+    const s = r.summary;
+    setText('tracksWeatherLabel', `${s.icon} ${s.label}`);
+    setText('tracksWeatherTemp',
+      (s.temp_max != null && s.temp_min != null)
+        ? `${Math.round(s.temp_max)}℃ / ${Math.round(s.temp_min)}℃` : '—');
+    setText('tracksWeatherPrecip',
+      s.precipitation_sum != null ? `${s.precipitation_sum.toFixed(1)} mm` : '—');
+    if (s.is_raining_now) {
+      setText('tracksWeatherRain', '🌧 降っています');
+    } else if (s.next_rain_start) {
+      const t = s.next_rain_start.slice(11, 16);
+      setText('tracksWeatherRain', `⛈ ${t} 頃から雨予報`);
+    } else {
+      setText('tracksWeatherRain', '今日は雨なし');
+    }
+    const srcLabel = r.source === 'gps' ? '直近 GPS' : r.source === 'fixed' ? '固定座標' : r.source === 'cache' ? 'キャッシュ' : r.source;
+    setText('tracksWeatherLoc', `${r.lat.toFixed(3)}, ${r.lon.toFixed(3)} (${srcLabel})`);
+    // hourly 描画
+    renderWeatherHourly(r.forecast.hourly, s.date);
+    if (pill) {
+      pill.classList.remove('ext-cfg-pill-loading');
+      pill.classList.add(s.is_raining_now ? 'ext-cfg-pill-configured' : 'ext-cfg-pill-active');
+      const ts = new Date(r.fetched_at);
+      pill.textContent = `更新 ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
+    }
+    stampLoadSig('weather');
+  } catch (e: unknown) {
+    if (pill) {
+      pill.classList.remove('ext-cfg-pill-loading');
+      pill.classList.add('ext-cfg-pill-inactive');
+      pill.textContent = '取得失敗';
+    }
+    const msg = (e as Error)?.message || '';
+    setText('tracksWeatherLabel', '—');
+    setText('tracksWeatherRain', '—');
+    setText('tracksWeatherLoc', /no location/i.test(msg) ? '位置情報なし' : '取得失敗');
+  }
+}
+
+function renderWeatherHourly(hourly: { time: string[]; temperature: number[];
+  precipitation: number[]; precipitation_probability: number[]; weather_code: number[] }, date: string) {
+  const host = document.getElementById('tracksWeatherHourly');
+  if (!host) return;
+  const now = Date.now();
+  // 「今 (= 直近 hour) 〜 12h」 を選ぶ
+  const slice: string[] = [];
+  for (let i = 0; i < hourly.time.length && slice.length < 12; i++) {
+    const t = hourly.time[i];
+    const ts = new Date(t).getTime();
+    if (Number.isNaN(ts)) continue;
+    if (ts < now - 30 * 60 * 1000) continue;
+    if (!t.startsWith(date) && slice.length === 0) continue;
+    slice.push(t);
+    if (slice.length >= 12) break;
+  }
+  const items = slice.map((t) => {
+    const i = hourly.time.indexOf(t);
+    const hh = t.slice(11, 13);
+    const code = hourly.weather_code[i] ?? 0;
+    const icon = weatherIconForCode(code);
+    const temp = Math.round(hourly.temperature[i] ?? 0);
+    const prob = hourly.precipitation_probability[i] ?? 0;
+    const probLabel = prob > 0 ? `${prob}%` : '';
+    return `<div class="tracks-weather-hour" title="${escapeHtml(t)}">
+      <div class="tracks-weather-hour-time">${hh}</div>
+      <div class="tracks-weather-hour-icon">${icon}</div>
+      <div class="tracks-weather-hour-temp">${temp}°</div>
+      <div class="tracks-weather-hour-prob">${probLabel}</div>
+    </div>`;
+  });
+  host.innerHTML = items.join('');
+}
+
+function weatherIconForCode(code: number): string {
+  if (code === 0) return '☀️';
+  if (code <= 3) return '⛅';
+  if (code === 45 || code === 48) return '🌫';
+  if (code >= 51 && code <= 57) return '🌦';
+  if (code >= 61 && code <= 67) return '🌧';
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '🌨';
+  if (code >= 80 && code <= 82) return '🌧';
+  if (code >= 95 && code <= 99) return '⛈';
+  return '🌡';
+}
+
+function setText(id: string, v: string) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = v;
+}
+
+// 固定 lat/lon モーダル
+async function openWeatherSettings() {
+  const r = await api('/api/weather/config') as { fixed_lat: number | null; fixed_lon: number | null };
+  ($('weatherSettingsLat') as HTMLInputElement).value = r.fixed_lat != null ? String(r.fixed_lat) : '';
+  ($('weatherSettingsLon') as HTMLInputElement).value = r.fixed_lon != null ? String(r.fixed_lon) : '';
+  const err = $('weatherSettingsError');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('weatherSettingsModal');
+}
+
+async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
+  const err = $('weatherSettingsError');
+  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
+  let payload: { lat: number | null; lon: number | null };
+  if (opts.clear) {
+    payload = { lat: null, lon: null };
+  } else {
+    const latStr = ($('weatherSettingsLat') as HTMLInputElement).value.trim();
+    const lonStr = ($('weatherSettingsLon') as HTMLInputElement).value.trim();
+    if (!latStr || !lonStr) return showErr('lat / lon の両方を入力してください (空欄保存は ✖ 解除 ボタン)');
+    const lat = Number(latStr); const lon = Number(lonStr);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return showErr('数値を入力してください');
+    payload = { lat, lon };
+  }
+  try {
+    const res = await fetch('/api/weather/config', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(body.error || `${res.status}`);
+    }
+    hideModal('weatherSettingsModal');
+    void loadTracksWeather({ force: true });
+  } catch (e) {
+    showErr((e as Error).message);
+  }
+}
+
+document.getElementById('tracksWeatherRefresh')?.addEventListener('click', () => void loadTracksWeather({ force: true }));
+document.getElementById('tracksWeatherSettingsBtn')?.addEventListener('click', () => void openWeatherSettings());
+document.getElementById('weatherSettingsSaveBtn')?.addEventListener('click', () => void saveWeatherSettings());
+document.getElementById('weatherSettingsClearBtn')?.addEventListener('click', () => void saveWeatherSettings({ clear: true }));
+document.getElementById('weatherSettingsCloseBtn')?.addEventListener('click', () => hideModal('weatherSettingsModal'));
+
 // コピーボタン (data-copy-env="legatus" / "dnsmasq")
 document.addEventListener('click', (ev) => {
   const btn = ev.target?.closest?.('[data-copy-env]');
@@ -10115,6 +10392,8 @@ const REVIEW_FILES_UI = [
 ];
 const reviewState = {
   items: [],
+  availableDates: [],          // 全 repo を横断した「レビューが存在する日」 (新しい順)
+  listDate: null,              // 現在カードを絞り込む日付 (null = 未初期化)
   filterRepo: null,            // null = 全カテゴリ
   selected: null,
   dates: [],
@@ -10129,17 +10408,45 @@ async function loadReviewRepos() {
   const empty = document.getElementById('reviewEmpty');
   if (!cards) return;
   try {
-    const r = await api('/api/review/repos');
-    reviewState.items = (r.items || []).slice().sort((a, b) =>
-      (b.latest_date || '').localeCompare(a.latest_date || ''));
+    // 利用可能な日付を取得 → 既定は最新 (= 今日があれば今日)
+    const ds = await api('/api/review/dates') as { dates?: string[] };
+    reviewState.availableDates = ds.dates || [];
+    if (reviewState.availableDates.length === 0) {
+      reviewState.listDate = null;
+      reviewState.items = [];
+      renderReviewListDateMenu();
+      renderReviewMenu();
+      renderReviewCards();
+      return;
+    }
+    if (!reviewState.listDate || !reviewState.availableDates.includes(reviewState.listDate)) {
+      reviewState.listDate = reviewState.availableDates[0];
+    }
+    const r = await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`);
+    reviewState.items = (r.items || []).slice().sort((a, b) => a.repo.localeCompare(b.repo));
+    renderReviewListDateMenu();
     renderReviewMenu();
     renderReviewCards();
+    stampLoadSig('review');
   } catch (e) {
     cards.innerHTML = '';
     empty?.classList.add('hidden');
     const menu = document.getElementById('reviewRepoMenu');
     if (menu) menu.innerHTML = `<option>読み込みエラー: ${escapeHtml(e.message)}</option>`;
   }
+}
+
+function renderReviewListDateMenu() {
+  const sel = document.getElementById('reviewListDateSel') as HTMLSelectElement | null;
+  if (!sel) return;
+  if (reviewState.availableDates.length === 0) {
+    sel.innerHTML = '<option value="">(レビューなし)</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = reviewState.availableDates.map((d) =>
+    `<option value="${escapeHtml(d)}"${d === reviewState.listDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
 }
 
 function renderReviewMenu() {
@@ -10271,13 +10578,158 @@ async function loadReviewFile() {
     const res = await fetch(url);
     if (!res.ok) { body.textContent = `${res.status}: ${await res.text()}`; return; }
     const md = await res.text();
-    // 見出し + テーブル + リスト + 段落 + コードフェンスを HTML に。
-    // インラインは notes/markdown.ts:renderInline を流用 (bold / italic / code / link)。
     body.innerHTML = renderMarkdownBlock(md);
+    // ファイルが読めたら下に dig セクションを出して、 同じ repo/date/file の
+    // 過去 dig を一覧する。
+    await refreshReviewDigSection();
   } catch (e) {
     body.textContent = `読み込みエラー: ${e.message}`;
   }
 }
+
+// ── レビュー画面の Dig UI ───────────────────────────────────────────────
+// section の表示は currentFile があるときだけ。 切替直後に履歴も読み直す。
+// pending な dig があるときだけ 5 秒おきに自分自身を呼び戻して進捗を反映。
+let _reviewDigPollTimer: number | null = null;
+function clearReviewDigPoll() {
+  if (_reviewDigPollTimer != null) {
+    window.clearTimeout(_reviewDigPollTimer);
+    _reviewDigPollTimer = null;
+  }
+}
+
+async function refreshReviewDigSection() {
+  const section = document.getElementById('reviewDigSection');
+  if (!section) return;
+  // レビュータブ以外に居る間は section を見せず poll も止める。
+  if (state.tab !== 'review'
+    || !reviewState.selected || !reviewState.currentDate || !reviewState.currentFile) {
+    section.classList.add('hidden');
+    clearReviewDigPoll();
+    return;
+  }
+  section.classList.remove('hidden');
+  const list = document.getElementById('reviewDigHistoryList');
+  const countEl = document.getElementById('reviewDigHistoryCount');
+  if (!list) return;
+  list.innerHTML = '<li class="muted">読み込み中…</li>';
+  try {
+    interface ReviewDigItem { id: number; query: string; status: string; created_at: string; error: string | null; preview_json: string | null; result_json: string | null }
+    const r = (await api(`/api/dig/by-review?repo=${encodeURIComponent(reviewState.selected)}&date=${encodeURIComponent(reviewState.currentDate)}&file=${encodeURIComponent(reviewState.currentFile)}`)) as { items: ReviewDigItem[] };
+    const items = r.items || [];
+    if (countEl) countEl.textContent = items.length > 0 ? `(${items.length} 件)` : '';
+    clearReviewDigPoll();
+    const hasPending = items.some((it) => it.status === 'pending');
+    if (hasPending) {
+      // 5 秒後に再 fetch (= status の追従)。 タブを離れていたら refreshReviewDigSection
+      // が冒頭で hidden→return するので空回りしない。
+      _reviewDigPollTimer = window.setTimeout(() => { void refreshReviewDigSection(); }, 5_000);
+    }
+    if (items.length === 0) {
+      list.innerHTML = '<li class="muted" style="font-size:12px">まだディグ履歴はありません。 上の入力欄から始められます。</li>';
+      return;
+    }
+    list.innerHTML = items.map((it) => {
+      const status = it.error ? `<span style="color:#c0392b">⚠ ${escapeHtml(it.error.slice(0, 80))}</span>`
+        : it.status === 'pending' ? '<span class="muted">⏳ 実行中</span>'
+        : it.status === 'done' ? '<span style="color:#059669">✓ 完了</span>'
+        : escapeHtml(it.status);
+      const summary = extractDigSummarySnippet(it.result_json, it.preview_json);
+      const when = new Date(it.created_at).toLocaleString('ja-JP');
+      return `<li class="review-dig-history-item" data-dig-id="${it.id}">
+        <div class="review-dig-history-row1">
+          <strong>${escapeHtml(it.query)}</strong>
+          ${status}
+        </div>
+        <div class="muted" style="font-size:11px">${escapeHtml(when)}</div>
+        ${summary ? `<p class="review-dig-summary">${escapeHtml(summary)}</p>` : ''}
+        <div class="review-dig-history-actions">
+          <button class="ghost review-dig-open" data-dig-id="${it.id}" type="button">▶ Dig タブで開く</button>
+        </div>
+      </li>`;
+    }).join('');
+    list.querySelectorAll('.review-dig-open').forEach((b) => {
+      b.addEventListener('click', () => {
+        const id = Number((b as HTMLElement).dataset.digId);
+        if (Number.isFinite(id)) void openDigSessionFromReview(id);
+      });
+    });
+  } catch (e: unknown) {
+    list.innerHTML = `<li class="muted" style="font-size:12px;color:#c0392b">読み込みエラー: ${escapeHtml((e as Error).message)}</li>`;
+  }
+}
+
+function extractDigSummarySnippet(resultJson: string | null, previewJson: string | null): string {
+  // result_json (深堀完了) > preview_json の順で要約を抽出。 1 行プレビューとして 200 字以内に切る。
+  for (const j of [resultJson, previewJson]) {
+    if (!j) continue;
+    try {
+      const obj = JSON.parse(j) as { summary?: string; ai_overview?: string };
+      const text = (obj.summary || obj.ai_overview || '').trim();
+      if (text) return text.replace(/\s+/g, ' ').slice(0, 200);
+    } catch { /* swallow */ }
+  }
+  return '';
+}
+
+async function openDigSessionFromReview(id: number) {
+  // dig タブに切替えて該当 session を開く。 既存の loadDigSession を再利用。
+  switchTab('dig');
+  // loadDigSession は async function declaration 済み (10ms 後で十分タブ DOM 完成)
+  setTimeout(() => { void loadDigSession(id); }, 50);
+}
+
+async function submitReviewDig() {
+  const ta = $('reviewDigQuery') as HTMLTextAreaElement | null;
+  const errEl = $('reviewDigError');
+  const setErr = (m: string) => { if (errEl) { errEl.textContent = `⚠ ${m}`; errEl.hidden = false; } };
+  if (errEl) errEl.hidden = true;
+  const q = ta?.value.trim() ?? '';
+  if (!q) return setErr('調べたい点を入力してください');
+  if (!reviewState.selected || !reviewState.currentDate || !reviewState.currentFile) {
+    return setErr('レビューファイルが選択されていません');
+  }
+  // dig query には 「どのレビュー由来か」 を先頭に付けて、 dig 側でも文脈が分かるように。
+  const ctx = `[Review ${reviewState.selected}/${reviewState.currentDate}/${reviewState.currentFile}]`;
+  const composedQuery = `${ctx}\n${q}`;
+  const btn = $('reviewDigSubmit') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 起動中…'; }
+  try {
+    const res = await fetch('/api/dig', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: composedQuery,
+        origin: {
+          kind: 'review',
+          repo: reviewState.selected,
+          date: reviewState.currentDate,
+          file: reviewState.currentFile,
+        },
+      }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      return setErr(b.error || `${res.status}`);
+    }
+    if (ta) ta.value = '';
+    flashToast('🔎 ディグを開始しました');
+    await refreshReviewDigSection();
+  } catch (e: unknown) {
+    setErr((e as Error).message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔎 ディグる'; }
+  }
+}
+
+document.getElementById('reviewDigSubmit')?.addEventListener('click', () => void submitReviewDig());
+// Ctrl/Cmd + Enter で submit
+document.getElementById('reviewDigQuery')?.addEventListener('keydown', (ev) => {
+  const e = ev as KeyboardEvent;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    void submitReviewDig();
+  }
+});
 
 document.getElementById('reviewRefresh')?.addEventListener('click', () => void loadReviewRepos());
 document.getElementById('reviewBackBtn')?.addEventListener('click', () => showReviewList());
@@ -10286,6 +10738,14 @@ document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
   reviewState.filterRepo = v || null;
   renderReviewMenu();
   renderReviewCards();
+});
+document.getElementById('reviewListDateSel')?.addEventListener('change', (ev) => {
+  const v = (ev.target as HTMLSelectElement).value;
+  if (!v) return;
+  reviewState.listDate = v;
+  // 日付を切り替えると repo フィルタはリセット (= 別日付のリストに移るため)
+  reviewState.filterRepo = null;
+  void loadReviewRepos();
 });
 
 // ── レビュー対象の追加モーダル ─────────────────────────────────
@@ -10330,6 +10790,383 @@ $('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTarg
 document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   reviewState.currentDate = ev.target.value;
   void loadReviewFile();
+});
+
+// ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────
+//
+// 3 つの sub-panel を切替: 検索 / 乗車履歴 / 運行情報。 API key は modal で。
+// 駅検索は from / to のテキスト入力に debounce auto-complete を付け、
+// 候補から選ぶと code を hidden input に詰める。
+
+interface TransitStation {
+  /** Directions の origin/destination に渡す値。 ローカルなら "lat,lon" 形式。 */
+  code: string;
+  name: string;
+  secondary?: string;
+  /** 路線サマリ (= 乗入路線を 「JR山手線 ほか 3 路線」 風に表示) */
+  lines_label?: string;
+  distance_m?: number;
+}
+interface TransitSegment {
+  line: string; company?: string; train_type?: string;
+  from_station: string; to_station: string;
+  departure_at: string | null; arrival_at: string | null;
+  num_stops?: number; headsign?: string;
+  travel_mode?: string;
+}
+interface TransitCourse {
+  duration_min: number; fare_yen: number; transfer_count: number;
+  segments: TransitSegment[];
+  warnings?: string[];
+  has_delay_hint?: boolean;
+  departure_at?: string | null;
+  arrival_at?: string | null;
+}
+interface TransitRide {
+  id: number; recorded_at: string;
+  from_station: string; to_station: string;
+  line_name: string | null; train_type: string | null;
+  departure_at: string | null; arrival_at: string | null;
+  duration_min: number | null; fare_yen: number | null;
+  transfer_count: number; segments: TransitSegment[]; notes: string | null;
+  detected_from_gps?: boolean;
+  max_speed_kmh?: number | null;
+}
+
+const transitState = {
+  sub: 'search' as 'search' | 'rides',
+  hasKey: false,
+  courses: [] as TransitCourse[],
+  rides: [] as TransitRide[],
+};
+
+async function loadTransit() {
+  try {
+    const cfg = await api('/api/transit/config') as { hasKey: boolean };
+    transitState.hasKey = !!cfg.hasKey;
+  } catch { transitState.hasKey = false; }
+  switchTransitSub(transitState.sub);
+}
+
+function switchTransitSub(sub: 'search' | 'rides') {
+  transitState.sub = sub;
+  document.querySelectorAll('.transit-subtabs .tab').forEach((t) => {
+    (t as HTMLElement).classList.toggle('active', (t as HTMLElement).dataset.transitSub === sub);
+  });
+  $('transitSearchPanel')?.classList.toggle('hidden', sub !== 'search');
+  $('transitRidesPanel')?.classList.toggle('hidden', sub !== 'rides');
+  if (sub === 'rides') void loadTransitRides();
+}
+
+document.querySelectorAll('.transit-subtabs .tab').forEach((t) => {
+  t.addEventListener('click', () => {
+    const sub = (t as HTMLElement).dataset.transitSub as 'search' | 'rides';
+    switchTransitSub(sub);
+  });
+});
+
+// 駅 auto-complete: input → 300ms debounce → /api/transit/stations
+function attachStationLookup(opts: { input: string; candidates: string; codeInput: string; pickLabel: string }) {
+  const inEl = document.getElementById(opts.input) as HTMLInputElement | null;
+  const ul = document.getElementById(opts.candidates) as HTMLUListElement | null;
+  const codeEl = document.getElementById(opts.codeInput) as HTMLInputElement | null;
+  const pickEl = document.getElementById(opts.pickLabel);
+  if (!inEl || !ul || !codeEl) return;
+  let timer: number | null = null;
+  let lastQuery = '';
+  function clearList() { ul!.innerHTML = ''; ul!.hidden = true; }
+  function setPick(s: TransitStation | null) {
+    if (codeEl) codeEl.value = s?.code ?? '';
+    if (pickEl) pickEl.textContent = s ? `✓ ${s.name}${s.secondary ? ` (${s.secondary})` : ''}${s.lines_label ? ` — ${s.lines_label}` : ''}` : '';
+  }
+  inEl.addEventListener('input', () => {
+    const q = inEl.value.trim();
+    if (q === lastQuery) return;
+    lastQuery = q;
+    setPick(null);
+    if (!q) { clearList(); return; }
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      try {
+        interface LocalStationItem { name: string; prefecture: string; lines: string[]; lat: number; lon: number; is_terminal: boolean; distance_m?: number }
+        // ローカル DB (HeartRails seed) を最初に試す。 GPS は backend が直近 row を使う。
+        const localR = (await api(`/api/transit/stations/local?q=${encodeURIComponent(q)}&limit=20`)) as { items: LocalStationItem[]; error?: string };
+        const items: TransitStation[] = (localR.items || []).map((s) => {
+          const linesLabel = s.lines.length === 0 ? ''
+            : s.lines.length === 1 ? s.lines[0]
+            : `${s.lines[0]} ほか ${s.lines.length - 1} 路線`;
+          return {
+            code: `${s.lat},${s.lon}`,
+            name: s.name,
+            secondary: s.prefecture,
+            lines_label: linesLabel,
+            distance_m: s.distance_m,
+          };
+        });
+        if (items.length === 0) {
+          ul!.innerHTML = `<li class="transit-autocomplete-empty">候補なし — そのままテキスト入力で検索すれば Google が解釈します</li>`;
+          ul!.hidden = false;
+          return;
+        }
+        ul!.innerHTML = items.map((s) => {
+          const dist = s.distance_m != null
+            ? (s.distance_m < 1000 ? `${Math.round(s.distance_m)}m` : `${(s.distance_m / 1000).toFixed(1)}km`)
+            : '';
+          return `<li data-code="${escapeHtml(s.code)}" data-name="${escapeHtml(s.name)}" data-secondary="${escapeHtml(s.secondary ?? '')}" data-lines="${escapeHtml(s.lines_label ?? '')}">
+            <strong>${escapeHtml(s.name)}</strong>${s.secondary ? ` <small class="muted">${escapeHtml(s.secondary)}</small>` : ''}
+            ${s.lines_label ? `<div class="transit-autocomplete-sub">${escapeHtml(s.lines_label)}${dist ? ` · ${dist}` : ''}</div>` : (dist ? `<div class="transit-autocomplete-sub">${dist}</div>` : '')}
+          </li>`;
+        }).join('');
+        ul!.hidden = false;
+      } catch (e: unknown) {
+        ul!.innerHTML = `<li class="transit-autocomplete-empty">エラー: ${escapeHtml((e as Error).message)}</li>`;
+        ul!.hidden = false;
+      }
+    }, 300);
+  });
+  ul.addEventListener('click', (ev) => {
+    const li = (ev.target as HTMLElement).closest('li');
+    if (!li || !li.dataset.code) return;
+    inEl.value = li.dataset.name ?? '';
+    setPick({
+      code: li.dataset.code,
+      name: li.dataset.name ?? '',
+      secondary: li.dataset.secondary,
+      lines_label: li.dataset.lines,
+    });
+    clearList();
+  });
+  inEl.addEventListener('blur', () => setTimeout(clearList, 200));
+}
+
+attachStationLookup({ input: 'transitFromName', candidates: 'transitFromCandidates', codeInput: 'transitFromCode', pickLabel: 'transitFromPick' });
+attachStationLookup({ input: 'transitToName', candidates: 'transitToCandidates', codeInput: 'transitToCode', pickLabel: 'transitToPick' });
+
+document.getElementById('transitSearchBtn')?.addEventListener('click', () => void runTransitSearch());
+document.getElementById('transitSearchNowBtn')?.addEventListener('click', () => {
+  ($('transitDateTime') as HTMLInputElement).value = '';
+  void runTransitSearch();
+});
+
+async function runTransitSearch() {
+  const fromCode = ($('transitFromCode') as HTMLInputElement).value.trim()
+    || ($('transitFromName') as HTMLInputElement).value.trim();
+  const toCode = ($('transitToCode') as HTMLInputElement).value.trim()
+    || ($('transitToName') as HTMLInputElement).value.trim();
+  const resultsEl = $('transitResults');
+  if (!resultsEl) return;
+  if (!fromCode || !toCode) {
+    resultsEl.innerHTML = `<div class="hint">出発・到着を入力してください (候補から選ぶ or 駅名/住所を直接入力)。</div>`;
+    return;
+  }
+  const mode = ($('transitTimeMode') as HTMLSelectElement).value;
+  const dt = ($('transitDateTime') as HTMLInputElement).value;
+  const params = new URLSearchParams({ from: fromCode, to: toCode, mode });
+  if (dt) params.set('datetime', new Date(dt).toISOString());
+  resultsEl.innerHTML = '<div class="hint">検索中…</div>';
+  try {
+    const r = await api(`/api/transit/search?${params.toString()}`) as { courses: TransitCourse[]; error?: string };
+    if (r.error) {
+      resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml(r.error)}</div>`;
+      return;
+    }
+    transitState.courses = r.courses || [];
+    renderTransitCourses();
+  } catch (e: unknown) {
+    resultsEl.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
+  }
+}
+
+function renderTransitCourses() {
+  const resultsEl = $('transitResults');
+  if (!resultsEl) return;
+  if (transitState.courses.length === 0) {
+    resultsEl.innerHTML = `<div class="hint">該当する経路がありません。</div>`;
+    return;
+  }
+  resultsEl.innerHTML = transitState.courses.map((c, idx) => {
+    const segLines = c.segments.map((s) => {
+      const time = s.departure_at ? new Date(s.departure_at).toTimeString().slice(0, 5) : '';
+      const isWalk = s.travel_mode === 'WALKING';
+      const lineLbl = isWalk ? '徒歩' : `${s.line}${s.train_type ? ` (${s.train_type})` : ''}`;
+      return `<li>${escapeHtml(time)} ${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(lineLbl)}${s.headsign ? ` ・${escapeHtml(s.headsign)}方面` : ''}</small></li>`;
+    }).join('');
+    const dep = c.departure_at ? new Date(c.departure_at).toTimeString().slice(0, 5) : '';
+    const arr = c.arrival_at ? new Date(c.arrival_at).toTimeString().slice(0, 5) : '';
+    const range = (dep || arr) ? `<small class="muted">${dep} → ${arr}</small>` : '';
+    const delayBadge = c.has_delay_hint
+      ? `<span class="transit-delay-badge" title="${escapeHtml((c.warnings || []).join(' / '))}">⚠ 遅延/運休</span>` : '';
+    const warningsBlock = (c.warnings && c.warnings.length > 0 && !c.has_delay_hint)
+      ? `<p class="muted" style="font-size:11px;margin:4px 0">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
+      : (c.has_delay_hint
+        ? `<p class="transit-warning-text">${(c.warnings || []).map(escapeHtml).join('<br>')}</p>`
+        : '');
+    return `<article class="transit-course${c.has_delay_hint ? ' transit-course-warn' : ''}" data-idx="${idx}">
+      <header>
+        <strong>${c.duration_min} 分 / ${c.fare_yen ? c.fare_yen + '円' : '—'}</strong>
+        ${range}
+        <small class="muted">乗換 ${c.transfer_count} 回</small>
+        ${delayBadge}
+        <span class="grow"></span>
+        <button class="ghost transit-record-btn" data-idx="${idx}">✅ 乗ったと記録</button>
+      </header>
+      ${warningsBlock}
+      <ol class="transit-course-segments">${segLines}</ol>
+    </article>`;
+  }).join('');
+  resultsEl.querySelectorAll('.transit-record-btn').forEach((b) => {
+    b.addEventListener('click', () => {
+      const idx = Number((b as HTMLElement).dataset.idx);
+      void recordRideFromCourse(idx);
+    });
+  });
+}
+
+async function recordRideFromCourse(idx: number) {
+  const course = transitState.courses[idx];
+  if (!course) return;
+  try {
+    const res = await fetch('/api/transit/rides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ course }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      alert(`保存失敗: ${body.error || res.status}`);
+      return;
+    }
+    flashToast('🚆 乗車を記録しました');
+  } catch (e: unknown) {
+    alert(`保存失敗: ${(e as Error).message}`);
+  }
+}
+
+// 乗車履歴
+async function loadTransitRides() {
+  const list = $('transitRidesList');
+  if (!list) return;
+  const dateEl = $('transitRidesDate') as HTMLInputElement;
+  const params = new URLSearchParams();
+  if (dateEl?.value) params.set('date', dateEl.value);
+  list.innerHTML = '<div class="hint">読み込み中…</div>';
+  try {
+    const r = await api(`/api/transit/rides?${params.toString()}`) as { items: TransitRide[] };
+    transitState.rides = r.items || [];
+    renderTransitRides();
+    stampLoadSig('transit_rides');
+  } catch (e: unknown) {
+    list.innerHTML = `<div class="hint">エラー: ${escapeHtml((e as Error).message)}</div>`;
+  }
+}
+
+function renderTransitRides() {
+  const list = $('transitRidesList');
+  if (!list) return;
+  if (transitState.rides.length === 0) {
+    list.innerHTML = '<div class="hint">まだ乗車記録がありません。</div>';
+    return;
+  }
+  list.innerHTML = transitState.rides.map((ride) => {
+    const dep = ride.departure_at ? new Date(ride.departure_at).toLocaleString('ja-JP') : '';
+    const arr = ride.arrival_at ? new Date(ride.arrival_at).toLocaleString('ja-JP') : '';
+    const fare = ride.fare_yen != null ? `${ride.fare_yen} 円` : '';
+    const dur = ride.duration_min != null ? `${ride.duration_min} 分` : '';
+    const segs = ride.segments?.length
+      ? `<ol class="transit-course-segments">${ride.segments.map((s) => `<li>${escapeHtml(s.from_station)} → ${escapeHtml(s.to_station)} <small class="muted">${escapeHtml(s.line)}</small></li>`).join('')}</ol>`
+      : '';
+    const badge = ride.detected_from_gps
+      ? `<span class="transit-ride-badge" title="GPS 履歴から自動検出">🛰 自動${ride.max_speed_kmh != null ? ` (max ${Math.round(ride.max_speed_kmh)} km/h)` : ''}</span>`
+      : '';
+    return `<article class="transit-ride${ride.detected_from_gps ? ' transit-ride-auto' : ''}">
+      <header>
+        <strong>${escapeHtml(ride.from_station)} → ${escapeHtml(ride.to_station)}</strong>
+        <small class="muted">${escapeHtml(ride.line_name ?? '')}</small>
+        ${badge}
+        <span class="grow"></span>
+        <button class="ghost transit-ride-delete" data-id="${ride.id}" title="削除">×</button>
+      </header>
+      <div class="muted" style="font-size:11px">${dep} 〜 ${arr} ${dur ? '/ ' + dur : ''} ${fare ? '/ ' + fare : ''}</div>
+      ${segs}
+      ${ride.notes ? `<p class="muted" style="font-size:12px">${escapeHtml(ride.notes)}</p>` : ''}
+    </article>`;
+  }).join('');
+  list.querySelectorAll('.transit-ride-delete').forEach((b) => {
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const id = Number((b as HTMLElement).dataset.id);
+      if (!Number.isFinite(id)) return;
+      if (!confirm('この乗車記録を削除しますか?')) return;
+      await fetch(`/api/transit/rides/${id}`, { method: 'DELETE' });
+      void loadTransitRides();
+    });
+  });
+}
+
+$('transitRidesRefresh')?.addEventListener('click', () => void loadTransitRides());
+$('transitRidesDetectBtn')?.addEventListener('click', async () => {
+  const btn = $('transitRidesDetectBtn') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '🛰 検出中…'; }
+  try {
+    const res = await fetch('/api/transit/detect', { method: 'POST' });
+    const r = await res.json() as { inserted?: number; windows?: number; scanned?: number; skipped_dup?: number; error?: string };
+    if (r.error) {
+      flashToast(`❌ 検出失敗: ${r.error}`);
+    } else {
+      flashToast(`🛰 ${r.inserted ?? 0} 件追加 (検出 ${r.windows} / 重複 ${r.skipped_dup})`);
+      void loadTransitRides();
+    }
+  } catch (e: unknown) {
+    flashToast(`❌ 検出失敗: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🛰 GPS 再検出'; }
+  }
+});
+$('transitRidesDate')?.addEventListener('change', () => void loadTransitRides());
+$('transitRidesClear')?.addEventListener('click', () => {
+  ($('transitRidesDate') as HTMLInputElement).value = '';
+  void loadTransitRides();
+});
+$('transitRidesAddBtn')?.addEventListener('click', () => {
+  ['rideFromStation', 'rideToStation', 'rideLineName', 'rideTrainType',
+    'rideDepartureAt', 'rideArrivalAt', 'rideFareYen', 'rideDurationMin', 'rideNotes']
+    .forEach((id) => { const el = $(id); if (el) (el as HTMLInputElement | HTMLTextAreaElement).value = ''; });
+  const err = $('transitRideManualError'); if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('transitRideManualModal');
+});
+$('transitRideManualCloseBtn')?.addEventListener('click', () => hideModal('transitRideManualModal'));
+$('transitRideManualSaveBtn')?.addEventListener('click', async () => {
+  const err = $('transitRideManualError');
+  const showErr = (m: string) => { if (err) { err.textContent = `⚠ ${m}`; err.hidden = false; } };
+  const from = ($('rideFromStation') as HTMLInputElement).value.trim();
+  const to = ($('rideToStation') as HTMLInputElement).value.trim();
+  if (!from || !to) return showErr('出発駅 / 到着駅を入力してください');
+  const body: Record<string, unknown> = {
+    from_station: from, to_station: to,
+    line_name: ($('rideLineName') as HTMLInputElement).value.trim() || undefined,
+    train_type: ($('rideTrainType') as HTMLInputElement).value.trim() || undefined,
+    departure_at: ($('rideDepartureAt') as HTMLInputElement).value || undefined,
+    arrival_at: ($('rideArrivalAt') as HTMLInputElement).value || undefined,
+    fare_yen: Number(($('rideFareYen') as HTMLInputElement).value) || undefined,
+    duration_min: Number(($('rideDurationMin') as HTMLInputElement).value) || undefined,
+    notes: ($('rideNotes') as HTMLTextAreaElement).value.trim() || undefined,
+  };
+  try {
+    const res = await fetch('/api/transit/rides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(b.error || `${res.status}`);
+    }
+    hideModal('transitRideManualModal');
+    void loadTransitRides();
+    flashToast('🚆 乗車を記録しました');
+  } catch (e: unknown) {
+    showErr((e as Error).message);
+  }
 });
 
 async function loadMeals() {
