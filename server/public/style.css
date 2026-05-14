@@ -1549,6 +1549,29 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* グローバル読み込み pill — 画面上部中央。 pointer-events:none で
+   他の操作を一切ブロックしない。 250ms 以上の api() 読み込み中だけ表示。 */
+.mem-loading {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  background: rgba(31, 86, 192, 0.95);
+  color: #fff;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 9998;
+}
+.mem-loading.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
 .visits-actions {
   display: flex;
   gap: 10px;

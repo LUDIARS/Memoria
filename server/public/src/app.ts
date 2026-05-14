@@ -435,10 +435,59 @@ interface ApiResp extends Loose {
   results?: Loose[];
 }
 
+// ── グローバル読み込みインジケータ ───────────────────────────────────────
+//
+// api() 経由の fetch が in-flight のあいだ、 画面上部に非ブロッキングな
+// 「⏳ 読み込み中…」 pill を出す。 pointer-events:none なので他の操作は
+// 一切妨げない。
+//
+// 250ms の遅延を入れてあるので:
+//   - 2 秒ごとの queue/visits poll や staleness ping のような速い fetch は
+//     出さない (= チラつかない)
+//   - diary 生成 / review file / transit 検索 等の重い読み込みだけ出る
+let _apiInflight = 0;
+let _apiLoadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showLoadingPill() {
+  let el = document.getElementById('memLoading');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'memLoading';
+    el.className = 'mem-loading';
+    el.textContent = '⏳ 読み込み中…';
+    document.body.appendChild(el);
+  }
+  el.classList.add('show');
+}
+function hideLoadingPill() {
+  document.getElementById('memLoading')?.classList.remove('show');
+}
+function apiInflightStart() {
+  _apiInflight++;
+  if (_apiInflight === 1 && _apiLoadingTimer == null) {
+    _apiLoadingTimer = setTimeout(() => {
+      _apiLoadingTimer = null;
+      if (_apiInflight > 0) showLoadingPill();
+    }, 250);
+  }
+}
+function apiInflightEnd() {
+  _apiInflight = Math.max(0, _apiInflight - 1);
+  if (_apiInflight === 0) {
+    if (_apiLoadingTimer != null) { clearTimeout(_apiLoadingTimer); _apiLoadingTimer = null; }
+    hideLoadingPill();
+  }
+}
+
 async function api<T = ApiResp>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(path, opts);
-  if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
-  return await res.json() as T;
+  apiInflightStart();
+  try {
+    const res = await fetch(path, opts);
+    if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
+    return await res.json() as T;
+  } finally {
+    apiInflightEnd();
+  }
 }
 
 // 元 JS で `funcName = function () {...}` の形で宣言なしに代入 + 後段で再代入
