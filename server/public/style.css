@@ -6717,6 +6717,18 @@ dialog.loc-edit-modal[open] {
   .ncb-tool-group { padding: 0 2px; }
 }
 
+/* ── 📋 作業一覧 ─────────────────────────────────────────────────────────── */
+.worklist-section { margin-bottom: 28px; }
+.worklist-section:last-child { margin-bottom: 0; }
+.worklist-section-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin: 0 0 10px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.worklist-section-head h2 { margin: 0; font-size: 16px; }
+.worklist-section-desc { font-size: 11px; }
+.worklist-section-head .ghost { align-self: center; }
+
 /* ── 📦 リポジトリ ウォッチ一覧 ─────────────────────────────────────────── */
 .repo-watch-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .repo-watch-head { display: flex; align-items: center; gap: 6px; }

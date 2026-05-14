@@ -1145,7 +1145,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
-  $('reposView')?.classList.toggle('hidden', tab !== 'repos');
+  $('worklistView')?.classList.toggle('hidden', tab !== 'worklist');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
@@ -1164,7 +1164,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
-  if (tab === 'repos') loadRepoWatch();
+  if (tab === 'worklist') loadRepoWatch();
   if (tab === 'transit') loadTransit();
   if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
@@ -11020,11 +11020,13 @@ document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   void loadReviewFile();
 });
 
-// ── 📦 リポジトリ ウォッチ一覧 ────────────────────────────────────────────
+// ── 📋 作業一覧 / 📦 リポジトリ セクション ────────────────────────────────
 //
-// 登録した GitHub リポの PR / Issue / デフォルトブランチ最終更新を一覧する。
-// 内部ビューアは持たず、 すべての項目は GitHub への外部リンク。 サマリは
-// サーバ側 (repo_watch テーブル) にキャッシュされ、 「更新」 で取り直す。
+// 「作業一覧」 タブ (worklistView) の中の 1 セクション。 登録した GitHub リポの
+// PR / Issue / デフォルトブランチ最終更新を一覧する。 内部ビューアは持たず、
+// すべての項目は GitHub への外部リンク。 サマリはサーバ側 (repo_watch テーブル)
+// にキャッシュされ、 「更新」 で取り直す。 今後ほかのリストを足す時は
+// worklistView に <section> を追加し、 ここに同様の load/render を書く。
 interface RepoWatchItem {
   id: number;
   provider: string;

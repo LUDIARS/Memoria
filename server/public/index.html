@@ -305,8 +305,8 @@
           <button class="tab" data-tab="review">
             <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
           </button>
-          <button class="tab" data-tab="repos">
-            <span class="tab-label" data-full="📦 リポジトリ" data-short="📦 リポ">📦 リポジトリ</span>
+          <button class="tab" data-tab="worklist">
+            <span class="tab-label" data-full="📋 作業一覧" data-short="📋 作業">📋 作業一覧</span>
           </button>
           <button class="tab" data-tab="transit">
             <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
@@ -968,22 +968,27 @@
         </div>
       </div>
 
-      <div id="reposView" class="hidden">
-        <div class="bookmarks-toolbar">
-          <span class="muted">📦 ウォッチ中のリポジトリ — PR / Issue / デフォルトブランチ最終更新</span>
-          <span class="grow"></span>
-          <button id="repoAddBtn" class="ghost" type="button" title="リポジトリを追加">+ 追加</button>
-          <button id="repoRefreshAllBtn" class="ghost" type="button" title="全リポのサマリを取り直す">更新</button>
-        </div>
-        <p id="repoTokenHint" class="muted" style="font-size:11px;margin:0 0 8px;display:none">
-          GitHub PAT が未設定です。 public リポは取得できますが、 private リポや
-          rate limit 緩和には <code>日記</code> 設定の GitHub トークンを設定してください。
-        </p>
-        <div id="repoList" class="cards"></div>
-        <div id="repoEmpty" class="dict-empty hidden">
-          ウォッチ中のリポジトリはありません。 「+ 追加」 から GitHub の URL か
-          <code>owner/name</code> を登録してください。
-        </div>
+      <!-- 📋 作業一覧 — 各種「一覧」をセクション見出しで縦に積むダッシュボード。
+           今はリポジトリ一覧のみ。 今後ほかのリストを <section> で下に足す。 -->
+      <div id="worklistView" class="hidden">
+        <section class="worklist-section">
+          <header class="worklist-section-head">
+            <h2>📦 リポジトリ</h2>
+            <span class="muted worklist-section-desc">PR / Issue / デフォルトブランチ最終更新</span>
+            <span class="grow"></span>
+            <button id="repoAddBtn" class="ghost" type="button" title="リポジトリを追加">+ 追加</button>
+            <button id="repoRefreshAllBtn" class="ghost" type="button" title="全リポのサマリを取り直す">更新</button>
+          </header>
+          <p id="repoTokenHint" class="muted" style="font-size:11px;margin:0 0 8px;display:none">
+            GitHub PAT が未設定です。 public リポは取得できますが、 private リポや
+            rate limit 緩和には <code>日記</code> 設定の GitHub トークンを設定してください。
+          </p>
+          <div id="repoList" class="cards"></div>
+          <div id="repoEmpty" class="dict-empty hidden">
+            ウォッチ中のリポジトリはありません。 「+ 追加」 から GitHub の URL か
+            <code>owner/name</code> を登録してください。
+          </div>
+        </section>
       </div>
 
       <div id="transitView" class="hidden">
