@@ -19,9 +19,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   openDb, ensureUserStopwordsTable,
-  getAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
+  getAppSettings, setAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
   insertGpsLocation, listPendingMeals,
 } from './db.js';
+import {
+  hasInfisicalCreds, missingWantedKeys, applyInfisicalCreds,
+  type InfisicalCreds,
+} from './lib/env-bootstrap.js';
 import { resolveUnresolvedBatch } from './lib/place-resolver.js';
 import { loadLlmConfigFromSettings } from './llm.js';
 import { initWebPush } from './push.js';
@@ -165,6 +169,148 @@ app.use('*', async (c, next) => {
     const tag = status >= 500 ? '[http-error]' : status >= 400 ? '[http-warn]' : '[http]';
     console.log(`${tag} ${JSON.stringify(entry)}`);
   }
+});
+
+// ── Infisical セットアップ gate ───────────────────────────────────────────
+//
+// machine identity (INFISICAL_*) がどこにも無いときだけ、 全 route より前段で
+// 専用セットアップ画面を出す。 画面で creds を入力 → /api/setup/infisical →
+// Infisical 接続成功で app_settings に保存 + env inject + gate 開放 (再起動不要)。
+//
+// machine identity の取得経路 (優先順):
+//   1. Excubitor inject / host shell env
+//   2. app_settings (前回の画面入力)  — bootstrap.ts が起動時に読込済
+//   3. 専用セットアップ画面            — この gate
+//
+// 注意: creds さえ有れば gate は出さない。 Infisical に CERNERE_BASE_URL 等が
+// 未登録でもローカル機能は動かす (= Hub 連携だけ degraded)。
+let needsInfisicalSetup = !hasInfisicalCreds();
+if (needsInfisicalSetup) {
+  console.warn('[setup-gate] Infisical machine identity 未設定 — 専用セットアップ画面を表示');
+} else {
+  const missing = missingWantedKeys();
+  if (missing.length > 0) {
+    console.warn(`[setup-gate] Infisical 接続済だが未取得の設定キー: ${missing.join(', ')} (= 関連機能は degraded)`);
+  }
+}
+
+const SETUP_HTML = `<!doctype html>
+<html lang="ja"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Memoria — Infisical セットアップ</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f4f6fb; margin: 0; padding: 40px 16px; color: #1f2430; }
+  .card { max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #d8dee9;
+          border-radius: 12px; padding: 24px 28px; box-shadow: 0 8px 32px rgba(0,0,0,.08); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lead { font-size: 13px; color: #5a6478; margin: 0 0 18px; line-height: 1.6; }
+  label { display: block; font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+  input { width: 100%; box-sizing: border-box; border: 1px solid #d8dee9; border-radius: 8px;
+          padding: 10px 12px; font-size: 14px; }
+  input:focus { outline: none; border-color: #2a6df4; box-shadow: 0 0 0 3px rgba(42,109,244,.18); }
+  button { margin-top: 18px; width: 100%; background: #2a6df4; color: #fff; border: 0;
+           border-radius: 8px; padding: 11px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: progress; }
+  .err { color: #c0392b; font-size: 12px; margin-top: 10px; min-height: 1em; }
+  .ok { color: #1f7a1f; }
+  code { background: #eef1f6; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style></head><body>
+<div class="card">
+  <h1>🔑 Infisical セットアップ</h1>
+  <p class="lead">Memoria はアプリ設定値 (Cernere URL / API key 等) を Infisical から取得します。
+  この PC の machine identity を入力してください。 値は SQLite (<code>app_settings</code>) に保存され、
+  次回からは自動で接続します。 Excubitor 経由で起動する場合はこの画面は出ません。</p>
+  <form id="f">
+    <label>Site URL</label>
+    <input id="siteUrl" value="https://infisical.vtn-game.com" />
+    <label>Project ID</label>
+    <input id="projectId" placeholder="xxxxxxxx-xxxx-..." />
+    <label>Environment</label>
+    <input id="environment" value="dev" />
+    <label>Machine Identity — Client ID</label>
+    <input id="clientId" placeholder="Universal Auth client id" />
+    <label>Machine Identity — Client Secret</label>
+    <input id="clientSecret" type="password" placeholder="Universal Auth client secret" />
+    <button type="submit" id="submit">接続して保存</button>
+    <div class="err" id="msg"></div>
+  </form>
+</div>
+<script>
+const f = document.getElementById('f');
+const msg = document.getElementById('msg');
+const btn = document.getElementById('submit');
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  msg.className = 'err'; msg.textContent = '';
+  btn.disabled = true; btn.textContent = '接続中…';
+  const body = {
+    siteUrl: siteUrl.value.trim(), projectId: projectId.value.trim(),
+    environment: environment.value.trim() || 'dev',
+    clientId: clientId.value.trim(), clientSecret: clientSecret.value.trim(),
+  };
+  try {
+    const res = await fetch('/api/setup/infisical', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await res.json();
+    if (!res.ok) { msg.textContent = '⚠ ' + (j.error || res.status); btn.disabled = false; btn.textContent = '接続して保存'; return; }
+    msg.className = 'err ok';
+    msg.textContent = '✓ ' + (j.injected || 0) + ' 件の secret を取得しました。 リロードします…';
+    setTimeout(() => { location.href = '/'; }, 1200);
+  } catch (err) {
+    msg.textContent = '⚠ ' + err.message; btn.disabled = false; btn.textContent = '接続して保存';
+  }
+});
+</script>
+</body></html>`;
+
+// gate middleware: 全 route より前段 (= access ログの直後、 router より前)。
+app.use('*', async (c, next) => {
+  if (!needsInfisicalSetup) return next();
+  const p = c.req.path;
+  // 通すもの: セットアップ POST 自身 + health check。
+  if (p === '/api/setup/infisical' || p === '/api/health') return next();
+  // API 呼び出しは 503 + 案内 JSON。
+  if (p.startsWith('/api/')) {
+    return c.json({ error: 'infisical_setup_required', setup_url: '/' }, 503);
+  }
+  // それ以外 (= 画面遷移) はセットアップ画面 HTML。
+  return c.html(SETUP_HTML);
+});
+
+// 専用セットアップ画面からの machine identity 受け口。
+app.post('/api/setup/infisical', async (c) => {
+  const body = await c.req.json().catch(() => null) as Partial<InfisicalCreds> | null;
+  const creds: InfisicalCreds = {
+    siteUrl: String(body?.siteUrl ?? '').trim().replace(/\/$/, ''),
+    projectId: String(body?.projectId ?? '').trim(),
+    environment: String(body?.environment ?? 'dev').trim() || 'dev',
+    clientId: String(body?.clientId ?? '').trim(),
+    clientSecret: String(body?.clientSecret ?? '').trim(),
+  };
+  if (!creds.siteUrl || !creds.projectId || !creds.clientId || !creds.clientSecret) {
+    return c.json({ error: 'siteUrl / projectId / clientId / clientSecret は必須' }, 400);
+  }
+  let injected = 0;
+  try {
+    ({ injected } = await applyInfisicalCreds(creds));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ error: `Infisical 接続失敗: ${msg}` }, 502);
+  }
+  // 成功したら app_settings に永続化 (次回起動は bootstrap.ts が読む)。
+  // キー名は INFISICAL_SETTING_KEYS の左辺 (= 'infisical.*') と一致させる。
+  setAppSettings(db, {
+    'infisical.site_url': creds.siteUrl,
+    'infisical.project_id': creds.projectId,
+    'infisical.environment': creds.environment,
+    'infisical.client_id': creds.clientId,
+    'infisical.client_secret': creds.clientSecret,
+  });
+  needsInfisicalSetup = false;
+  console.log(`[setup-gate] Infisical 接続成功 — ${injected} secrets inject、 gate を開放`);
+  return c.json({ ok: true, injected });
 });
 
 // ── routers (mount with absolute /api/... paths inside each) ──────────────
