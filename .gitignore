@@ -4,6 +4,10 @@ node_modules/
 # local environment overrides
 .env
 .env.local
+# Infisical machine identity (= Infisical に到達するための bootstrap 認証情報)。
+# アプリ設定値そのものは Infisical 本体に置く。 この .env.secrets だけは
+# Infisical に入れられない (chicken-and-egg) のでファイルで持つ。
+.env.secrets
 
 # user data — never commit
 data/
