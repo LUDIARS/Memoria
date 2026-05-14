@@ -18,6 +18,12 @@ export interface DigSessionRow {
   owner_user_name: string | null;
   shared_at: string | null;
   shared_origin: string | null;
+  // レビュー画面発の dig は出自を持つ (= レビュータブ末尾で履歴再表示用)。
+  // 通常 dig タブ起動の場合は全部 null。
+  origin_kind: 'review' | null;
+  origin_repo: string | null;
+  origin_date: string | null;
+  origin_file: string | null;
 }
 
 export interface RecommendationDismissalRow {

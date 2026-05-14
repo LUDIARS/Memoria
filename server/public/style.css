@@ -5459,10 +5459,10 @@ dialog.loc-edit-modal[open] {
   background: var(--panel);
 }
 .review-detail-bar {
-  padding: 14px 18px 10px;
+  padding: 14px 18px 18px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   border-bottom: 1px solid var(--border);
 }
 .review-detail-title-row {
@@ -5494,10 +5494,87 @@ dialog.loc-edit-modal[open] {
   margin-bottom: 0;
 }
 @media (max-width: 760px) {
-  .review-detail-bar { padding: 12px 14px 8px; }
+  .review-detail-bar { padding: 12px 14px 16px; gap: 8px; }
   .review-detail-title { font-size: 22px; }
   .review-file-tabs { padding: 6px 12px 0; }
 }
+/* レビュー詳細末尾の Dig セクション */
+.review-dig-section {
+  border-top: 1px solid var(--border);
+  padding: 16px 18px 20px;
+  margin-top: 16px;
+}
+.review-dig-head {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.review-dig-input {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.review-dig-input textarea {
+  flex: 1;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  resize: vertical;
+  min-height: 48px;
+}
+.review-dig-input button {
+  white-space: nowrap;
+}
+.review-dig-history {
+  margin-top: 16px;
+}
+.review-dig-history-head {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.review-dig-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-dig-history-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--bg-surface, var(--panel));
+}
+.review-dig-history-row1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.review-dig-history-row1 strong {
+  font-size: 13px;
+  flex: 1;
+}
+.review-dig-summary {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted, #6b7280);
+}
+.review-dig-history-actions {
+  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+}
+@media (max-width: 760px) {
+  .review-dig-input { flex-direction: column; align-items: stretch; }
+  .review-dig-section { padding: 12px 14px 16px; }
+}
+
 .review-card {
   cursor: pointer;
   padding: 12px 14px;

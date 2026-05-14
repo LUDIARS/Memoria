@@ -926,6 +926,24 @@
           </div>
           <nav class="tabs review-file-tabs" id="reviewFileTabs"></nav>
           <div id="reviewBody" class="review-body">読み込み中…</div>
+          <!-- レビューファイル末尾の Dig UI (= 問題を深堀するきっかけ)。
+               入力欄 + 「ディグる」 ボタン + 過去 dig 履歴。 dig session は
+               dig タブの履歴とも同期される。 -->
+          <section id="reviewDigSection" class="review-dig-section hidden">
+            <h3 class="review-dig-head">🔎 このレビューをディグる</h3>
+            <p class="muted" style="font-size:12px;margin:4px 0 8px">
+              気になる指摘を選んでさらに調べる。 「ディグる」 を押すと Memoria の Dig 履歴にも残り、 ここからも続きを確認できます。
+            </p>
+            <div class="review-dig-input">
+              <textarea id="reviewDigQuery" rows="2" placeholder="どこを深堀するか — 例: 「OWASP A07 該当ライブラリの代替案」 「指摘された SRE Gap の業界例」"></textarea>
+              <button id="reviewDigSubmit" type="button">🔎 ディグる</button>
+            </div>
+            <div id="reviewDigError" class="muted" style="font-size:11px;color:#c0392b;margin-top:4px" hidden></div>
+            <div class="review-dig-history">
+              <h4 class="review-dig-history-head">過去のディグ <small id="reviewDigHistoryCount" class="muted"></small></h4>
+              <ul id="reviewDigHistoryList" class="review-dig-history-list"></ul>
+            </div>
+          </section>
         </div>
       </div>
 

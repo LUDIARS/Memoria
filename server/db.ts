@@ -113,7 +113,15 @@ export function openDb(dbPath: string): Db {
       status        TEXT NOT NULL DEFAULT 'pending',
       error         TEXT,
       result_json   TEXT,
-      preview_json  TEXT
+      preview_json  TEXT,
+      raw_results_json TEXT,
+      theme         TEXT,
+      -- レビュー画面から起こした dig の出自 (= レビュー画面の対応するファイル下に
+      -- 再表示するため)。 origin_kind = 'review' / NULL のいずれか。
+      origin_kind   TEXT,
+      origin_repo   TEXT,
+      origin_date   TEXT,
+      origin_file   TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_dig_sessions_created
@@ -820,6 +828,20 @@ export function openDb(dbPath: string): Db {
   if (!dsCols.includes('raw_results_json')) {
     db.exec(`ALTER TABLE dig_sessions ADD COLUMN raw_results_json TEXT`);
   }
+  // レビュー画面から発生した dig の出自を保存。
+  //   origin_kind  : 'review' のみ (将来別の発生源を足すための拡張)
+  //   origin_repo  : 'Memoria' 等の repo 名
+  //   origin_date  : 'YYYY-MM-DD' のレビュー日付
+  //   origin_file  : 'REVIEW.md' / 'REVIEW_DESIGN.md' 等
+  // dig タブ側は無視して良い。 レビュー画面で同じ repo×date×file の dig
+  // を再表示するために使う。
+  if (!dsCols.includes('origin_kind'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_kind TEXT`);
+  if (!dsCols.includes('origin_repo'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_repo TEXT`);
+  if (!dsCols.includes('origin_date'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_date TEXT`);
+  if (!dsCols.includes('origin_file'))  db.exec(`ALTER TABLE dig_sessions ADD COLUMN origin_file TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_dig_sessions_origin_review
+            ON dig_sessions(origin_kind, origin_repo, origin_date, origin_file, created_at DESC)
+           WHERE origin_kind = 'review'`);
 
   const deCols = (db.prepare(`PRAGMA table_info(diary_entries)`).all() as { name: string }[]).map(c => c.name);
   if (!deCols.includes('work_content')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_content TEXT`);
@@ -1278,11 +1300,49 @@ export function listSuggestedVisits(db: Db, { sinceDays = 30 }: { sinceDays?: nu
 
 // ── dig sessions ----------------------------------------------------------
 
-export function insertDigSession(db: Db, query: string, theme: string | null = null): number {
+export interface DigOriginReview {
+  kind: 'review';
+  repo: string;
+  date: string;
+  file: string;
+}
+
+export function insertDigSession(
+  db: Db,
+  query: string,
+  theme: string | null = null,
+  origin: DigOriginReview | null = null,
+): number {
   const info = db
-    .prepare(`INSERT INTO dig_sessions (query, theme) VALUES (?, ?)`)
-    .run(query, theme || null);
+    .prepare(`INSERT INTO dig_sessions (query, theme, origin_kind, origin_repo, origin_date, origin_file)
+              VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(
+      query,
+      theme || null,
+      origin?.kind ?? null,
+      origin?.repo ?? null,
+      origin?.date ?? null,
+      origin?.file ?? null,
+    );
   return Number(info.lastInsertRowid);
+}
+
+/** 指定 repo×date×file から発生した dig session を新しい順で返す。
+ *  レビュー画面の各ファイル末尾で 「過去のディグ履歴」 として再表示する用。 */
+export function listDigsForReview(
+  db: Db,
+  { repo, date, file }: { repo: string; date: string; file: string },
+): DigSessionRow[] {
+  return db.prepare(
+    `SELECT id, query, theme, status, error, result_json, preview_json, raw_results_json,
+            created_at, origin_kind, origin_repo, origin_date, origin_file
+       FROM dig_sessions
+      WHERE origin_kind = 'review'
+        AND origin_repo = ?
+        AND origin_date = ?
+        AND origin_file = ?
+      ORDER BY created_at DESC`,
+  ).all(repo, date, file) as DigSessionRow[];
 }
 
 export interface SetDigResultInput {

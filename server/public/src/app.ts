@@ -10547,13 +10547,158 @@ async function loadReviewFile() {
     const res = await fetch(url);
     if (!res.ok) { body.textContent = `${res.status}: ${await res.text()}`; return; }
     const md = await res.text();
-    // 見出し + テーブル + リスト + 段落 + コードフェンスを HTML に。
-    // インラインは notes/markdown.ts:renderInline を流用 (bold / italic / code / link)。
     body.innerHTML = renderMarkdownBlock(md);
+    // ファイルが読めたら下に dig セクションを出して、 同じ repo/date/file の
+    // 過去 dig を一覧する。
+    await refreshReviewDigSection();
   } catch (e) {
     body.textContent = `読み込みエラー: ${e.message}`;
   }
 }
+
+// ── レビュー画面の Dig UI ───────────────────────────────────────────────
+// section の表示は currentFile があるときだけ。 切替直後に履歴も読み直す。
+// pending な dig があるときだけ 5 秒おきに自分自身を呼び戻して進捗を反映。
+let _reviewDigPollTimer: number | null = null;
+function clearReviewDigPoll() {
+  if (_reviewDigPollTimer != null) {
+    window.clearTimeout(_reviewDigPollTimer);
+    _reviewDigPollTimer = null;
+  }
+}
+
+async function refreshReviewDigSection() {
+  const section = document.getElementById('reviewDigSection');
+  if (!section) return;
+  // レビュータブ以外に居る間は section を見せず poll も止める。
+  if (state.tab !== 'review'
+    || !reviewState.selected || !reviewState.currentDate || !reviewState.currentFile) {
+    section.classList.add('hidden');
+    clearReviewDigPoll();
+    return;
+  }
+  section.classList.remove('hidden');
+  const list = document.getElementById('reviewDigHistoryList');
+  const countEl = document.getElementById('reviewDigHistoryCount');
+  if (!list) return;
+  list.innerHTML = '<li class="muted">読み込み中…</li>';
+  try {
+    interface ReviewDigItem { id: number; query: string; status: string; created_at: string; error: string | null; preview_json: string | null; result_json: string | null }
+    const r = (await api(`/api/dig/by-review?repo=${encodeURIComponent(reviewState.selected)}&date=${encodeURIComponent(reviewState.currentDate)}&file=${encodeURIComponent(reviewState.currentFile)}`)) as { items: ReviewDigItem[] };
+    const items = r.items || [];
+    if (countEl) countEl.textContent = items.length > 0 ? `(${items.length} 件)` : '';
+    clearReviewDigPoll();
+    const hasPending = items.some((it) => it.status === 'pending');
+    if (hasPending) {
+      // 5 秒後に再 fetch (= status の追従)。 タブを離れていたら refreshReviewDigSection
+      // が冒頭で hidden→return するので空回りしない。
+      _reviewDigPollTimer = window.setTimeout(() => { void refreshReviewDigSection(); }, 5_000);
+    }
+    if (items.length === 0) {
+      list.innerHTML = '<li class="muted" style="font-size:12px">まだディグ履歴はありません。 上の入力欄から始められます。</li>';
+      return;
+    }
+    list.innerHTML = items.map((it) => {
+      const status = it.error ? `<span style="color:#c0392b">⚠ ${escapeHtml(it.error.slice(0, 80))}</span>`
+        : it.status === 'pending' ? '<span class="muted">⏳ 実行中</span>'
+        : it.status === 'done' ? '<span style="color:#059669">✓ 完了</span>'
+        : escapeHtml(it.status);
+      const summary = extractDigSummarySnippet(it.result_json, it.preview_json);
+      const when = new Date(it.created_at).toLocaleString('ja-JP');
+      return `<li class="review-dig-history-item" data-dig-id="${it.id}">
+        <div class="review-dig-history-row1">
+          <strong>${escapeHtml(it.query)}</strong>
+          ${status}
+        </div>
+        <div class="muted" style="font-size:11px">${escapeHtml(when)}</div>
+        ${summary ? `<p class="review-dig-summary">${escapeHtml(summary)}</p>` : ''}
+        <div class="review-dig-history-actions">
+          <button class="ghost review-dig-open" data-dig-id="${it.id}" type="button">▶ Dig タブで開く</button>
+        </div>
+      </li>`;
+    }).join('');
+    list.querySelectorAll('.review-dig-open').forEach((b) => {
+      b.addEventListener('click', () => {
+        const id = Number((b as HTMLElement).dataset.digId);
+        if (Number.isFinite(id)) void openDigSessionFromReview(id);
+      });
+    });
+  } catch (e: unknown) {
+    list.innerHTML = `<li class="muted" style="font-size:12px;color:#c0392b">読み込みエラー: ${escapeHtml((e as Error).message)}</li>`;
+  }
+}
+
+function extractDigSummarySnippet(resultJson: string | null, previewJson: string | null): string {
+  // result_json (深堀完了) > preview_json の順で要約を抽出。 1 行プレビューとして 200 字以内に切る。
+  for (const j of [resultJson, previewJson]) {
+    if (!j) continue;
+    try {
+      const obj = JSON.parse(j) as { summary?: string; ai_overview?: string };
+      const text = (obj.summary || obj.ai_overview || '').trim();
+      if (text) return text.replace(/\s+/g, ' ').slice(0, 200);
+    } catch { /* swallow */ }
+  }
+  return '';
+}
+
+async function openDigSessionFromReview(id: number) {
+  // dig タブに切替えて該当 session を開く。 既存の loadDigSession を再利用。
+  switchTab('dig');
+  // loadDigSession は async function declaration 済み (10ms 後で十分タブ DOM 完成)
+  setTimeout(() => { void loadDigSession(id); }, 50);
+}
+
+async function submitReviewDig() {
+  const ta = $('reviewDigQuery') as HTMLTextAreaElement | null;
+  const errEl = $('reviewDigError');
+  const setErr = (m: string) => { if (errEl) { errEl.textContent = `⚠ ${m}`; errEl.hidden = false; } };
+  if (errEl) errEl.hidden = true;
+  const q = ta?.value.trim() ?? '';
+  if (!q) return setErr('調べたい点を入力してください');
+  if (!reviewState.selected || !reviewState.currentDate || !reviewState.currentFile) {
+    return setErr('レビューファイルが選択されていません');
+  }
+  // dig query には 「どのレビュー由来か」 を先頭に付けて、 dig 側でも文脈が分かるように。
+  const ctx = `[Review ${reviewState.selected}/${reviewState.currentDate}/${reviewState.currentFile}]`;
+  const composedQuery = `${ctx}\n${q}`;
+  const btn = $('reviewDigSubmit') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 起動中…'; }
+  try {
+    const res = await fetch('/api/dig', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: composedQuery,
+        origin: {
+          kind: 'review',
+          repo: reviewState.selected,
+          date: reviewState.currentDate,
+          file: reviewState.currentFile,
+        },
+      }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      return setErr(b.error || `${res.status}`);
+    }
+    if (ta) ta.value = '';
+    flashToast('🔎 ディグを開始しました');
+    await refreshReviewDigSection();
+  } catch (e: unknown) {
+    setErr((e as Error).message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔎 ディグる'; }
+  }
+}
+
+document.getElementById('reviewDigSubmit')?.addEventListener('click', () => void submitReviewDig());
+// Ctrl/Cmd + Enter で submit
+document.getElementById('reviewDigQuery')?.addEventListener('keydown', (ev) => {
+  const e = ev as KeyboardEvent;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    void submitReviewDig();
+  }
+});
 
 document.getElementById('reviewRefresh')?.addEventListener('click', () => void loadReviewRepos());
 document.getElementById('reviewBackBtn')?.addEventListener('click', () => showReviewList());
