@@ -53,6 +53,9 @@ import {
   applyInfisicalCreds, hasInfisicalCreds, missingWantedKeys,
 } from './env-bootstrap.js';
 import { cernereLogin, cernereProjectToken } from './cernere-login.js';
+import {
+  DATA_TYPES, listData, getData, createData, updateData, deleteData,
+} from './data.js';
 
 const PORT = Number(process.env.MEMORIA_HUB_PORT ?? 5280);
 const ALLOWED = (process.env.MEMORIA_HUB_ALLOWED_ORIGINS || '')
@@ -748,6 +751,95 @@ app.get('/api/shared/moderation/log', async (c) => {
   const limit = Math.min(Number(c.req.query('limit') || 200), 1000);
   const items = await listShareLog({ limit });
   return c.json({ items });
+});
+
+// ── /api/data/* — Multi 対応 7 型の汎用 JSON CRUD (二層設計の本線) ─────────
+//
+// /api/shared/* と違い GET も含め全て session 必須 (Multi モードは Hub に
+// ログインした状態でのみ動く前提)。 旧 /api/shared/* は Phase 6 まで併存。
+
+const DATA_TYPE_SET = new Set(DATA_TYPES);
+
+function dataActor(c) {
+  const u = authedUser(c);
+  if (!u) return null;
+  return { userId: u.userId, displayName: u.displayName, role: u.role };
+}
+
+app.get('/api/data/:type', authMiddleware, async (c) => {
+  const type = c.req.param('type');
+  if (!DATA_TYPE_SET.has(type)) return c.json({ error: 'unknown_type' }, 404);
+  try {
+    const items = await listData(type, {
+      limit: c.req.query('limit'),
+      offset: c.req.query('offset'),
+      q: c.req.query('q') || c.req.query('search') || null,
+    });
+    return c.json({ items });
+  } catch (err) {
+    return c.json({ error: err.message }, err.status || 500);
+  }
+});
+
+app.get('/api/data/:type/:id', authMiddleware, async (c) => {
+  const type = c.req.param('type');
+  if (!DATA_TYPE_SET.has(type)) return c.json({ error: 'unknown_type' }, 404);
+  try {
+    const row = await getData(type, c.req.param('id'));
+    if (!row) return c.json({ error: 'not_found' }, 404);
+    return c.json(row);
+  } catch (err) {
+    return c.json({ error: err.message }, err.status || 500);
+  }
+});
+
+app.post('/api/data/:type', authMiddleware, async (c) => {
+  const type = c.req.param('type');
+  if (!DATA_TYPE_SET.has(type)) return c.json({ error: 'unknown_type' }, 404);
+  const actor = dataActor(c);
+  if (!actor) return c.json({ error: 'unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'invalid body' }, 400);
+  try {
+    const row = await createData(type, body, {
+      userId: actor.userId,
+      displayName: actor.displayName,
+      sharedOrigin: c.req.header('x-memoria-origin') || null,
+    });
+    return c.json(row, 201);
+  } catch (err) {
+    return c.json({ error: err.message }, err.status || 500);
+  }
+});
+
+app.patch('/api/data/:type/:id', authMiddleware, async (c) => {
+  const type = c.req.param('type');
+  if (!DATA_TYPE_SET.has(type)) return c.json({ error: 'unknown_type' }, 404);
+  const actor = dataActor(c);
+  if (!actor) return c.json({ error: 'unauthorized' }, 401);
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'invalid body' }, 400);
+  try {
+    const r = await updateData(type, c.req.param('id'), body, actor);
+    if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
+    return c.json(r.row);
+  } catch (err) {
+    return c.json({ error: err.message }, err.status || 500);
+  }
+});
+
+app.delete('/api/data/:type/:id', authMiddleware, async (c) => {
+  const type = c.req.param('type');
+  if (!DATA_TYPE_SET.has(type)) return c.json({ error: 'unknown_type' }, 404);
+  const actor = dataActor(c);
+  if (!actor) return c.json({ error: 'unauthorized' }, 401);
+  try {
+    const r = await deleteData(type, c.req.param('id'), actor);
+    if (!r.ok) return c.json({ error: r.error }, r.error === 'not_found' ? 404 : 403);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: err.message }, err.status || 500);
+  }
 });
 
 // ── boot ───────────────────────────────────────────────────────────────────
