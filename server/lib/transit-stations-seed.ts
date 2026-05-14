@@ -195,7 +195,7 @@ export function searchStationsLocal(db: Db, input: StationSearchInput): StationC
       });
     }
   }
-  let candidates = [...groups.values()];
+  const candidates = [...groups.values()];
 
   // GPS 距離計算
   const hasGps = Number.isFinite(input.lat) && Number.isFinite(input.lon);
