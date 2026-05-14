@@ -75,19 +75,20 @@ Multi モード時、 `server/local/multi-proxy.ts` の middleware が feature r
 - Hub は自分の Infisical project から `CERNERE_BASE_URL` 等を取得し、 自分が
   属する Cernere に代理ログインする。 拠点ごとに別 Cernere でよい。
 
-## 5. 旧経路 (移行期間中・ Phase 6 で撤去予定)
+## 5. Phase 6 で撤去した旧経路
 
-以下は旧 OAuth-dance / share-relay 方式の名残。 二層設計では使われず、
-既存接続が即死しないために残してあるだけ。 frontend の旧 Multi browse タブと
-共に Phase 6 で撤去する。
+旧 OAuth-dance / share-relay 方式のエンドポイント・コードは Phase 6 で撤去済:
 
-| method | path | 備考 |
-|---|---|---|
-| POST | `/api/multi/active` | 旧 multi-select (複数 Hub 同時 active)。 二層では排他なので不要 |
-| POST | `/api/multi/disconnect` | → `/api/multi/logout` に置換済 |
-| GET/POST | `/api/multi/proxy/*` | → proxy 層 (middleware) に置換済 |
-| POST | `/api/multi/share` | → Multi モードの通常 CRUD に置換済 |
-| POST | `/api/multi/download` | → Multi モードの通常 CRUD に置換済 |
-| GET/POST/DELETE | Hub `/api/shared/*` | → Hub `/api/data/*` に置換済 |
+| 撤去したもの | 置換先 |
+|---|---|
+| `/api/multi/disconnect` | `/api/multi/logout` |
+| `/api/multi/proxy/*` | proxy 層 (`server/local/multi-proxy.ts` middleware) |
+| `/api/multi/share` | Multi モードの通常 CRUD (proxy 層) |
+| `/api/multi/download` | Multi モードの通常 CRUD (proxy 層) |
+| Hub `/api/shared/*` (moderation / workplace-presence 含む) | Hub `/api/data/*` |
+| `server/lib/cernere-session.ts` | 不要 (ローカルは Cernere を直接叩かない) |
+| frontend の旧 Multi browse タブ + 各 detail の「シェア」 ボタン | データソース スイッチャ + proxy |
 
-撤去時に `server/lib/cernere-session.ts` (ローカル直 Cernere 経路) も不要になる。
+`/api/multi/active` は登録サーバ管理 API の一部として残置 (排他選択化で実質
+未使用だが無害)。 workplace-presence の Hub 共有は二層設計では廃止
+(個人の在席ストリームは個人ログ扱いで Hub に出さない)。
