@@ -6716,3 +6716,32 @@ dialog.loc-edit-modal[open] {
   .ncb-toolbar { gap: 6px; }
   .ncb-tool-group { padding: 0 2px; }
 }
+
+/* ── 📦 リポジトリ ウォッチ一覧 ─────────────────────────────────────────── */
+.repo-watch-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.repo-watch-head { display: flex; align-items: center; gap: 6px; }
+.repo-watch-slug { text-decoration: none; color: inherit; word-break: break-all; }
+.repo-watch-slug:hover strong { color: var(--accent); }
+.repo-watch-head .ghost { padding: 2px 7px; font-size: 12px; line-height: 1.4; }
+.repo-watch-stats { display: flex; gap: 8px; }
+.repo-watch-stat {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 1px; padding: 6px 4px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  text-decoration: none; color: inherit;
+}
+.repo-watch-stat:hover { border-color: var(--accent); background: var(--accent-bg); }
+.repo-watch-stat-num { font-size: 18px; font-weight: 700; }
+.repo-watch-stat-label { font-size: 10px; color: var(--muted); }
+.repo-watch-branch {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  font-size: 12px;
+}
+.repo-watch-branch code {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; font-size: 11px;
+}
+.repo-watch-commit-msg { flex: 1; min-width: 120px; word-break: break-word; }
+.repo-watch-commit-when { color: var(--muted); white-space: nowrap; }
+.repo-watch-commit-when a { color: var(--muted); }
+.repo-watch-foot { min-height: 0; }

@@ -60,6 +60,7 @@ import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMiscRouter } from './routes/misc.js';
 import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
+import { makeRepoRouter } from './routes/repo.js';
 import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
 import { makeWeatherRouter } from './routes/weather.js';
 import { makeTransitRouter } from './routes/transit.js';
@@ -297,6 +298,7 @@ app.route('/', makeMultiRouter({
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
 app.route('/', makeReviewRouter({ db }));
+app.route('/', makeRepoRouter({ db }));
 app.route('/', makeWeatherRouter({ db }));
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));

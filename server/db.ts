@@ -532,6 +532,35 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_recommendation_runs_started
       ON recommendation_runs(started_at DESC);
 
+    -- ウォッチ対象のソース管理リポジトリ。 PR / Issue / デフォルトブランチの
+    -- 最終更新を一覧するためのレジストリ。 内部ビューアは持たず、 表示は
+    -- すべて元のホスティング先 (GitHub 等) へリンクするだけ。
+    -- provider は将来 GitHub 以外 (gitlab / bitbucket / gitea ...) を足す
+    -- ための拡張点 (現状は 'github' のみ実装)。
+    -- 各 *_count / last_commit_* / fetched_at / fetch_error はホスティング先
+    -- API レート制限を避けるための直近フェッチのキャッシュ。 表示は常に
+    -- このキャッシュから行い、 refresh で明示的に取り直す。
+    CREATE TABLE IF NOT EXISTS repo_watch (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider            TEXT NOT NULL DEFAULT 'github',
+      owner               TEXT NOT NULL,
+      name                TEXT NOT NULL,
+      html_url            TEXT NOT NULL,
+      default_branch      TEXT,
+      open_pr_count       INTEGER,
+      open_issue_count    INTEGER,
+      last_commit_sha     TEXT,
+      last_commit_message TEXT,
+      last_commit_url     TEXT,
+      last_commit_at      TEXT,
+      fetched_at          TEXT,
+      fetch_error         TEXT,
+      sort_order          INTEGER NOT NULL DEFAULT 0,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(provider, owner, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_watch_sort ON repo_watch(sort_order, id);
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,
@@ -2571,6 +2600,104 @@ export function updateReviewTarget(
 export function deleteReviewTarget(db: Db, id: number): boolean {
   const r = db.prepare(`DELETE FROM review_targets WHERE id = ?`).run(id);
   return r.changes > 0;
+}
+
+// ─── repo_watch (ソース管理リポジトリのウォッチ一覧) ──────────────────────────
+export interface RepoWatchRow {
+  id: number;
+  provider: string;
+  owner: string;
+  name: string;
+  html_url: string;
+  default_branch: string | null;
+  open_pr_count: number | null;
+  open_issue_count: number | null;
+  last_commit_sha: string | null;
+  last_commit_message: string | null;
+  last_commit_url: string | null;
+  last_commit_at: string | null;
+  fetched_at: string | null;
+  fetch_error: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+const REPO_WATCH_COLS = `
+  id, provider, owner, name, html_url, default_branch,
+  open_pr_count, open_issue_count,
+  last_commit_sha, last_commit_message, last_commit_url, last_commit_at,
+  fetched_at, fetch_error, sort_order, created_at
+`;
+
+export function listRepoWatch(db: Db): RepoWatchRow[] {
+  return db.prepare(
+    `SELECT ${REPO_WATCH_COLS} FROM repo_watch ORDER BY sort_order ASC, id ASC`,
+  ).all() as RepoWatchRow[];
+}
+
+export function getRepoWatch(db: Db, id: number): RepoWatchRow | undefined {
+  return db.prepare(
+    `SELECT ${REPO_WATCH_COLS} FROM repo_watch WHERE id = ?`,
+  ).get(id) as RepoWatchRow | undefined;
+}
+
+/** 新規登録。 (provider, owner, name) が重複する場合は UNIQUE 制約で throw。 */
+export function insertRepoWatch(
+  db: Db,
+  { provider = 'github', owner, name, html_url, default_branch = null }:
+    { provider?: string; owner: string; name: string; html_url: string; default_branch?: string | null },
+): number {
+  const max = db.prepare(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM repo_watch`).get() as { m: number };
+  const r = db.prepare(
+    `INSERT INTO repo_watch (provider, owner, name, html_url, default_branch, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(provider, owner, name, html_url, default_branch, max.m + 1);
+  return Number(r.lastInsertRowid);
+}
+
+export function deleteRepoWatch(db: Db, id: number): boolean {
+  const r = db.prepare(`DELETE FROM repo_watch WHERE id = ?`).run(id);
+  return r.changes > 0;
+}
+
+/** 直近フェッチのキャッシュ列を更新する。 fetch 成否どちらでも呼ぶ。 */
+export function updateRepoWatchStats(
+  db: Db,
+  id: number,
+  stats: {
+    default_branch?: string | null;
+    open_pr_count?: number | null;
+    open_issue_count?: number | null;
+    last_commit_sha?: string | null;
+    last_commit_message?: string | null;
+    last_commit_url?: string | null;
+    last_commit_at?: string | null;
+    fetch_error?: string | null;
+  },
+): void {
+  db.prepare(
+    `UPDATE repo_watch SET
+       default_branch      = ?,
+       open_pr_count       = ?,
+       open_issue_count    = ?,
+       last_commit_sha     = ?,
+       last_commit_message = ?,
+       last_commit_url     = ?,
+       last_commit_at      = ?,
+       fetched_at          = datetime('now'),
+       fetch_error         = ?
+     WHERE id = ?`,
+  ).run(
+    stats.default_branch ?? null,
+    stats.open_pr_count ?? null,
+    stats.open_issue_count ?? null,
+    stats.last_commit_sha ?? null,
+    stats.last_commit_message ?? null,
+    stats.last_commit_url ?? null,
+    stats.last_commit_at ?? null,
+    stats.fetch_error ?? null,
+    id,
+  );
 }
 
 export function activityEventsForDate(db: Db, dateStr: string): ActivityEventParsed[] {
