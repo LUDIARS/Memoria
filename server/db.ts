@@ -512,6 +512,26 @@ export function openDb(dbPath: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_review_targets_enabled ON review_targets(enabled);
 
+    -- AI 主導おすすめ run の履歴。 1 run = 6 agent 並列 Sonnet + Opus 統合の結果。
+    -- agent_logs_json:  各 agent の入出力サマリ (= 「なぜ・どうおすすめしたか」 の根拠)
+    -- results_json:     Opus 統合済みの最終おすすめリスト (RecommendationItem[])
+    -- status:           pending / running / done / error
+    CREATE TABLE IF NOT EXISTS recommendation_runs (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      started_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at     TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      error           TEXT,
+      agent_logs_json TEXT,
+      results_json    TEXT,
+      model_sonnet    TEXT,
+      model_opus      TEXT,
+      duration_ms     INTEGER,
+      result_count    INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_recommendation_runs_started
+      ON recommendation_runs(started_at DESC);
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,
@@ -4962,4 +4982,334 @@ export function setExtensionRules(db: Db, rules: ExtensionRules): void {
     INSERT INTO app_settings (key, value) VALUES ('extension_rules_json', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(JSON.stringify(rules));
+}
+
+// ── recommendation_runs (AI 主導おすすめ) ─────────────────────────────────────
+
+export interface RecommendationRunRow {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: 'pending' | 'running' | 'done' | 'error';
+  error: string | null;
+  agent_logs_json: string | null;
+  results_json: string | null;
+  model_sonnet: string | null;
+  model_opus: string | null;
+  duration_ms: number | null;
+  result_count: number | null;
+}
+
+export function insertRecommendationRun(db: Db): number {
+  const res = db.prepare(`
+    INSERT INTO recommendation_runs (status) VALUES ('running')
+  `).run();
+  return Number(res.lastInsertRowid);
+}
+
+export function failRecommendationRun(db: Db, id: number, error: string): void {
+  db.prepare(`
+    UPDATE recommendation_runs
+       SET status = 'error',
+           error = ?,
+           finished_at = datetime('now'),
+           duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
+     WHERE id = ?
+  `).run(error.slice(0, 4000), id);
+}
+
+export function completeRecommendationRun(
+  db: Db,
+  id: number,
+  payload: {
+    agentLogs: unknown;
+    results: unknown[];
+    modelSonnet: string;
+    modelOpus: string;
+  },
+): void {
+  db.prepare(`
+    UPDATE recommendation_runs
+       SET status = 'done',
+           finished_at = datetime('now'),
+           agent_logs_json = ?,
+           results_json = ?,
+           model_sonnet = ?,
+           model_opus = ?,
+           result_count = ?,
+           duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
+     WHERE id = ?
+  `).run(
+    JSON.stringify(payload.agentLogs),
+    JSON.stringify(payload.results),
+    payload.modelSonnet,
+    payload.modelOpus,
+    payload.results.length,
+    id,
+  );
+}
+
+export function getRecommendationRun(db: Db, id: number): RecommendationRunRow | null {
+  const row = db.prepare(`SELECT * FROM recommendation_runs WHERE id = ?`).get(id) as RecommendationRunRow | undefined;
+  return row ?? null;
+}
+
+export function getLatestRecommendationRun(db: Db, status: 'done' | 'any' = 'done'): RecommendationRunRow | null {
+  const where = status === 'done' ? `WHERE status = 'done'` : '';
+  const row = db.prepare(`
+    SELECT * FROM recommendation_runs
+    ${where}
+    ORDER BY started_at DESC
+    LIMIT 1
+  `).get() as RecommendationRunRow | undefined;
+  return row ?? null;
+}
+
+export function listRecommendationRuns(db: Db, limit = 30): RecommendationRunRow[] {
+  return db.prepare(`
+    SELECT id, started_at, finished_at, status, error, model_sonnet, model_opus, duration_ms, result_count
+    FROM recommendation_runs
+    ORDER BY started_at DESC
+    LIMIT ?
+  `).all(Number(limit) || 30) as RecommendationRunRow[];
+}
+
+export function findRunningRecommendationRun(db: Db): RecommendationRunRow | null {
+  const row = db.prepare(`
+    SELECT * FROM recommendation_runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1
+  `).get() as RecommendationRunRow | undefined;
+  return row ?? null;
+}
+
+// ── recommendation 入力データ集計 (直近 N 日) ────────────────────────────────
+//
+// 6 agent に渡すための各領域 1 週間サマリ。 LLM への入力サイズが現実的になる
+// よう、 各 agent 用に top-N で truncate する。
+
+export interface RecSourceBookmark {
+  id: number;
+  url: string;
+  title: string;
+  summary: string | null;
+  memo: string;
+  created_at: string;
+  categories: string[];
+}
+
+export function recRecentBookmarks(db: Db, sinceDays = 7, limit = 50): RecSourceBookmark[] {
+  const rows = db.prepare(`
+    SELECT id, url, title, summary, memo, created_at
+    FROM bookmarks
+    WHERE created_at >= datetime('now', ?)
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as Array<Omit<RecSourceBookmark, 'categories'>>;
+  const ids = rows.map(r => r.id);
+  if (ids.length === 0) return [];
+  const cats = db.prepare(`
+    SELECT bookmark_id, category FROM bookmark_categories
+    WHERE bookmark_id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids) as { bookmark_id: number; category: string }[];
+  const byId = new Map<number, string[]>();
+  for (const c of cats) {
+    let arr = byId.get(c.bookmark_id);
+    if (!arr) { arr = []; byId.set(c.bookmark_id, arr); }
+    arr.push(c.category);
+  }
+  return rows.map(r => ({ ...r, categories: byId.get(r.id) ?? [] }));
+}
+
+export interface RecBrowserDomain {
+  domain: string;
+  visits: number;
+  last_seen_at: string;
+  sample_titles: string[];
+}
+
+export function recBrowserHistory(db: Db, sinceDays = 7, topDomains = 30): RecBrowserDomain[] {
+  // domain × visit_events 集計 + 各 domain の代表 title を 3 件まで
+  const rows = db.prepare(`
+    SELECT domain, COUNT(*) AS visits, MAX(visited_at) AS last_seen_at
+    FROM visit_events
+    WHERE visited_at >= datetime('now', ?)
+      AND domain IS NOT NULL AND domain <> ''
+    GROUP BY domain
+    ORDER BY visits DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, topDomains) as { domain: string; visits: number; last_seen_at: string }[];
+  if (rows.length === 0) return [];
+  const titleStmt = db.prepare(`
+    SELECT DISTINCT title FROM visit_events
+    WHERE domain = ? AND visited_at >= datetime('now', ?) AND title IS NOT NULL AND title <> ''
+    ORDER BY visited_at DESC
+    LIMIT 3
+  `);
+  return rows.map(r => ({
+    domain: r.domain,
+    visits: r.visits,
+    last_seen_at: r.last_seen_at,
+    sample_titles: (titleStmt.all(r.domain, `-${sinceDays} days`) as { title: string }[]).map(t => t.title),
+  }));
+}
+
+export interface RecGitCommit {
+  occurred_at: string;
+  source: string | null;     // repo name
+  content: string;           // commit message (1 行目)
+  metadata: Record<string, unknown> | null;
+}
+
+export function recGitCommits(db: Db, sinceDays = 7, limit = 80): RecGitCommit[] {
+  const rows = db.prepare(`
+    SELECT occurred_at, source, content, metadata_json
+    FROM activity_events
+    WHERE kind = 'git_commit' AND occurred_at >= datetime('now', ?)
+    ORDER BY occurred_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { occurred_at: string; source: string | null; content: string; metadata_json: string | null }[];
+  return rows.map(r => ({
+    occurred_at: r.occurred_at,
+    source: r.source,
+    content: r.content,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) as Record<string, unknown> : null,
+  }));
+}
+
+export interface RecClaudePrompt {
+  occurred_at: string;
+  source: string | null;
+  content: string;
+  metadata: Record<string, unknown> | null;
+}
+
+export function recClaudePrompts(db: Db, sinceDays = 7, limit = 80): RecClaudePrompt[] {
+  const rows = db.prepare(`
+    SELECT occurred_at, source, content, metadata_json
+    FROM activity_events
+    WHERE kind = 'claude_code_prompt' AND occurred_at >= datetime('now', ?)
+    ORDER BY occurred_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { occurred_at: string; source: string | null; content: string; metadata_json: string | null }[];
+  return rows.map(r => ({
+    occurred_at: r.occurred_at,
+    source: r.source,
+    content: r.content,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) as Record<string, unknown> : null,
+  }));
+}
+
+export interface RecGameSummary {
+  appid: number;
+  name: string;
+  minutes_7d: number;
+  last_played_at: string;
+}
+
+export function recGamesLastWeek(db: Db, sinceDays = 7, limit = 20): RecGameSummary[] {
+  const rows = db.prepare(`
+    SELECT appid, name,
+           MAX(playtime_2weeks_min) - MIN(playtime_2weeks_min) AS minutes_7d,
+           MAX(sampled_at) AS last_played_at
+    FROM steam_activity
+    WHERE sampled_at >= datetime('now', ?)
+    GROUP BY appid, name
+    HAVING minutes_7d > 0
+    ORDER BY minutes_7d DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as RecGameSummary[];
+  return rows;
+}
+
+export interface RecAppSummary {
+  process_name: string;
+  app_name: string | null;
+  kind: string | null;
+  minutes_7d: number;
+  sample_titles: string[];
+}
+
+export function recAppsLastWeek(db: Db, sinceDays = 7, limit = 30): RecAppSummary[] {
+  // app_samples は 30s 周期で 1 行 = sample_interval_sec 秒なので合算
+  const rows = db.prepare(`
+    SELECT s.process_name,
+           a.name AS app_name,
+           a.kind AS kind,
+           SUM(s.sample_interval_sec) / 60.0 AS minutes_7d
+    FROM app_samples s
+    LEFT JOIN applications a ON a.process_name = s.process_name
+    WHERE s.sampled_at >= datetime('now', ?)
+    GROUP BY s.process_name
+    HAVING minutes_7d >= 5
+    ORDER BY minutes_7d DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { process_name: string; app_name: string | null; kind: string | null; minutes_7d: number }[];
+  if (rows.length === 0) return [];
+  const titleStmt = db.prepare(`
+    SELECT DISTINCT window_title FROM app_samples
+    WHERE process_name = ? AND sampled_at >= datetime('now', ?) AND window_title IS NOT NULL AND window_title <> ''
+    ORDER BY sampled_at DESC
+    LIMIT 5
+  `);
+  return rows.map(r => ({
+    process_name: r.process_name,
+    app_name: r.app_name,
+    kind: r.kind,
+    minutes_7d: Math.round(r.minutes_7d),
+    sample_titles: (titleStmt.all(r.process_name, `-${sinceDays} days`) as { window_title: string }[]).map(t => t.window_title),
+  }));
+}
+
+export interface RecNoteSummary {
+  id: string;
+  title: string;
+  kind: string;
+  updated_at: string;
+  preview: string;
+}
+
+export function recRecentNotes(db: Db, sinceDays = 7, limit = 30): RecNoteSummary[] {
+  const notes = db.prepare(`
+    SELECT id, title, kind, updated_at
+    FROM notes
+    WHERE updated_at >= datetime('now', ?)
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { id: string; title: string; kind: string; updated_at: string }[];
+  if (notes.length === 0) return [];
+  const blockStmt = db.prepare(`
+    SELECT text FROM note_blocks
+    WHERE note_id = ?
+    ORDER BY position
+    LIMIT 6
+  `);
+  return notes.map(n => {
+    const blocks = blockStmt.all(n.id) as { text: string }[];
+    const preview = blocks.map(b => (b.text || '').trim()).filter(Boolean).join('\n').slice(0, 600);
+    return { id: n.id, title: n.title, kind: n.kind, updated_at: n.updated_at, preview };
+  });
+}
+
+export interface RecDigSummary {
+  id: number;
+  query: string;
+  created_at: string;
+  status: string;
+  result_preview: string;
+}
+
+export function recRecentDigs(db: Db, sinceDays = 7, limit = 25): RecDigSummary[] {
+  const rows = db.prepare(`
+    SELECT id, query, created_at, status, result_json
+    FROM dig_sessions
+    WHERE created_at >= datetime('now', ?)
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { id: number; query: string; created_at: string; status: string; result_json: string | null }[];
+  return rows.map(r => ({
+    id: r.id,
+    query: r.query,
+    created_at: r.created_at,
+    status: r.status,
+    result_preview: r.result_json ? String(r.result_json).slice(0, 400) : '',
+  }));
 }

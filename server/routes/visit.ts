@@ -19,12 +19,14 @@ import {
   recordActivityEvent, listActivityEvents, activityEventsPage,
   pageVisitsForDate, revisitedBookmarksForDate, browsingDomainStatsForDate,
   listServerEvents, listServerEventsForDate,
+  getLatestRecommendationRun, getRecommendationRun, listRecommendationRuns,
 } from '../db.js';
 import { shouldSkipDomain } from '../domain-catalog.js';
 import { featureEnabled } from '../lib/privacy.js';
 import {
-  recommendationsFor, dismissRecommendation, clearDismissals,
-} from '../recommendations.js';
+  runAiRecommendations, isAiRecommendationsAvailable, isRecommendationsRunning,
+  type RecResultItem, type RecAgentLogBundle,
+} from '../recommendations-ai.js';
 import { fetchGithubRange } from '../diary.js';
 import { readHeartbeat, DOWNTIME_THRESHOLD_MS } from '../local/uptime.js';
 import { bulkSaveUrls } from '../lib/bulk-save.js';
@@ -41,8 +43,15 @@ export interface VisitRouterDeps {
   bulkSaveDeps: BulkSaveDeps;
 }
 
+function safeParseArray(s: string): unknown[] {
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function safeParseObject(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 export function makeVisitRouter(deps: VisitRouterDeps): Hono {
-  const { db, htmlDir, heartbeatFile, maybeQueuePageMetadata, maybeQueueDomain, bulkSaveDeps } = deps;
+  const { db, heartbeatFile, maybeQueuePageMetadata, maybeQueueDomain, bulkSaveDeps } = deps;
   const r = new Hono();
 
   // ---- trends ---------------------------------------------------------------
@@ -163,23 +172,61 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     }
   });
 
-  // ---- recommendations ------------------------------------------------------
+  // ---- recommendations (AI 主導) -------------------------------------------
+  //
+  // 旧アルゴリズム版 (HTML リンク + 訪問ドメイン + word cloud) は廃止。
+  // 6 領域 agent (Sonnet 並列) + 1 統合 (Opus) で 直近 1 週間のログを
+  // 多角的に分析し、 「いま読むと打開につながる」 リソースを提示する。
+  // AI が未設定の場合は available=false を返し、 UI 側でプレースホルダ表示。
 
+  // 最新 done run + 進行中 run の状態を返す。 force=1 が来たら新規 run を蹴る。
   r.get('/api/recommendations', (c: Context) => {
-    const force = c.req.query('force') === '1';
-    return c.json({ items: recommendationsFor(db, htmlDir, { force }) });
+    const avail = isAiRecommendationsAvailable();
+    if (!avail.available) {
+      return c.json({ available: false, reason: avail.reason, run: null });
+    }
+    const latest = getLatestRecommendationRun(db, 'done');
+    const items = latest?.results_json ? safeParseArray(latest.results_json) as RecResultItem[] : [];
+    return c.json({
+      available: true,
+      running: isRecommendationsRunning(db),
+      run: latest ? {
+        id: latest.id,
+        started_at: latest.started_at,
+        finished_at: latest.finished_at,
+        result_count: latest.result_count,
+        duration_ms: latest.duration_ms,
+        model_sonnet: latest.model_sonnet,
+        model_opus: latest.model_opus,
+      } : null,
+      items,
+    });
   });
 
-  r.post('/api/recommendations/dismiss', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
-    if (!body?.url || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
-    dismissRecommendation(db, body.url);
-    return c.json({ ok: true });
+  r.post('/api/recommendations/run', (c: Context) => {
+    const avail = isAiRecommendationsAvailable();
+    if (!avail.available) return c.json({ error: avail.reason }, 400);
+    if (isRecommendationsRunning(db)) return c.json({ error: 'already_running' }, 409);
+    // Fire-and-forget。 ユーザは status を polling する。
+    void runAiRecommendations(db).catch(err => {
+      console.error('[recommendations] run failed:', err instanceof Error ? err.message : err);
+    });
+    return c.json({ ok: true, started: true });
   });
 
-  r.delete('/api/recommendations/dismissals', (c: Context) => {
-    clearDismissals(db);
-    return c.json({ ok: true });
+  r.get('/api/recommendations/runs', (c: Context) => {
+    const limit = Number(c.req.query('limit')) || 30;
+    return c.json({ items: listRecommendationRuns(db, limit) });
+  });
+
+  r.get('/api/recommendations/runs/:id', (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'invalid id' }, 400);
+    const run = getRecommendationRun(db, id);
+    if (!run) return c.json({ error: 'not_found' }, 404);
+    const items = run.results_json ? safeParseArray(run.results_json) as RecResultItem[] : [];
+    const logs = run.agent_logs_json ? safeParseObject(run.agent_logs_json) as RecAgentLogBundle : null;
+    return c.json({ run, items, logs });
   });
 
   // ---- categories ------------------------------------------------------------
