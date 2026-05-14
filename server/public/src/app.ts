@@ -1145,6 +1145,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
+  $('reposView')?.classList.toggle('hidden', tab !== 'repos');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
@@ -1163,6 +1164,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
+  if (tab === 'repos') loadRepoWatch();
   if (tab === 'transit') loadTransit();
   if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
@@ -11016,6 +11018,231 @@ $('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTarg
 document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   reviewState.currentDate = ev.target.value;
   void loadReviewFile();
+});
+
+// ── 📦 リポジトリ ウォッチ一覧 ────────────────────────────────────────────
+//
+// 登録した GitHub リポの PR / Issue / デフォルトブランチ最終更新を一覧する。
+// 内部ビューアは持たず、 すべての項目は GitHub への外部リンク。 サマリは
+// サーバ側 (repo_watch テーブル) にキャッシュされ、 「更新」 で取り直す。
+interface RepoWatchItem {
+  id: number;
+  provider: string;
+  owner: string;
+  name: string;
+  html_url: string;
+  default_branch: string | null;
+  open_pr_count: number | null;
+  open_issue_count: number | null;
+  last_commit_sha: string | null;
+  last_commit_message: string | null;
+  last_commit_url: string | null;
+  last_commit_at: string | null;
+  fetched_at: string | null;
+  fetch_error: string | null;
+}
+const repoWatchState: { items: RepoWatchItem[]; tokenSet: boolean } = { items: [], tokenSet: false };
+
+/** ざっくり相対時刻 ("3時間前" 等)。 不正値や未来は fmtDate にフォールバック。 */
+function repoFmtAgo(s: string | null): string {
+  if (!s) return '—';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+  const ms = Date.now() - d.getTime();
+  if (Number.isNaN(ms)) return s;
+  if (ms < 0) return fmtDate(s);
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return 'たった今';
+  if (min < 60) return `${min}分前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}時間前`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}日前`;
+  const mon = Math.floor(day / 30);
+  if (mon < 12) return `${mon}ヶ月前`;
+  return `${Math.floor(mon / 12)}年前`;
+}
+
+async function loadRepoWatch() {
+  const list = document.getElementById('repoList');
+  const empty = document.getElementById('repoEmpty');
+  if (!list) return;
+  try {
+    const r = await api('/api/repos') as { items?: RepoWatchItem[]; token_set?: boolean };
+    repoWatchState.items = r.items || [];
+    repoWatchState.tokenSet = !!r.token_set;
+    renderRepoWatch();
+  } catch (e) {
+    list.innerHTML = '';
+    empty?.classList.add('hidden');
+    list.innerHTML = `<p class="muted">読み込みエラー: ${escapeHtml((e as Error).message)}</p>`;
+  }
+}
+
+function renderRepoWatch() {
+  const list = document.getElementById('repoList');
+  const empty = document.getElementById('repoEmpty');
+  const hint = document.getElementById('repoTokenHint');
+  if (!list || !empty) return;
+  if (hint) hint.style.display = repoWatchState.tokenSet ? 'none' : '';
+  if (repoWatchState.items.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = repoWatchState.items.map((it) => {
+    const slug = `${it.owner}/${it.name}`;
+    const branch = it.default_branch || 'main';
+    const prCount = it.open_pr_count == null ? '—' : String(it.open_pr_count);
+    const issueCount = it.open_issue_count == null ? '—' : String(it.open_issue_count);
+    const prLink = `${it.html_url}/pulls`;
+    const issueLink = `${it.html_url}/issues`;
+    const branchLink = `${it.html_url}/commits/${encodeURIComponent(branch)}`;
+    const commitMsg = it.last_commit_message
+      ? escapeHtml(it.last_commit_message)
+      : '<span class="muted">コミット情報なし</span>';
+    const commitWhen = it.last_commit_at
+      ? `<a href="${escapeHtml(it.last_commit_url || branchLink)}" target="_blank" rel="noopener" title="${escapeHtml(fmtDate(it.last_commit_at))}">${escapeHtml(repoFmtAgo(it.last_commit_at))}</a>`
+      : '<span class="muted">—</span>';
+    const fetched = it.fetched_at
+      ? `<span class="muted" style="font-size:11px" title="${escapeHtml(fmtDate(it.fetched_at))}">サマリ取得: ${escapeHtml(repoFmtAgo(it.fetched_at))}</span>`
+      : '';
+    const err = it.fetch_error
+      ? `<div class="muted" style="font-size:11px;color:#c0392b;margin-top:4px">⚠ ${escapeHtml(it.fetch_error)}</div>`
+      : '';
+    return `
+      <article class="card repo-watch-card">
+        <header class="repo-watch-head">
+          <a class="repo-watch-slug" href="${escapeHtml(it.html_url)}" target="_blank" rel="noopener">
+            <strong>${escapeHtml(slug)}</strong>
+          </a>
+          <span class="grow"></span>
+          <button class="ghost repo-refresh-btn" type="button" data-repo-id="${it.id}" title="このリポを更新">↻</button>
+          <button class="ghost repo-delete-btn" type="button" data-repo-id="${it.id}" title="一覧から削除">✕</button>
+        </header>
+        <div class="repo-watch-stats">
+          <a class="repo-watch-stat" href="${escapeHtml(prLink)}" target="_blank" rel="noopener">
+            <span class="repo-watch-stat-num">${escapeHtml(prCount)}</span>
+            <span class="repo-watch-stat-label">Open PR</span>
+          </a>
+          <a class="repo-watch-stat" href="${escapeHtml(issueLink)}" target="_blank" rel="noopener">
+            <span class="repo-watch-stat-num">${escapeHtml(issueCount)}</span>
+            <span class="repo-watch-stat-label">Open Issue</span>
+          </a>
+        </div>
+        <div class="repo-watch-branch">
+          <a href="${escapeHtml(branchLink)}" target="_blank" rel="noopener" title="デフォルトブランチのコミット一覧"><code>${escapeHtml(branch)}</code></a>
+          <span class="repo-watch-commit-msg">${commitMsg}</span>
+          <span class="repo-watch-commit-when">${commitWhen}</span>
+        </div>
+        <div class="repo-watch-foot">${fetched}</div>
+        ${err}
+      </article>`;
+  }).join('');
+}
+
+// ── 追加モーダル ──────────────────────────────────────────────────────────
+function openRepoWatchModal() {
+  const input = $('repoWatchUrl') as HTMLInputElement | null;
+  if (input) input.value = '';
+  const err = $('repoWatchError');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('repoWatchModal');
+  input?.focus();
+}
+
+async function submitRepoWatch() {
+  const url = (($('repoWatchUrl') as HTMLInputElement | null)?.value || '').trim();
+  const err = $('repoWatchError');
+  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
+  if (!url) return showErr('リポジトリ URL または owner/name を入力してください');
+  try {
+    const res = await fetch('/api/repos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(body.error || `${res.status}`);
+    }
+    hideModal('repoWatchModal');
+    flashToast('リポジトリを追加しました');
+    await loadRepoWatch();
+  } catch (e) {
+    showErr((e as Error).message);
+  }
+}
+
+async function refreshRepoWatch(id: number) {
+  try {
+    const res = await fetch(`/api/repos/${id}/refresh`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      flashToast(`更新失敗: ${body.error || res.status}`);
+      return;
+    }
+    const { item } = await res.json() as { item: RepoWatchItem };
+    const idx = repoWatchState.items.findIndex((r) => r.id === id);
+    if (idx >= 0) repoWatchState.items[idx] = item;
+    renderRepoWatch();
+  } catch (e) {
+    flashToast(`更新失敗: ${(e as Error).message}`);
+  }
+}
+
+async function deleteRepoWatch(id: number) {
+  const it = repoWatchState.items.find((r) => r.id === id);
+  if (it && !confirm(`「${it.owner}/${it.name}」 を一覧から削除しますか?`)) return;
+  try {
+    const res = await fetch(`/api/repos/${id}`, { method: 'DELETE' });
+    if (!res.ok) { flashToast(`削除失敗: ${res.status}`); return; }
+    repoWatchState.items = repoWatchState.items.filter((r) => r.id !== id);
+    renderRepoWatch();
+    flashToast('削除しました');
+  } catch (e) {
+    flashToast(`削除失敗: ${(e as Error).message}`);
+  }
+}
+
+async function refreshAllRepoWatch() {
+  const btn = $('repoRefreshAllBtn') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '更新中…'; }
+  try {
+    const res = await fetch('/api/repos/refresh', { method: 'POST' });
+    if (res.ok) {
+      const { items } = await res.json() as { items: RepoWatchItem[] };
+      repoWatchState.items = items;
+      renderRepoWatch();
+      flashToast('全リポを更新しました');
+    } else {
+      flashToast(`更新失敗: ${res.status}`);
+    }
+  } catch (e) {
+    flashToast(`更新失敗: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '更新'; }
+  }
+}
+
+$('repoAddBtn')?.addEventListener('click', openRepoWatchModal);
+$('repoRefreshAllBtn')?.addEventListener('click', () => void refreshAllRepoWatch());
+$('repoWatchSaveBtn')?.addEventListener('click', () => void submitRepoWatch());
+$('repoWatchCloseBtn')?.addEventListener('click', () => hideModal('repoWatchModal'));
+$('repoWatchUrl')?.addEventListener('keydown', (ev) => {
+  if ((ev as KeyboardEvent).key === 'Enter') { ev.preventDefault(); void submitRepoWatch(); }
+});
+document.getElementById('repoList')?.addEventListener('click', (ev) => {
+  const target = ev.target as HTMLElement;
+  const refreshBtn = target.closest('.repo-refresh-btn') as HTMLElement | null;
+  if (refreshBtn) {
+    void refreshRepoWatch(Number(refreshBtn.dataset.repoId));
+    return;
+  }
+  const deleteBtn = target.closest('.repo-delete-btn') as HTMLElement | null;
+  if (deleteBtn) {
+    void deleteRepoWatch(Number(deleteBtn.dataset.repoId));
+  }
 });
 
 // ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────

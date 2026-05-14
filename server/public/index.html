@@ -305,6 +305,9 @@
           <button class="tab" data-tab="review">
             <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
           </button>
+          <button class="tab" data-tab="repos">
+            <span class="tab-label" data-full="📦 リポジトリ" data-short="📦 リポ">📦 リポジトリ</span>
+          </button>
           <button class="tab" data-tab="transit">
             <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
           </button>
@@ -965,6 +968,24 @@
         </div>
       </div>
 
+      <div id="reposView" class="hidden">
+        <div class="bookmarks-toolbar">
+          <span class="muted">📦 ウォッチ中のリポジトリ — PR / Issue / デフォルトブランチ最終更新</span>
+          <span class="grow"></span>
+          <button id="repoAddBtn" class="ghost" type="button" title="リポジトリを追加">+ 追加</button>
+          <button id="repoRefreshAllBtn" class="ghost" type="button" title="全リポのサマリを取り直す">更新</button>
+        </div>
+        <p id="repoTokenHint" class="muted" style="font-size:11px;margin:0 0 8px;display:none">
+          GitHub PAT が未設定です。 public リポは取得できますが、 private リポや
+          rate limit 緩和には <code>日記</code> 設定の GitHub トークンを設定してください。
+        </p>
+        <div id="repoList" class="cards"></div>
+        <div id="repoEmpty" class="dict-empty hidden">
+          ウォッチ中のリポジトリはありません。 「+ 追加」 から GitHub の URL か
+          <code>owner/name</code> を登録してください。
+        </div>
+      </div>
+
       <div id="transitView" class="hidden">
         <div class="bookmarks-toolbar">
           <span class="muted">🚆 経路検索 (Google Maps へ) / 乗車記録</span>
@@ -1491,6 +1512,27 @@
       現在は AIFormat のみ。 カスタムフォーマットは将来対応。
     </p>
     <div id="reviewTargetError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
+  </div>
+
+  <div id="repoWatchModal" class="dict-detail modal-panel hidden foundation-form">
+    <div class="dict-detail-head">
+      <h3 style="margin:0;flex:1">📦 リポジトリを追加</h3>
+      <button id="repoWatchSaveBtn">追加</button>
+      <button id="repoWatchCloseBtn" class="modal-close" title="閉じる">×</button>
+    </div>
+    <p class="muted" style="margin:8px 0;font-size:12px">
+      ウォッチ対象のリポジトリを登録します。 PR / Issue / デフォルトブランチの
+      最終更新を一覧表示し、 各項目は GitHub へリンクします (内部ビューアは
+      ありません)。
+    </p>
+    <label class="simple-field" style="margin-top:8px">
+      <span>リポジトリ URL または owner/name</span>
+      <input id="repoWatchUrl" type="text" placeholder="例: https://github.com/LUDIARS/Memoria  または  LUDIARS/Memoria" />
+    </label>
+    <p class="muted" style="font-size:11px;margin:4px 0">
+      現在は GitHub のみ対応。 GitHub 以外のバージョン管理は今後対応予定です。
+    </p>
+    <div id="repoWatchError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
   </div>
 
   <div id="appsDetail" class="dict-detail modal-panel hidden foundation-form">
