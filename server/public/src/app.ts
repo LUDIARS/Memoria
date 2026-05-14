@@ -3101,6 +3101,36 @@ async function loadDiaryDetail(date) {
   }
 }
 
+// 日記詳細ヘッダの日付の横に、 その日の天気スナップショットを 1 行で出す。
+// snapshot が無い日 (= 天気取得前の過去日 / 機能 OFF) は span を隠す。
+async function renderDiaryWeatherTag(date: string) {
+  const el = document.getElementById('diaryWeather');
+  if (!el) return;
+  try {
+    const r = await api(`/api/weather/snapshot/${encodeURIComponent(date)}`) as {
+      summary?: {
+        icon: string; label: string;
+        temp_max: number | null; temp_min: number | null;
+        precipitation_sum: number | null;
+      };
+    };
+    const s = r.summary;
+    if (!s) { el.hidden = true; return; }
+    const parts = [`${s.icon} ${s.label}`];
+    if (s.temp_max != null && s.temp_min != null) {
+      parts.push(`${Math.round(s.temp_max)}/${Math.round(s.temp_min)}℃`);
+    }
+    if (s.precipitation_sum != null && s.precipitation_sum > 0) {
+      parts.push(`☔${s.precipitation_sum.toFixed(1)}mm`);
+    }
+    el.textContent = parts.join(' ');
+    el.hidden = false;
+  } catch {
+    // snapshot 404 等 = その日は天気記録なし。 静かに隠す。
+    el.hidden = true;
+  }
+}
+
 function pollDiary(date) {
   if (state.diaryPolling) clearInterval(state.diaryPolling);
   state.diaryPolling = setInterval(async () => {
@@ -3122,6 +3152,7 @@ function renderDiaryDetail() {
   const d = state.diaryDetail;
   if (!d) return;
   $('diaryDate').textContent = d.date;
+  void renderDiaryWeatherTag(d.date);
   const status = d.status || 'absent';
   const statusEl = $('diaryStatus');
   const statusLabels = { absent: '未作成', pending: '生成中…', done: '完了', error: 'エラー' };

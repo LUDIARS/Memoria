@@ -316,7 +316,7 @@
       </nav>
 
       <div id="bookmarksView">
-        <div class="bookmarks-toolbar foundation-form">
+        <div class="bookmarks-toolbar">
           <button id="categoriesToggle" class="ghost categories-toggle" title="カテゴリを表示" aria-expanded="false">☰ カテゴリ</button>
           <select id="sort" title="ブックマークの並び順">
             <option value="created_desc">追加日 (新しい順)</option>
@@ -353,7 +353,7 @@
       </div>
 
       <div id="trendsView" class="hidden">
-        <div class="trends-bar foundation-form">
+        <div class="trends-bar">
           <span>保存・閲覧傾向のサマリ。期間を変えると全カードが更新されます。</span>
           <span class="grow"></span>
           <select id="trendsRange">
@@ -466,9 +466,9 @@
                 </button>
               </div>
             </div>
-            <div class="dig-input-row2 foundation-form">
-              <label class="dig-engine-label simple-field">
-                <span>AI / 検索エンジン</span>
+            <div class="dig-input-row2">
+              <label class="dig-engine-label">
+                AI / 検索エンジン
                 <select id="digEngine" title="AI が使う検索エンジン" class="dig-engine"></select>
               </label>
             </div>
@@ -495,7 +495,7 @@
       </div>
 
       <div id="dictView" class="hidden">
-        <div class="dict-bar foundation-form">
+        <div class="dict-bar">
           <input id="dictSearch" type="search" placeholder="辞書を検索 (term / 説明 / メモ)" />
           <button id="dictNewBtn">＋ 新規エントリ</button>
         </div>
@@ -503,7 +503,7 @@
       </div>
 
       <div id="domainView" class="hidden">
-        <div class="dict-bar foundation-form">
+        <div class="dict-bar">
           <input id="domainSearch" type="search" placeholder="ドメイン・サイト名・概要で検索" />
           <button id="domainRecatalogBtn" class="ghost" title="アクセス記録に出てきた全ドメインのうち、まだ辞書に無いものを fetch + 分類キューに積む">🔄 全走査</button>
           <span class="grow"></span>
@@ -549,6 +549,7 @@
           <div id="diaryDetail" class="diary-detail hidden foundation-form">
             <div class="diary-detail-head">
               <h3 id="diaryDate"></h3>
+              <span id="diaryWeather" class="diary-weather-tag" hidden></span>
               <span id="diaryStatus" class="diary-status-tag"></span>
               <span id="diaryWorkMinutes" class="diary-status-tag" hidden></span>
               <span class="grow"></span>
@@ -633,7 +634,7 @@
            ドメイン辞書と同じ構造 (= 自動分類 + 手動上書き)。
            data: app_samples (= sampling 元) / applications (= AI 分類済 row) -->
       <div id="appsView" class="hidden">
-        <div class="dict-bar foundation-form">
+        <div class="dict-bar">
           <input id="appsSearch" type="search" placeholder="プロセス名・表示名・説明で検索" />
           <span id="appsCount" class="muted"></span>
           <span class="grow"></span>
@@ -655,7 +656,7 @@
       </div>
 
       <div id="worklogView" class="hidden">
-        <div class="worklog-daynav foundation-form">
+        <div class="worklog-daynav">
           <button id="wlPrevDay" class="ghost" title="前日">◀</button>
           <input id="wlDate" type="date" />
           <button id="wlNextDay" class="ghost" title="翌日">▶</button>
@@ -1030,7 +1031,7 @@
       </div>
 
       <div id="mealsView" class="hidden">
-        <div class="meals-bar foundation-form">
+        <div class="meals-bar">
           <label class="meals-upload-btn">
             📷 写真を追加
             <input id="mealsPhotoInput" type="file" accept="image/*" multiple hidden />
@@ -1058,7 +1059,7 @@
 
       <!-- 📓 ノート — esa / DocBase 風 WYSIWYG ブロックエディタ + bookmark base + comment sets。 spec/feature/note.md -->
       <div id="notesView" class="hidden">
-        <div class="notes-toolbar foundation-form">
+        <div class="notes-toolbar">
           <button id="notesSidebarToggle" type="button" class="ghost notes-sidebar-toggle"
             title="ノート一覧の表示切替" aria-label="ノート一覧の表示切替">☰</button>
           <input id="notesSearch" type="search" placeholder="ノート検索 (タイトル / 本文)" />
