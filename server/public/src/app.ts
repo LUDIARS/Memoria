@@ -5103,15 +5103,11 @@ async function toggleMultiActive(url) {
   const set = new Set(active);
   if (set.has(url)) set.delete(url);
   else set.add(url);
-  // If the server isn't yet authenticated, kick off OAuth instead.
+  // 未認証の server を active にしようとした場合は、 Multi タブの
+  // Cernere ログインフォームに誘導する (= OAuth dance は廃止)。
   const target = (s.servers || []).find(x => x.url === url);
   if (target && set.has(url) && !target.connected) {
-    const r = await api('/api/multi/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
-    });
-    location.href = r.authorize_url;
+    switchTab('multi');
     return;
   }
   await api('/api/multi/active', {
@@ -5161,12 +5157,11 @@ function renderMultiServersList(s) {
 
 async function multiServerAction(action, url) {
   if (action === 'connect') {
-    const r = await api('/api/multi/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, redirect_uri: location.origin + '/' }),
-    });
-    location.href = r.authorize_url;
+    // Cernere ログインは Multi タブのフォームで行う (= OAuth dance 廃止)。
+    // URL を pre-fill しておいてタブを切り替える。
+    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+    if (urlInput) urlInput.value = url;
+    switchTab('multi');
     return;
   }
   if (action === 'disconnect') {
@@ -8828,19 +8823,28 @@ async function loadMulti() {
     infiConfigured = st.configured !== false;
   } catch { infiConfigured = true; }
   const setupEl = $('multiInfisicalSetup');
+  const loginEl = $('multiCernereLogin');
   const mainEl = $('multiMainContent');
+  // gate 1: Infisical 未設定 → setup フォーム
   if (!infiConfigured) {
     setupEl?.classList.remove('hidden');
+    loginEl?.classList.add('hidden');
     mainEl?.classList.add('hidden');
     return;
   }
   setupEl?.classList.add('hidden');
-  mainEl?.classList.remove('hidden');
-
+  // gate 2: Infisical OK だが Hub 未接続 → Cernere ログインフォーム
   if (!state.multi?.connected) {
-    $('multiList').innerHTML = '<div class="queue-empty">マルチサーバに接続されていません。⚙ AI から接続してください。</div>';
+    loginEl?.classList.remove('hidden');
+    mainEl?.classList.add('hidden');
+    // Hub URL 欄に登録済 server を pre-fill
+    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+    const firstUrl = state.multi?.servers?.[0]?.url;
+    if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
     return;
   }
+  loginEl?.classList.add('hidden');
+  mainEl?.classList.remove('hidden');
   const sub = state.multiSubtab;
   document.querySelectorAll('.multi-subtab').forEach(b => {
     b.classList.toggle('active', b.dataset.mtab === sub);
@@ -8889,6 +8893,42 @@ async function loadMulti() {
     btn.addEventListener('click', () => moderate('hide', btn.dataset.hide, Number(btn.dataset.id)));
   });
 }
+
+// Cernere ログインフォーム (Multi view 内) の送信。 成功で Hub に接続済みになり、
+// loadMulti を呼び直して通常の Hub 内容へ。
+document.getElementById('multiLoginSubmit')?.addEventListener('click', async () => {
+  const btn = $('multiLoginSubmit') as HTMLButtonElement | null;
+  const msg = $('multiLoginMsg');
+  const setMsg = (text: string, ok = false) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
+    msg.hidden = false;
+  };
+  const url = ($('multiLoginUrl') as HTMLInputElement).value.trim();
+  const email = ($('multiLoginEmail') as HTMLInputElement).value.trim();
+  const password = ($('multiLoginPassword') as HTMLInputElement).value;
+  if (!url || !email || !password) {
+    return setMsg('⚠ Hub URL / メールアドレス / パスワードは必須');
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'ログイン中…'; }
+  try {
+    const res = await fetch('/api/multi/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, email, password }),
+    });
+    const j = await res.json() as { user?: { displayName?: string }; error?: string };
+    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
+    setMsg(`✓ ${j.user?.displayName || ''} としてログインしました`, true);
+    ($('multiLoginPassword') as HTMLInputElement).value = '';
+    await refreshMultiStatus();
+    setTimeout(() => { void loadMulti(); }, 600);
+  } catch (e: unknown) {
+    setMsg(`⚠ ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'ログイン'; }
+  }
+});
 
 // Infisical setup フォーム (Multi view 内) の送信。 成功したら loadMulti を
 // 呼び直して通常の Hub 内容に切り替える。

@@ -20,7 +20,7 @@ import {
 } from '../db.js';
 import {
   readMultiState, isConnected,
-  readMultiServers, persistServers, upsertServer, removeServer,
+  readMultiServers, persistServers, upsertServer, removeServer, findServerByUrl,
   saveServerSession, clearServerSession, setActive,
   fetchMe, shareBookmark, shareDig, shareDictionary,
   shareImplementationNote, shareWorkLocation,
@@ -101,41 +101,79 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
     return c.json({ ok: true });
   });
 
-  r.post('/api/multi/connect', async (c: Context) => {
-    // Kicks off the OAuth dance for a specific server URL.
+  // Cernere email/password 直ログイン。
+  //
+  // Hub には認証 endpoint が無い (= Cernere 発行トークンを検証するだけ)。
+  // 旧 /api/multi/connect は <hub>/api/auth/start へ飛ばしていたが Hub に
+  // その route は無く 404 になっていた。 正しい流れ:
+  //   1. Cernere POST /api/auth/login {email,password} → accessToken
+  //   2. accessToken を user-JWT として保存
+  //   3. fetchMe() = multiFetch('/api/me') が Cernere /api/auth/project-token
+  //      で project-token に交換 → Hub の authMiddleware が PASETO 検証
+  r.post('/api/multi/login', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as
-      { url?: unknown; label?: unknown; redirect_uri?: unknown } | null;
-    if (!body?.url || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
-    const { servers, active } = readMultiServers(db);
-    const updated = upsertServer(servers, { label: typeof body.label === 'string' ? body.label : body.url, url: body.url });
-    persistServers(db, updated, active);
-    const redirectBack = typeof body.redirect_uri === 'string' ? body.redirect_uri : 'http://localhost:5180/?multi=connected';
-    const start = `${body.url.replace(/\/$/, '')}/api/auth/start?redirect_uri=${encodeURIComponent(redirectBack)}`;
-    return c.json({ ok: true, authorize_url: start });
-  });
+      { url?: unknown; email?: unknown; password?: unknown; label?: unknown } | null;
+    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
+    const email = typeof body?.email === 'string' ? body.email.trim() : '';
+    const password = typeof body?.password === 'string' ? body.password : '';
+    if (!url) return c.json({ error: 'url required' }, 400);
+    if (!email || !password) return c.json({ error: 'email / password required' }, 400);
 
-  r.post('/api/multi/finish', async (c: Context) => {
-    // SPA hands back the JWT after Cernere → Hub redirect.
-    const body = await c.req.json().catch(() => null) as { jwt?: unknown; url?: unknown } | null;
-    if (!body?.jwt || typeof body.jwt !== 'string') return c.json({ error: 'jwt required' }, 400);
-    const { servers } = readMultiServers(db);
-    const target = (typeof body.url === 'string' && body.url)
-      ? servers.find((s) => s.url === String(body.url).replace(/\/$/, ''))
-      : servers[servers.length - 1];
-    if (!target) return c.json({ error: 'no multi server registered' }, 400);
-    let me;
-    try { me = await fetchMe({ ...target, jwt: body.jwt }); }
-    catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `verify failed: ${msg}` }, 401);
+    const cernereBase = (process.env.CERNERE_BASE_URL ?? '').replace(/\/$/, '');
+    if (!cernereBase) {
+      return c.json({
+        error: 'CERNERE_BASE_URL 未設定 — Multi view の Infisical セットアップを先に完了してください',
+      }, 400);
     }
-    saveServerSession(db, target.url, {
-      jwt: body.jwt,
+
+    // 1. Cernere に email/password ログイン
+    let accessToken: string;
+    try {
+      const res = await fetch(`${cernereBase}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json().catch(() => ({})) as {
+        accessToken?: string; mfaRequired?: boolean; error?: string;
+      };
+      if (data.mfaRequired) {
+        return c.json({ error: 'MFA が有効なアカウントは現状未対応です' }, 400);
+      }
+      if (!res.ok || !data.accessToken) {
+        return c.json({ error: `Cernere ログイン失敗: ${data.error || `HTTP ${res.status}`}` }, 401);
+      }
+      accessToken = data.accessToken;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: `Cernere 到達失敗: ${msg}` }, 502);
+    }
+
+    // 2. server を登録 (未登録なら) + accessToken で Hub /api/me を検証
+    const { servers, active } = readMultiServers(db);
+    const label = typeof body?.label === 'string' && body.label
+      ? body.label : (findServerByUrl(servers, url)?.label || url);
+    const updated = upsertServer(servers, { url, label });
+    persistServers(db, updated, active);
+    const target = findServerByUrl(updated, url);
+    if (!target) return c.json({ error: 'server register failed' }, 500);
+
+    let me;
+    try {
+      me = await fetchMe({ ...target, jwt: accessToken });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return c.json({ error: `Hub 検証失敗: ${msg}` }, 401);
+    }
+
+    // 3. session 保存 (= jwt + user 情報を app_settings に)
+    saveServerSession(db, url, {
+      jwt: accessToken,
       userId: me.userId,
       userName: me.displayName,
       role: me.role,
     });
-    return c.json({ ok: true, url: target.url, user: me });
+    return c.json({ ok: true, url, user: me });
   });
 
   r.post('/api/multi/disconnect', async (c: Context) => {

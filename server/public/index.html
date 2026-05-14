@@ -1308,6 +1308,28 @@
           <div id="infiSetupMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
         </section>
 
+        <!-- Cernere ログイン — Infisical 設定済だが Hub 未接続のとき表示。
+             Hub には認証 endpoint が無いので Cernere に email/password 直ログイン
+             して accessToken を取得する。 -->
+        <section id="multiCernereLogin" class="multi-infisical-setup foundation-form hidden">
+          <h3 style="margin:0 0 4px">🔐 Cernere ログイン (Multi Mode)</h3>
+          <p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6">
+            Memoria Hub への接続には Cernere のアカウントが必要です。
+            email / password でログインすると accessToken を取得し、
+            それを project-token に交換して Hub に接続します。
+          </p>
+          <label class="simple-field"><span>Hub URL</span>
+            <input id="multiLoginUrl" type="url" placeholder="https://memoria-hub.vtn-game.com" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>Cernere メールアドレス</span>
+            <input id="multiLoginEmail" type="email" placeholder="you@example.com" /></label>
+          <label class="simple-field" style="margin-top:8px"><span>パスワード</span>
+            <input id="multiLoginPassword" type="password" /></label>
+          <div class="simple-actions" style="margin-top:14px">
+            <button id="multiLoginSubmit" type="button">ログイン</button>
+          </div>
+          <div id="multiLoginMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
+        </section>
+
         <div id="multiMainContent">
           <div class="multi-bar">
             <span id="multiUserBadge" class="multi-user-badge"></span>
