@@ -537,7 +537,6 @@
           <button id="diaryNextMonth" class="ghost">▶</button>
           <button id="diaryToday" class="ghost">今日</button>
           <span class="grow"></span>
-          <button id="diarySettingsBtn" class="ghost">⚙ GitHub設定</button>
         </div>
         <div class="diary-layout">
           <div class="diary-calendar-wrap">
@@ -622,24 +621,7 @@
             </div>
           </div>
         </div>
-        <div id="diarySettingsPanel" class="diary-settings hidden foundation-form">
-          <h4>GitHub 設定</h4>
-          <p class="diary-settings-help">GitHub の commit ツリーを日報に取り込むときだけ設定してください。トークンはサーバーの SQLite に保存されます。</p>
-          <label class="simple-field"><span>ユーザ名</span><input id="diaryGhUser" type="text" placeholder="example" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>リポジトリ (カンマ区切り。空欄なら全リポ)</span><input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Personal access token (公開リポのみなら不要)</span><input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
-          <p class="diary-settings-help" style="font-size:11px;margin:4px 0 0">
-            推奨: classic PAT (<code>ghp_...</code>)。 スコープは公開リポのみなら <code>public_repo</code>、 private を含むなら <code>repo</code>。
-            fine-grained (<code>github_pat_...</code>) は org 設定で無効化されることがあるので非推奨。
-          </p>
-          <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
-          <div class="diary-settings-actions">
-            <button id="diarySettingsSave">保存</button>
-            <button id="diarySettingsTest" class="ghost">PAT を検証</button>
-            <button id="diarySettingsClose" class="ghost">閉じる</button>
-          </div>
-          <div id="diaryGhTestResult" class="diary-settings-tokenstatus"></div>
-        </div>
+        <!-- GitHub 設定は ⚙ 設定 → 🔌 連携 / API key に移動 (日記以外でも参照するため) -->
       </div>
 
       <div id="queueView" class="hidden">
@@ -1681,6 +1663,24 @@
       <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
       <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
       <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+
+      <h4>🐙 GitHub</h4>
+      <p class="ai-settings-help">
+        日記の commit 取り込み・「📋 作業一覧」 のリポ監視で共通で使う設定です。 トークンはサーバの SQLite に保存されます。
+      </p>
+      <label class="simple-field"><span>ユーザ名</span><input id="diaryGhUser" type="text" placeholder="example" /></label>
+      <label class="simple-field" style="margin-top:8px"><span>日記対象リポジトリ (カンマ区切り。空欄なら全リポ)</span><input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
+      <label class="simple-field" style="margin-top:8px"><span>Personal access token (公開リポのみなら不要)</span><input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
+      <p class="ai-settings-help" style="font-size:11px;margin:4px 0 0">
+        推奨: classic PAT (<code>ghp_...</code>)。 スコープは公開リポのみなら <code>public_repo</code>、 private を含むなら <code>repo</code>。
+        fine-grained (<code>github_pat_...</code>) は org 設定で無効化されることがあるので非推奨。
+      </p>
+      <span id="diaryGhTokenStatus" class="ai-keystatus"></span>
+      <div class="ai-settings-actions">
+        <button id="diarySettingsSave">保存</button>
+        <button id="diarySettingsTest" class="ghost">PAT を検証</button>
+      </div>
+      <div id="diaryGhTestResult" class="ai-keystatus"></div>
 
       <h4>📍 Legatus 連携 (GPS / 位置情報リレー)</h4>
       <p class="ai-settings-help">

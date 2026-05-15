@@ -3820,8 +3820,10 @@ async function saveDiaryNotes() {
   }
 }
 
-async function openDiarySettings() {
-  $('diarySettingsPanel').classList.remove('hidden');
+// GitHub 設定 (user / repos / PAT) は ⚙ 設定 → 🔌 連携 / API key 配下に統合。
+// 日記・「📋 作業一覧」 など複数機能で参照するため、 単一フィールドを共有する。
+async function loadGithubSettings() {
+  if (!$('diaryGhUser')) return;  // settings panel が DOM に未注入の旧 HTML 互換
   try {
     const s = await api('/api/diary/settings');
     $('diaryGhUser').value = s.github_user || '';
@@ -3874,7 +3876,7 @@ async function saveDiarySettings() {
     });
     $('diaryGhToken').value = '';
     flashToast('GitHub 設定を保存しました');
-    openDiarySettings();
+    void loadGithubSettings();
   } catch (e) {
     alert(`保存失敗: ${e.message}`);
   }
@@ -4755,10 +4757,9 @@ $('diaryGenerate')?.addEventListener('click', () => generateDiary());
 $('diaryImproveBtn')?.addEventListener('click', improveDiary);
 $('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
 $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
-$('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
+// GitHub 設定の入口は ⚙ 設定 → 🔌 連携 / API key に移動済 (openAiSettings で load)
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
 $('diarySettingsTest')?.addEventListener('click', testGithubPat);
-$('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
 $('domainSearch')?.addEventListener('input', (e) => {
@@ -5070,6 +5071,8 @@ async function openAiSettings() {
     // tracks/meals/tasks reminder 等のトグルが入っており、 どちらを先に開いても
     // 一度ロード済みの状態にする。
     loadPrivacySettings().catch((e) => console.warn('privacy settings load:', e));
+    // GitHub PAT / user / repos (日記 + 📋 作業一覧 で共有)
+    void loadGithubSettings();
     // Google Maps API key の現在値ステータス (実値はブラウザに渡さない方針 — masked)
     if ($('mapsApiKey')) {
       try {
