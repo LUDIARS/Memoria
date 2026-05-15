@@ -628,6 +628,10 @@
           <label class="simple-field"><span>ユーザ名</span><input id="diaryGhUser" type="text" placeholder="example" /></label>
           <label class="simple-field" style="margin-top:8px"><span>リポジトリ (カンマ区切り。空欄なら全リポ)</span><input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
           <label class="simple-field" style="margin-top:8px"><span>Personal access token (公開リポのみなら不要)</span><input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
+          <p class="diary-settings-help" style="font-size:11px;margin:4px 0 0">
+            推奨: classic PAT (<code>ghp_...</code>)。 スコープは公開リポのみなら <code>public_repo</code>、 private を含むなら <code>repo</code>。
+            fine-grained (<code>github_pat_...</code>) は org 設定で無効化されることがあるので非推奨。
+          </p>
           <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
           <div class="diary-settings-actions">
             <button id="diarySettingsSave">保存</button>
@@ -982,6 +986,7 @@
           <p id="repoTokenHint" class="muted" style="font-size:11px;margin:0 0 8px;display:none">
             GitHub PAT が未設定です。 public リポは取得できますが、 private リポや
             rate limit 緩和には <code>日記</code> 設定の GitHub トークンを設定してください。
+            推奨は classic PAT で、 スコープは公開リポのみなら <code>public_repo</code>、 private を含むなら <code>repo</code>。
           </p>
           <div id="repoList" class="cards"></div>
           <div id="repoEmpty" class="dict-empty hidden">
