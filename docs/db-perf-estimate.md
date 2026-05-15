@@ -112,7 +112,7 @@
 | `claude_code_prompt` | 2,086 |   234 (max 240) |  111 |    470 |
 | `git_commit`         |   162 |    62 |  180 |    347 |
 
-> `claude_code_prompt` は content を 240 文字で truncate している (`server/index.js` で `slice(0, 4000)` だが
+> `claude_code_prompt` は content を 240 文字で truncate している (`server/routes/visit.ts` で `slice(0, 4000)` だが
 > hook 側でさらに短く渡している) → **行サイズが想定より小さい**。 これは大きな朗報。
 
 **24 時間の hourly 分布 (実測):**
@@ -224,7 +224,7 @@ stored rows:                          65
 | `summary`             | (含めていないが小さい) |
 | **1 行合計**          | **~80 KB** |
 
-> `metrics_json` が 72 KB と異常に大きい。 `server/diary.js` を確認しないと分からないが、
+> `metrics_json` が 72 KB と異常に大きい。 `server/diary.ts` を確認しないと分からないが、
 > hourly bucket × 24h × 複数指標 (heartbeat / GitHub / activity) を生のままシリアライズして
 > いる可能性大。 **集計後の数字だけ残せば 5-10 KB に減らせる余地がある**。
 
