@@ -482,10 +482,6 @@
 
             <div id="digHistory" class="dig-history"></div>
             <div id="cloudView" class="dig-cloud"></div>
-            <div id="digShareBar" class="dig-share-bar" hidden>
-              <button id="digShareBtn" class="ghost" title="マルチサーバに共有">📤 シェア</button>
-              <span id="digShareStatus" class="share-status"></span>
-            </div>
             <div id="digResult" class="dig-result"></div>
           </div>
         </div>
@@ -1310,12 +1306,12 @@
              その CERNERE_BASE_URL 等を Infisical から取る。 未設定のときだけ表示。
              Local Mode では Infisical は一切使わない。 -->
         <section id="multiInfisicalSetup" class="multi-infisical-setup foundation-form hidden">
-          <h3 style="margin:0 0 4px">🔑 Infisical セットアップ (Multi Mode に必要)</h3>
+          <h3 style="margin:0 0 4px">🔑 Infisical セットアップ</h3>
           <p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6">
-            Multi Mode は Hub への Cernere 認証を行うため、 設定値 (Cernere URL 等) を
-            Infisical から取得します。 この PC の machine identity を入力してください。
-            値は SQLite (<code>app_settings</code>) に保存され、 次回からは自動接続します。
-            Excubitor 経由で起動する場合はこの画面は出ません。 Local Mode の機能には影響しません。
+            Memoria の一部設定値 (Google Maps API キー等) を Infisical から取得します。
+            この PC の machine identity を入力してください。 値は SQLite
+            (<code>app_settings</code>) に保存され、 次回からは自動接続します。
+            Excubitor 経由で起動する場合はこの画面は出ません。
           </p>
           <label class="simple-field"><span>Site URL</span>
             <input id="infiSiteUrl" type="url" value="https://infisical.vtn-game.com" /></label>
@@ -1333,19 +1329,18 @@
           <div id="infiSetupMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
         </section>
 
-        <!-- Cernere ログイン — Infisical 設定済だが Hub 未接続のとき表示。
-             Hub には認証 endpoint が無いので Cernere に email/password 直ログイン
-             して accessToken を取得する。 -->
+        <!-- Hub ログイン — ログの下のスイッチャで未ログイン Hub を選んだとき表示。
+             ローカルは Cernere を直接知らず、 Hub に email/password を渡すだけ。
+             Hub が内部で Cernere に代理ログインして session token を返す。 -->
         <section id="multiCernereLogin" class="multi-infisical-setup foundation-form hidden">
-          <h3 style="margin:0 0 4px">🔐 Cernere ログイン (Multi Mode)</h3>
+          <h3 style="margin:0 0 4px">🔐 Hub ログイン</h3>
           <p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6">
-            Memoria Hub への接続には Cernere のアカウントが必要です。
-            email / password でログインすると accessToken を取得し、
-            それを project-token に交換して Hub に接続します。
+            Memoria Hub への接続にはアカウントが必要です。 email / password を
+            Hub に渡すと、 Hub が内部で Cernere に代理ログインして接続します。
           </p>
           <label class="simple-field"><span>Hub URL</span>
             <input id="multiLoginUrl" type="url" placeholder="https://memoria-hub.vtn-game.com" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Cernere メールアドレス</span>
+          <label class="simple-field" style="margin-top:8px"><span>メールアドレス</span>
             <input id="multiLoginEmail" type="email" placeholder="you@example.com" /></label>
           <label class="simple-field" style="margin-top:8px"><span>パスワード</span>
             <input id="multiLoginPassword" type="password" /></label>
@@ -1355,21 +1350,9 @@
           <div id="multiLoginMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
         </section>
 
-        <div id="multiMainContent">
-          <div class="multi-bar">
-            <span id="multiUserBadge" class="multi-user-badge"></span>
-            <span class="grow"></span>
-            <button id="multiRefresh" class="ghost">更新</button>
-          </div>
-          <nav class="multi-subtabs">
-            <button class="multi-subtab active" data-mtab="bookmarks">📑 ブックマーク</button>
-            <button class="multi-subtab" data-mtab="digs">⛏ ディグ</button>
-            <button class="multi-subtab" data-mtab="dictionary">📖 辞書</button>
-            <button class="multi-subtab multi-mod-only" data-mtab="moderation" hidden>🛡 モデレーション</button>
-          </nav>
-          <div id="multiList" class="multi-list"></div>
-          <div id="multiEmpty" class="queue-empty hidden">該当エントリなし</div>
-        </div>
+        <!-- 旧 Multi browse タブ (#multiMainContent) は二層設計で撤去。
+             Hub のデータはモード切替後、 通常のタブに proxy 経由で出る。
+             #multiView は Infisical 設定 / Hub ログインフォーム専用ビュー。 -->
       </div>
     </section>
 
@@ -1399,8 +1382,6 @@
         <button id="dReparse" class="ghost" title="保存済 HTML を再パースして note 化 (Gemini / ChatGPT / Claude / Notion)"
           hidden>📄 ノート化 (再パース)</button>
         <a id="dViewHtml" href="#" target="_blank" class="ghost">保存 HTML を開く</a>
-        <button id="dShare" class="ghost" title="マルチサーバに共有" hidden>📤 シェア</button>
-        <span id="dShareStatus" class="share-status"></span>
         <button id="dDelete" class="danger">削除</button>
       </div>
       <span id="dReparseStatus" class="share-status"></span>
@@ -1417,8 +1398,6 @@
     <div class="dict-detail-head">
       <input id="dictTerm" type="text" placeholder="単語" />
       <button id="dictSaveBtn">保存</button>
-      <button id="dictShareBtn" class="ghost" title="マルチサーバに共有" hidden>📤 シェア</button>
-      <span id="dictShareStatus" class="share-status"></span>
       <button id="dictDeleteBtn" class="danger">削除</button>
       <button id="dictDetailClose" class="modal-close" title="閉じる">×</button>
     </div>

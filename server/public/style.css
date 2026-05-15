@@ -355,6 +355,9 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .tab:hover { background: #f0f2f7; color: var(--text); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+/* Multi モード時、 Local 専用タブはグレーアウト (= switchTab が切替を弾く)。 */
+.tab.mode-locked { opacity: 0.38; cursor: not-allowed; }
+.tab.mode-locked:hover { background: transparent; color: var(--muted); }
 .tab-count {
   background: #fff5e1;
   color: #8a5a00;

@@ -9,14 +9,6 @@
 // one-entry list with that URL active.
 import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings, setAppSettings } from '../db/index.js';
-import { getProjectTokenForHub, invalidateProjectToken } from '../lib/cernere-session.js';
-
-/**
- * Hub への Bearer に使う project-token を Cernere から取得 (memory-cached)。
- * Cernere unreachable 等で失敗したら fall-through せず throw する — 「起動時に
- * 必ず認証を通す」 ポリシーに従い、 user-JWT を Hub に直送りはしない。
- */
-const CERNERE_PROJECT_KEY = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
 
 type Db = BetterSqlite3.Database;
 
@@ -64,27 +56,6 @@ export interface SaveSessionInput {
   userId: string | null;
   userName: string | null;
   role: string | null;
-}
-
-export interface FetchMeResult {
-  userId: string;
-  displayName: string;
-  role: string | null;
-}
-
-export interface ShareResponse {
-  id: number;
-  shared_at: string;
-  occurred_at?: string;
-  [key: string]: unknown;
-}
-
-export interface WorkplacePresenceInput {
-  workplace_name: string;
-  address: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  kind: 'enter' | 'leave';
 }
 
 interface FetchInit {
@@ -207,11 +178,6 @@ export function isConnected(state: MultiState | null | undefined): state is Conn
   return Boolean(state && state.url && state.jwt && state.userId);
 }
 
-export function listConnectedActive(db: Db): MultiServerEntry[] {
-  const { servers, active } = readMultiServers(db);
-  return servers.filter((s) => active.has(s.url) && s.jwt && s.userId);
-}
-
 // ── per-server session save/load ────────────────────────────────────────
 
 export function saveServerSession(db: Db, url: string, { jwt, userId, userName, role }: SaveSessionInput): void {
@@ -245,19 +211,59 @@ export function setActive(db: Db, urls: string[]): void {
   persistServers(db, servers, [...urls].filter((u) => valid.has(u)));
 }
 
-// ── HTTP helpers ─────────────────────────────────────────────────────────
+// ── 二層モード (Local / Multi) ───────────────────────────────────────────
+//
+// 旧 multi-server era は「複数 Hub を同時 active」 だったが、 二層再設計では
+// データソースは排他 (= Local か、 特定 Hub 1 つ)。 app_settings に保持する:
+//   multi_mode      = 'local' | 'multi'
+//   multi_mode_url  = Multi モード時に向き先の Hub URL
 
-export async function multiFetch<T = Record<string, unknown>>(
-  state: MultiState,
-  path: string,
+export type MultiMode = 'local' | 'multi';
+
+export interface ModeState {
+  mode: MultiMode;
+  hubUrl: string | null;
+}
+
+export function readMode(db: Db): ModeState {
+  const s = getAppSettings(db);
+  const mode: MultiMode = s.multi_mode === 'multi' ? 'multi' : 'local';
+  const hubUrl = mode === 'multi' && s.multi_mode_url ? s.multi_mode_url.replace(/\/$/, '') : null;
+  return { mode, hubUrl };
+}
+
+export function setMode(db: Db, mode: MultiMode, url?: string | null): void {
+  if (mode === 'multi') {
+    setAppSettings(db, {
+      multi_mode: 'multi',
+      multi_mode_url: String(url || '').replace(/\/$/, ''),
+    });
+  } else {
+    setAppSettings(db, { multi_mode: 'local', multi_mode_url: '' });
+  }
+}
+
+export interface HubResponse {
+  status: number;
+  body: unknown;
+  contentType: string;
+}
+
+/**
+ * Hub に直接話す (= 二層設計の proxy 経路)。 旧 multiFetch と違い Cernere を
+ * 一切経由しない: Hub の `/api/auth/login` が返した session token をそのまま
+ * Bearer に使う。 ステータスとボディを呼び出し側にそのまま返す (proxy のため)。
+ */
+export async function hubFetch(
+  hubUrl: string,
+  sessionToken: string,
+  pathWithQuery: string,
   init: FetchInit = {},
-): Promise<T> {
-  if (!isConnected(state)) throw new Error('not connected to a multi server');
-  const url = `${state.url.replace(/\/$/, '')}${path}`;
-  const bearer = await getProjectTokenForHub(state.url, state.jwt, CERNERE_PROJECT_KEY);
+): Promise<HubResponse> {
+  const url = `${hubUrl.replace(/\/$/, '')}${pathWithQuery}`;
   const headers: Record<string, string> = {
     ...(init.headers || {}),
-    'Authorization': `Bearer ${bearer}`,
+    'Authorization': `Bearer ${sessionToken}`,
     'X-Memoria-Origin': 'local',
   };
   if (init.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
@@ -265,135 +271,40 @@ export async function multiFetch<T = Record<string, unknown>>(
   const text = await res.text();
   let body: unknown;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-  if (!res.ok) {
-    if (res.status === 401 || res.status === 403) invalidateProjectToken(state.url);
-    const msg = (body && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string')
-      ? (body as { error: string }).error
-      : `HTTP ${res.status}`;
-    const err = new Error(`multi ${path} failed: ${msg}`) as Error & { status?: number; body?: unknown };
-    err.status = res.status;
-    err.body = body;
+  return {
+    status: res.status,
+    body,
+    contentType: res.headers.get('content-type') || 'application/json',
+  };
+}
+
+/** Hub の `/api/auth/login` に email/password を渡す (Hub が Cernere に代理ログイン)。 */
+export async function hubLogin(
+  hubUrl: string,
+  email: string,
+  password: string,
+): Promise<{ sessionToken: string; user: { userId: string | null; displayName: string; role: string } }> {
+  const res = await fetch(`${hubUrl.replace(/\/$/, '')}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json().catch(() => ({})) as {
+    sessionToken?: string;
+    user?: { userId?: string | null; displayName?: string; role?: string };
+    error?: string;
+  };
+  if (!res.ok || !data.sessionToken) {
+    const err = new Error(data.error || `Hub login failed: HTTP ${res.status}`) as Error & { status?: number };
+    err.status = res.status === 401 ? 401 : 502;
     throw err;
   }
-  return body as T;
-}
-
-interface ShareBookmarkInput {
-  url: string;
-  title: string;
-  summary?: string | null;
-  memo?: string;
-  categories?: string[];
-}
-
-interface ShareDigInput {
-  query: string;
-  status: string;
-  result?: unknown;
-}
-
-interface ShareDictionaryInput {
-  term: string;
-  definition?: string | null;
-  notes?: string | null;
-}
-
-interface ShareImplInput {
-  product?: string;
-  title: string;
-  good_points?: string | null;
-  bad_points?: string | null;
-  attachment_type?: string | null;
-  attachment_value?: string | null;
-}
-
-interface ShareWorkLocationInput {
-  name: string;
-  address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  description?: string | null;
-  url?: string | null;
-  tags?: string[] | string | null;
-}
-
-export async function shareBookmark(state: MultiState, b: ShareBookmarkInput): Promise<ShareResponse> {
-  return multiFetch<ShareResponse>(state, '/api/shared/bookmarks', {
-    method: 'POST',
-    body: JSON.stringify({
-      url: b.url,
-      title: b.title,
-      summary: b.summary || null,
-      memo: b.memo || '',
-      categories: b.categories || [],
-    }),
-  });
-}
-
-export async function shareDig(state: MultiState, d: ShareDigInput): Promise<ShareResponse> {
-  return multiFetch<ShareResponse>(state, '/api/shared/digs', {
-    method: 'POST',
-    body: JSON.stringify({
-      query: d.query,
-      status: d.status,
-      result: d.result || null,
-    }),
-  });
-}
-
-export async function shareDictionary(state: MultiState, e: ShareDictionaryInput): Promise<ShareResponse> {
-  return multiFetch<ShareResponse>(state, '/api/shared/dictionary', {
-    method: 'POST',
-    body: JSON.stringify({
-      term: e.term,
-      definition: e.definition || null,
-      notes: e.notes || null,
-    }),
-  });
-}
-
-export async function shareImplementationNote(state: MultiState, n: ShareImplInput): Promise<ShareResponse> {
-  return multiFetch<ShareResponse>(state, '/api/shared/implementation-notes', {
-    method: 'POST',
-    body: JSON.stringify({
-      product: n.product || '',
-      title: n.title,
-      good_points: n.good_points || null,
-      bad_points: n.bad_points || null,
-      attachment_type: n.attachment_type || null,
-      attachment_value: n.attachment_value || null,
-    }),
-  });
-}
-
-export async function shareWorkLocation(state: MultiState, w: ShareWorkLocationInput): Promise<ShareResponse> {
-  return multiFetch<ShareResponse>(state, '/api/shared/work-locations', {
-    method: 'POST',
-    body: JSON.stringify({
-      name: w.name,
-      address: w.address || null,
-      latitude: w.latitude == null ? null : Number(w.latitude),
-      longitude: w.longitude == null ? null : Number(w.longitude),
-      description: w.description || null,
-      url: w.url || null,
-      tags: w.tags || null,
-    }),
-  });
-}
-
-export async function shareWorkplacePresence(state: MultiState, presence: WorkplacePresenceInput): Promise<ShareResponse> {
-  return multiFetch<ShareResponse>(state, '/api/shared/workplace-presence', {
-    method: 'POST',
-    body: JSON.stringify({
-      workplace_name: presence.workplace_name,
-      address: presence.address || null,
-      latitude: presence.latitude == null ? null : Number(presence.latitude),
-      longitude: presence.longitude == null ? null : Number(presence.longitude),
-      kind: presence.kind === 'leave' ? 'leave' : 'enter',
-    }),
-  });
-}
-
-export async function fetchMe(state: MultiState): Promise<FetchMeResult> {
-  return multiFetch<FetchMeResult>(state, '/api/me');
+  return {
+    sessionToken: data.sessionToken,
+    user: {
+      userId: data.user?.userId ?? null,
+      displayName: data.user?.displayName || '(unknown)',
+      role: data.user?.role || 'general',
+    },
+  };
 }

@@ -2,18 +2,9 @@
 // + /api/tracks/settings + /api/work-sessions の GPS 取込部分。
 // Spec: spec/api/multi.md
 
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
-  getBookmark, getDigSession, getDictionaryEntry, getImplementationNote,
-  getWorkLocation, insertImportedBookmark, setBookmarkOwner,
-  insertDigSession, setDigResult, setDigOwner,
-  findDictionaryEntryByTerm, insertDictionaryEntry, updateDictionaryEntry, setDictionaryOwner,
-  insertImplementationNote, updateImplementationNote,
-  insertWorkLocation, updateWorkLocation, setWorkLocationOwner,
-  markBookmarkShared, markDigShared, markDictionaryShared,
   insertGpsLocation, listGpsLocationsInRange, listGpsLocationDays,
   listGpsLocationsForDate, deleteGpsLocationsOlderThan, compressGpsHistory,
   getAppSettings, setAppSettings,
@@ -22,31 +13,24 @@ import {
   readMultiState, isConnected,
   readMultiServers, persistServers, upsertServer, removeServer, findServerByUrl,
   saveServerSession, clearServerSession, setActive,
-  fetchMe, shareBookmark, shareDig, shareDictionary,
-  shareImplementationNote, shareWorkLocation,
-  multiFetch,
+  readMode, setMode, hubFetch, hubLogin,
 } from '../local/multi-client.js';
 import { resolveUnresolvedBatch, getResolverDebug } from '../lib/place-resolver.js';
-import { fetchPageHtml } from '../lib/fetch-page.js';
 import { featureEnabled } from '../lib/privacy.js';
 import { checkIngestKey } from '../lib/ingest-auth.js';
-import { getProjectTokenForHub } from '../lib/cernere-session.js';
 import type { LocationBroadcastPoint, PlaceResolveResult } from '../lib/ws-locations.js';
-
-const CERNERE_PROJECT_KEY = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
 
 type Db = BetterSqlite3.Database;
 
 export interface MultiRouterDeps {
   db: Db;
-  htmlDir: string;
   broadcastLocation: (point: LocationBroadcastPoint) => void;
   broadcastLocationResolved: (id: number, result: PlaceResolveResult | null) => void;
   triggerResolveAsync: (id: number, lat: number, lon: number) => void;
 }
 
 export function makeMultiRouter(deps: MultiRouterDeps): Hono {
-  const { db, htmlDir, broadcastLocation, broadcastLocationResolved, triggerResolveAsync } = deps;
+  const { db, broadcastLocation, broadcastLocationResolved, triggerResolveAsync } = deps;
   const r = new Hono();
 
   // ---- multi server (Memoria Hub) integration --------------------------------
@@ -101,15 +85,14 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
     return c.json({ ok: true });
   });
 
-  // Cernere email/password 直ログイン。
+  // ── 二層設計: Hub に対するログイン ────────────────────────────────────
   //
-  // Hub には認証 endpoint が無い (= Cernere 発行トークンを検証するだけ)。
-  // 旧 /api/multi/connect は <hub>/api/auth/start へ飛ばしていたが Hub に
-  // その route は無く 404 になっていた。 正しい流れ:
-  //   1. Cernere POST /api/auth/login {email,password} → accessToken
-  //   2. accessToken を user-JWT として保存
-  //   3. fetchMe() = multiFetch('/api/me') が Cernere /api/auth/project-token
-  //      で project-token に交換 → Hub の authMiddleware が PASETO 検証
+  // 旧: ローカルが Cernere に直ログイン (CERNERE_BASE_URL を 1 つしか持てず、
+  //     複数拠点 Hub に対応できなかった)。
+  // 新: ローカルは Cernere を一切知らない。 Hub の /api/auth/login に
+  //     email/password を渡すだけ。 Hub が自分の Infisical 由来の
+  //     CERNERE_BASE_URL で Cernere に代理ログインし、 session token を返す。
+  //     ローカルはその session token を per-hub に保存する。
   r.post('/api/multi/login', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as
       { url?: unknown; email?: unknown; password?: unknown; label?: unknown } | null;
@@ -119,338 +102,89 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
     if (!url) return c.json({ error: 'url required' }, 400);
     if (!email || !password) return c.json({ error: 'email / password required' }, 400);
 
-    const cernereBase = (process.env.CERNERE_BASE_URL ?? '').replace(/\/$/, '');
-    if (!cernereBase) {
-      return c.json({
-        error: 'CERNERE_BASE_URL 未設定 — Multi view の Infisical セットアップを先に完了してください',
-      }, 400);
-    }
-
-    // 1. Cernere に email/password ログイン
-    let accessToken: string;
-    try {
-      const res = await fetch(`${cernereBase}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json().catch(() => ({})) as {
-        accessToken?: string; mfaRequired?: boolean; error?: string;
-      };
-      if (data.mfaRequired) {
-        return c.json({ error: 'MFA が有効なアカウントは現状未対応です' }, 400);
-      }
-      if (!res.ok || !data.accessToken) {
-        return c.json({ error: `Cernere ログイン失敗: ${data.error || `HTTP ${res.status}`}` }, 401);
-      }
-      accessToken = data.accessToken;
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `Cernere 到達失敗: ${msg}` }, 502);
-    }
-
-    // 2. server を登録 (未登録なら) + accessToken で Hub /api/me を検証
+    // 1. server を登録 (未登録なら)
     const { servers, active } = readMultiServers(db);
     const label = typeof body?.label === 'string' && body.label
       ? body.label : (findServerByUrl(servers, url)?.label || url);
-    const updated = upsertServer(servers, { url, label });
-    persistServers(db, updated, active);
-    const target = findServerByUrl(updated, url);
-    if (!target) return c.json({ error: 'server register failed' }, 500);
+    persistServers(db, upsertServer(servers, { url, label }), active);
 
-    let me;
+    // 2. Hub の /api/auth/login に代理ログインを依頼
+    let result;
     try {
-      me = await fetchMe({ ...target, jwt: accessToken });
+      result = await hubLogin(url, email, password);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `Hub 検証失敗: ${msg}` }, 401);
+      const status = (e as { status?: number })?.status ?? 502;
+      return c.json({ error: `Hub ログイン失敗: ${msg}` }, status as 401);
     }
 
-    // 3. session 保存 (= jwt + user 情報を app_settings に)
+    // 3. session token を per-hub に保存
     saveServerSession(db, url, {
-      jwt: accessToken,
-      userId: me.userId,
-      userName: me.displayName,
-      role: me.role,
+      jwt: result.sessionToken,
+      userId: result.user.userId,
+      userName: result.user.displayName,
+      role: result.user.role,
     });
-    return c.json({ ok: true, url, user: me });
+    return c.json({ ok: true, url, user: result.user });
   });
 
-  r.post('/api/multi/disconnect', async (c: Context) => {
-    // Body: { url? } — disconnect a specific server, or all if omitted.
-    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
-    if (typeof body?.url === 'string' && body.url) {
-      clearServerSession(db, body.url);
-    } else {
-      const { servers } = readMultiServers(db);
-      for (const s of servers) clearServerSession(db, s.url);
+  // ── 二層モード: データソース (Local / Multi) の状態 ───────────────────
+
+  r.get('/api/multi/mode', (c: Context) => c.json(readMode(db)));
+
+  // Body: { mode: 'local' | 'multi', url? }
+  // Multi にしたい Hub が未ログインなら切り替えず { needs_login: true } を返す。
+  r.post('/api/multi/mode', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as { mode?: unknown; url?: unknown } | null;
+    const mode = body?.mode === 'multi' ? 'multi' : body?.mode === 'local' ? 'local' : null;
+    if (!mode) return c.json({ error: "mode は 'local' か 'multi'" }, 400);
+    if (mode === 'local') {
+      setMode(db, 'local');
+      return c.json({ ok: true, mode: 'local', hubUrl: null });
     }
-    return c.json({ ok: true });
+    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
+    if (!url) return c.json({ error: 'multi モードには url が必要' }, 400);
+    const { servers } = readMultiServers(db);
+    const s = findServerByUrl(servers, url);
+    if (!s || !s.jwt || !s.userId) {
+      // 未ログイン — モードは切り替えず frontend にログインを促す
+      return c.json({ ok: false, needs_login: true, url });
+    }
+    setMode(db, 'multi', url);
+    return c.json({ ok: true, mode: 'multi', hubUrl: url });
   });
 
-  // Proxy for the multi server. Forwards path + query through with the saved
-  // JWT so the SPA can call the Hub without dealing with CORS or a second
-  // login. GET / POST are both allowed; POST is restricted to the
-  // `/api/shared/moderation/*` endpoints since every other write should go
-  // through `/api/multi/share` (which also updates the local row).
-  async function proxyMulti(c: Context, method: 'GET' | 'POST'): Promise<Response> {
-    const state = readMultiState(db);
-    if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
-    const path = c.req.path.replace('/api/multi/proxy', '');
-    if (method === 'POST' && !path.startsWith('/api/shared/moderation/')) {
-      return c.json({ error: 'forbidden_proxy_write' }, 403);
-    }
-    const qs = new URL(c.req.url).search;
-    const upstream = `${state.url.replace(/\/$/, '')}${path}${qs}`;
-    let bearer: string;
-    try {
-      bearer = await getProjectTokenForHub(state.url, state.jwt, CERNERE_PROJECT_KEY);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `cernere project-token failed: ${msg}` }, 502);
-    }
-    const init: RequestInit & { headers: Record<string, string> } = {
-      method,
-      headers: {
-        'Authorization': `Bearer ${bearer}`,
-        'Accept': 'application/json',
-      },
-    };
-    if (method === 'POST') {
-      init.headers['Content-Type'] = 'application/json';
-      init.body = await c.req.text();
-    }
-    try {
-      const res = await fetch(upstream, init);
-      const text = await res.text();
-      return new Response(text, {
-        status: res.status,
-        headers: {
-          'Content-Type': res.headers.get('content-type') || 'application/json',
-        },
+  // 指定 Hub にログイン済か。 ?url=<hub>
+  r.get('/api/multi/session', (c: Context) => {
+    const url = c.req.query('url') || '';
+    if (!url) return c.json({ error: 'url query required' }, 400);
+    const { servers } = readMultiServers(db);
+    const s = findServerByUrl(servers, url);
+    if (s && s.jwt && s.userId) {
+      return c.json({
+        connected: true,
+        user: { id: s.userId, name: s.userName, role: s.role },
       });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return c.json({ error: `proxy failed: ${msg}` }, 502);
     }
-  }
-  r.get('/api/multi/proxy/*', (c: Context) => proxyMulti(c, 'GET'));
-  r.post('/api/multi/proxy/*', (c: Context) => proxyMulti(c, 'POST'));
-
-  // Body: { kind: 'bookmark' | 'dig' | 'dict' | 'implementation_note' | 'work_location', id }
-  r.post('/api/multi/share', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as
-      { kind?: unknown; id?: unknown } | null;
-    if (!body?.kind || body.id == null) return c.json({ error: 'kind+id required' }, 400);
-    const state = readMultiState(db);
-    if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
-
-    const id = Number(body.id);
-
-    try {
-      if (body.kind === 'bookmark') {
-        const b = getBookmark(db, id);
-        if (!b) return c.json({ error: 'not_found' }, 404);
-        const r2 = await shareBookmark(state, b);
-        markBookmarkShared(db, id, { sharedAt: r2.shared_at, sharedOrigin: state.url });
-        return c.json({ ok: true, remote: r2 });
-      }
-      if (body.kind === 'dig') {
-        const d = getDigSession(db, id);
-        if (!d) return c.json({ error: 'not_found' }, 404);
-        const r2 = await shareDig(state, {
-          query: d.query, status: d.status, result: d.result,
-        });
-        markDigShared(db, id, { sharedAt: r2.shared_at, sharedOrigin: state.url });
-        return c.json({ ok: true, remote: r2 });
-      }
-      if (body.kind === 'dict') {
-        const e = getDictionaryEntry(db, id);
-        if (!e) return c.json({ error: 'not_found' }, 404);
-        const r2 = await shareDictionary(state, e);
-        markDictionaryShared(db, id, { sharedAt: r2.shared_at, sharedOrigin: state.url });
-        return c.json({ ok: true, remote: r2 });
-      }
-      if (body.kind === 'implementation_note') {
-        const n = getImplementationNote(db, id);
-        if (!n) return c.json({ error: 'not_found' }, 404);
-        if (!n.shareable) return c.json({ error: 'note is not marked shareable' }, 409);
-        const r2 = await shareImplementationNote(state, n);
-        updateImplementationNote(db, id, { shared_at: r2.shared_at, shared_origin: state.url });
-        return c.json({ ok: true, remote: r2 });
-      }
-      if (body.kind === 'work_location') {
-        const w = getWorkLocation(db, id);
-        if (!w) return c.json({ error: 'not_found' }, 404);
-        if (!w.shareable) return c.json({ error: 'location is not marked shareable' }, 409);
-        const r2 = await shareWorkLocation(state, w);
-        updateWorkLocation(db, id, { shared_at: r2.shared_at, shared_origin: state.url });
-        return c.json({ ok: true, remote: r2 });
-      }
-      return c.json({ error: 'unknown kind' }, 400);
-    } catch (e: unknown) {
-      console.error('[multi/share]', e);
-      const msg = e instanceof Error ? e.message : String(e);
-      const status = (e as { status?: number })?.status ?? 500;
-      return c.json({ error: msg }, status as 500);
-    }
+    return c.json({ connected: false });
   });
 
-  // Body: { kind, remote_id }
-  r.post('/api/multi/download', async (c: Context) => {
-    interface RemoteSharedBookmark {
-      url: string; title: string; summary: string | null; memo: string | null;
-      categories: string[]; owner_user_id: string; owner_user_name: string; shared_at: string;
+  // Body: { url? } — 指定 Hub の session を破棄。 そのモードに居たら Local に戻す。
+  r.post('/api/multi/logout', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
+    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
+    if (!url) return c.json({ error: 'url required' }, 400);
+    const { servers } = readMultiServers(db);
+    const s = findServerByUrl(servers, url);
+    if (s && s.jwt) {
+      try {
+        await hubFetch(s.url, s.jwt, '/api/auth/logout', { method: 'POST' });
+      } catch { /* Hub 側破棄はステートレスなので失敗しても続行 */ }
     }
-    interface RemoteSharedDig {
-      query: string; status: string; result_json?: unknown; result?: unknown;
-      owner_user_id: string; owner_user_name: string; shared_at: string;
-    }
-    interface RemoteSharedDict {
-      term: string; definition: string | null; notes: string | null;
-      owner_user_id: string; owner_user_name: string; shared_at: string;
-    }
-    interface RemoteSharedImpl {
-      product: string; title: string; good_points: string; bad_points: string;
-      attachment_type: string | null; attachment_value: string | null;
-      owner_user_name: string; shared_at: string;
-    }
-    interface RemoteSharedWorkLocation {
-      name: string; address: string | null; latitude: number | null; longitude: number | null;
-      description: string | null; url: string | null; tags: string | null;
-      owner_user_id: string; owner_user_name: string; shared_at: string;
-    }
-
-    const body = await c.req.json().catch(() => null) as
-      { kind?: unknown; remote_id?: unknown } | null;
-    if (!body?.kind || body.remote_id == null) return c.json({ error: 'kind+remote_id required' }, 400);
-    const state = readMultiState(db);
-    if (!isConnected(state)) return c.json({ error: 'not_connected' }, 400);
-    const remoteId = Number(body.remote_id);
-
-    try {
-      if (body.kind === 'bookmark') {
-        const remote = await multiFetch<RemoteSharedBookmark>(state, `/api/shared/bookmarks/${remoteId}`);
-        // Bookmarks need an HTML body locally — fetch the URL ourselves.
-        const escapeHtml = (s = '') => String(s).replace(/[&<>"']/g, (ch) => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-        }[ch] ?? ch));
-        let htmlBody: string;
-        try { htmlBody = (await fetchPageHtml(remote.url)).html; }
-        catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          htmlBody = `<!-- downloaded from ${state.url}; original fetch failed: ${msg} -->\n<html><head><title>${escapeHtml(remote.title || '')}</title></head><body></body></html>`;
-        }
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const safe = ts + '_' + Math.random().toString(36).slice(2, 8) + '.html';
-        writeFileSync(join(htmlDir, safe), htmlBody, 'utf8');
-        const ins = insertImportedBookmark(db, {
-          url: remote.url,
-          title: remote.title,
-          html_path: safe,
-          summary: remote.summary,
-          memo: remote.memo,
-          categories: remote.categories || [],
-        });
-        if (ins.skipped) return c.json({ ok: true, duplicate: true, id: ins.id });
-        setBookmarkOwner(db, ins.id, {
-          ownerUserId: remote.owner_user_id,
-          ownerUserName: remote.owner_user_name,
-          sharedAt: remote.shared_at,
-          sharedOrigin: state.url,
-        });
-        return c.json({ ok: true, id: ins.id });
-      }
-      if (body.kind === 'dig') {
-        const remote = await multiFetch<RemoteSharedDig>(state, `/api/shared/digs/${remoteId}`);
-        const id = insertDigSession(db, remote.query);
-        setDigResult(db, id, {
-          status: remote.status || 'done',
-          result: remote.result_json || remote.result || null,
-          error: null,
-        });
-        setDigOwner(db, id, {
-          ownerUserId: remote.owner_user_id,
-          ownerUserName: remote.owner_user_name,
-          sharedAt: remote.shared_at,
-          sharedOrigin: state.url,
-        });
-        return c.json({ ok: true, id });
-      }
-      if (body.kind === 'dict') {
-        const remote = await multiFetch<RemoteSharedDict>(state, `/api/shared/dictionary/${remoteId}`);
-        // Dictionary terms are unique locally — namespace remote-owned terms
-        // with the owner so a download doesn't clobber a local entry.
-        const namespacedTerm = remote.owner_user_id
-          ? `${remote.term} (@${remote.owner_user_name || remote.owner_user_id})`
-          : remote.term;
-        const existing = findDictionaryEntryByTerm(db, namespacedTerm);
-        let id: number;
-        if (existing) {
-          updateDictionaryEntry(db, existing.id, {
-            definition: remote.definition,
-            notes: remote.notes,
-          });
-          id = existing.id;
-        } else {
-          id = insertDictionaryEntry(db, {
-            term: namespacedTerm,
-            definition: remote.definition,
-            notes: remote.notes,
-          });
-        }
-        setDictionaryOwner(db, id, {
-          ownerUserId: remote.owner_user_id,
-          ownerUserName: remote.owner_user_name,
-          sharedAt: remote.shared_at,
-          sharedOrigin: state.url,
-        });
-        return c.json({ ok: true, id });
-      }
-      if (body.kind === 'implementation_note') {
-        const remote = await multiFetch<RemoteSharedImpl>(state, `/api/shared/implementation-notes/${remoteId}`);
-        const id = insertImplementationNote(db, {
-          product: remote.product || '',
-          title: remote.title,
-          good_points: remote.good_points,
-          bad_points: remote.bad_points,
-          attachment_type: remote.attachment_type,
-          attachment_value: remote.attachment_value,
-          shareable: 0,
-        });
-        updateImplementationNote(db, id, {
-          shared_at: remote.shared_at,
-          shared_origin: state.url,
-        });
-        return c.json({ ok: true, id, owner: remote.owner_user_name });
-      }
-      if (body.kind === 'work_location') {
-        const remote = await multiFetch<RemoteSharedWorkLocation>(state, `/api/shared/work-locations/${remoteId}`);
-        const id = insertWorkLocation(db, {
-          name: remote.name,
-          address: remote.address,
-          latitude: remote.latitude,
-          longitude: remote.longitude,
-          description: remote.description,
-          url: remote.url,
-          tags: remote.tags,
-          shareable: 0,
-        });
-        setWorkLocationOwner(db, id, {
-          ownerUserId: remote.owner_user_id,
-          ownerUserName: remote.owner_user_name,
-          sharedAt: remote.shared_at,
-          sharedOrigin: state.url,
-        });
-        return c.json({ ok: true, id, owner: remote.owner_user_name });
-      }
-      return c.json({ error: 'unknown kind' }, 400);
-    } catch (e: unknown) {
-      console.error('[multi/download]', e);
-      const msg = e instanceof Error ? e.message : String(e);
-      const status = (e as { status?: number })?.status ?? 500;
-      return c.json({ error: msg }, status as 500);
-    }
+    clearServerSession(db, url);
+    const m = readMode(db);
+    if (m.mode === 'multi' && m.hubUrl === url) setMode(db, 'local');
+    return c.json({ ok: true });
   });
 
   // ---- GPS locations (OwnTracks) -------------------------------------------
