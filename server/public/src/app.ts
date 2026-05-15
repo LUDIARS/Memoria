@@ -3827,9 +3827,9 @@ async function loadGithubSettings() {
   try {
     const s = await api('/api/diary/settings');
     $('diaryGhUser').value = s.github_user || '';
-    $('diaryGhRepos').value = s.github_repos || '';
     setTokenPlaceholder('diaryGhToken', !!s.github_token_set, 'ghp_...');
     $('diaryGhTokenStatus').textContent = s.github_token_set ? '✓ token 設定済み (再入力で上書き)' : '(未設定)';
+    // github_repos は repo_watch から導出される (UI 上は編集不可)。
   } catch (e) { console.error(e); }
 }
 
@@ -3870,8 +3870,8 @@ async function saveDiarySettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         github_user: $('diaryGhUser').value.trim(),
-        github_repos: $('diaryGhRepos').value.trim(),
         github_token: $('diaryGhToken').value,
+        // github_repos は repo_watch (📋 作業一覧) で管理。 ここでは送らない。
       }),
     });
     $('diaryGhToken').value = '';

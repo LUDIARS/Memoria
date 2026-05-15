@@ -3167,6 +3167,20 @@ export function getDiarySettings(db: Db): Record<string, string | null> {
   return out;
 }
 
+/**
+ * 日記の commit 集計対象リポを返す (`owner/name` slug 配列)。
+ *
+ * 出典は `📋 作業一覧` の `repo_watch` テーブル (provider='github')。
+ * 旧: `diary_settings.github_repos` のカンマ区切り手動入力 → 廃止。
+ * ユーザは worklist で登録するだけで日記にも反映される。
+ * worklist が空なら空配列を返し、 呼び出し側は GitHub 全体 search に fallback する。
+ */
+export function diaryRepos(db: Db): string[] {
+  return listRepoWatch(db)
+    .filter((r) => r.provider === 'github')
+    .map((r) => `${r.owner}/${r.name}`);
+}
+
 export function setDiarySettings(db: Db, patch: Record<string, unknown>): void {
   const tx = db.transaction(() => {
     for (const [k, v] of Object.entries(patch)) {
