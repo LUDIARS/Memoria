@@ -16,7 +16,8 @@ import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   listRepoWatch, getRepoWatch, insertRepoWatch, deleteRepoWatch,
-  updateRepoWatchStats, getDiarySettings, type RepoWatchRow,
+  updateRepoWatchStats, replaceRepoWatchItems, listRepoWatchItems,
+  getDiarySettings, type RepoWatchRow, type RepoWatchItemRow,
 } from '../db.js';
 import { parseRepoInput, fetchRepoStats, REPO_PROVIDERS } from '../lib/repo-watch.js';
 
@@ -30,11 +31,31 @@ function githubToken(db: Db): string | null {
   return s.github_token || process.env.MEMORIA_GH_TOKEN || null;
 }
 
-/** 1 件フェッチ → repo_watch のキャッシュ列を更新 → 最新行を返す。 */
+/** 1 件フェッチ → repo_watch のキャッシュ列を更新 → items も差し替え → 最新行を返す。 */
 async function refreshOne(db: Db, row: RepoWatchRow): Promise<RepoWatchRow> {
   const stats = await fetchRepoStats(row, githubToken(db));
-  updateRepoWatchStats(db, row.id, stats);
+  updateRepoWatchStats(db, row.id, {
+    default_branch:      stats.default_branch,
+    open_pr_count:       stats.open_pr_count,
+    open_issue_count:    stats.open_issue_count,
+    last_commit_sha:     stats.last_commit_sha,
+    last_commit_message: stats.last_commit_message,
+    last_commit_url:     stats.last_commit_url,
+    last_commit_at:      stats.last_commit_at,
+    ci_status:           stats.ci.status,
+    ci_conclusion:       stats.ci.conclusion,
+    ci_url:              stats.ci.url,
+    ci_workflow_name:    stats.ci.workflow_name,
+    ci_run_at:           stats.ci.run_at,
+    fetch_error:         stats.fetch_error,
+  });
+  replaceRepoWatchItems(db, row.id, stats.items);
   return getRepoWatch(db, row.id) ?? row;
+}
+
+/** カード表示用に row + top N items を組み立てる。 */
+function rowWithItems(db: Db, row: RepoWatchRow, topN: number) {
+  return { ...row, items: listRepoWatchItems(db, row.id, topN) };
 }
 
 export function makeRepoRouter(deps: RepoRouterDeps): Hono {
@@ -42,12 +63,24 @@ export function makeRepoRouter(deps: RepoRouterDeps): Hono {
   const r = new Hono();
 
   // ── 一覧 ────────────────────────────────────────────────────────────────
+  // 各 repo に top 5 の PR/Issue items を同梱して返す。 50 件まで展開する場合は
+  // /api/repos/:id/items を別途叩く。
   r.get('/api/repos', (c: Context) => {
     return c.json({
-      items: listRepoWatch(db),
+      items: listRepoWatch(db).map((row) => rowWithItems(db, row, 5)),
       providers: REPO_PROVIDERS,
       token_set: !!githubToken(db),
     });
+  });
+
+  // ── 1 リポの items 拡張 (more ボタン押下時に最大 50 件取得) ───────────────
+  r.get('/api/repos/:id/items', (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
+    if (!getRepoWatch(db, id)) return c.json({ error: 'not_found' }, 404);
+    const limit = Math.min(50, Math.max(1, Number(c.req.query('limit')) || 50));
+    const items: RepoWatchItemRow[] = listRepoWatchItems(db, id, limit);
+    return c.json({ items });
   });
 
   // ── 追加 ────────────────────────────────────────────────────────────────
@@ -78,7 +111,7 @@ export function makeRepoRouter(deps: RepoRouterDeps): Hono {
     const inserted = getRepoWatch(db, id);
     if (!inserted) return c.json({ error: 'insert succeeded but row not found' }, 500);
     const row = await refreshOne(db, inserted);
-    return c.json({ item: row }, 201);
+    return c.json({ item: rowWithItems(db, row, 5) }, 201);
   });
 
   // ── 削除 ────────────────────────────────────────────────────────────────
@@ -94,7 +127,8 @@ export function makeRepoRouter(deps: RepoRouterDeps): Hono {
     if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
     const row = getRepoWatch(db, id);
     if (!row) return c.json({ error: 'not_found' }, 404);
-    return c.json({ item: await refreshOne(db, row) });
+    const refreshed = await refreshOne(db, row);
+    return c.json({ item: rowWithItems(db, refreshed, 5) });
   });
 
   // ── 全件サマリ更新 ──────────────────────────────────────────────────────
@@ -106,7 +140,9 @@ export function makeRepoRouter(deps: RepoRouterDeps): Hono {
       await refreshOne(db, row);
       await new Promise((res) => setTimeout(res, 200));
     }
-    return c.json({ items: listRepoWatch(db) });
+    return c.json({
+      items: listRepoWatch(db).map((row) => rowWithItems(db, row, 5)),
+    });
   });
 
   return r;
