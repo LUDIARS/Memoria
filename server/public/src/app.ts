@@ -1145,7 +1145,7 @@ function switchTab(tab) {
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
-  $('reposView')?.classList.toggle('hidden', tab !== 'repos');
+  $('worklistView')?.classList.toggle('hidden', tab !== 'worklist');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
@@ -1164,7 +1164,7 @@ function switchTab(tab) {
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
-  if (tab === 'repos') loadRepoWatch();
+  if (tab === 'worklist') loadRepoWatch();
   if (tab === 'transit') loadTransit();
   if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
@@ -3820,14 +3820,16 @@ async function saveDiaryNotes() {
   }
 }
 
-async function openDiarySettings() {
-  $('diarySettingsPanel').classList.remove('hidden');
+// GitHub 設定 (user / repos / PAT) は ⚙ 設定 → 🔌 連携 / API key 配下に統合。
+// 日記・「📋 作業一覧」 など複数機能で参照するため、 単一フィールドを共有する。
+async function loadGithubSettings() {
+  if (!$('diaryGhUser')) return;  // settings panel が DOM に未注入の旧 HTML 互換
   try {
     const s = await api('/api/diary/settings');
     $('diaryGhUser').value = s.github_user || '';
-    $('diaryGhRepos').value = s.github_repos || '';
     setTokenPlaceholder('diaryGhToken', !!s.github_token_set, 'ghp_...');
     $('diaryGhTokenStatus').textContent = s.github_token_set ? '✓ token 設定済み (再入力で上書き)' : '(未設定)';
+    // github_repos は repo_watch から導出される (UI 上は編集不可)。
   } catch (e) { console.error(e); }
 }
 
@@ -3868,13 +3870,13 @@ async function saveDiarySettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         github_user: $('diaryGhUser').value.trim(),
-        github_repos: $('diaryGhRepos').value.trim(),
         github_token: $('diaryGhToken').value,
+        // github_repos は repo_watch (📋 作業一覧) で管理。 ここでは送らない。
       }),
     });
     $('diaryGhToken').value = '';
     flashToast('GitHub 設定を保存しました');
-    openDiarySettings();
+    void loadGithubSettings();
   } catch (e) {
     alert(`保存失敗: ${e.message}`);
   }
@@ -4755,10 +4757,9 @@ $('diaryGenerate')?.addEventListener('click', () => generateDiary());
 $('diaryImproveBtn')?.addEventListener('click', improveDiary);
 $('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
 $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
-$('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
+// GitHub 設定の入口は ⚙ 設定 → 🔌 連携 / API key に移動済 (openAiSettings で load)
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
 $('diarySettingsTest')?.addEventListener('click', testGithubPat);
-$('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
 $('domainSearch')?.addEventListener('input', (e) => {
@@ -5070,6 +5071,8 @@ async function openAiSettings() {
     // tracks/meals/tasks reminder 等のトグルが入っており、 どちらを先に開いても
     // 一度ロード済みの状態にする。
     loadPrivacySettings().catch((e) => console.warn('privacy settings load:', e));
+    // GitHub PAT / user / repos (日記 + 📋 作業一覧 で共有)
+    void loadGithubSettings();
     // Google Maps API key の現在値ステータス (実値はブラウザに渡さない方針 — masked)
     if ($('mapsApiKey')) {
       try {
@@ -11020,11 +11023,22 @@ document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   void loadReviewFile();
 });
 
-// ── 📦 リポジトリ ウォッチ一覧 ────────────────────────────────────────────
+// ── 📋 作業一覧 / 📦 リポジトリ セクション ────────────────────────────────
 //
-// 登録した GitHub リポの PR / Issue / デフォルトブランチ最終更新を一覧する。
-// 内部ビューアは持たず、 すべての項目は GitHub への外部リンク。 サマリは
-// サーバ側 (repo_watch テーブル) にキャッシュされ、 「更新」 で取り直す。
+// 「作業一覧」 タブ (worklistView) の中の 1 セクション。 登録した GitHub リポの
+// PR / Issue / デフォルトブランチ最終更新を一覧する。 内部ビューアは持たず、
+// すべての項目は GitHub への外部リンク。 サマリはサーバ側 (repo_watch テーブル)
+// にキャッシュされ、 「更新」 で取り直す。 今後ほかのリストを足す時は
+// worklistView に <section> を追加し、 ここに同様の load/render を書く。
+interface RepoListItem {
+  kind: 'pr' | 'issue';
+  number: number;
+  title: string;
+  html_url: string;
+  state: string | null;
+  author: string | null;
+  updated_at: string | null;
+}
 interface RepoWatchItem {
   id: number;
   provider: string;
@@ -11038,10 +11052,18 @@ interface RepoWatchItem {
   last_commit_message: string | null;
   last_commit_url: string | null;
   last_commit_at: string | null;
+  ci_status: string | null;
+  ci_conclusion: string | null;
+  ci_url: string | null;
+  ci_workflow_name: string | null;
+  ci_run_at: string | null;
   fetched_at: string | null;
   fetch_error: string | null;
+  items?: RepoListItem[];
 }
-const repoWatchState: { items: RepoWatchItem[]; tokenSet: boolean } = { items: [], tokenSet: false };
+// expandedRepos: 「more」 で 50 件展開済みの repo id 集合。 一覧 refresh しても保持。
+const repoWatchState: { items: RepoWatchItem[]; tokenSet: boolean; expandedRepos: Set<number> } =
+  { items: [], tokenSet: false, expandedRepos: new Set() };
 
 /** ざっくり相対時刻 ("3時間前" 等)。 不正値や未来は fmtDate にフォールバック。 */
 function repoFmtAgo(s: string | null): string {
@@ -11078,6 +11100,39 @@ async function loadRepoWatch() {
   }
 }
 
+/** CI status/conclusion → アイコン + ラベル + CSS modifier。 */
+function repoCiBadge(it: RepoWatchItem): string {
+  const s = (it.ci_status || '').toLowerCase();
+  const c = (it.ci_conclusion || '').toLowerCase();
+  if (!s) return '';
+  let mod = 'none'; let icon = '⚪'; let label = '—';
+  if (s !== 'completed') { mod = 'running'; icon = '◷'; label = s; }
+  else if (c === 'success') { mod = 'pass'; icon = '✓'; label = 'passing'; }
+  else if (c === 'failure') { mod = 'fail'; icon = '✗'; label = 'failing'; }
+  else if (c === 'cancelled' || c === 'skipped' || c === 'neutral') { mod = 'skip'; icon = '⊘'; label = c; }
+  else if (c === 'timed_out' || c === 'action_required') { mod = 'fail'; icon = '!'; label = c; }
+  else { mod = 'none'; icon = '?'; label = c || s; }
+  const title = `${it.ci_workflow_name || 'CI'}: ${label}${it.ci_run_at ? ` (${repoFmtAgo(it.ci_run_at)})` : ''}`;
+  const href = it.ci_url || `${it.html_url}/actions`;
+  return `<a class="repo-watch-ci repo-watch-ci-${mod}" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${icon} ${escapeHtml(label)}</a>`;
+}
+
+function repoItemRowHtml(item: RepoListItem): string {
+  const isPr = item.kind === 'pr';
+  const icon = isPr ? '🔃' : '⭕';
+  const author = item.author ? ` <span class="muted">${escapeHtml(item.author)}</span>` : '';
+  const when = item.updated_at ? ` <span class="muted">· ${escapeHtml(repoFmtAgo(item.updated_at))}</span>` : '';
+  return `
+    <li class="repo-watch-item repo-watch-item-${isPr ? 'pr' : 'issue'}">
+      <span class="repo-watch-item-icon">${icon}</span>
+      <a class="repo-watch-item-link" href="${escapeHtml(item.html_url)}" target="_blank" rel="noopener" title="${escapeHtml(item.title)}">
+        <span class="repo-watch-item-num">#${item.number}</span>
+        <span class="repo-watch-item-title">${escapeHtml(item.title)}</span>
+      </a>
+      ${author}${when}
+    </li>`;
+}
+
 function renderRepoWatch() {
   const list = document.getElementById('repoList');
   const empty = document.getElementById('repoEmpty');
@@ -11110,12 +11165,35 @@ function renderRepoWatch() {
     const err = it.fetch_error
       ? `<div class="muted" style="font-size:11px;color:#c0392b;margin-top:4px">⚠ ${escapeHtml(it.fetch_error)}</div>`
       : '';
+    const ciBadge = repoCiBadge(it);
+
+    // PR / Issue items: 既定 5 件、 expanded なら最大 50 件 (loadRepoItemsMore で差し替え済)。
+    const isExpanded = repoWatchState.expandedRepos.has(it.id);
+    const totalCount = (it.open_pr_count ?? 0) + (it.open_issue_count ?? 0);
+    const items = it.items || [];
+    const shownItems = isExpanded ? items : items.slice(0, 5);
+    let itemsBlock = '';
+    if (shownItems.length > 0) {
+      const remain = totalCount - shownItems.length;
+      const more = !isExpanded && remain > 0
+        ? `<button class="ghost repo-watch-more-btn" type="button" data-repo-id="${it.id}">more (${Math.min(remain, 50 - shownItems.length)} 件) ▼</button>`
+        : (isExpanded && items.length >= 50
+          ? `<span class="muted" style="font-size:11px">直近 50 件まで表示中（残りは GitHub で確認）</span>`
+          : '');
+      itemsBlock = `
+        <ul class="repo-watch-items">${shownItems.map(repoItemRowHtml).join('')}</ul>
+        ${more ? `<div class="repo-watch-more-row">${more}</div>` : ''}`;
+    } else if (totalCount === 0) {
+      itemsBlock = `<p class="muted repo-watch-empty-items">open な PR / Issue はありません</p>`;
+    }
+
     return `
-      <article class="card repo-watch-card">
+      <article class="card repo-watch-card" data-repo-id="${it.id}">
         <header class="repo-watch-head">
           <a class="repo-watch-slug" href="${escapeHtml(it.html_url)}" target="_blank" rel="noopener">
             <strong>${escapeHtml(slug)}</strong>
           </a>
+          ${ciBadge}
           <span class="grow"></span>
           <button class="ghost repo-refresh-btn" type="button" data-repo-id="${it.id}" title="このリポを更新">↻</button>
           <button class="ghost repo-delete-btn" type="button" data-repo-id="${it.id}" title="一覧から削除">✕</button>
@@ -11130,6 +11208,7 @@ function renderRepoWatch() {
             <span class="repo-watch-stat-label">Open Issue</span>
           </a>
         </div>
+        ${itemsBlock}
         <div class="repo-watch-branch">
           <a href="${escapeHtml(branchLink)}" target="_blank" rel="noopener" title="デフォルトブランチのコミット一覧"><code>${escapeHtml(branch)}</code></a>
           <span class="repo-watch-commit-msg">${commitMsg}</span>
@@ -11139,6 +11218,20 @@ function renderRepoWatch() {
         ${err}
       </article>`;
   }).join('');
+}
+
+async function loadRepoItemsMore(id: number) {
+  try {
+    const r = await api(`/api/repos/${id}/items?limit=50`) as { items?: RepoListItem[] };
+    const idx = repoWatchState.items.findIndex((x) => x.id === id);
+    if (idx >= 0) {
+      repoWatchState.items[idx] = { ...repoWatchState.items[idx], items: r.items || [] };
+      repoWatchState.expandedRepos.add(id);
+      renderRepoWatch();
+    }
+  } catch (e) {
+    flashToast(`展開失敗: ${(e as Error).message}`);
+  }
 }
 
 // ── 追加モーダル ──────────────────────────────────────────────────────────
@@ -11242,6 +11335,11 @@ document.getElementById('repoList')?.addEventListener('click', (ev) => {
   const deleteBtn = target.closest('.repo-delete-btn') as HTMLElement | null;
   if (deleteBtn) {
     void deleteRepoWatch(Number(deleteBtn.dataset.repoId));
+    return;
+  }
+  const moreBtn = target.closest('.repo-watch-more-btn') as HTMLElement | null;
+  if (moreBtn) {
+    void loadRepoItemsMore(Number(moreBtn.dataset.repoId));
   }
 });
 

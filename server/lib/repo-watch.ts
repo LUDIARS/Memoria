@@ -27,6 +27,24 @@ export interface ParsedRepo {
   html_url: string;
 }
 
+export interface RepoItem {
+  kind: 'pr' | 'issue';
+  number: number;
+  title: string;
+  html_url: string;
+  state: string;
+  author: string | null;
+  updated_at: string | null;
+}
+
+export interface RepoCi {
+  status: string | null;          // 'queued' | 'in_progress' | 'completed'
+  conclusion: string | null;      // 'success' | 'failure' | 'cancelled' | 'skipped' | etc.
+  url: string | null;
+  workflow_name: string | null;
+  run_at: string | null;
+}
+
 export interface RepoStats {
   default_branch: string | null;
   open_pr_count: number | null;
@@ -35,6 +53,8 @@ export interface RepoStats {
   last_commit_message: string | null;
   last_commit_url: string | null;
   last_commit_at: string | null;
+  items: RepoItem[];              // 最大 50 件、 PR + Issue 混在、 updated_at DESC
+  ci: RepoCi;
   /** 取得に失敗した場合の理由 (= 部分的にしか取れなかった時も入れる)。 成功なら null。 */
   fetch_error: string | null;
 }
@@ -84,6 +104,14 @@ export async function fetchRepoStats(
   return { ...EMPTY_STATS, fetch_error: `未対応の provider: ${repo.provider}` };
 }
 
+const EMPTY_CI: RepoCi = {
+  status: null,
+  conclusion: null,
+  url: null,
+  workflow_name: null,
+  run_at: null,
+};
+
 const EMPTY_STATS: RepoStats = {
   default_branch: null,
   open_pr_count: null,
@@ -92,6 +120,8 @@ const EMPTY_STATS: RepoStats = {
   last_commit_message: null,
   last_commit_url: null,
   last_commit_at: null,
+  items: [],
+  ci: EMPTY_CI,
   fetch_error: null,
 };
 
@@ -104,8 +134,31 @@ interface GithubCommitResponse {
   html_url?: string;
   commit?: { message?: string; committer?: { date?: string }; author?: { date?: string } };
 }
-interface GithubSearchResponse {
-  total_count?: number;
+interface GithubPullResponse {
+  number?: number;
+  title?: string;
+  html_url?: string;
+  state?: string;
+  updated_at?: string;
+  user?: { login?: string };
+}
+interface GithubIssueResponse {
+  number?: number;
+  title?: string;
+  html_url?: string;
+  state?: string;
+  updated_at?: string;
+  user?: { login?: string };
+  pull_request?: unknown;       // Issues API は PR も返す。 これがあれば PR なので除外。
+}
+interface GithubActionsRunsResponse {
+  workflow_runs?: Array<{
+    status?: string;
+    conclusion?: string | null;
+    html_url?: string;
+    name?: string;
+    updated_at?: string;
+  }>;
 }
 
 /**
@@ -174,22 +227,92 @@ async function fetchGithubRepoStats(
     }
   }
 
-  // 3. open PR 件数 (best-effort, search API)。 Issue 件数はそこから逆算。
+  // 3. open PR リスト (最大 50 件、 updated_at DESC)。 件数は array.length で算出。
   let openPrCount: number | null = null;
-  let openIssueCount: number | null = null;
-  const searchRes = await get(
-    `https://api.github.com/search/issues?q=${encodeURIComponent(`repo:${slug} is:pr is:open`)}&per_page=1`,
+  const items: RepoItem[] = [];
+  const pullsRes = await get(
+    `https://api.github.com/repos/${slug}/pulls?state=open&per_page=50&sort=updated&direction=desc`,
   );
-  if (searchRes.ok) {
-    const s = searchRes.data as GithubSearchResponse;
-    openPrCount = typeof s.total_count === 'number' ? s.total_count : null;
-    if (openPrCount != null && openIssuesAndPrs != null) {
-      openIssueCount = Math.max(0, openIssuesAndPrs - openPrCount);
+  if (pullsRes.ok && Array.isArray(pullsRes.data)) {
+    const arr = pullsRes.data as GithubPullResponse[];
+    openPrCount = arr.length;
+    for (const p of arr) {
+      if (typeof p.number !== 'number' || !p.title || !p.html_url) continue;
+      items.push({
+        kind: 'pr',
+        number: p.number,
+        title: p.title,
+        html_url: p.html_url,
+        state: p.state ?? 'open',
+        author: p.user?.login ?? null,
+        updated_at: p.updated_at ?? null,
+      });
     }
-  } else {
-    errors.push(`PR count: ${searchRes.error}`);
-    // search が落ちても open_issues_count (issue+PR 合算) は出しておく。
-    openIssueCount = openIssuesAndPrs;
+  } else if (!pullsRes.ok) {
+    errors.push(`pulls: ${pullsRes.error}`);
+  }
+
+  // 4. open Issue リスト (最大 50 件、 updated_at DESC)。 GitHub Issues API は PR も
+  //    返すので `pull_request` フィールドがあるものは除外する。
+  let openIssueCount: number | null = null;
+  const issuesRes = await get(
+    `https://api.github.com/repos/${slug}/issues?state=open&per_page=50&sort=updated&direction=desc`,
+  );
+  if (issuesRes.ok && Array.isArray(issuesRes.data)) {
+    const arr = issuesRes.data as GithubIssueResponse[];
+    let count = 0;
+    for (const i of arr) {
+      if (i.pull_request) continue;
+      if (typeof i.number !== 'number' || !i.title || !i.html_url) continue;
+      count++;
+      items.push({
+        kind: 'issue',
+        number: i.number,
+        title: i.title,
+        html_url: i.html_url,
+        state: i.state ?? 'open',
+        author: i.user?.login ?? null,
+        updated_at: i.updated_at ?? null,
+      });
+    }
+    openIssueCount = count;
+  } else if (!issuesRes.ok) {
+    errors.push(`issues: ${issuesRes.error}`);
+    // 致命的でない場合の fallback: /repos の open_issues_count (PR 込み合算)
+    openIssueCount = openIssuesAndPrs != null && openPrCount != null
+      ? Math.max(0, openIssuesAndPrs - openPrCount)
+      : openIssuesAndPrs;
+  }
+
+  // 合算ソート: updated_at DESC (null は末尾)
+  items.sort((a, b) => {
+    const ta = a.updated_at || '';
+    const tb = b.updated_at || '';
+    if (ta === tb) return a.kind.localeCompare(b.kind);
+    return tb.localeCompare(ta);
+  });
+
+  // 5. CI: デフォルトブランチの最新 Actions run (best-effort)。
+  let ci: RepoCi = EMPTY_CI;
+  if (defaultBranch) {
+    const runsRes = await get(
+      `https://api.github.com/repos/${slug}/actions/runs?branch=${encodeURIComponent(defaultBranch)}&per_page=1`,
+    );
+    if (runsRes.ok) {
+      const data = runsRes.data as GithubActionsRunsResponse;
+      const run = data.workflow_runs?.[0];
+      if (run) {
+        ci = {
+          status: run.status ?? null,
+          conclusion: run.conclusion ?? null,
+          url: run.html_url ?? null,
+          workflow_name: run.name ?? null,
+          run_at: run.updated_at ?? null,
+        };
+      }
+    } else {
+      errors.push(`ci: ${runsRes.error}`);
+    }
   }
 
   return {
@@ -200,6 +323,8 @@ async function fetchGithubRepoStats(
     last_commit_message: lastCommitMessage,
     last_commit_url: lastCommitUrl,
     last_commit_at: lastCommitAt,
+    items,
+    ci,
     fetch_error: errors.length > 0 ? errors.join(' / ') : null,
   };
 }

@@ -15,7 +15,7 @@ import {
   recordAccess, findBookmarkByUrl,
   listAllCategories,
   getDomainCatalogMap, getPageMetadataMap,
-  getAppSettings,
+  getAppSettings, diaryRepos,
   recordActivityEvent, listActivityEvents, activityEventsPage,
   pageVisitsForDate, revisitedBookmarksForDate, browsingDomainStatsForDate,
   listServerEvents, listServerEventsForDate,
@@ -116,9 +116,8 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     return {
       github_token: s['diary.github_token'] || process.env.MEMORIA_GH_TOKEN || '',
       github_user: s['diary.github_user'] || process.env.MEMORIA_GH_USER || '',
-      github_repos: s['diary.github_repos']
-        ? String(s['diary.github_repos']).split(',').map((x) => x.trim()).filter(Boolean)
-        : [] as string[],
+      // 集計対象リポは `📋 作業一覧` (repo_watch) から導出。
+      github_repos: diaryRepos(db),
     };
   }
 

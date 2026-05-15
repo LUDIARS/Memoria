@@ -5,7 +5,7 @@ import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   getDiary, listDiariesInRange, upsertDiary, deleteDiary,
-  getDiarySettings, setDiarySettings,
+  getDiarySettings, setDiarySettings, diaryRepos,
   getWeekly, listWeeklyForMonth, deleteWeekly,
   digSessionsForDate,
 } from '../db.js';
@@ -37,9 +37,8 @@ export function makeDiaryRouter(deps: DiaryRouterDeps): Hono {
     return {
       github_token: s.github_token || process.env.MEMORIA_GH_TOKEN || '',
       github_user: s.github_user || process.env.MEMORIA_GH_USER || '',
-      github_repos: s.github_repos
-        ? s.github_repos.split(',').map((x) => x.trim()).filter(Boolean)
-        : [] as string[],
+      // 集計対象リポは `📋 作業一覧` (repo_watch) から導出。 旧 diary_settings.github_repos は不使用。
+      github_repos: diaryRepos(db),
     };
   }
 
@@ -60,21 +59,23 @@ export function makeDiaryRouter(deps: DiaryRouterDeps): Hono {
 
   r.get('/api/diary/settings', (c: Context) => {
     // Mask the token when returning to the FE.
+    // github_repos は `📋 作業一覧` (repo_watch) からの導出値を参考表示として返す
+    // (フロント設定 UI では編集対象外)。
     const s = settingsAsObject();
     return c.json({
       github_user: s.github_user,
-      github_repos: s.github_repos.join(','),
+      github_repos: s.github_repos,           // 導出値 (string[])
       github_token_set: !!s.github_token,
     });
   });
 
   r.post('/api/diary/settings', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as
-      { github_token?: unknown; github_user?: unknown; github_repos?: unknown };
+      { github_token?: unknown; github_user?: unknown };
     const patch: Record<string, string> = {};
     if (typeof body.github_token === 'string') patch.github_token = body.github_token;
     if (typeof body.github_user === 'string') patch.github_user = body.github_user;
-    if (typeof body.github_repos === 'string') patch.github_repos = body.github_repos;
+    // github_repos は repo_watch 側で管理するため受け付けない (旧キーは無視)。
     setDiarySettings(db, patch);
     return c.json({ ok: true });
   });

@@ -23,7 +23,7 @@ import {
   upsertDiary, getDiary, getAppSettings,
   digThemeContext,
   upsertWeekly, listDiariesInRange,
-  getDiarySettings,
+  getDiarySettings, diaryRepos,
   countBookmarksInRange, countVisitEventsInRange, countActivityEventsInRange,
   insertApplicationPending, getApplication, setApplication,
 } from '../db.js';
@@ -481,9 +481,8 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
     return {
       github_token: s.github_token || process.env.MEMORIA_GH_TOKEN || '',
       github_user: s.github_user || process.env.MEMORIA_GH_USER || '',
-      github_repos: s.github_repos
-        ? s.github_repos.split(',').map((x) => x.trim()).filter(Boolean)
-        : [],
+      // 集計対象リポは `📋 作業一覧` (repo_watch) から導出。 旧 diary_settings.github_repos は不使用。
+      github_repos: diaryRepos(db),
     };
   }
 
