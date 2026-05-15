@@ -1522,7 +1522,6 @@
   <div id="repoWatchModal" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
       <h3 style="margin:0;flex:1">📦 リポジトリを追加</h3>
-      <button id="repoWatchSaveBtn">追加</button>
       <button id="repoWatchCloseBtn" class="modal-close" title="閉じる">×</button>
     </div>
     <p class="muted" style="margin:8px 0;font-size:12px">
@@ -1534,6 +1533,9 @@
       <span>リポジトリ URL または owner/name</span>
       <input id="repoWatchUrl" type="text" placeholder="例: https://github.com/LUDIARS/Memoria  または  LUDIARS/Memoria" />
     </label>
+    <div style="margin-top:10px;display:flex;justify-content:flex-end">
+      <button id="repoWatchSaveBtn">追加</button>
+    </div>
     <p class="muted" style="font-size:11px;margin:4px 0">
       現在は GitHub のみ対応。 GitHub 以外のバージョン管理は今後対応予定です。
     </p>
