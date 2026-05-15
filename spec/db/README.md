@@ -1,6 +1,6 @@
 # `spec/db/` — SQLite データモデル
 
-Memoria ローカルサーバ (`server/db.js` で初期化される SQLite ファイル) の
+Memoria ローカルサーバ (`server/db.ts` で初期化される SQLite ファイル) の
 テーブル仕様書。 ファイルは原則 **1 ドメイン 1 ファイル** (関連テーブルをまとめる)。
 
 ## テーブル一覧 (ドメイン別)
