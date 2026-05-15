@@ -561,6 +561,25 @@ export function openDb(dbPath: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_repo_watch_sort ON repo_watch(sort_order, id);
 
+    -- repo_watch の各リポについて、 直近フェッチ時の open PR / Issue を最大 50 件まで
+    -- キャッシュする。 一覧上には top 5 を updated_at DESC で表示、 「more」 で
+    -- 50 件まで展開する。 表示時に外部リンクへ飛ばすだけなので body 等は保持しない。
+    CREATE TABLE IF NOT EXISTS repo_watch_items (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id    INTEGER NOT NULL REFERENCES repo_watch(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL,                   -- 'pr' | 'issue'
+      number     INTEGER NOT NULL,
+      title      TEXT NOT NULL,
+      html_url   TEXT NOT NULL,
+      state      TEXT,                            -- 'open' | 'closed' (現状 open のみ取得)
+      author     TEXT,
+      updated_at TEXT,                            -- ISO8601
+      fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(repo_id, kind, number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_watch_items_recent
+      ON repo_watch_items(repo_id, updated_at DESC);
+
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       endpoint    TEXT NOT NULL UNIQUE,
@@ -837,6 +856,21 @@ export function openDb(dbPath: string): Db {
   // 場所の物理的な大きさに応じて個別に設定できるようにする。
   if (wlCols.length > 0 && !wlCols.includes('radius_m')) {
     db.exec(`ALTER TABLE work_locations ADD COLUMN radius_m INTEGER`);
+  }
+
+  // repo_watch: CI (GitHub Actions 最新 run) のキャッシュ列を後付け。
+  const repoWatchCols = (db.prepare(`PRAGMA table_info(repo_watch)`).all() as { name: string }[]).map(c => c.name);
+  const repoWatchAlters: ReadonlyArray<readonly [string, string]> = [
+    ['ci_status', 'TEXT'],         // queued / in_progress / completed
+    ['ci_conclusion', 'TEXT'],     // success / failure / cancelled / skipped / null
+    ['ci_url', 'TEXT'],            // workflow run の html_url
+    ['ci_workflow_name', 'TEXT'],
+    ['ci_run_at', 'TEXT'],         // ISO8601 (workflow run の updated_at)
+  ];
+  for (const [col, ddl] of repoWatchAlters) {
+    if (repoWatchCols.length > 0 && !repoWatchCols.includes(col)) {
+      db.exec(`ALTER TABLE repo_watch ADD COLUMN ${col} ${ddl}`);
+    }
   }
 
   const mealsCols = (db.prepare(`PRAGMA table_info(meals)`).all() as { name: string }[]).map(c => c.name);
@@ -2616,6 +2650,11 @@ export interface RepoWatchRow {
   last_commit_message: string | null;
   last_commit_url: string | null;
   last_commit_at: string | null;
+  ci_status: string | null;
+  ci_conclusion: string | null;
+  ci_url: string | null;
+  ci_workflow_name: string | null;
+  ci_run_at: string | null;
   fetched_at: string | null;
   fetch_error: string | null;
   sort_order: number;
@@ -2626,6 +2665,7 @@ const REPO_WATCH_COLS = `
   id, provider, owner, name, html_url, default_branch,
   open_pr_count, open_issue_count,
   last_commit_sha, last_commit_message, last_commit_url, last_commit_at,
+  ci_status, ci_conclusion, ci_url, ci_workflow_name, ci_run_at,
   fetched_at, fetch_error, sort_order, created_at
 `;
 
@@ -2672,6 +2712,11 @@ export function updateRepoWatchStats(
     last_commit_message?: string | null;
     last_commit_url?: string | null;
     last_commit_at?: string | null;
+    ci_status?: string | null;
+    ci_conclusion?: string | null;
+    ci_url?: string | null;
+    ci_workflow_name?: string | null;
+    ci_run_at?: string | null;
     fetch_error?: string | null;
   },
 ): void {
@@ -2684,6 +2729,11 @@ export function updateRepoWatchStats(
        last_commit_message = ?,
        last_commit_url     = ?,
        last_commit_at      = ?,
+       ci_status           = ?,
+       ci_conclusion       = ?,
+       ci_url              = ?,
+       ci_workflow_name    = ?,
+       ci_run_at           = ?,
        fetched_at          = datetime('now'),
        fetch_error         = ?
      WHERE id = ?`,
@@ -2695,9 +2745,67 @@ export function updateRepoWatchStats(
     stats.last_commit_message ?? null,
     stats.last_commit_url ?? null,
     stats.last_commit_at ?? null,
+    stats.ci_status ?? null,
+    stats.ci_conclusion ?? null,
+    stats.ci_url ?? null,
+    stats.ci_workflow_name ?? null,
+    stats.ci_run_at ?? null,
     stats.fetch_error ?? null,
     id,
   );
+}
+
+// ─── repo_watch_items (各リポの open PR / Issue キャッシュ) ────────────────
+export interface RepoWatchItemRow {
+  id: number;
+  repo_id: number;
+  kind: string;       // 'pr' | 'issue'
+  number: number;
+  title: string;
+  html_url: string;
+  state: string | null;
+  author: string | null;
+  updated_at: string | null;
+  fetched_at: string;
+}
+
+export function listRepoWatchItems(db: Db, repoId: number, limit = 50): RepoWatchItemRow[] {
+  return db.prepare(
+    `SELECT id, repo_id, kind, number, title, html_url, state, author, updated_at, fetched_at
+     FROM repo_watch_items
+     WHERE repo_id = ?
+     ORDER BY updated_at DESC, id DESC
+     LIMIT ?`,
+  ).all(repoId, limit) as RepoWatchItemRow[];
+}
+
+/** ある repo の items を丸ごと差し替える (取得結果を毎回上書きする想定)。 */
+export function replaceRepoWatchItems(
+  db: Db,
+  repoId: number,
+  items: ReadonlyArray<{
+    kind: string;
+    number: number;
+    title: string;
+    html_url: string;
+    state?: string | null;
+    author?: string | null;
+    updated_at?: string | null;
+  }>,
+): void {
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM repo_watch_items WHERE repo_id = ?`).run(repoId);
+    if (items.length === 0) return;
+    const ins = db.prepare(
+      `INSERT INTO repo_watch_items (repo_id, kind, number, title, html_url, state, author, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const it of items) {
+      ins.run(repoId, it.kind, it.number, it.title, it.html_url,
+        it.state ?? null, it.author ?? null, it.updated_at ?? null);
+    }
+  });
+  tx();
 }
 
 export function activityEventsForDate(db: Db, dateStr: string): ActivityEventParsed[] {
@@ -3165,6 +3273,20 @@ export function getDiarySettings(db: Db): Record<string, string | null> {
   const out: Record<string, string | null> = {};
   for (const r of rows) out[r.key] = r.value;
   return out;
+}
+
+/**
+ * 日記の commit 集計対象リポを返す (`owner/name` slug 配列)。
+ *
+ * 出典は `📋 作業一覧` の `repo_watch` テーブル (provider='github')。
+ * 旧: `diary_settings.github_repos` のカンマ区切り手動入力 → 廃止。
+ * ユーザは worklist で登録するだけで日記にも反映される。
+ * worklist が空なら空配列を返し、 呼び出し側は GitHub 全体 search に fallback する。
+ */
+export function diaryRepos(db: Db): string[] {
+  return listRepoWatch(db)
+    .filter((r) => r.provider === 'github')
+    .map((r) => `${r.owner}/${r.name}`);
 }
 
 export function setDiarySettings(db: Db, patch: Record<string, unknown>): void {

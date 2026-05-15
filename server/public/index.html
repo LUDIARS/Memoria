@@ -305,8 +305,8 @@
           <button class="tab" data-tab="review">
             <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
           </button>
-          <button class="tab" data-tab="repos">
-            <span class="tab-label" data-full="📦 リポジトリ" data-short="📦 リポ">📦 リポジトリ</span>
+          <button class="tab" data-tab="worklist">
+            <span class="tab-label" data-full="📋 作業一覧" data-short="📋 作業">📋 作業一覧</span>
           </button>
           <button class="tab" data-tab="transit">
             <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
@@ -537,7 +537,6 @@
           <button id="diaryNextMonth" class="ghost">▶</button>
           <button id="diaryToday" class="ghost">今日</button>
           <span class="grow"></span>
-          <button id="diarySettingsBtn" class="ghost">⚙ GitHub設定</button>
         </div>
         <div class="diary-layout">
           <div class="diary-calendar-wrap">
@@ -622,20 +621,7 @@
             </div>
           </div>
         </div>
-        <div id="diarySettingsPanel" class="diary-settings hidden foundation-form">
-          <h4>GitHub 設定</h4>
-          <p class="diary-settings-help">GitHub の commit ツリーを日報に取り込むときだけ設定してください。トークンはサーバーの SQLite に保存されます。</p>
-          <label class="simple-field"><span>ユーザ名</span><input id="diaryGhUser" type="text" placeholder="example" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>リポジトリ (カンマ区切り。空欄なら全リポ)</span><input id="diaryGhRepos" type="text" placeholder="user/repo1, user/repo2" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Personal access token (公開リポのみなら不要)</span><input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
-          <span id="diaryGhTokenStatus" class="diary-settings-tokenstatus"></span>
-          <div class="diary-settings-actions">
-            <button id="diarySettingsSave">保存</button>
-            <button id="diarySettingsTest" class="ghost">PAT を検証</button>
-            <button id="diarySettingsClose" class="ghost">閉じる</button>
-          </div>
-          <div id="diaryGhTestResult" class="diary-settings-tokenstatus"></div>
-        </div>
+        <!-- GitHub 設定は ⚙ 設定 → 🔌 連携 / API key に移動 (日記以外でも参照するため) -->
       </div>
 
       <div id="queueView" class="hidden">
@@ -968,22 +954,28 @@
         </div>
       </div>
 
-      <div id="reposView" class="hidden">
-        <div class="bookmarks-toolbar">
-          <span class="muted">📦 ウォッチ中のリポジトリ — PR / Issue / デフォルトブランチ最終更新</span>
-          <span class="grow"></span>
-          <button id="repoAddBtn" class="ghost" type="button" title="リポジトリを追加">+ 追加</button>
-          <button id="repoRefreshAllBtn" class="ghost" type="button" title="全リポのサマリを取り直す">更新</button>
-        </div>
-        <p id="repoTokenHint" class="muted" style="font-size:11px;margin:0 0 8px;display:none">
-          GitHub PAT が未設定です。 public リポは取得できますが、 private リポや
-          rate limit 緩和には <code>日記</code> 設定の GitHub トークンを設定してください。
-        </p>
-        <div id="repoList" class="cards"></div>
-        <div id="repoEmpty" class="dict-empty hidden">
-          ウォッチ中のリポジトリはありません。 「+ 追加」 から GitHub の URL か
-          <code>owner/name</code> を登録してください。
-        </div>
+      <!-- 📋 作業一覧 — 各種「一覧」をセクション見出しで縦に積むダッシュボード。
+           今はリポジトリ一覧のみ。 今後ほかのリストを <section> で下に足す。 -->
+      <div id="worklistView" class="hidden">
+        <section class="worklist-section">
+          <header class="worklist-section-head">
+            <h2>📦 リポジトリ</h2>
+            <span class="muted worklist-section-desc">PR / Issue / デフォルトブランチ最終更新</span>
+            <span class="grow"></span>
+            <button id="repoAddBtn" class="ghost" type="button" title="リポジトリを追加">+ 追加</button>
+            <button id="repoRefreshAllBtn" class="ghost" type="button" title="全リポのサマリを取り直す">更新</button>
+          </header>
+          <p id="repoTokenHint" class="muted" style="font-size:11px;margin:0 0 8px;display:none">
+            GitHub PAT が未設定です。 public リポは取得できますが、 private リポや
+            rate limit 緩和には <code>日記</code> 設定の GitHub トークンを設定してください。
+            推奨は classic PAT で、 スコープは公開リポのみなら <code>public_repo</code>、 private を含むなら <code>repo</code>。
+          </p>
+          <div id="repoList" class="cards"></div>
+          <div id="repoEmpty" class="dict-empty hidden">
+            ウォッチ中のリポジトリはありません。 「+ 追加」 から GitHub の URL か
+            <code>owner/name</code> を登録してください。
+          </div>
+        </section>
       </div>
 
       <div id="transitView" class="hidden">
@@ -1517,7 +1509,6 @@
   <div id="repoWatchModal" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
       <h3 style="margin:0;flex:1">📦 リポジトリを追加</h3>
-      <button id="repoWatchSaveBtn">追加</button>
       <button id="repoWatchCloseBtn" class="modal-close" title="閉じる">×</button>
     </div>
     <p class="muted" style="margin:8px 0;font-size:12px">
@@ -1529,6 +1520,9 @@
       <span>リポジトリ URL または owner/name</span>
       <input id="repoWatchUrl" type="text" placeholder="例: https://github.com/LUDIARS/Memoria  または  LUDIARS/Memoria" />
     </label>
+    <div style="margin-top:10px;display:flex;justify-content:flex-end">
+      <button id="repoWatchSaveBtn">追加</button>
+    </div>
     <p class="muted" style="font-size:11px;margin:4px 0">
       現在は GitHub のみ対応。 GitHub 以外のバージョン管理は今後対応予定です。
     </p>
@@ -1669,6 +1663,24 @@
       <label>API Key (gpt 系を使う場合): <input id="aiOpenaiKey" type="password" placeholder="sk-..." autocomplete="off" /></label>
       <span id="aiOpenaiKeyStatus" class="ai-keystatus"></span>
       <label>デフォルトモデル: <input id="aiOpenaiModel" type="text" placeholder="gpt-4o-mini" /></label>
+
+      <h4>🐙 GitHub</h4>
+      <p class="ai-settings-help">
+        日記の commit 取り込み・「📋 作業一覧」 のリポ監視で共通で使う設定です。 トークンはサーバの SQLite に保存されます。
+        集計対象のリポは「📋 作業一覧」 タブで管理してください (こちらでは編集できません)。
+      </p>
+      <label class="simple-field"><span>ユーザ名</span><input id="diaryGhUser" type="text" placeholder="example" /></label>
+      <label class="simple-field" style="margin-top:8px"><span>Personal access token (公開リポのみなら不要)</span><input id="diaryGhToken" type="password" placeholder="ghp_..." /></label>
+      <p class="ai-settings-help" style="font-size:11px;margin:4px 0 0">
+        推奨: classic PAT (<code>ghp_...</code>)。 スコープは公開リポのみなら <code>public_repo</code>、 private を含むなら <code>repo</code>。
+        fine-grained (<code>github_pat_...</code>) は org 設定で無効化されることがあるので非推奨。
+      </p>
+      <span id="diaryGhTokenStatus" class="ai-keystatus"></span>
+      <div class="ai-settings-actions">
+        <button id="diarySettingsSave">保存</button>
+        <button id="diarySettingsTest" class="ghost">PAT を検証</button>
+      </div>
+      <div id="diaryGhTestResult" class="ai-keystatus"></div>
 
       <h4>📍 Legatus 連携 (GPS / 位置情報リレー)</h4>
       <p class="ai-settings-help">
