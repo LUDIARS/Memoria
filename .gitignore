@@ -5,9 +5,11 @@ node_modules/
 .env
 .env.local
 # Infisical machine identity (= Infisical に到達するための bootstrap 認証情報)。
-# アプリ設定値そのものは Infisical 本体に置く。 この .env.secrets だけは
-# Infisical に入れられない (chicken-and-egg) のでファイルで持つ。
+# アプリ設定値そのもの (MEMORIA_PG_URL / CERNERE_BASE_URL 等) は Infisical 本体に
+# 置く。 この machine identity だけは Infisical に入れられない (chicken-and-egg)
+# のでファイルで持つ。 Local backend は .env.secrets、 Hub は creds JSON。
 .env.secrets
+server/multi/.infisical-creds.json
 
 # user data — never commit
 data/

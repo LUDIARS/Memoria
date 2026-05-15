@@ -9,9 +9,6 @@ import {
   listGpsLocationsForDate,
   getAppSettings, setAppSettings,
 } from '../db.js';
-import {
-  readMultiState, isConnected, shareWorkplacePresence,
-} from '../local/multi-client.js';
 import { privacySettings } from '../lib/privacy.js';
 import { getCurrentWifiInfo, hasWiredConnection } from '../lib/wifi-info.js';
 
@@ -249,6 +246,8 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
       broadcast: null,
     };
 
+    // 二層設計では workplace-presence の Hub 共有は廃止 (Hub には出さない —
+    // 個人の在席ストリームは個人ログ扱い)。 current の判定だけローカルで行う。
     if (matched) {
       if (lastId !== matched.id) {
         result.changed = true;
@@ -256,52 +255,11 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
           'workplace.current.id': String(matched.id),
           'workplace.current.at': now,
         });
-
-        // Optional broadcast to Hub.
-        if (settings.workplace_auto_share_enabled) {
-          try {
-            const state = readMultiState(db);
-            if (isConnected(state)) {
-              const r2 = await shareWorkplacePresence(state, {
-                workplace_name: matched.name,
-                address: matched.address,
-                latitude: matched.latitude,
-                longitude: matched.longitude,
-                kind: 'enter',
-              });
-              result.broadcast = { ok: true, id: r2.id, occurred_at: r2.occurred_at };
-            } else {
-              result.broadcast = { ok: false, error: 'not_connected' };
-            }
-          } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : String(e);
-            console.error('[workplace/checkin] broadcast failed', e);
-            result.broadcast = { ok: false, error: msg };
-          }
-        }
       }
     } else if (lastId) {
       // We left the previously matched workplace.
       result.changed = true;
-      const prev = getWorkLocation(db, lastId);
       setAppSettings(db, { 'workplace.current.id': '', 'workplace.current.at': now });
-      if (prev && settings.workplace_auto_share_enabled) {
-        try {
-          const state = readMultiState(db);
-          if (isConnected(state)) {
-            await shareWorkplacePresence(state, {
-              workplace_name: prev.name,
-              address: prev.address,
-              latitude: prev.latitude,
-              longitude: prev.longitude,
-              kind: 'leave',
-            });
-            result.broadcast = { ok: true, kind: 'leave' };
-          }
-        } catch (e: unknown) {
-          console.error('[workplace/checkin] leave broadcast failed', e);
-        }
-      }
     }
     return c.json(result);
   });
@@ -360,26 +318,7 @@ export function makeWorkplaceRouter(deps: WorkplaceRouterDeps): Hono {
           // どの経路で current になったかを記録 (debug / UI 用)
           'workplace.current.source': resolutionSource === 'wired' ? 'wired:home' : `wifi:${ssid}`,
         });
-        if (settings.workplace_auto_share_enabled) {
-          try {
-            const state = readMultiState(db);
-            if (isConnected(state)) {
-              const r2 = await shareWorkplacePresence(state, {
-                workplace_name: matched.name,
-                address: matched.address,
-                latitude: matched.latitude,
-                longitude: matched.longitude,
-                kind: 'enter',
-              });
-              result.broadcast = { ok: true, id: r2.id, occurred_at: r2.occurred_at };
-            } else {
-              result.broadcast = { ok: false, error: 'not_connected' };
-            }
-          } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : String(e);
-            result.broadcast = { ok: false, error: msg };
-          }
-        }
+        // 二層設計では workplace-presence の Hub 共有は廃止。
       }
     }
     return c.json(result);

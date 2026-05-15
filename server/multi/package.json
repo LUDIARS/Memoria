@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Memoria Hub — multi-server (Cernere SSO + /api/shared/*)",
   "scripts": {
-    "start": "node --env-file-if-exists=.env --env-file-if-exists=../../.env index.js",
-    "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../../.env index.js",
+    "start": "node --env-file-if-exists=.env --env-file-if-exists=../../.env bootstrap.js",
+    "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../../.env bootstrap.js",
     "migrate": "node migrate.js"
   },
   "dependencies": {

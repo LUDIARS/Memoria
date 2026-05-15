@@ -58,6 +58,7 @@ import { makePushRouter } from './routes/push.js';
 import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
+import { makeMultiProxyMiddleware } from './local/multi-proxy.js';
 import { makeMiscRouter } from './routes/misc.js';
 import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
 import { makeRepoRouter } from './routes/repo.js';
@@ -230,6 +231,13 @@ app.post('/api/setup/infisical', async (c) => {
   return c.json({ ok: true, injected });
 });
 
+// ── Multi モード proxy 層 ─────────────────────────────────────────────────
+//
+// Multi モード時、 Multi 対応 7 型の CRUD を Hub の /api/data/* に転送し、
+// 個人ログ系は 503 local_only を返す。 Local モードでは素通り。 feature
+// router より前に置く必要がある (= router に届く前に横取りする)。
+app.use('/api/*', makeMultiProxyMiddleware(db));
+
 // ── routers (mount with absolute /api/... paths inside each) ──────────────
 const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSummary };
 
@@ -291,7 +299,7 @@ app.route('/', makeConfigRouter({
   mealVisionQueue: queues.mealVisionQueue,
 }));
 app.route('/', makeMultiRouter({
-  db, htmlDir: HTML_DIR,
+  db,
   broadcastLocation: ws.broadcastLocation,
   broadcastLocationResolved: ws.broadcastLocationResolved,
   triggerResolveAsync: ws.triggerResolveAsync,
@@ -325,24 +333,8 @@ const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
 
-// 起動時の Cernere project-token 事前取得 — 「起動時に必ず認証を通す」 ポリシー。
-// 接続済みサーバごとに user-JWT → Cernere /api/auth/project-token → memory cache。
-// 失敗してもプロセスは落とさず、 該当 Hub への次の操作で再試行される。
-void import('./local/multi-client.js').then(async ({ readMultiServers, isConnected }) => {
-  const { getProjectTokenForHub } = await import('./lib/cernere-session.js');
-  const projectKey = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
-  const { servers } = readMultiServers(db);
-  for (const s of servers) {
-    const state = { ...s, label: s.label } as const;
-    if (!isConnected(state as never)) continue;
-    try {
-      await getProjectTokenForHub(s.url, s.jwt as string, projectKey);
-      console.log(`[cernere] startup auth ok — hub=${s.url} project=${projectKey}`);
-    } catch (e) {
-      console.warn(`[cernere] startup auth failed — hub=${s.url}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-});
+// 二層設計では起動時の Cernere 事前認証は廃止。 ローカルは Cernere を直接
+// 叩かず、 Multi モード時に Hub の session token を使うだけ (= Hub が代理認証)。
 
 // 起動時に未解決 GPS の backfill を 1 batch だけ走らせる. listen 直後でなく
 // 5 秒遅延させて、 Memoria 起動直後のバタつき (server / WS / RAG init) と

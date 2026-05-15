@@ -300,7 +300,15 @@ const state: State = {
   domainEntries: [],
   domainDetail: null,
   domainSearch: '',
+  // 二層設計: データソース (Local / 特定 Hub)。 ログ下のスイッチャで排他切替。
+  dataSource: { mode: 'local', hubUrl: null },
 };
+
+// Multi モードで触れないタブ (= 個人ログ系。 [個人データ保管禁止])。
+// Multi 対応は database (bookmark/dict/domain/impl) / dig / notes / worklog のみ。
+const LOCAL_ONLY_TABS = new Set([
+  'diary', 'meals', 'recommend', 'review', 'transit', 'trends',
+]);
 
 // `$()` は永らく document.getElementById のショートハンド。
 //
@@ -1116,6 +1124,12 @@ const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
 const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'external']);
 
 function switchTab(tab) {
+  // Multi モード時、 個人ログ系タブはグレーアウト = 切替を弾く。
+  const ds = state.dataSource as { mode: string; hubUrl: string | null };
+  if (ds?.mode === 'multi' && LOCAL_ONLY_TABS.has(tab)) {
+    showShareToast('この機能は Local モード専用です');
+    return;
+  }
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
     const sub = tab;
     if (state.worklog) state.worklog.sub = sub;
@@ -1490,8 +1504,6 @@ async function deleteDigSessionFromUi(id) {
     state.digSelected = new Set();
     const el = $('digResult');
     if (el) el.innerHTML = '';
-    const shareBar = $('digShareBar');
-    if (shareBar) shareBar.hidden = true;
   }
   await loadDigHistory();
   // テーマペインの件数表示も更新 (最後の 1 件を消したらテーマも消える)。
@@ -1625,9 +1637,6 @@ async function loadDigSession(id) {
 function renderDigSession() {
   const s = state.digSession;
   const el = $('digResult');
-  const shareBar = $('digShareBar');
-  if (shareBar) shareBar.hidden = !(s && s.status === 'done' && state.multi?.connected);
-  if ($('digShareStatus')) $('digShareStatus').textContent = '';
   if (!s) { el.innerHTML = ''; return; }
   if (s.status === 'pending') {
     // Show whatever we have RIGHT NOW. Three layers in increasing latency:
@@ -5144,16 +5153,13 @@ async function refreshMultiStatus() {
         status.textContent = '未接続';
       }
     }
-    // Share buttons reflect whether ANY server is active+connected.
-    const anyConnected = !!(s.servers || []).some(x => x.active && x.connected);
-    document.querySelectorAll('#dShare, #dictShareBtn, #digShareBtn').forEach(b => {
-      b.hidden = !anyConnected;
-    });
-    if (!anyConnected && $('digShareBar')) $('digShareBar').hidden = true;
     if (typeof refreshMultiTabVisibility === 'function') refreshMultiTabVisibility();
+    // 二層モード状態を読み直してスイッチャ + タブ gating に反映。
+    void refreshDataSource();
   } catch (e) { console.error(e); }
 }
 
+// 二層設計のデータソース セレクタ。 排他選択 (= ローカル か、 特定 Hub 1 つ)。
 function renderMultiSwitch(s) {
   const root = $('multiSwitch');
   if (!root) return;
@@ -5164,46 +5170,87 @@ function renderMultiSwitch(s) {
     return;
   }
   root.hidden = false;
-  // ローカル baseline pill (always-on, just visual reminder) +
-  // one toggleable pill per registered remote.
+  const ds = state.dataSource as { mode: string; hubUrl: string | null };
+  const localActive = !ds || ds.mode !== 'multi';
   const items = [
-    `<span class="ms-pill ms-local active" title="ローカル DB は常に有効">🏠 ローカル</span>`,
+    `<button type="button" class="ms-pill ms-local ${localActive ? 'active' : ''}" data-local="1" title="ローカル SQLite を使う">🏠 ローカル</button>`,
     ...servers.map(sv => {
-      const cls = sv.active ? 'active' : '';
+      const active = ds?.mode === 'multi' && ds.hubUrl === sv.url;
       const labelTxt = sv.label || sv.url;
       const tip = sv.connected
         ? `${sv.url} (${sv.user?.name || ''})`
-        : `${sv.url} — 未認証`;
-      return `<button type="button" class="ms-pill ${cls}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
+        : `${sv.url} — 未ログイン (クリックでログイン)`;
+      return `<button type="button" class="ms-pill ${active ? 'active' : ''}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
     }),
   ];
   root.innerHTML = items.join('');
+  const localBtn = root.querySelector('.ms-pill[data-local]');
+  if (localBtn) localBtn.addEventListener('click', () => selectDataSource(null));
   root.querySelectorAll('.ms-pill[data-url]').forEach(btn => {
-    btn.addEventListener('click', () => toggleMultiActive(btn.dataset.url));
+    btn.addEventListener('click', () => selectDataSource(btn.dataset.url));
   });
 }
 
-async function toggleMultiActive(url) {
-  // Multi-select: clicking flips this server's membership in the active set.
-  const s = state.multi;
-  if (!s) return;
-  const active = (s.servers || []).filter(x => x.active).map(x => x.url);
-  const set = new Set(active);
-  if (set.has(url)) set.delete(url);
-  else set.add(url);
-  // 未認証の server を active にしようとした場合は、 Multi タブの
-  // Cernere ログインフォームに誘導する (= OAuth dance は廃止)。
-  const target = (s.servers || []).find(x => x.url === url);
-  if (target && set.has(url) && !target.connected) {
-    switchTab('multi');
-    return;
+// データソースを切り替える。 url=null で Local、 url 指定で その Hub。
+// 未ログイン Hub を選んだら Multi タブのログインフォームへ誘導する。
+async function selectDataSource(url) {
+  try {
+    const res = await fetch('/api/multi/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(url ? { mode: 'multi', url } : { mode: 'local' }),
+    });
+    const j = await res.json() as {
+      ok?: boolean; mode?: string; hubUrl?: string | null;
+      needs_login?: boolean; url?: string; error?: string;
+    };
+    if (j.needs_login) {
+      const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+      if (urlInput && j.url) urlInput.value = j.url;
+      switchTab('multi');
+      return;
+    }
+    if (!res.ok || !j.ok) {
+      alert(`データソース切替に失敗: ${j.error || res.status}`);
+      return;
+    }
+    state.dataSource = { mode: j.mode || 'local', hubUrl: j.hubUrl ?? null };
+    applyModeGating();
+    renderMultiSwitch(state.multi);
+    // 現タブを Multi モードで触れないなら database に逃がしつつ、 データを再取得。
+    const cur = state.tab as string;
+    if (state.dataSource.mode === 'multi' && LOCAL_ONLY_TABS.has(cur)) {
+      switchTab('database');
+    } else {
+      switchTab(cur);
+    }
+  } catch (e: unknown) {
+    alert(`データソース切替に失敗: ${(e as Error).message}`);
   }
-  await api('/api/multi/active', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls: [...set] }),
+}
+
+// Multi モード時、 個人ログ系タブに mode-locked クラスを付けてグレーアウト。
+function applyModeGating() {
+  const multi = (state.dataSource as { mode?: string })?.mode === 'multi';
+  document.querySelectorAll('.tab[data-tab]').forEach(t => {
+    const el = t as HTMLElement;
+    const locked = multi && LOCAL_ONLY_TABS.has(el.dataset.tab || '');
+    el.classList.toggle('mode-locked', locked);
+    if (locked) el.title = 'Local モード専用 (Multi モードでは利用不可)';
+    else if (el.title === 'Local モード専用 (Multi モードでは利用不可)') el.title = '';
   });
-  await refreshMultiStatus();
+}
+
+// 現在のモードを backend から読んで state に反映。 起動時 + status 更新時に呼ぶ。
+async function refreshDataSource() {
+  try {
+    const m = await api('/api/multi/mode') as { mode?: string; hubUrl?: string | null };
+    state.dataSource = { mode: m.mode || 'local', hubUrl: m.hubUrl ?? null };
+  } catch {
+    state.dataSource = { mode: 'local', hubUrl: null };
+  }
+  applyModeGating();
+  renderMultiSwitch(state.multi);
 }
 
 function renderMultiServersList(s) {
@@ -5218,10 +5265,12 @@ function renderMultiServersList(s) {
     const status = sv.connected
       ? `<span class="ms-status ok">✓ ${escapeHtml(sv.user?.name || '')} (${escapeHtml(sv.user?.role || '')})</span>`
       : '<span class="ms-status">未認証</span>';
+    const ds = state.dataSource as { mode: string; hubUrl: string | null };
+    const isCurrent = ds?.mode === 'multi' && ds.hubUrl === sv.url;
     return `<li class="multi-server-row" data-url="${escapeHtml(sv.url)}">
       <label class="ms-active-toggle">
-        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${sv.active ? 'checked' : ''} />
-        有効
+        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${isCurrent ? 'checked' : ''} />
+        使用中
       </label>
       <div class="ms-row-body">
         <div class="ms-label">${escapeHtml(sv.label)}</div>
@@ -5229,14 +5278,18 @@ function renderMultiServersList(s) {
         <div>${status}</div>
       </div>
       <div class="ms-row-actions">
-        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : '接続'}</button>
-        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>切断</button>
+        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : 'ログイン'}</button>
+        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>ログアウト</button>
         <button class="danger ghost-sm" data-action="remove" data-url="${escapeHtml(sv.url)}">削除</button>
       </div>
     </li>`;
   }).join('');
+  // チェックボックス: ON でその Hub をデータソースに、 OFF で Local に戻す。
   list.querySelectorAll('input[type=checkbox][data-url]').forEach(cb => {
-    cb.addEventListener('change', () => toggleMultiActive(cb.dataset.url));
+    cb.addEventListener('change', () => {
+      const el = cb as HTMLInputElement;
+      selectDataSource(el.checked ? el.dataset.url : null);
+    });
   });
   list.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => multiServerAction(btn.dataset.action, btn.dataset.url));
@@ -5253,13 +5306,14 @@ async function multiServerAction(action, url) {
     return;
   }
   if (action === 'disconnect') {
-    if (!confirm(`「${url}」から切断しますか?`)) return;
-    await api('/api/multi/disconnect', {
+    if (!confirm(`「${url}」からログアウトしますか?`)) return;
+    await api('/api/multi/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
     await refreshMultiStatus();
+    await refreshDataSource();
     return;
   }
   if (action === 'remove') {
@@ -5288,26 +5342,6 @@ async function multiAddServer() {
   await refreshMultiStatus();
 }
 
-async function multiFinishFromUrl() {
-  const params = new URLSearchParams(location.search);
-  const jwt = params.get('memoria_hub_jwt');
-  if (!jwt) return;
-  try {
-    // Use the most-recently-touched server as target if no explicit URL.
-    const r = await api('/api/multi/finish', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jwt }),
-    });
-    showShareToast(`🌐 ${r.user.displayName} (${r.url}) として接続しました`);
-  } catch (e) {
-    alert(`マルチ接続失敗: ${e.message}`);
-  } finally {
-    history.replaceState({}, '', location.pathname);
-    await refreshMultiStatus();
-  }
-}
-
 function showShareToast(text) {
   const div = document.createElement('div');
   div.className = 'share-toast';
@@ -5316,62 +5350,8 @@ function showShareToast(text) {
   setTimeout(() => div.remove(), 4000);
 }
 
-async function shareCurrentBookmark() {
-  if (state.detailId == null) return;
-  const btn = $('dShare');
-  btn.disabled = true;
-  $('dShareStatus').textContent = '送信中…';
-  try {
-    await api('/api/multi/share', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'bookmark', id: state.detailId }),
-    });
-    $('dShareStatus').textContent = '✓ 共有しました';
-  } catch (e) {
-    $('dShareStatus').textContent = `✗ ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function shareCurrentDict() {
-  if (!state.dictDetail?.id) return;
-  const btn = $('dictShareBtn');
-  btn.disabled = true;
-  $('dictShareStatus').textContent = '送信中…';
-  try {
-    await api('/api/multi/share', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'dict', id: state.dictDetail.id }),
-    });
-    $('dictShareStatus').textContent = '✓ 共有しました';
-  } catch (e) {
-    $('dictShareStatus').textContent = `✗ ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function shareCurrentDig() {
-  if (!state.digSession?.id) return;
-  const btn = $('digShareBtn');
-  btn.disabled = true;
-  $('digShareStatus').textContent = '送信中…';
-  try {
-    await api('/api/multi/share', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'dig', id: state.digSession.id }),
-    });
-    $('digShareStatus').textContent = '✓ 共有しました';
-  } catch (e) {
-    $('digShareStatus').textContent = `✗ ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
+// 二層設計では「Hub へ個別 share」 は廃止。 Multi モードに切り替えると
+// bookmark / dict / dig タブはそのまま Hub のデータを編集する。
 
 async function saveAiSettings() {
   const tasks = {};
@@ -5529,12 +5509,8 @@ document.getElementById('mapsApiKeyAutoBtn')?.addEventListener('click', async ()
 document.getElementById('pushSubscribeBtn')?.addEventListener('click', () => pushSubscribeFlow().catch(e => setPushStatus(e.message, true)));
 document.getElementById('pushTestBtn')?.addEventListener('click', () => pushTestSend().catch(e => setPushStatus(e.message, true)));
 document.getElementById('multiAddBtn')?.addEventListener('click', multiAddServer);
-document.getElementById('dShare')?.addEventListener('click', shareCurrentBookmark);
-document.getElementById('dictShareBtn')?.addEventListener('click', shareCurrentDict);
-document.getElementById('digShareBtn')?.addEventListener('click', shareCurrentDig);
 
-// Pull JWT out of OAuth redirect on first paint, then prime the share buttons.
-multiFinishFromUrl();
+// Hub 登録一覧 + モード状態を初期描画。
 refreshMultiStatus();
 
 // Legatus 連携の初期 ON/OFF を取得し、 watcher / 右上バッジを早期に整える。
@@ -6260,25 +6236,9 @@ let loadImplementationNotes = async function () {
       <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
       <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
       <div class="simple-actions">
-        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
-        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
         <button class="danger" data-impl-delete="${n.id}">削除</button>
       </div>
     </div>`).join('');
-  list.querySelectorAll('[data-impl-share]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        await api('/api/multi/share', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
-        });
-        showShareToast('実装自慢をシェアしました');
-      }
-      catch (e) { alert(e.message); }
-      loadImplementationNotes();
-    });
-  });
   list.querySelectorAll('[data-impl-delete]').forEach(btn => {
     btn.addEventListener('click', async () => {
       await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
@@ -6430,26 +6390,9 @@ loadImplementationNotes = async function () {
       <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
       ${renderImplementationAttachment(n)}
       <div class="simple-actions">
-        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
-        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
         <button class="danger" data-impl-delete="${n.id}">削除</button>
       </div>
     </div>`).join('');
-  list.querySelectorAll('[data-impl-share]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      try {
-        await api('/api/multi/share', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
-        });
-        showShareToast('実装自慢をシェアしました');
-      }
-      catch (e) { alert(e.message); }
-      loadImplementationNotes();
-    });
-  });
   list.querySelectorAll('[data-impl-delete]').forEach(btn => {
     btn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -6667,10 +6610,6 @@ async function loadWorkLocations() {
     const link = w.url ? `<a href="${escapeHtml(w.url)}" target="_blank" rel="noopener">${escapeHtml(w.url)}</a>` : '';
     const coord = (Number.isFinite(w.latitude) && Number.isFinite(w.longitude))
       ? `<span class="muted">${w.latitude.toFixed(4)}, ${w.longitude.toFixed(4)}</span>` : '';
-    const sharedTag = w.shared_at
-      ? `シェア済み: ${escapeHtml(fmtDate(w.shared_at))}`
-      : (w.shareable ? 'シェア可能' : '非公開');
-    const isOwned = !w.owner_user_id;
     return `
       <div class="simple-item" data-id="${w.id}" data-workplace-open="${w.id}">
         <div class="simple-item-head">
@@ -6682,8 +6621,6 @@ async function loadWorkLocations() {
         <p>${escapeHtml(w.description || '')}</p>
         ${link ? `<div>${link}</div>` : ''}
         <div class="simple-actions">
-          <span class="muted">${sharedTag}</span>
-          ${isOwned ? `<button class="ghost" data-workplace-share="${w.id}" ${w.shared_at ? 'disabled' : ''}>シェア</button>` : ''}
           <button class="danger" data-workplace-delete="${w.id}">削除</button>
         </div>
       </div>`;
@@ -6695,20 +6632,6 @@ async function loadWorkLocations() {
       const id = Number(el.dataset.workplaceOpen || 0);
       const w = _workplaceItems.find(x => x.id === id);
       if (w) openWorkplaceEditor(w);
-    });
-  });
-  list.querySelectorAll('[data-workplace-share]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      try {
-        await api('/api/multi/share', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'work_location', id: Number(btn.dataset.workplaceShare) }),
-        });
-        showShareToast('作業場所をシェアしました');
-      } catch (e) { alert(e.message); }
-      loadWorkLocations();
     });
   });
   list.querySelectorAll('[data-workplace-delete]').forEach(btn => {
@@ -8877,32 +8800,27 @@ $('wlGeminiWebContent')?.addEventListener('keydown', (e) => {
   }
 });
 
-// ── 🌐 Multi (Memoria Hub) browse ─────────────────────────────────────────
-state.multiSubtab = 'bookmarks';
+// ── 🌐 Multi (Memoria Hub) 接続管理ビュー ─────────────────────────────────
+//
+// 二層設計では #multiView は「Hub への接続管理」 ビュー。 Infisical セットアップ
+// または Hub ログインフォームを出すだけ。 旧 Multi browse タブ (共有データの
+// 一覧 / download / moderation) は Phase 6 で撤去した — Hub のデータはモードを
+// 切り替えると通常のタブに proxy 経由でそのまま出る。
 
 function refreshMultiTabVisibility() {
   const visible = !!state.multi?.connected;
-  document.querySelectorAll('.tab-multi-only').forEach(t => { t.hidden = !visible; });
-  if (!visible && state.tab === 'multi') switchTab('bookmarks');
+  document.querySelectorAll('.tab-multi-only').forEach(t => { (t as HTMLElement).hidden = !visible; });
+  if (!visible && state.tab === 'multi') switchTab('database');
   if (visible) {
     const badge = $('multiUserBadge');
     if (badge) badge.textContent = `🌐 ${state.multi.user.name} (${state.multi.user.role})`;
   }
-  const role = state.multi?.user?.role;
-  const isMod = role === 'admin' || role === 'moderator';
-  document.querySelectorAll('.multi-mod-only').forEach(t => { t.hidden = !(visible && isMod); });
 }
 
-function isCurrentUserModerator() {
-  const role = state.multi?.user?.role;
-  return role === 'admin' || role === 'moderator';
-}
-
+// #multiView を開いたとき: Infisical 未設定なら setup フォーム、 設定済なら
+// Hub ログインフォームを出す。 旧 browse 部 (#multiMainContent) は常に隠す。
 async function loadMulti() {
   refreshMultiTabVisibility();
-  // Multi Mode は Cernere 認証 (= Infisical 由来の CERNERE_BASE_URL) 前提。
-  // 未設定なら Hub の中身ではなく Infisical setup フォームを出す。
-  // status 取得失敗時は素通り (= 旧 server 互換、 Local 機能を妨げない)。
   let infiConfigured = true;
   try {
     const st = await api('/api/setup/infisical/status') as { configured?: boolean };
@@ -8911,77 +8829,22 @@ async function loadMulti() {
   const setupEl = $('multiInfisicalSetup');
   const loginEl = $('multiCernereLogin');
   const mainEl = $('multiMainContent');
-  // gate 1: Infisical 未設定 → setup フォーム
+  mainEl?.classList.add('hidden');
   if (!infiConfigured) {
     setupEl?.classList.remove('hidden');
     loginEl?.classList.add('hidden');
-    mainEl?.classList.add('hidden');
     return;
   }
   setupEl?.classList.add('hidden');
-  // gate 2: Infisical OK だが Hub 未接続 → Cernere ログインフォーム
-  if (!state.multi?.connected) {
-    loginEl?.classList.remove('hidden');
-    mainEl?.classList.add('hidden');
-    // Hub URL 欄に登録済 server を pre-fill
-    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
-    const firstUrl = state.multi?.servers?.[0]?.url;
-    if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
-    return;
-  }
-  loginEl?.classList.add('hidden');
-  mainEl?.classList.remove('hidden');
-  const sub = state.multiSubtab;
-  document.querySelectorAll('.multi-subtab').forEach(b => {
-    b.classList.toggle('active', b.dataset.mtab === sub);
-  });
-  if (sub === 'moderation') {
-    return loadModeration();
-  }
-  let url;
-  if (sub === 'bookmarks') url = '/api/multi/proxy/api/shared/bookmarks?limit=50';
-  else if (sub === 'digs') url = '/api/multi/proxy/api/shared/digs?limit=50';
-  else url = '/api/multi/proxy/api/shared/dictionary?limit=200';
-  let data;
-  try { data = await api(url); }
-  catch (e) {
-    $('multiList').innerHTML = `<div class="queue-empty">取得失敗: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
-  const items = data.items || [];
-  if (!items.length) {
-    $('multiList').innerHTML = '<div class="queue-empty">該当エントリなし</div>';
-    return;
-  }
-  if (sub === 'bookmarks') $('multiList').innerHTML = items.map(renderMultiBookmark).join('');
-  else if (sub === 'digs') $('multiList').innerHTML = items.map(renderMultiDig).join('');
-  else $('multiList').innerHTML = items.map(renderMultiDict).join('');
-  $('multiList').querySelectorAll('[data-download]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const kind = btn.dataset.download;
-      const id = Number(btn.dataset.id);
-      btn.disabled = true;
-      btn.textContent = '取込中…';
-      try {
-        await api('/api/multi/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind, remote_id: id }),
-        });
-        btn.textContent = '✓ 取込済';
-      } catch (e) {
-        btn.textContent = `✗ ${e.message}`;
-        btn.disabled = false;
-      }
-    });
-  });
-  $('multiList').querySelectorAll('[data-hide]').forEach(btn => {
-    btn.addEventListener('click', () => moderate('hide', btn.dataset.hide, Number(btn.dataset.id)));
-  });
+  loginEl?.classList.remove('hidden');
+  // Hub URL 欄に登録済 server を pre-fill
+  const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+  const firstUrl = state.multi?.servers?.[0]?.url;
+  if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
 }
 
-// Cernere ログインフォーム (Multi view 内) の送信。 成功で Hub に接続済みになり、
-// loadMulti を呼び直して通常の Hub 内容へ。
+// Hub ログインフォーム (#multiView 内) の送信。 成功したら selectDataSource で
+// その Hub を Multi モードのデータソースに切り替える。
 document.getElementById('multiLoginSubmit')?.addEventListener('click', async () => {
   const btn = $('multiLoginSubmit') as HTMLButtonElement | null;
   const msg = $('multiLoginMsg');
@@ -9008,7 +8871,8 @@ document.getElementById('multiLoginSubmit')?.addEventListener('click', async () 
     setMsg(`✓ ${j.user?.displayName || ''} としてログインしました`, true);
     ($('multiLoginPassword') as HTMLInputElement).value = '';
     await refreshMultiStatus();
-    setTimeout(() => { void loadMulti(); }, 600);
+    // ログイン成功 → そのままその Hub をデータソースに切り替える (Multi モードへ)。
+    setTimeout(() => { void selectDataSource(url); }, 400);
   } catch (e: unknown) {
     setMsg(`⚠ ${(e as Error).message}`);
   } finally {
@@ -9053,137 +8917,6 @@ document.getElementById('infiSetupSubmit')?.addEventListener('click', async () =
     if (btn) { btn.disabled = false; btn.textContent = '接続して保存'; }
   }
 });
-
-async function moderate(action, kind, id) {
-  if (action === 'hide') {
-    const reason = prompt('非表示にする理由 (任意):') ?? '';
-    if (reason === null) return;
-    try {
-      await api('/api/multi/proxy/api/shared/moderation/hide', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind, id, reason }),
-      });
-      showShareToast('🛡 非表示にしました');
-      loadMulti();
-    } catch (e) { alert(`失敗: ${e.message}`); }
-    return;
-  }
-  if (action === 'unhide') {
-    try {
-      await api('/api/multi/proxy/api/shared/moderation/unhide', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind, id }),
-      });
-      showShareToast('✓ 復元しました');
-      loadModeration();
-    } catch (e) { alert(`失敗: ${e.message}`); }
-  }
-}
-
-async function loadModeration() {
-  if (!isCurrentUserModerator()) {
-    $('multiList').innerHTML = '<div class="queue-empty">モデレーション権限がありません</div>';
-    return;
-  }
-  let hidden, log;
-  try {
-    [hidden, log] = await Promise.all([
-      api('/api/multi/proxy/api/shared/moderation/hidden?limit=100'),
-      api('/api/multi/proxy/api/shared/moderation/log?limit=100'),
-    ]);
-  } catch (e) {
-    $('multiList').innerHTML = `<div class="queue-empty">取得失敗: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
-  const hiddenItems = hidden.items || [];
-  const logItems = log.items || [];
-  $('multiList').innerHTML = `
-    <h3 class="mod-h">非表示中 (${hiddenItems.length})</h3>
-    ${hiddenItems.length === 0 ? '<div class="queue-empty">非表示エントリなし</div>'
-      : hiddenItems.map(i => `<div class="multi-card mod-hidden-card">
-          <div class="title">${KIND_LABEL[i.kind] || i.kind} — ${escapeHtml(i.label || `id=${i.id}`)}</div>
-          <div class="multi-meta">
-            <span>owner: ${escapeHtml(i.owner_user_name || i.owner_user_id)}</span>
-            <span>hidden ${fmtDate(i.hidden_at)} by ${escapeHtml(i.hidden_by || '?')}</span>
-            ${i.hidden_reason ? `<span>${escapeHtml(i.hidden_reason)}</span>` : ''}
-            <button class="ghost ghost-sm" data-unhide="${i.kind}" data-id="${i.id}">↺ 復元</button>
-          </div>
-        </div>`).join('')}
-    <h3 class="mod-h">監査ログ (最新 ${logItems.length})</h3>
-    <ul class="mod-log">
-      ${logItems.map(e => `<li>
-        <span class="mono">${escapeHtml(e.occurred_at)}</span>
-        <b>${escapeHtml(e.action)}</b> ${escapeHtml(e.resource_kind)}#${e.resource_id}
-        by ${escapeHtml(e.acting_user_id)}
-        ${e.details_json ? `<span class="mod-det">${escapeHtml(JSON.stringify(e.details_json))}</span>` : ''}
-      </li>`).join('')}
-    </ul>
-  `;
-  $('multiList').querySelectorAll('[data-unhide]').forEach(btn => {
-    btn.addEventListener('click', () => moderate('unhide', btn.dataset.unhide, Number(btn.dataset.id)));
-  });
-}
-
-const KIND_LABEL = { bookmark: '📑', dig: '⛏', dict: '📖' };
-
-function modHideButton(kind, id) {
-  return isCurrentUserModerator()
-    ? `<button class="ghost ghost-sm danger" data-hide="${kind}" data-id="${id}">🛡 非表示</button>`
-    : '';
-}
-
-function renderMultiBookmark(b) {
-  return `<div class="multi-card">
-    <div class="title">${escapeHtml(b.title || b.url)}</div>
-    <div class="url"><a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer">${escapeHtml(b.url)}</a></div>
-    ${b.summary ? `<div class="summary">${escapeHtml(b.summary)}</div>` : ''}
-    <div class="cats">${(b.categories || []).map(c => `<span class="cat">${escapeHtml(c)}</span>`).join('')}</div>
-    <div class="multi-meta">
-      <span>by ${escapeHtml(b.owner_user_name || b.owner_user_id || '?')}</span>
-      <span>${fmtDate(b.shared_at)}</span>
-      <button class="ghost ghost-sm" data-download="bookmark" data-id="${b.id}">📥 ローカルへ取込</button>
-      ${modHideButton('bookmark', b.id)}
-    </div>
-  </div>`;
-}
-
-function renderMultiDig(d) {
-  const r = d.result_json || d.result || {};
-  const summary = (r.summary || '').slice(0, 600);
-  return `<div class="multi-card">
-    <div class="title">⛏ ${escapeHtml(d.query)}</div>
-    ${summary ? `<div class="summary">${escapeHtml(summary)}</div>` : ''}
-    <div class="multi-meta">
-      <span>by ${escapeHtml(d.owner_user_name || d.owner_user_id || '?')}</span>
-      <span>${fmtDate(d.shared_at)}</span>
-      <button class="ghost ghost-sm" data-download="dig" data-id="${d.id}">📥 ローカルへ取込</button>
-      ${modHideButton('dig', d.id)}
-    </div>
-  </div>`;
-}
-
-function renderMultiDict(e) {
-  return `<div class="multi-card">
-    <div class="title">📖 ${escapeHtml(e.term)}</div>
-    ${e.definition ? `<div class="summary">${escapeHtml(e.definition)}</div>` : ''}
-    <div class="multi-meta">
-      <span>by ${escapeHtml(e.owner_user_name || e.owner_user_id || '?')}</span>
-      <span>${fmtDate(e.shared_at)}</span>
-      <button class="ghost ghost-sm" data-download="dict" data-id="${e.id}">📥 ローカルへ取込</button>
-      ${modHideButton('dict', e.id)}
-    </div>
-  </div>`;
-}
-
-document.querySelectorAll('.multi-subtab').forEach(b => {
-  b.addEventListener('click', () => {
-    state.multiSubtab = b.dataset.mtab;
-    loadMulti();
-  });
-});
-document.getElementById('multiRefresh')?.addEventListener('click', loadMulti);
 
 // First paint: surface the multi tab if we're already connected.
 refreshMultiTabVisibility();
