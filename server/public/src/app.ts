@@ -445,57 +445,64 @@ interface ApiResp extends Loose {
 
 // ── グローバル読み込みインジケータ ───────────────────────────────────────
 //
-// api() 経由の fetch が in-flight のあいだ、 画面上部に非ブロッキングな
-// 「⏳ 読み込み中…」 pill を出す。 pointer-events:none なので他の操作は
-// 一切妨げない。
+// api() 経由の fetch が in-flight のあいだ、 ロゴ (`.brand`) の横に小さな
+// スピナーを表示する。 pointer-events:none なので他の操作は一切妨げない。
 //
-// 250ms の遅延を入れてあるので:
-//   - 2 秒ごとの queue/visits poll や staleness ping のような速い fetch は
-//     出さない (= チラつかない)
-//   - diary 生成 / review file / transit 検索 等の重い読み込みだけ出る
+// `opts.silent: true` を渡すと表示しない (= 2 秒ごとの queue/visits poll や
+// staleness ping、 各種 setInterval ベースの定期 fetch 用 — ユーザに「定期
+// 自動読み込みで青い帯が点滅する」 ノイズを与えない)。
 let _apiInflight = 0;
-let _apiLoadingTimer: ReturnType<typeof setTimeout> | null = null;
 
-function showLoadingPill() {
-  let el = document.getElementById('memLoading');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'memLoading';
-    el.className = 'mem-loading';
-    el.textContent = '⏳ 読み込み中…';
-    document.body.appendChild(el);
+function showLogoSpinner() {
+  const brand = document.querySelector('.brand');
+  if (!brand) return;
+  let sp = document.getElementById('brandSpinner');
+  if (!sp) {
+    sp = document.createElement('span');
+    sp.id = 'brandSpinner';
+    sp.className = 'brand-spinner';
+    sp.setAttribute('aria-hidden', 'true');
+    brand.appendChild(sp);
   }
-  el.classList.add('show');
+  sp.classList.add('show');
 }
-function hideLoadingPill() {
-  document.getElementById('memLoading')?.classList.remove('show');
+function hideLogoSpinner() {
+  document.getElementById('brandSpinner')?.classList.remove('show');
 }
 function apiInflightStart() {
   _apiInflight++;
-  if (_apiInflight === 1 && _apiLoadingTimer == null) {
-    _apiLoadingTimer = setTimeout(() => {
-      _apiLoadingTimer = null;
-      if (_apiInflight > 0) showLoadingPill();
-    }, 250);
-  }
+  if (_apiInflight === 1) showLogoSpinner();
 }
 function apiInflightEnd() {
   _apiInflight = Math.max(0, _apiInflight - 1);
-  if (_apiInflight === 0) {
-    if (_apiLoadingTimer != null) { clearTimeout(_apiLoadingTimer); _apiLoadingTimer = null; }
-    hideLoadingPill();
-  }
+  if (_apiInflight === 0) hideLogoSpinner();
 }
 
-async function api<T = ApiResp>(path: string, opts?: RequestInit): Promise<T> {
-  apiInflightStart();
+type ApiOpts = RequestInit & { silent?: boolean };
+async function api<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
+  const silent = !!opts?.silent;
+  if (!silent) apiInflightStart();
   try {
-    const res = await fetch(path, opts);
+    // RequestInit 側に silent を渡さないよう取り除く (fetch 仕様外プロパティ)
+    let fetchOpts: RequestInit | undefined = opts;
+    if (silent && opts) {
+      const { silent: _drop, ...rest } = opts;
+      fetchOpts = rest;
+    }
+    const res = await fetch(path, fetchOpts);
     if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
     return await res.json() as T;
   } finally {
-    apiInflightEnd();
+    if (!silent) apiInflightEnd();
   }
+}
+
+// 定期 poll / 自動 reload 用: api() を silent=true で叩く。 旧 setInterval 群が
+// `api(path)` 直接呼び出していたので、 silent 化を一括で塗り直すための薄い
+// ラッパ。 既存 api() を残しているのは、 ユーザ操作起点の呼び出しではロゴ
+// スピナーを出したいため。
+function apiSilent<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
+  return api<T>(path, { ...(opts || {}), silent: true });
 }
 
 // 元 JS で `funcName = function () {...}` の形で宣言なしに代入 + 後段で再代入
@@ -515,6 +522,8 @@ async function load(opts: Loose = {}) {
   // 50 件ずつのページング。 「もっと表示」 で append=true、 それ以外
   // (カテゴリ切替 / ソート変更 / 検索 / 自動 refresh) は先頭から取り直す。
   const append = opts.append === true;
+  const silent = opts.silent === true;
+  const apiFn = silent ? apiSilent : api;
   const offset = append ? state.bookmarks.length : 0;
   const qs = new URLSearchParams();
   if (state.category) qs.set('category', state.category);
@@ -523,8 +532,8 @@ async function load(opts: Loose = {}) {
   qs.set('limit', String(BOOKMARKS_PAGE_SIZE));
   qs.set('offset', String(offset));
   const [bookmarksRes, categoriesRes] = await Promise.all([
-    api(`/api/bookmarks?${qs.toString()}`),
-    api('/api/categories'),
+    apiFn(`/api/bookmarks?${qs.toString()}`),
+    apiFn('/api/categories'),
   ]);
   state.bookmarks = append
     ? [...state.bookmarks, ...(bookmarksRes.items || [])]
@@ -810,7 +819,7 @@ async function generateDetailCloud() {
 function pollDetailCloud(cloudId) {
   if (state.detailCloudPolling) clearInterval(state.detailCloudPolling);
   state.detailCloudPolling = setInterval(async () => {
-    const c = await api(`/api/wordcloud/${cloudId}`).catch(() => null);
+    const c = await apiSilent(`/api/wordcloud/${cloudId}`).catch(() => null);
     if (!c || c.status === 'pending') return;
     clearInterval(state.detailCloudPolling);
     state.detailCloudPolling = null;
@@ -960,7 +969,7 @@ load().catch(err => {
 
 async function refreshVisitsBadge() {
   try {
-    const r = await api('/api/visits/unsaved/count');
+    const r = await apiSilent('/api/visits/unsaved/count');
     const badge = $('tabVisitsCount');
     if (!badge) return;
     if ((r.count ?? 0) > 0) {
@@ -974,7 +983,7 @@ async function refreshVisitsBadge() {
 
 async function refreshQueue() {
   try {
-    const snap = await api('/api/queue/items');
+    const snap = await apiSilent('/api/queue/items');
     state.queue = snap;
     // Sum depth across all groups for the top-bar badge.
     const groups = ['summary','dig','wordcloud','diary','weekly','domain','page'];
@@ -1609,7 +1618,7 @@ function pollDigSession(id) {
   loadDigSession(id);
   // Poll faster while waiting for preview, then settle.
   state.digPolling = setInterval(async () => {
-    const s = await api(`/api/dig/${id}`).catch(() => null);
+    const s = await apiSilent(`/api/dig/${id}`).catch(() => null);
     if (!s) return;
     const had = state.digSession;
     state.digSession = s;
@@ -2242,7 +2251,7 @@ function pollCloud(id) {
   if (state.cloudPolling) clearInterval(state.cloudPolling);
   loadCloud(id);
   state.cloudPolling = setInterval(async () => {
-    const c = await api(`/api/wordcloud/${id}`).catch(() => null);
+    const c = await apiSilent(`/api/wordcloud/${id}`).catch(() => null);
     if (!c) return;
     if (c.status !== 'pending') {
       clearInterval(state.cloudPolling);
@@ -3039,7 +3048,7 @@ function pollWeekly(ws) {
     if (state.weeklyDetailWeek !== ws) {
       clearInterval(state.weeklyPolling); state.weeklyPolling = null; return;
     }
-    const w = await api(`/api/weekly/${ws}`).catch(() => null);
+    const w = await apiSilent(`/api/weekly/${ws}`).catch(() => null);
     if (!w) return;
     if (w.status !== 'pending') {
       clearInterval(state.weeklyPolling); state.weeklyPolling = null;
@@ -3199,7 +3208,7 @@ function pollDiary(date) {
     if (state.diaryDetailDate !== date) {
       clearInterval(state.diaryPolling); state.diaryPolling = null; return;
     }
-    const d = await api(`/api/diary/${date}`).catch(() => null);
+    const d = await apiSilent(`/api/diary/${date}`).catch(() => null);
     if (!d) return;
     if (d.status !== 'pending') {
       clearInterval(state.diaryPolling); state.diaryPolling = null;
@@ -3905,9 +3914,9 @@ const REC_AGENT_LABELS = {
 
 let recPollTimer = null;
 
-async function loadRecommendations() {
+async function loadRecommendations(opts: { silent?: boolean } = {}) {
   try {
-    const data = await api('/api/recommendations');
+    const data = await (opts.silent ? apiSilent : api)('/api/recommendations');
     state.recommendations = {
       available: !!data.available,
       running: !!data.running,
@@ -3926,7 +3935,7 @@ async function loadRecommendations() {
 function startRecPolling() {
   if (recPollTimer) return;
   recPollTimer = setInterval(() => {
-    loadRecommendations().catch(() => { /* ignore — next tick retries */ });
+    loadRecommendations({ silent: true }).catch(() => { /* ignore — next tick retries */ });
   }, 5000);
 }
 
@@ -4683,7 +4692,7 @@ async function refreshExtensionBadge() {
     return;
   }
   try {
-    const s = await api('/api/extension/status');
+    const s = await apiSilent('/api/extension/status');
     badge.hidden = false;
     if (s.configured) {
       badge.className = 'ext-badge ext-ok';
@@ -4911,7 +4920,9 @@ $('visitsAll').addEventListener('click', (e) => {
 setInterval(async () => {
   const depth = await refreshQueue();
   await refreshVisitsBadge();
-  if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
+  // 定期 poll の流れで bookmarks を refresh するときも silent。 ユーザが手動で
+  // 並び替え / 検索したときは load() が直接呼ばれてロゴスピナーが出る。
+  if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load({ silent: true });
   if (state.tab === 'queue') renderQueue();
 }, 2000);
 refreshQueue();
@@ -4940,7 +4951,7 @@ async function pingStaleness(): Promise<void> {
   if (_stalenessPingInFlight) return;
   _stalenessPingInFlight = true;
   try {
-    const r = await api('/api/staleness') as Record<string, unknown>;
+    const r = await apiSilent('/api/staleness') as Record<string, unknown>;
     for (const k of ['review', 'weather', 'transit_rides']) {
       const v = r[k];
       if (typeof v === 'string') STALE_SIGS[k] = v;
@@ -5026,9 +5037,28 @@ async function openAiSettings() {
       ];
       return opts.join('');
     }
+    // 機能名は内部キー (summarize 等) のままだとユーザに意味が伝わらないので日本語で表示。
+    // 未マップなら原文を fallback。
+    const TASK_LABELS_JA: Record<string, string> = {
+      summarize: '📚 ブックマーク要約',
+      dig: '🔎 ディグ (検索結果分析)',
+      dig_preview: '🔎 ディグ (タイトル/概要プレビュー)',
+      cloud_extract: '🌐 ワードクラウド (語句抽出)',
+      cloud_validate: '🌐 ワードクラウド (語句検証)',
+      domain_classify: '🏷 ドメイン辞書 (サイト分類)',
+      page_summary: '🔖 訪問URL要約 (kind / 短文要約)',
+      diary_work: '📓 日記 (作業内容)',
+      diary_highlights: '📓 日記 (ハイライト)',
+      diary_weekly: '📓 日記 (週報)',
+      meal_vision: '🍽 食事写真 解析',
+      meal_calorie: '🍽 食事カロリー 推定',
+      app_classify: '💻 アプリ 分類 (PC使用統計)',
+      recommendation_agent: '✨ おすすめ (候補抽出)',
+      recommendation_synthesize: '✨ おすすめ (統合)',
+    };
     $('aiTaskRows').innerHTML = tasks.map(t => `
       <div class="ai-task-row">
-        <label>${escapeHtml(t)}</label>
+        <label title="${escapeHtml(t)}">${escapeHtml(TASK_LABELS_JA[t] || t)}</label>
         <select data-task="${t}" class="ai-task-provider">${optionsHtml}</select>
         <select data-task="${t}" class="ai-task-model"></select>
       </div>
@@ -5069,11 +5099,14 @@ async function openAiSettings() {
     }
     if (r.runtime) {
       const rt = r.runtime;
-      $('aiRuntimeInfo').innerHTML = `
-        <div><b>port</b>: ${escapeHtml(String(rt.port))}</div>
-        <div><b>data_dir</b>: <code>${escapeHtml(rt.data_dir)}</code></div>
-        <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
-      `;
+      const rtEl = document.getElementById('aiRuntimeInfo');
+      if (rtEl) {
+        rtEl.innerHTML = `
+          <div><b>port</b>: ${escapeHtml(String(rt.port))}</div>
+          <div><b>data_dir</b>: <code>${escapeHtml(rt.data_dir)}</code></div>
+          <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
+        `;
+      }
     }
     // privacy / feature flags (Legatus 連携 ON/OFF, tracks/meals 可視化 etc.) を
     // ここで一括ロードしておく。 API タブには Legatus 連携トグルが、 privacy タブには
@@ -5445,6 +5478,38 @@ async function saveAiSettings() {
   }
 }
 
+// 「全部」 タブで section 上に挿入する見出しラベル (stab → 表示名)。
+const SETTINGS_STAB_LABELS: Record<string, string> = {
+  ai: '🤖 AI / モデル',
+  api: '🔌 連携 / API key',
+  profile: '🧍 プロフィール',
+  data: '📦 データ / Hub',
+  privacy: '🔒 プライバシー / 表示',
+};
+// 「全部」 タブで非表示にする 手順系 (= 一度しか見ない / 別 UI)。
+const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup', 'agent-projects']);
+
+function applyAllModeHeadings(panel: HTMLElement, isAll: boolean) {
+  // 既存の見出しを除去
+  panel.querySelectorAll('.settings-all-mode-heading').forEach((el) => el.remove());
+  if (!isAll) return;
+  panel.querySelectorAll('.settings-tab-body').forEach((sec) => {
+    const stab = (sec as HTMLElement).dataset.stab || '';
+    if (SETTINGS_STAB_EXCLUDE_FROM_ALL.has(stab)) return;
+    const label = SETTINGS_STAB_LABELS[stab];
+    if (!label) return;
+    // 同じ stab の複数 section に重複させない: 最初の 1 個目だけに付ける
+    const prev = sec.previousElementSibling;
+    if (prev && (prev as HTMLElement).classList.contains('settings-all-mode-heading')
+        && (prev as HTMLElement).dataset.forStab === stab) return;
+    const h = document.createElement('h3');
+    h.className = 'settings-all-mode-heading';
+    h.dataset.forStab = stab;
+    h.textContent = label;
+    sec.parentNode?.insertBefore(h, sec);
+  });
+}
+
 // ── settings 内部タブ切替 ─────────────────────────────
 document.addEventListener('click', (ev) => {
   const target = ev.target;
@@ -5455,9 +5520,20 @@ document.addEventListener('click', (ev) => {
   if (!panel || panel.classList.contains('hidden')) return;
   const stab = btn.dataset.stab;
   panel.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b === btn));
-  panel.querySelectorAll('.settings-tab-body').forEach(sec => {
-    sec.classList.toggle('hidden', sec.dataset.stab !== stab);
-  });
+  if (stab === 'all') {
+    panel.querySelectorAll('.settings-tab-body').forEach(sec => {
+      const sstab = (sec as HTMLElement).dataset.stab || '';
+      sec.classList.toggle('hidden', SETTINGS_STAB_EXCLUDE_FROM_ALL.has(sstab));
+    });
+    applyAllModeHeadings(panel, true);
+    // 全部表示時は privacy 側 (Legatus 等) もロードしておく
+    loadPrivacySettings().catch(console.warn);
+  } else {
+    applyAllModeHeadings(panel, false);
+    panel.querySelectorAll('.settings-tab-body').forEach(sec => {
+      sec.classList.toggle('hidden', sec.dataset.stab !== stab);
+    });
+  }
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
@@ -5732,9 +5808,10 @@ let ensureMemoriaFeatureViews = function () {
   const footer = document.querySelector('.settings-footer');
   if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
     for (const spec of [
-      ['privacy', 'プライバシー / 表示'],
-      ['setup', 'セットアップ手順'],
-      ['agent-projects', 'AI 実装プロジェクト'],
+      ['privacy', '🔒 プライバシー / 表示'],
+      ['setup', '📚 セットアップ手順'],
+      ['agent-projects', '🤖 AI 実装プロジェクト'],
+      ['all', '🌐 全部'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -6969,7 +7046,7 @@ async function refreshAgentRunHistory(taskId) {
 
 async function refreshAgentRunLog(runId) {
   try {
-    const r = await api(`/api/agent-runs/${runId}/log?tail=131072`);
+    const r = await apiSilent(`/api/agent-runs/${runId}/log?tail=131072`);
     $('agentRunLog').textContent = r.log || '(ログなし)';
     $('agentRunLog').dataset.runId = String(runId);
     const status = r.run?.status || 'unknown';
@@ -6995,22 +7072,18 @@ async function startAgentRunFromModal() {
   const agent = $('agentRunAgent')?.value || 'claude_code';
   const model = $('agentRunModel')?.value || '';
   if (!projectId) return alert('プロジェクトが未登録です。設定 → AI 実装プロジェクトから登録してください');
-  $('agentRunStartBtn').disabled = true;
-  $('agentRunStartBtn').textContent = '起動中…';
-  try {
-    const r = await api(`/api/tasks/${_agentRunCurrentTask.id}/agent-run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, agent, model }),
-    });
-    await refreshAgentRunHistory(_agentRunCurrentTask.id);
-    if (r.run?.id) refreshAgentRunLog(r.run.id);
-  } catch (e) {
-    alert(`起動失敗: ${e.message}`);
-  } finally {
-    $('agentRunStartBtn').disabled = false;
-    $('agentRunStartBtn').textContent = '▶ 実装を開始';
-  }
+  const task = _agentRunCurrentTask;
+  // 「キューに乗せる」 UX: ボタン押下と同時にダイアログを閉じてトーストでフィードバック、
+  // API 呼び出しは fire-and-forget。 結果はトーストで通知し、 履歴はモーダル次回起動時に表示。
+  closeAgentRunModal();
+  flashToast(`🤖 「${task.title}」 を AI 実装キューへ送信しました`);
+  api(`/api/tasks/${task.id}/agent-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId, agent, model }),
+  })
+    .then(() => { flashToast(`✅ 「${task.title}」 の AI 実装を開始しました`); })
+    .catch((e) => { flashToast(`⚠ AI 実装の起動に失敗: ${e.message}`); });
 }
 
 // ── GPS / Place API helpers ────────────────────────────────────────────────
@@ -7073,6 +7146,7 @@ async function _silentCheckin() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+      silent: true,
     });
     _workplaceLastSilentMs = Date.now();
     const banner = $('workplaceCurrentBanner');
@@ -11395,7 +11469,7 @@ $('transitRideManualSaveBtn')?.addEventListener('click', async () => {
   }
 });
 
-async function loadMeals() {
+async function loadMeals(opts: { silent?: boolean } = {}) {
   const list = document.getElementById('mealsList');
   if (!list) return;
   // 単一日付フィルタ — 値があれば「その日 0:00 〜 23:59」 で絞り込み
@@ -11407,7 +11481,7 @@ async function loadMeals() {
     params.set('to', v + 'T23:59:59');
   }
   try {
-    const r = await api(`/api/meals?${params.toString()}`);
+    const r = await (opts.silent ? apiSilent : api)(`/api/meals?${params.toString()}`);
     mealsState.items = r.meals || [];
     renderMeals();
     schedulePendingPoll();
@@ -11633,7 +11707,7 @@ function schedulePendingPoll() {
   if (!hasPending) return;
   mealsState.pollTimer = setTimeout(() => {
     if (state.tab !== 'meals') return;
-    loadMeals();
+    loadMeals({ silent: true });
   }, 4000);
 }
 
@@ -11974,7 +12048,10 @@ async function submitMealModal() {
     return;
   }
 
+  // ボタン押下フィードバック: ダイアログを即座に閉じてキューを進め、 ネットワーク処理はバックグラウンドで進める。
   if (status) status.textContent = item.kind === 'edit' ? `📝 保存中…` : `📤 登録中…`;
+  flashToast(item.kind === 'edit' ? '📝 保存をキューに入れました' : '📤 登録をキューに入れました');
+  advanceMealQueue();
 
   try {
     if (item.kind === 'edit') {
@@ -12052,10 +12129,10 @@ async function submitMealModal() {
     if (status) status.textContent = item.kind === 'edit'
       ? `⚠ 保存エラー: ${e.message}`
       : `⚠ 登録エラー: ${e.message}`;
+    flashToast(item.kind === 'edit' ? `⚠ 保存エラー: ${e.message}` : `⚠ 登録エラー: ${e.message}`);
     console.warn('[meals] submit error:', e);
   }
   await loadMeals();
-  advanceMealQueue();
 }
 
 function skipMealModalItem() {

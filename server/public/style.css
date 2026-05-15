@@ -1610,28 +1610,22 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   transform: translateX(-50%) translateY(0);
 }
 
-/* グローバル読み込み pill — 画面上部中央。 pointer-events:none で
-   他の操作を一切ブロックしない。 250ms 以上の api() 読み込み中だけ表示。 */
-.mem-loading {
-  position: fixed;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%) translateY(-12px);
-  background: rgba(31, 86, 192, 0.95);
-  color: #fff;
-  padding: 6px 16px;
-  border-radius: 999px;
-  font-size: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+/* 旧グローバル読み込み pill (`#memLoading`) は廃止。 代わりにロゴ (`.brand`)
+   の横に小さなスピナーを描く。 定期 poll は api(opts.silent=true) でこちらも
+   出さない (= 自動読み込み中の点滅ノイズを完全に消す)。 */
+.brand { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.brand-spinner {
+  display: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: brand-spin 0.9s linear infinite;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity .2s ease, transform .2s ease;
-  z-index: 9998;
 }
-.mem-loading.show {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
+.brand-spinner.show { display: inline-block; }
+@keyframes brand-spin { to { transform: rotate(360deg); } }
 .visits-actions {
   display: flex;
   gap: 10px;
@@ -1818,6 +1812,10 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   margin-bottom: 12px;
 }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+@media (min-width: 761px) {
+  /* PC 版はリポジトリ ウォッチ カードを横幅 2 倍に (280px → 560px) */
+  #repoList.cards { grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); }
+}
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -2125,12 +2123,24 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   border-radius: 12px;
   padding: 18px 22px;
   box-shadow: 0 12px 48px rgba(0,0,0,0.2);
-  width: 560px;
-  max-height: 80vh;
+  /* PC は横 2.5x (= 1400px) + 最大の高さで固定。 viewport より大きい時は cap */
+  width: min(1400px, calc(100vw - 24px));
+  max-height: 92vh;
   overflow-y: auto;
   resize: none;
   z-index: 100;
 }
+/* 「全部」 タブで section の上に表示する見出し */
+.settings-all-mode-heading {
+  font-size: 14px;
+  margin: 22px 0 8px;
+  padding: 6px 10px;
+  background: var(--accent-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+}
+.settings-all-mode-heading:first-of-type { margin-top: 10px; }
 .ai-settings-head {
   display: flex;
   justify-content: space-between;
