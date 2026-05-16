@@ -6925,6 +6925,23 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   font-size: 11px; font-weight: 600; vertical-align: middle;
 }
 
+/* 🤖 AI 識別 ボタン + 結果パネル */
+.packetmon-ai-btn { padding: 2px 8px; font-size: 11px; }
+.packetmon-ai-panel {
+  margin: 4px 6px 6px 24px;
+  padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg);
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+  font-size: 12px;
+}
+.packetmon-ai-panel.packetmon-ai-high { border-color: #1f7a1f; background: #e7f6e7; }
+.packetmon-ai-panel.packetmon-ai-mid  { border-color: #b58a00; background: #fff8e1; }
+.packetmon-ai-panel.packetmon-ai-low  { border-color: #c0392b; background: #fde7e7; }
+.packetmon-ai-name { font-weight: 600; }
+.packetmon-ai-conf { font-family: monospace; font-size: 11px; color: var(--muted); }
+.packetmon-ai-reasoning { flex-basis: 100%; font-size: 11px; line-height: 1.4; }
+
 /* ── 🔧 プロセス別 IN/OUT (packet 監視 タブ上部の collapsible card) ── */
 .packetmon-proc-card { padding: 8px 12px; margin-bottom: 12px; }
 .packetmon-proc-summary {

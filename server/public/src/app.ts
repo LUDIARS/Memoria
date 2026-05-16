@@ -5178,6 +5178,7 @@ async function openAiSettings() {
       app_classify: '💻 アプリ 分類 (PC使用統計)',
       recommendation_agent: '✨ おすすめ (候補抽出)',
       recommendation_synthesize: '✨ おすすめ (統合)',
+      endpoint_identify: '🛡 パケット監視 (接続先 AI 識別)',
     };
     $('aiTaskRows').innerHTML = tasks.map(t => `
       <div class="ai-task-row">
@@ -11597,6 +11598,10 @@ const packetmonInspectShown: Set<string> = new Set();
 const packetmonInspectCache: Map<string, PacketMonInspectResult> = new Map();
 // 「? 不明」 を押して PTR 再試行中の group (= UI 上で ⏳ にする)。
 const packetmonPtrPending: Set<string> = new Set();
+// 🤖 AI 識別 の進行中 / 結果。 key = `${adapter}|${direction}|${groupKey}`
+const packetmonAiPending: Set<string> = new Set();
+interface PacketmonAiResult { name: string; confidence: number; reasoning: string }
+const packetmonAiResults: Map<string, PacketmonAiResult> = new Map();
 // 最後に fetch した summary。 inspect のトグル / 結果反映で UI を再描画する
 // 際に再 fetch せず使い回す。 60s auto refresh / 手動更新で上書き。
 let _lastPacketmonSummary: PacketMonSummary | null = null;
@@ -11718,6 +11723,58 @@ function patchLastSummaryGroupKey(adapter: string, direction: 'out' | 'in', oldK
   }
 }
 
+async function identifyEndpointWithAi(aiKey: string, target: string, adapter: string, direction: 'in' | 'out') {
+  if (packetmonAiPending.has(aiKey)) return;
+  // 該当 group を _lastPacketmonSummary から探す
+  const s = _lastPacketmonSummary;
+  if (!s) return;
+  const a = s.adapters.find((x) => x.adapter === adapter);
+  if (!a) return;
+  const list = direction === 'out' ? a.outbound : a.inbound;
+  const g = list.find((x) => x.key === target);
+  if (!g) return;
+  // body 組み立て
+  const body = {
+    target,
+    remotes: g.remotes.slice(0, 20),
+    hint: (g as PacketMonOutboundGroup).hint || '',
+    ptr: direction === 'in' ? (g as PacketMonInboundGroup).remote_name : ((g as PacketMonOutboundGroup).derived_from_ptr ? g.key : ''),
+    // 同じ remote IP+port に紐付くプロセスがあれば付ける (= 補助情報)
+    processes: collectProcessesForGroup(g.remotes),
+  };
+  packetmonAiPending.add(aiKey);
+  rerenderPacketMonitor();
+  try {
+    const r = await api('/api/packet-monitor/identify-with-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }) as PacketmonAiResult;
+    packetmonAiResults.set(aiKey, r);
+    flashToast(`🤖 ${r.name} (${Math.round((r.confidence || 0) * 100)}%)`);
+  } catch (e) {
+    packetmonAiResults.set(aiKey, { name: 'エラー', confidence: 0, reasoning: (e as Error).message });
+    flashToast(`⚠ AI 識別失敗: ${(e as Error).message}`);
+  } finally {
+    packetmonAiPending.delete(aiKey);
+    rerenderPacketMonitor();
+  }
+}
+
+// 直近のプロセス一覧 (`loadPacketmonProcesses` の結果) を保持しておいて、
+// AI 識別の補助情報として「この remote へ繋いでいるプロセス」 を抽出する。
+let _lastPacketmonProcesses: PacketMonProcSummary[] = [];
+function collectProcessesForGroup(remotes: PacketMonFlowRemote[]): string[] {
+  if (!_lastPacketmonProcesses.length) return [];
+  const wanted = new Set(remotes.map((r) => `${r.remote_ip}:${r.remote_port}`));
+  const procs = new Set<string>();
+  for (const p of _lastPacketmonProcesses) {
+    const hit = [...p.outbound, ...p.inbound].some((f) => wanted.has(`${f.remote_ip}:${f.remote_port}`));
+    if (hit) procs.add(p.process);
+  }
+  return [...procs].slice(0, 10);
+}
+
 async function inspectPacketmonTarget(target: string, adapterIndex: number) {
   if (!target) return;
   const key = `${adapterIndex}|${target}`;
@@ -11790,10 +11847,11 @@ function renderPacketMonitor(data: PacketMonSummary) {
       }).join('');
     }
 
-    // group の右側に出すアクション (登録 / 中身) ボタン。 localhost / 登録済は出さない。
-    function groupActions(g: { key: string; is_domain: boolean; registered: boolean; is_localhost: boolean; remotes: PacketMonFlowRemote[] }, direction: 'out' | 'in'): string {
+    // group の右側に出すアクション (登録 / 中身 / AI) ボタン。 localhost / 登録済は出さない。
+    function groupActions(g: { key: string; is_domain: boolean; registered: boolean; is_localhost: boolean; remotes: PacketMonFlowRemote[]; friendly_name: string | null; hint?: string; remote_name?: string }, direction: 'out' | 'in'): string {
       if (g.is_localhost) return ''; // localhost は対象外
       const parts: string[] = [];
+      const aiKey = `${a.adapter}|${direction}|${g.key}`;
       if (g.is_domain && !g.registered) {
         parts.push(`<button type="button" class="ghost packetmon-register-btn" data-key="${escapeHtml(g.key)}" title="このドメインを「確認済」 として登録">＋ 登録</button>`);
       } else if (g.registered) {
@@ -11806,6 +11864,14 @@ function renderPacketMonitor(data: PacketMonSummary) {
         const pending = packetmonPtrPending.has(expKey);
         const label = pending ? '⏳ 解決中…' : '? 不明';
         parts.push(`<button type="button" class="packetmon-badge packetmon-badge-unknown packetmon-ptr-retry-btn" data-ips="${ipsAttr}" data-expkey="${escapeHtml(expKey)}" data-group-key="${escapeHtml(g.key)}" data-direction="${direction}" data-adapter="${escapeHtml(a.adapter)}" title="クリックで逆引き (PTR) を再試行 (cache bypass / 3 秒待ち)" ${pending ? 'disabled' : ''}>${label}</button>`);
+      }
+      // 🤖 AI 識別 ボタン: well-known マッチも PTR もなく、 登録もされていない group に表示
+      const aiPending = packetmonAiPending.has(aiKey);
+      const aiResult = packetmonAiResults.get(aiKey);
+      const showAi = !g.is_localhost && !g.registered && !g.friendly_name;
+      if (showAi) {
+        const aiLabel = aiPending ? '⏳ AI 識別中…' : (aiResult ? '🤖 AI 再識別' : '🤖 AI 識別');
+        parts.push(`<button type="button" class="ghost packetmon-ai-btn" data-ai-key="${escapeHtml(aiKey)}" data-target="${escapeHtml(g.key)}" data-direction="${direction}" data-adapter="${escapeHtml(a.adapter)}" title="LLM (Claude/Gemini/OpenAI 等) に観測情報を渡してサービス名を推定" ${aiPending ? 'disabled' : ''}>${aiLabel}</button>`);
       }
       if (!g.registered) {
         parts.push(`<button type="button" class="ghost packetmon-inspect-btn" data-target="${escapeHtml(g.key)}" data-adapter-index="${a.adapter_index}" data-direction="${direction}" title="この宛先のパケットを on-demand で 5 秒キャプチャして中身を見る">🔍 中身</button>`);
@@ -11849,6 +11915,7 @@ function renderPacketMonitor(data: PacketMonSummary) {
           <tbody>${detailRowsHtml(g.remotes)}</tbody>
         </table>` : ''}
         ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
+        ${aiPanelHtml(`${a.adapter}|out|${g.key}`)}
       </div>`;
     }
 
@@ -11885,6 +11952,20 @@ function renderPacketMonitor(data: PacketMonSummary) {
           <tbody>${detailRowsHtml(g.remotes)}</tbody>
         </table>` : ''}
         ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
+        ${aiPanelHtml(`${a.adapter}|in|${g.key}`)}
+      </div>`;
+    }
+
+    // AI 識別結果パネル (group の下に挿入)
+    function aiPanelHtml(aiKey: string): string {
+      const r = packetmonAiResults.get(aiKey);
+      if (!r) return '';
+      const pct = Math.round((r.confidence || 0) * 100);
+      const cls = r.confidence >= 0.7 ? 'high' : r.confidence >= 0.3 ? 'mid' : 'low';
+      return `<div class="packetmon-ai-panel packetmon-ai-${cls}">
+        <span class="packetmon-ai-name">🤖 ${escapeHtml(r.name)}</span>
+        <span class="packetmon-ai-conf">確信度 ${pct}%</span>
+        ${r.reasoning ? `<div class="packetmon-ai-reasoning muted">${escapeHtml(r.reasoning)}</div>` : ''}
       </div>`;
     }
 
@@ -11979,6 +12060,16 @@ document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => 
     void retryPtrForGroup(expKey, groupKey, direction, adapter, ips);
     return;
   }
+  const aiBtn = t.closest('.packetmon-ai-btn') as HTMLElement | null;
+  if (aiBtn) {
+    ev.stopPropagation();
+    const aiKey = aiBtn.dataset.aiKey || '';
+    const target = aiBtn.dataset.target || '';
+    const adapter = aiBtn.dataset.adapter || '';
+    const direction = (aiBtn.dataset.direction === 'in' ? 'in' : 'out') as 'in' | 'out';
+    void identifyEndpointWithAi(aiKey, target, adapter, direction);
+    return;
+  }
   const head = t.closest('.packetmon-group-head') as HTMLElement | null;
   if (!head) return;
   const key = head.dataset.expkey;
@@ -12039,6 +12130,7 @@ async function loadPacketmonProcesses(opts: { silent?: boolean } = {}) {
 }
 
 function renderPacketmonProcesses(r: PacketMonProcResponse) {
+  _lastPacketmonProcesses = r.processes || [];
   const listEl = document.getElementById('packetmonProcList');
   const statusEl = document.getElementById('packetmonProcStatus');
   if (!listEl) return;

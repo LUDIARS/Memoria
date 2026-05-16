@@ -27,6 +27,7 @@ import * as dns from 'node:dns/promises';
 import { spawn } from 'node:child_process';
 import { WELL_KNOWN_RULES, lookupFriendlyName } from '../lib/packet-known-endpoints.js';
 import { getProcessAttribution } from '../lib/packet-process-attribution.js';
+import { runLlm } from '../llm.js';
 
 interface Meta {
   Friendly: string;
@@ -682,6 +683,93 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
       return { ip, name };
     }));
     return c.json({ results });
+  });
+
+  // ── 接続先 AI 識別 (= 「? 不明」 隣の 🤖 AI ボタン) ─────────────────
+  //   body: {
+  //     target,
+  //     remotes: [{ proto, remote_ip, remote_port, count }],
+  //     hint?, ptr?,
+  //     processes?: string[]  (= Sysmon / snapshot 由来で観測したプロセス名)
+  //   }
+  //   返り値: { name, confidence, reasoning }
+  // LLM は llm.runLlm({ task: 'endpoint_identify', prompt }) を経由。
+  // JSON 形式での返答を期待 (fence で囲まれていても抽出)。
+  r.post('/api/packet-monitor/identify-with-ai', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as {
+      target?: unknown;
+      remotes?: unknown;
+      hint?: unknown;
+      ptr?: unknown;
+      processes?: unknown;
+    } | null;
+    const target = typeof body?.target === 'string' ? body.target.trim() : '';
+    if (!target) return c.json({ error: 'target is required' }, 400);
+    const remotesRaw = Array.isArray(body?.remotes) ? body!.remotes : [];
+    const remotes = (remotesRaw as Array<Record<string, unknown>>).slice(0, 20).map((r) => ({
+      proto: String(r?.proto ?? ''),
+      remote_ip: String(r?.remote_ip ?? ''),
+      remote_port: String(r?.remote_port ?? ''),
+      count: Number(r?.count) || 0,
+    }));
+    const hint = typeof body?.hint === 'string' ? body.hint.trim() : '';
+    const ptr = typeof body?.ptr === 'string' ? body.ptr.trim() : '';
+    const processes = Array.isArray(body?.processes)
+      ? (body!.processes as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 10)
+      : [];
+
+    const remotesText = remotes.length === 0
+      ? '(なし)'
+      : remotes.map((r) => `  - ${r.proto} ${r.remote_ip}:${r.remote_port} (count: ${r.count})`).join('\n');
+
+    const prompt = [
+      'あなたは ネットワーク エンドポイント を観測情報から識別する専門家です。',
+      '以下の観測情報から、 この接続先がどのサービスやアプリケーションのものかを推定してください。',
+      '',
+      `観測した宛先キー: ${target}`,
+      `観測した remote 一覧:`,
+      remotesText,
+      hint ? `TLS SNI / HTTP host / DNS query: ${hint}` : 'TLS SNI / HTTP host / DNS query: (取れず)',
+      ptr  ? `逆引き PTR: ${ptr}`                       : '逆引き PTR: (取れず)',
+      processes.length > 0
+        ? `接続を出していたプロセス: ${processes.join(', ')}`
+        : '接続を出していたプロセス: (不明)',
+      '',
+      '返答は **JSON のみ** で、 以下のキーを持ってください:',
+      '  name (短いサービス名 — 例: "Anthropic Claude API", "Cloudflare Tunnel POP", "Google Public DNS")',
+      '  confidence (0.0 〜 1.0)',
+      '  reasoning (1〜2 文の根拠)',
+      '',
+      '確信が持てない (confidence < 0.3) 時は name="Unknown" を返してください。',
+      '余分な ``` fence は不要。 JSON だけ。',
+    ].join('\n');
+
+    let rawText = '';
+    try {
+      rawText = await runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+    } catch (e) {
+      return c.json({ error: `LLM 呼び出し失敗: ${(e as Error).message}` }, 502);
+    }
+
+    // JSON 抽出 (fence で囲まれていても拾う)
+    let parsed: { name?: unknown; confidence?: unknown; reasoning?: unknown } | null = null;
+    const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    const jsonCandidate = (fenceMatch ? fenceMatch[1] : rawText).trim();
+    const braceMatch = jsonCandidate.match(/\{[\s\S]*\}/);
+    if (braceMatch) {
+      try { parsed = JSON.parse(braceMatch[0]) as typeof parsed; } catch { /* ignore */ }
+    }
+    const name = typeof parsed?.name === 'string' ? parsed.name.trim() : '';
+    const confidence = typeof parsed?.confidence === 'number'
+      ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
+    const reasoning = typeof parsed?.reasoning === 'string' ? parsed.reasoning.trim() : '';
+    if (!name) {
+      return c.json({
+        name: 'Unknown', confidence: 0, reasoning: '(LLM 応答を JSON として解釈できませんでした)',
+        raw: rawText.slice(0, 1000),
+      });
+    }
+    return c.json({ name, confidence, reasoning, raw: rawText.length > 1000 ? rawText.slice(0, 1000) + '…' : rawText });
   });
 
   // ── 中身確認 (on-demand tshark) ────────────────────────────────────
