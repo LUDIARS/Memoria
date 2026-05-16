@@ -823,12 +823,13 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
     }
 
     // JSON 抽出 (fence で囲まれていても拾う)
-    let parsed: { name?: unknown; confidence?: unknown; reasoning?: unknown } | null = null;
+    type EndpointIdentifyShape = { name?: unknown; confidence?: unknown; reasoning?: unknown };
+    let parsed: EndpointIdentifyShape | null = null;
     const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     const jsonCandidate = (fenceMatch ? fenceMatch[1] : rawText).trim();
     const braceMatch = jsonCandidate.match(/\{[\s\S]*\}/);
     if (braceMatch) {
-      try { parsed = JSON.parse(braceMatch[0]) as typeof parsed; } catch { /* ignore */ }
+      try { parsed = JSON.parse(braceMatch[0]) as EndpointIdentifyShape; } catch { /* ignore */ }
     }
     const name = typeof parsed?.name === 'string' ? parsed.name.trim() : '';
     const confidence = typeof parsed?.confidence === 'number'
