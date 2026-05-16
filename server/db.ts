@@ -3499,8 +3499,24 @@ export function trendsWorkHours(db: Db, { sinceDays = 30 }: { sinceDays?: number
 export interface GpsWalkingRow {
   date: string;
   distance_km: number;
+  /** 徒歩速度帯のみで積算した距離 (カロリー計算用) */
+  walking_distance_km: number;
   walking_minutes: number;
   travel_minutes: number;
+  // ── 「自宅以外にいた時間」 の内訳 (面積棒グラフ用) ──────────────
+  // 1 日 = 自宅 + 移動 + 場所滞在 + 不明 (どこにも match しない停止)。
+  // 「自宅以外」 = travel + 場所滞在 + 不明 の合計分数。 場所滞在は
+  // work_locations (is_home=0) の name でキー化。
+  /** 自宅 (work_locations.is_home=1) に居た分数 */
+  home_minutes: number;
+  /** 自宅以外の連続点をベースに集計した「外にいた」 合計分数 */
+  away_minutes: number;
+  /** 自宅以外 のうち、 0.5 m/s 以上で動いていた区間 */
+  away_moving_minutes: number;
+  /** 自宅以外 のうち、 登録 work_locations にいた時間。 場所 name でキー化。 */
+  away_places: { name: string; minutes: number }[];
+  /** 自宅以外 のうち、 場所未登録 + 停止 (= 不明な滞在) */
+  away_unknown_minutes: number;
 }
 
 /**
@@ -3510,6 +3526,9 @@ export interface GpsWalkingRow {
  *   - walking_minutes: 0.5〜3.5 m/s の区間 Δt 合計 (徒歩速度帯)
  *   - travel_minutes: 0.5 m/s 以上で動いていた区間 Δt 合計 (移動全体、
  *     乗り物含む)
+ *   - home_minutes / away_* : 各 GPS 点を work_locations の radius_m で
+ *     home / 場所 / 不明 に分類 (priority: is_home=1 > is_home=0 > 不明)。
+ *     セグメント Δt をその分類に振り分けて積算する。
  *
  * 静止判定は速度ベース。停車中の jitter は accuracy で弾く。
  */
@@ -3519,7 +3538,13 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
   function parseUtc(s: string): Date {
-    return new Date(String(s).replace(' ', 'T') + 'Z');
+    // recorded_at は 2 形式が混在する:
+    //   - "2026-05-16T02:36:06.000Z"  (OwnTracks 直接挿入: ISO + Z)
+    //   - "2026-05-16 02:36:06"       (Legatus/diary 経由: SQLite datetime)
+    // 後者は UTC として 'Z' を付ける必要があるが、 既に Z が付いている前者に
+    // 二度 Z を足すと Invalid Date になる (= 全 row 弾かれて全日 0 になる)。
+    const raw = String(s).replace(' ', 'T');
+    return new Date(/[zZ]$/.test(raw) ? raw : raw + 'Z');
   }
   function haversineMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
     const R = 6_371_008;
@@ -3531,11 +3556,45 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     const h = sa * sa + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * so * so;
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
   }
-  const SEG_DT_MAX_MS = 10 * 60_000;       // > 10 分の隙間は信頼しない
+  // GPS は 「移動した時だけ点を打つ」 ので、 連続する 2 点 (p1, p2) の間は
+  // 「p1 の場所に居続けて、 p2 で観測される直前に移動した」 と仮定する。
+  //   → gap 全体を p1 の class に倒す (同一クラスでも遷移でも同じ扱い)
+  //   → cap は 12 時間 (これより長い gap はデータ欠落とみなして無視)
+  // 移動メトリクス (距離 / walking / travel) は速度ノイズ防止のため 10 分超
+  // で切る (= 別ロジック)。
+  const SEG_DT_MAX_MS_MOVEMENT = 10 * 60_000;            // 10 分 (移動メトリクス用)
+  const SEG_DT_MAX_MS_DWELL    = 12 * 60 * 60_000;       // 12 時間 (滞在仮定の上限)
   const ACC_MAX_M = 200;                   // accuracy 200m 超は jitter とみなす
   const WALK_MIN_MPS = 0.5;                // 1.8 km/h
   const WALK_MAX_MPS = 3.5;                // 12.6 km/h (上限 = ジョギング以下)
   const TRAVEL_MIN_MPS = 0.5;              // 動いている扱いの下限
+  const DEFAULT_RADIUS_M = 100;            // work_locations.radius_m が NULL の時の既定
+
+  // work_locations を読み、 home + その他の場所に分けて in-memory 配列にする。
+  const places = db.prepare(`
+    SELECT id, name, latitude, longitude, radius_m, is_home
+    FROM work_locations
+    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+  `).all() as Array<{ id: number; name: string; latitude: number; longitude: number; radius_m: number | null; is_home: 0 | 1 }>;
+  const homePlace = places.find(p => p.is_home === 1) || null;
+  const otherPlaces = places.filter(p => p.is_home === 0);
+
+  function classifyPoint(lat: number, lon: number): { kind: 'home' | 'place' | 'unknown'; placeName?: string } {
+    // priority: home > その他 > 不明。 同 priority 内は最も近い場所を選ぶ。
+    if (homePlace) {
+      const r = homePlace.radius_m ?? DEFAULT_RADIUS_M;
+      const d = haversineMeters({ lat, lon }, { lat: homePlace.latitude, lon: homePlace.longitude });
+      if (d <= r) return { kind: 'home' };
+    }
+    let best: { p: typeof otherPlaces[number]; d: number } | null = null;
+    for (const p of otherPlaces) {
+      const r = p.radius_m ?? DEFAULT_RADIUS_M;
+      const d = haversineMeters({ lat, lon }, { lat: p.latitude, lon: p.longitude });
+      if (d <= r && (!best || d < best.d)) best = { p, d };
+    }
+    if (best) return { kind: 'place', placeName: best.p.name };
+    return { kind: 'unknown' };
+  }
 
   const startDate = new Date(Date.now() - (days - 1) * 86400_000);
   const startKey = dateKeyLocal(startDate);
@@ -3546,35 +3605,73 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     ORDER BY recorded_at ASC
   `).all(userId, startKey) as { recorded_at: string; lat: number; lon: number; accuracy_m: number | null }[];
 
-  interface DayBucket { distance_m: number; walking_ms: number; travel_ms: number }
+  interface DayBucket {
+    distance_m: number;        // 移動距離 (vehicle 含む)
+    walking_distance_m: number; // 徒歩速度帯のみで積算 (= カロリー計算の根拠)
+    walking_ms: number;
+    travel_ms: number;
+    home_ms: number;
+    away_moving_ms: number;
+    away_places_ms: Map<string, number>;
+    away_unknown_ms: number;
+  }
   const perDay = new Map<string, DayBucket>();
   function bucket(key: string): DayBucket {
     let b = perDay.get(key);
     if (!b) {
-      b = { distance_m: 0, walking_ms: 0, travel_ms: 0 };
+      b = {
+        distance_m: 0, walking_distance_m: 0, walking_ms: 0, travel_ms: 0,
+        home_ms: 0, away_moving_ms: 0, away_places_ms: new Map(), away_unknown_ms: 0,
+      };
       perDay.set(key, b);
     }
     return b;
   }
-  let prev: { ts: number; key: string; lat: number; lon: number; accOk: boolean } | null = null;
+  function attributeDwell(b: DayBucket, dwellMs: number, cls: ReturnType<typeof classifyPoint>): void {
+    if (dwellMs <= 0) return;
+    if (cls.kind === 'home') b.home_ms += dwellMs;
+    else if (cls.kind === 'place' && cls.placeName) {
+      b.away_places_ms.set(cls.placeName, (b.away_places_ms.get(cls.placeName) || 0) + dwellMs);
+    } else b.away_unknown_ms += dwellMs;
+  }
+  type PrevPoint = { ts: number; key: string; lat: number; lon: number; accOk: boolean; cls: ReturnType<typeof classifyPoint> };
+  let prev: PrevPoint | null = null;
   for (const r of rows) {
     const d = parseUtc(r.recorded_at);
     const ts = d.getTime();
     if (!Number.isFinite(ts)) { prev = null; continue; }
     const key = dateKeyLocal(d);
     const accOk = !r.accuracy_m || r.accuracy_m < ACC_MAX_M;
+    const cls = classifyPoint(r.lat, r.lon);
     if (prev && prev.key === key && accOk && prev.accOk) {
       const dt = ts - prev.ts;
-      if (dt > 0 && dt <= SEG_DT_MAX_MS) {
+      if (dt > 0 && dt <= SEG_DT_MAX_MS_DWELL) {
         const dist = haversineMeters(prev, { lat: r.lat, lon: r.lon });
         const speed = dist / (dt / 1000); // m/s
         const b = bucket(key);
-        b.distance_m += dist;
-        if (speed >= TRAVEL_MIN_MPS) b.travel_ms += dt;
-        if (speed >= WALK_MIN_MPS && speed <= WALK_MAX_MPS) b.walking_ms += dt;
+        const moving = (dt <= SEG_DT_MAX_MS_MOVEMENT) && (speed >= TRAVEL_MIN_MPS);
+
+        // 1. 移動メトリクス (10 分以内 + 速度あり、 速度ノイズ除去)
+        if (dt <= SEG_DT_MAX_MS_MOVEMENT) {
+          b.distance_m += dist;
+          if (speed >= TRAVEL_MIN_MPS) b.travel_ms += dt;
+          if (speed >= WALK_MIN_MPS && speed <= WALK_MAX_MPS) {
+            b.walking_ms += dt;
+            b.walking_distance_m += dist;
+          }
+        }
+
+        // 2. 滞在分類 (GPS は移動した時だけ点を打つ前提):
+        //    短時間 (≤ 10 分) で動いている → 移動中として away_moving
+        //    それ以外の gap (静止 or sparse) → p1 の場所に滞在し続けたと仮定
+        if (moving) {
+          b.away_moving_ms += dt;
+        } else {
+          attributeDwell(b, dt, prev.cls);
+        }
       }
     }
-    prev = { ts, key, lat: r.lat, lon: r.lon, accOk };
+    prev = { ts, key, lat: r.lat, lon: r.lon, accOk, cls };
   }
 
   const out: GpsWalkingRow[] = [];
@@ -3584,11 +3681,33 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     dt.setDate(today.getDate() - i);
     const k = dateKeyLocal(dt);
     const b = perDay.get(k);
+    if (!b) {
+      out.push({
+        date: k, distance_km: 0, walking_distance_km: 0, walking_minutes: 0, travel_minutes: 0,
+        home_minutes: 0, away_minutes: 0, away_moving_minutes: 0,
+        away_places: [], away_unknown_minutes: 0,
+      });
+      continue;
+    }
+    const home_min = Math.round(b.home_ms / 60_000);
+    const moving_min = Math.round(b.away_moving_ms / 60_000);
+    const unknown_min = Math.round(b.away_unknown_ms / 60_000);
+    const places_arr = [...b.away_places_ms.entries()]
+      .map(([name, ms]) => ({ name, minutes: Math.round(ms / 60_000) }))
+      .filter(p => p.minutes > 0)
+      .sort((a, b2) => b2.minutes - a.minutes);
+    const places_total = places_arr.reduce((s, p) => s + p.minutes, 0);
     out.push({
       date: k,
-      distance_km: b ? Number((b.distance_m / 1000).toFixed(2)) : 0,
-      walking_minutes: b ? Math.round(b.walking_ms / 60_000) : 0,
-      travel_minutes: b ? Math.round(b.travel_ms / 60_000) : 0,
+      distance_km: Number((b.distance_m / 1000).toFixed(2)),
+      walking_distance_km: Number((b.walking_distance_m / 1000).toFixed(2)),
+      walking_minutes: Math.round(b.walking_ms / 60_000),
+      travel_minutes: Math.round(b.travel_ms / 60_000),
+      home_minutes: home_min,
+      away_minutes: moving_min + places_total + unknown_min,
+      away_moving_minutes: moving_min,
+      away_places: places_arr,
+      away_unknown_minutes: unknown_min,
     });
   }
   return out;
@@ -5257,14 +5376,32 @@ export function insertRecommendationRun(db: Db): number {
 }
 
 export function failRecommendationRun(db: Db, id: number, error: string): void {
+  // WHERE status='running' を付けて、 既に cancel/done に遷移済の row を
+  // 上書きしないようにする (= 「キューを上書き」 した abandoned run が後から
+  // 完了しても、 現在の状態を破壊しない)。
   db.prepare(`
     UPDATE recommendation_runs
        SET status = 'error',
            error = ?,
            finished_at = datetime('now'),
            duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
-     WHERE id = ?
+     WHERE id = ? AND status = 'running'
   `).run(error.slice(0, 4000), id);
+}
+
+// 'running' のまま放置されている run を 'cancelled' に変更し、 件数を返す。
+// サーバが死んだまま再起動した / inFlight promise が hang した、 等で
+// 詰まったキューを掃除するために使う。
+export function cancelRunningRecommendationRuns(db: Db, reason = 'user_cancelled'): number {
+  const r = db.prepare(`
+    UPDATE recommendation_runs
+       SET status = 'cancelled',
+           error = ?,
+           finished_at = datetime('now'),
+           duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
+     WHERE status = 'running'
+  `).run(reason.slice(0, 4000));
+  return r.changes;
 }
 
 export function completeRecommendationRun(
@@ -5277,6 +5414,8 @@ export function completeRecommendationRun(
     modelOpus: string;
   },
 ): void {
+  // WHERE status='running' で、 cancel/done 済の row を上書きしない。
+  // (force 実行で abandon された旧 run が遅れて終わっても無視する)
   db.prepare(`
     UPDATE recommendation_runs
        SET status = 'done',
@@ -5287,7 +5426,7 @@ export function completeRecommendationRun(
            model_opus = ?,
            result_count = ?,
            duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
-     WHERE id = ?
+     WHERE id = ? AND status = 'running'
   `).run(
     JSON.stringify(payload.agentLogs),
     JSON.stringify(payload.results),

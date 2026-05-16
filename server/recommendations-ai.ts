@@ -14,7 +14,7 @@ import {
   recRecentBookmarks, recBrowserHistory, recGitCommits, recClaudePrompts,
   recGamesLastWeek, recAppsLastWeek, recRecentNotes, recRecentDigs,
   insertRecommendationRun, completeRecommendationRun, failRecommendationRun,
-  findRunningRecommendationRun,
+  findRunningRecommendationRun, cancelRunningRecommendationRuns,
   type RecSourceBookmark, type RecBrowserDomain, type RecGitCommit,
   type RecClaudePrompt, type RecGameSummary, type RecAppSummary,
   type RecNoteSummary, type RecDigSummary,
@@ -313,21 +313,51 @@ function parseSynthesisItems(raw: string): RecResultItem[] {
 
 // ── pipeline ──────────────────────────────────────────────────────────────
 
-let inFlight: Promise<RecRunResult> | null = null;
+// inFlight は「現在キューにある run」 の promise + runId を保持する。
+// cancel 時に runId を確定的に DB へ cancelled として書き込みたいので、
+// promise だけでなく id も対で持つ。 force = true で新規 run を開始する際
+// は abandon (= ポインタを差し替え) する: 旧 promise の処理は走り続けるが、
+// completeRecommendationRun の WHERE status='running' で db 上書きされない。
+let inFlight: { runId: number; promise: Promise<RecRunResult> } | null = null;
 
 export function isRecommendationsRunning(db: Db): boolean {
   return inFlight !== null || !!findRunningRecommendationRun(db);
 }
 
-export async function runAiRecommendations(db: Db): Promise<RecRunResult> {
-  if (inFlight) return inFlight;
+/**
+ * 現在 running の run を強制的に cancelled へ遷移させる。
+ * - in-memory inFlight ハンドルをクリア (= 後続の run はブロックされなくなる)
+ * - DB の running 行を全て 'cancelled' に更新 (= isRecommendationsRunning 解除)
+ *
+ * 実際の LLM 呼び出しを中断する手段は持っていないので、 abandon された
+ * 旧 run はバックグラウンドで完了するが、 completeRecommendationRun の
+ * WHERE status='running' により DB 上書きは行われない。
+ */
+export function cancelAiRecommendations(db: Db, reason = 'user_cancelled'): { dbCancelled: number; hadInFlight: boolean } {
+  const hadInFlight = inFlight !== null;
+  inFlight = null;
+  const dbCancelled = cancelRunningRecommendationRuns(db, reason);
+  return { dbCancelled, hadInFlight };
+}
+
+export async function runAiRecommendations(db: Db, options: { force?: boolean } = {}): Promise<RecRunResult> {
+  if (inFlight && !options.force) return inFlight.promise;
+  if (inFlight && options.force) {
+    // 旧 run を abandon。 DB 側も cancelled に倒す。
+    cancelAiRecommendations(db, 'superseded_by_force_run');
+  } else if (options.force) {
+    // inFlight は空でも、 server 再起動で DB に取り残された 'running' がある
+    // 可能性がある。 force なら必ず掃除してから始める。
+    cancelRunningRecommendationRuns(db, 'superseded_by_force_run');
+  }
   const avail = isAiRecommendationsAvailable();
   if (!avail.available) throw new Error(avail.reason);
-  inFlight = (async () => {
-    const cfg = getLlmConfig();
-    const modelSonnet = cfg.tasks.recommendation_agent?.model || 'sonnet';
-    const modelOpus = cfg.tasks.recommendation_synthesize?.model || 'claude-opus-4-7[1m]';
-    const runId = insertRecommendationRun(db);
+  const cfg = getLlmConfig();
+  const modelSonnet = cfg.tasks.recommendation_agent?.model || 'sonnet';
+  const modelOpus = cfg.tasks.recommendation_synthesize?.model || 'claude-opus-4-7[1m]';
+  const runId = insertRecommendationRun(db);
+  const handle = { runId, promise: undefined as unknown as Promise<RecRunResult> };
+  const promise = (async () => {
     try {
       const jobs = buildAgentJobs(db);
       const agentLogs: RecAgentLog[] = await Promise.all(jobs.map(async (j): Promise<RecAgentLog> => {
@@ -362,6 +392,12 @@ export async function runAiRecommendations(db: Db): Promise<RecRunResult> {
       failRecommendationRun(db, runId, msg);
       throw e;
     }
-  })().finally(() => { inFlight = null; });
-  return inFlight;
+  })().finally(() => {
+    // 自分が現役の handle のときだけ clear。 superseded されている場合は
+    // 既に inFlight = null か別の run に置き換わっているので触らない。
+    if (inFlight && inFlight.runId === runId) inFlight = null;
+  });
+  handle.promise = promise;
+  inFlight = handle;
+  return promise;
 }

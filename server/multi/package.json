@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@ludiars/cernere-composite": "file:../../../Cernere/packages/composite",
     "@ludiars/cernere-id-cache": "file:../../../Cernere/packages/id-cache",
     "@ludiars/cernere-service-adapter": "file:../../../Cernere/packages/service-adapter",
     "hono": "^4.6.10",

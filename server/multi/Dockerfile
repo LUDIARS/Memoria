@@ -15,10 +15,11 @@ RUN apk add --no-cache git
 WORKDIR /tmp
 RUN git clone --depth 1 --filter=blob:none --sparse https://github.com/LUDIARS/Cernere.git
 WORKDIR /tmp/Cernere
-# Both file: deps used by Memoria Hub:
+# file: deps used by Memoria Hub:
 #   @ludiars/cernere-service-adapter  -> packages/service-adapter
 #   @ludiars/cernere-id-cache         -> packages/id-cache
-RUN git sparse-checkout set packages/service-adapter packages/id-cache
+#   @ludiars/cernere-composite        -> packages/composite
+RUN git sparse-checkout set packages/service-adapter packages/id-cache packages/composite
 
 # The sparse clone only ships source; package.json points to dist/index.js,
 # so we compile both adapters here before the deps stage consumes them.
@@ -29,6 +30,12 @@ WORKDIR /tmp/Cernere/packages/service-adapter
 RUN npm install --no-audit --no-fund && npm run build
 WORKDIR /tmp/Cernere/packages/id-cache
 RUN npm install --no-audit --no-fund && npm run build
+WORKDIR /tmp/Cernere/packages/composite
+# composite's package.json references service-adapter via "^0.1.0" (private
+# scope, not on the public registry). Rewrite to a relative file: spec so npm
+# resolves the sibling package we just built.
+RUN node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8')); p.dependencies['@ludiars/cernere-service-adapter']='file:../service-adapter'; fs.writeFileSync('package.json', JSON.stringify(p,null,2));"
+RUN npm install --no-audit --no-fund && npm run build
 
 FROM node:20-alpine AS deps
 WORKDIR /app
@@ -36,6 +43,7 @@ WORKDIR /app
 # Resolved from /app, that points to /Cernere/packages/*.
 COPY --from=adapter-build /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
 COPY --from=adapter-build /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
+COPY --from=adapter-build /tmp/Cernere/packages/composite /Cernere/packages/composite
 COPY package.json ./
 RUN npm install --omit=dev
 
@@ -47,6 +55,7 @@ ENV MEMORIA_HUB_PORT=5280
 # node_modules. The link targets must also exist in the production image.
 COPY --from=adapter-build /tmp/Cernere/packages/service-adapter /Cernere/packages/service-adapter
 COPY --from=adapter-build /tmp/Cernere/packages/id-cache /Cernere/packages/id-cache
+COPY --from=adapter-build /tmp/Cernere/packages/composite /Cernere/packages/composite
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
