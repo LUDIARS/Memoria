@@ -126,13 +126,15 @@ export interface ConfigRouterDeps {
   domainCatalogQueue: FifoQueue;
   pageMetadataQueue: FifoQueue;
   mealVisionQueue: FifoQueue;
+  /** AI 分析系の一般 queue (packet-monitor identify-with-ai / identify-process など) */
+  aiAnalysisQueue?: FifoQueue;
 }
 
 export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
   const {
     db, port, dataDir, onMcpAutostartChange, onActivitySettingsChange,
     summaryQueue, cloudQueue, digQueue, diaryQueue, weeklyQueue,
-    domainCatalogQueue, pageMetadataQueue, mealVisionQueue,
+    domainCatalogQueue, pageMetadataQueue, mealVisionQueue, aiAnalysisQueue,
   } = deps;
   const r = new Hono();
 
@@ -291,6 +293,8 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
       domain: domainCatalogQueue.snapshot(),
       page: pageMetadataQueue.snapshot(),
       meal: mealVisionQueue.snapshot(),
+      // AI 分析系 (= ユーザ操作で起こす identify-with-ai / identify-process 等)
+      ai_analysis: aiAnalysisQueue ? aiAnalysisQueue.snapshot() : { depth: 0, running: false, items: [], history: [] },
       // Backward-compat top-level fields:
       ...summaryQueue.snapshot(),
     });

@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process';
 import { WELL_KNOWN_RULES, lookupFriendlyName } from '../lib/packet-known-endpoints.js';
 import { getProcessAttribution } from '../lib/packet-process-attribution.js';
 import { runLlm } from '../llm.js';
+import type { FifoQueue } from '../queue.js';
 
 interface Meta {
   Friendly: string;
@@ -595,7 +596,12 @@ async function runInspect(
   });
 }
 
-export interface PacketMonitorRouterDeps { dataDir?: string }
+export interface PacketMonitorRouterDeps {
+  dataDir?: string;
+  /** AI 分析 (identify-with-ai / identify-process) を投入する一般 queue。
+   *  渡されなかった場合は queue を経由せずに直接 LLM を叩く (= テスト用)。 */
+  aiAnalysisQueue?: FifoQueue;
+}
 
 export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hono {
   const r = new Hono();
@@ -801,7 +807,16 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
 
     let rawText = '';
     try {
-      rawText = await runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+      // キュー経由で走らせて、 ⚙ キュー タブの「作業中」 / 「履歴」 に出るようにする
+      const work = () => runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+      if (deps.aiAnalysisQueue) {
+        rawText = await deps.aiAnalysisQueue.enqueue(work, {
+          kind: 'packetmon_endpoint_identify',
+          title: `🛡 接続先 AI 識別: ${target}`,
+        }) as string;
+      } else {
+        rawText = await work();
+      }
     } catch (e) {
       return c.json({ error: `LLM 呼び出し失敗: ${(e as Error).message}` }, 502);
     }
@@ -892,7 +907,15 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
 
     let rawText = '';
     try {
-      rawText = await runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+      const work = () => runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+      if (deps.aiAnalysisQueue) {
+        rawText = await deps.aiAnalysisQueue.enqueue(work, {
+          kind: 'packetmon_process_identify',
+          title: `🔧 プロセス AI 解析: ${procName}`,
+        }) as string;
+      } else {
+        rawText = await work();
+      }
     } catch (e) {
       return c.json({ error: `LLM 呼び出し失敗: ${(e as Error).message}` }, 502);
     }

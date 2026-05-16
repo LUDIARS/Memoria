@@ -1023,14 +1023,15 @@ function fmtElapsed(ms) {
 }
 
 const QUEUE_GROUP_LABELS = {
-  summary:   '📑 ブックマーク要約',
-  dig:       '🔎 ディグ (deep research)',
-  wordcloud: '🌐 ワードクラウド',
-  diary:     '📅 日記',
-  weekly:    '📆 週報',
-  domain:    '🏷 ドメイン分類',
-  page:      '📄 ページメタ',
-  meal:      '🍽 食事解析',
+  summary:     '📑 ブックマーク要約',
+  dig:         '🔎 ディグ (deep research)',
+  wordcloud:   '🌐 ワードクラウド',
+  diary:       '📅 日記',
+  weekly:      '📆 週報',
+  domain:      '🏷 ドメイン分類',
+  page:        '📄 ページメタ',
+  meal:        '🍽 食事解析',
+  ai_analysis: '🤖 AI 分析 (接続先 / プロセス 等)',
 };
 
 function collectQueueJobs(snap) {

@@ -240,6 +240,7 @@ app.route('/', makeConfigRouter({
   domainCatalogQueue: queues.domainCatalogQueue,
   pageMetadataQueue: queues.pageMetadataQueue,
   mealVisionQueue: queues.mealVisionQueue,
+  aiAnalysisQueue: queues.aiAnalysisQueue,
 }));
 app.route('/', makeMultiRouter({
   db,
@@ -250,7 +251,10 @@ app.route('/', makeMultiRouter({
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
 app.route('/', makeReviewRouter({ db }));
 app.route('/', makeRepoRouter({ db }));
-app.route('/', makePacketMonitorRouter({ dataDir: DATA_DIR }));
+app.route('/', makePacketMonitorRouter({
+  dataDir: DATA_DIR,
+  aiAnalysisQueue: queues.aiAnalysisQueue,
+}));
 app.route('/', makeWeatherRouter({ db }));
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
