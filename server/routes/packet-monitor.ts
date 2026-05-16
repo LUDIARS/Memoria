@@ -807,15 +807,16 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
 
     let rawText = '';
     try {
-      // キュー経由で走らせて、 ⚙ キュー タブの「作業中」 / 「履歴」 に出るようにする
-      const work = () => runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+      // FifoQueue.enqueue は wrapped 内で result を捨てる設計 (= 副作用ベース) なので、
+      // 結果は外側 closure 経由で受ける。 enqueue 失敗時の例外も外に伝播する。
+      const work = async () => { rawText = await runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 }); };
       if (deps.aiAnalysisQueue) {
-        rawText = await deps.aiAnalysisQueue.enqueue(work, {
+        await deps.aiAnalysisQueue.enqueue(work, {
           kind: 'packetmon_endpoint_identify',
           title: `🛡 接続先 AI 識別: ${target}`,
-        }) as string;
+        });
       } else {
-        rawText = await work();
+        await work();
       }
     } catch (e) {
       return c.json({ error: `LLM 呼び出し失敗: ${(e as Error).message}` }, 502);
@@ -907,14 +908,14 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
 
     let rawText = '';
     try {
-      const work = () => runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+      const work = async () => { rawText = await runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 }); };
       if (deps.aiAnalysisQueue) {
-        rawText = await deps.aiAnalysisQueue.enqueue(work, {
+        await deps.aiAnalysisQueue.enqueue(work, {
           kind: 'packetmon_process_identify',
           title: `🔧 プロセス AI 解析: ${procName}`,
-        }) as string;
+        });
       } else {
-        rawText = await work();
+        await work();
       }
     } catch (e) {
       return c.json({ error: `LLM 呼び出し失敗: ${(e as Error).message}` }, 502);
