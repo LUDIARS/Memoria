@@ -23,6 +23,8 @@
     "node_modules",
     "multi/node_modules",
     "public/**/*",
-    "data/**/*"
+    "data/**/*",
+    "env-cli.config.ts",
+    "multi/env-cli.config.ts"
   ]
 }
