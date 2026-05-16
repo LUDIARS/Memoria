@@ -28,19 +28,32 @@ interface Meta {
   LocalIps: string[];
 }
 
-interface OutboundEntry {
+interface FlowRemote {
   proto: string;
   remote_ip: string;
   remote_port: string;
-  hint: string;          // TLS SNI / HTTP Host / DNS query 名 のいずれか
   count: number;
 }
-interface InboundEntry {
-  proto: string;
-  remote_ip: string;
-  remote_port: string;
-  remote_name: string;   // PTR (best-effort)
-  count: number;
+interface OutboundGroup {
+  /** 表示キー: domain (hint) があればそれ、 なければ IP。 ドメイン単位で集約済 */
+  key: string;
+  is_domain: boolean;       // key が domain なら true
+  hint: string;             // 集約に使った domain (空なら is_domain=false)
+  /** この group 内に集まった (proto, ip, port) のユニーク一覧。 count 降順 */
+  remotes: FlowRemote[];
+  /** group 内の全 packet 数 */
+  total_count: number;
+  /** group 内で観測された unique remote IP 数 */
+  unique_ips: number;
+}
+interface InboundGroup {
+  /** 表示キー: PTR があればそれ、 なければ IP。 PTR 単位で集約済 */
+  key: string;
+  is_domain: boolean;
+  remote_name: string;      // PTR (空なら is_domain=false)
+  remotes: FlowRemote[];
+  total_count: number;
+  unique_ips: number;
 }
 
 interface AdapterSummary {
@@ -53,8 +66,10 @@ interface AdapterSummary {
     self_loop: number;
     off_adapter: number;
   };
-  outbound: OutboundEntry[];
-  inbound: InboundEntry[];
+  /** ドメイン (or IP) 単位で集約済の outbound */
+  outbound: OutboundGroup[];
+  /** ドメイン (or IP) 単位で集約済の inbound */
+  inbound: InboundGroup[];
   // 接続先に渡しているホスト名 (SNI/HTTP host/DNS query) 統合 top
   outbound_hints: Array<{ hint: string; count: number }>;
 }
@@ -169,15 +184,37 @@ async function summarizeAdapter(
     fs.closeSync(fd);
   }
 
-  // outbound top N
-  const outboundEntries = [...outboundByDst.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, topN);
-  out.outbound = outboundEntries.map(([key, count]) => {
-    const [proto, hp, hint] = splitN(key, '|', 3);
-    const [remote_ip, remote_port] = splitN(hp, ':', 2);
-    return { proto, remote_ip, remote_port, hint, count };
-  });
+  // ── outbound: ドメイン (hint) ごとに集約。 同じドメインへ別 IP / ポートで
+  //    繋がっていても 1 行にまとめる。 hint が空のときは IP がキー。
+  {
+    const groupMap = new Map<string, OutboundGroup>();
+    for (const [key, count] of outboundByDst.entries()) {
+      const [proto, hp, hint] = splitN(key, '|', 3);
+      const [remote_ip, remote_port] = splitN(hp, ':', 2);
+      const groupKey = hint || remote_ip || '(unknown)';
+      let g = groupMap.get(groupKey);
+      if (!g) {
+        g = {
+          key: groupKey,
+          is_domain: !!hint,
+          hint: hint || '',
+          remotes: [],
+          total_count: 0,
+          unique_ips: 0,
+        };
+        groupMap.set(groupKey, g);
+      }
+      g.remotes.push({ proto, remote_ip, remote_port, count });
+      g.total_count += count;
+    }
+    for (const g of groupMap.values()) {
+      g.remotes.sort((a, b) => b.count - a.count);
+      g.unique_ips = new Set(g.remotes.map((r) => r.remote_ip).filter(Boolean)).size;
+    }
+    out.outbound = [...groupMap.values()]
+      .sort((a, b) => b.total_count - a.total_count)
+      .slice(0, topN);
+  }
 
   // outbound hint top N
   out.outbound_hints = [...outboundByHint.entries()]
@@ -185,19 +222,52 @@ async function summarizeAdapter(
     .slice(0, topN)
     .map(([hint, count]) => ({ hint, count }));
 
-  // inbound top N + PTR
-  const inboundEntries = [...inboundBySrc.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, topN);
-  out.inbound = await Promise.all(inboundEntries.map(async ([key, count]) => {
-    const [proto, hp] = splitN(key, '|', 2);
-    const [remote_ip, remote_port] = splitN(hp, ':', 2);
-    let remote_name = '';
-    if (resolvePtr && remote_ip) {
-      remote_name = await lookupPtr(remote_ip, ptrCache);
+  // ── inbound: 逆引き PTR を全 src IP に当てて、 同じ PTR は 1 行にまとめる。
+  //    PTR が引けなかった IP はそのまま IP キーで分離 (= "(unknown)" にまとめない)。
+  {
+    // src の unique IP を先に集めて並列逆引き
+    const uniqueIps = new Set<string>();
+    for (const key of inboundBySrc.keys()) {
+      const [, hp] = splitN(key, '|', 2);
+      const [ip] = splitN(hp, ':', 2);
+      if (ip) uniqueIps.add(ip);
     }
-    return { proto, remote_ip, remote_port, remote_name, count };
-  }));
+    const ipToName = new Map<string, string>();
+    if (resolvePtr) {
+      await Promise.all([...uniqueIps].map(async (ip) => {
+        ipToName.set(ip, await lookupPtr(ip, ptrCache));
+      }));
+    }
+
+    const groupMap = new Map<string, InboundGroup>();
+    for (const [key, count] of inboundBySrc.entries()) {
+      const [proto, hp] = splitN(key, '|', 2);
+      const [remote_ip, remote_port] = splitN(hp, ':', 2);
+      const name = ipToName.get(remote_ip) || '';
+      const groupKey = name || remote_ip || '(unknown)';
+      let g = groupMap.get(groupKey);
+      if (!g) {
+        g = {
+          key: groupKey,
+          is_domain: !!name,
+          remote_name: name,
+          remotes: [],
+          total_count: 0,
+          unique_ips: 0,
+        };
+        groupMap.set(groupKey, g);
+      }
+      g.remotes.push({ proto, remote_ip, remote_port, count });
+      g.total_count += count;
+    }
+    for (const g of groupMap.values()) {
+      g.remotes.sort((a, b) => b.count - a.count);
+      g.unique_ips = new Set(g.remotes.map((r) => r.remote_ip).filter(Boolean)).size;
+    }
+    out.inbound = [...groupMap.values()]
+      .sort((a, b) => b.total_count - a.total_count)
+      .slice(0, topN);
+  }
 
   return out;
 }

@@ -6871,6 +6871,23 @@ dialog.loc-edit-modal[open] {
 }
 .packetmon-hints li { display: flex; gap: 8px; align-items: baseline; }
 
+/* ドメイン (or PTR) で集約したグループ行 + 展開 detail */
+.packetmon-groups { display: flex; flex-direction: column; gap: 2px; }
+.packetmon-group {
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  background: var(--panel);
+}
+.packetmon-group.is-expanded { background: var(--accent-bg); }
+.packetmon-group-head {
+  display: flex; gap: 8px; align-items: baseline;
+  width: 100%; padding: 4px 8px; font-size: 12px;
+  background: transparent; border: 0; cursor: pointer; text-align: left;
+}
+.packetmon-group-head:hover { background: var(--accent-bg); }
+.packetmon-arrow { width: 12px; flex-shrink: 0; color: var(--muted); }
+.packetmon-domain { color: var(--accent); font-weight: 600; }
+.packetmon-group-detail { margin: 0 6px 6px 24px; }
+
 /* ── 「開く」 トグル + 直近の作業 サマリ ────────────────────────── */
 .repo-toggle-btn {
   padding: 0 6px;

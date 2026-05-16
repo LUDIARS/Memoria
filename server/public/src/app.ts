@@ -1176,6 +1176,8 @@ function switchTab(tab) {
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   $('packetmonView')?.classList.toggle('hidden', tab !== 'packetmon');
+  // 🛡 パケット監視 タブから離れたら 60s auto-refresh を止める。
+  if (tab !== 'packetmon') stopPacketmonAutoRefresh();
   if (tab === 'database') {
     // Re-show whichever DB sub was last picked.
     const sub = state.database?.sub || 'bookmarks';
@@ -11426,27 +11428,35 @@ document.getElementById('repoList')?.addEventListener('click', (ev) => {
 // inbound のサマリを表示する。 capture 自体は外部ツール、 Memoria は表示
 // 専用。 起動手順は 設定 → 📚 セットアップ手順 → 🛡 パケット監視 を参照。
 
-interface PacketMonOutbound {
+interface PacketMonFlowRemote {
   proto: string;
   remote_ip: string;
   remote_port: string;
-  hint: string;
   count: number;
 }
-interface PacketMonInbound {
-  proto: string;
-  remote_ip: string;
-  remote_port: string;
+interface PacketMonOutboundGroup {
+  key: string;
+  is_domain: boolean;
+  hint: string;
+  remotes: PacketMonFlowRemote[];
+  total_count: number;
+  unique_ips: number;
+}
+interface PacketMonInboundGroup {
+  key: string;
+  is_domain: boolean;
   remote_name: string;
-  count: number;
+  remotes: PacketMonFlowRemote[];
+  total_count: number;
+  unique_ips: number;
 }
 interface PacketMonAdapter {
   adapter: string;
   alias: string;
   local_ips: string[];
   packet_counts: { outbound: number; inbound: number; self_loop: number; off_adapter: number };
-  outbound: PacketMonOutbound[];
-  inbound: PacketMonInbound[];
+  outbound: PacketMonOutboundGroup[];
+  inbound: PacketMonInboundGroup[];
   outbound_hints: Array<{ hint: string; count: number }>;
 }
 interface PacketMonSummary {
@@ -11457,7 +11467,23 @@ interface PacketMonSummary {
   generated_at: string;
 }
 
-async function loadPacketMonitor() {
+// 折り畳み: 「あるアダプタの group key を 展開中」 にしている set。 同じ
+// セッション内では再描画後も状態を保持する。
+const packetmonExpanded: Set<string> = new Set();
+// 60s ごとの auto refresh は タブが active な間だけ動かす。
+let _packetmonAutoTimer: ReturnType<typeof setInterval> | null = null;
+
+function startPacketmonAutoRefresh() {
+  if (_packetmonAutoTimer != null) return;
+  _packetmonAutoTimer = setInterval(() => {
+    if (state.tab === 'packetmon') void loadPacketMonitor({ silent: true });
+  }, 60_000);
+}
+function stopPacketmonAutoRefresh() {
+  if (_packetmonAutoTimer != null) { clearInterval(_packetmonAutoTimer); _packetmonAutoTimer = null; }
+}
+
+async function loadPacketMonitor(opts: { silent?: boolean } = {}) {
   const sinceSel = document.getElementById('packetmonSince') as HTMLSelectElement | null;
   const topSel = document.getElementById('packetmonTopN') as HTMLSelectElement | null;
   const ptrEl = document.getElementById('packetmonResolvePtr') as HTMLInputElement | null;
@@ -11465,11 +11491,13 @@ async function loadPacketMonitor() {
   const topN = topSel?.value || '20';
   const resolve = ptrEl?.checked ? '1' : '0';
   const statusEl = document.getElementById('packetmonStatus');
-  if (statusEl) statusEl.textContent = '読み込み中…';
+  if (statusEl && !opts.silent) statusEl.textContent = '読み込み中…';
   try {
     const qs = `since_minutes=${encodeURIComponent(since)}&top_n=${encodeURIComponent(topN)}&resolve_ptr=${resolve}`;
-    const r = await api(`/api/packet-monitor/summary?${qs}`) as PacketMonSummary;
+    const apiFn = opts.silent ? apiSilent : api;
+    const r = await apiFn(`/api/packet-monitor/summary?${qs}`) as PacketMonSummary;
     renderPacketMonitor(r);
+    startPacketmonAutoRefresh();
   } catch (e) {
     if (statusEl) statusEl.textContent = `読み込みエラー: ${(e as Error).message}`;
   }
@@ -11499,7 +11527,7 @@ function renderPacketMonitor(data: PacketMonSummary) {
   if (statusEl) {
     const total = data.adapters.reduce((s, a) =>
       s + a.packet_counts.outbound + a.packet_counts.inbound, 0);
-    statusEl.textContent = `logs root: ${data.log_root || '—'} · ${data.adapters.length} アダプタ · 合計 ${total} パケット · 生成 ${new Date(data.generated_at).toLocaleTimeString()}`;
+    statusEl.textContent = `logs root: ${data.log_root || '—'} · ${data.adapters.length} アダプタ · 合計 ${total} パケット · 生成 ${new Date(data.generated_at).toLocaleTimeString()} · 60 秒ごとに自動更新`;
   }
 
   wrap.innerHTML = data.adapters.map((a) => {
@@ -11507,38 +11535,77 @@ function renderPacketMonitor(data: PacketMonSummary) {
     const counts = a.packet_counts;
     const totalPkt = counts.outbound + counts.inbound;
 
-    const outboundRows = a.outbound.map((o) => {
-      const hp = o.remote_port ? `${o.remote_ip}:${o.remote_port}` : o.remote_ip;
-      const hint = o.hint
-        ? `<span class="packetmon-hint" title="渡しているホスト名 (SNI/HTTP host/DNS query)">${escapeHtml(o.hint)}</span>`
+    function detailRowsHtml(remotes: PacketMonFlowRemote[]): string {
+      return remotes.map((r) => {
+        const hp = r.remote_port ? `${r.remote_ip}:${r.remote_port}` : r.remote_ip;
+        return `<tr>
+          <td class="packetmon-count">${r.count}</td>
+          <td class="packetmon-proto">${escapeHtml(r.proto)}</td>
+          <td class="packetmon-dst">${escapeHtml(hp)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function outboundGroupHtml(g: PacketMonOutboundGroup, idx: number): string {
+      const expKey = `out|${a.adapter}|${g.key}`;
+      const expanded = packetmonExpanded.has(expKey);
+      const headLabel = g.is_domain
+        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>`
+        : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>`;
+      const ipsLabel2 = g.unique_ips > 1
+        ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
         : '';
-      return `<tr>
-        <td class="packetmon-count">${o.count}</td>
-        <td class="packetmon-proto">${escapeHtml(o.proto)}</td>
-        <td class="packetmon-dst">${escapeHtml(hp)}</td>
-        <td class="packetmon-hint-cell">${hint}</td>
-      </tr>`;
-    }).join('');
+      const protos = new Set(g.remotes.map((r) => r.proto));
+      const protoLabel = [...protos].slice(0, 3).join(', ') + (protos.size > 3 ? ' …' : '');
+      return `<div class="packetmon-group ${expanded ? 'is-expanded' : ''}" data-expkey="${escapeHtml(expKey)}">
+        <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
+          <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+          <span class="packetmon-count">${g.total_count}</span>
+          ${headLabel}
+          ${ipsLabel2}
+          <span class="muted">· ${escapeHtml(protoLabel)}</span>
+        </button>
+        ${expanded ? `<table class="packetmon-table packetmon-group-detail">
+          <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
+          <tbody>${detailRowsHtml(g.remotes)}</tbody>
+        </table>` : ''}
+      </div>`;
+    }
 
-    const inboundRows = a.inbound.map((i) => {
-      const hp = i.remote_port ? `${i.remote_ip}:${i.remote_port}` : i.remote_ip;
-      const name = i.remote_name
-        ? `<span class="packetmon-ptr" title="${escapeHtml(i.remote_name)}">${escapeHtml(i.remote_name)}</span>`
-        : '<span class="muted">(逆引きなし)</span>';
-      return `<tr>
-        <td class="packetmon-count">${i.count}</td>
-        <td class="packetmon-proto">${escapeHtml(i.proto)}</td>
-        <td class="packetmon-src">${escapeHtml(hp)}</td>
-        <td class="packetmon-ptr-cell">${name}</td>
-      </tr>`;
-    }).join('');
+    function inboundGroupHtml(g: PacketMonInboundGroup): string {
+      const expKey = `in|${a.adapter}|${g.key}`;
+      const expanded = packetmonExpanded.has(expKey);
+      const headLabel = g.is_domain
+        ? `<span class="packetmon-ptr">${escapeHtml(g.key)}</span>`
+        : `<span class="packetmon-src">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>`;
+      const ipsLabel2 = g.unique_ips > 1
+        ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
+        : '';
+      const protos = new Set(g.remotes.map((r) => r.proto));
+      const protoLabel = [...protos].slice(0, 3).join(', ') + (protos.size > 3 ? ' …' : '');
+      return `<div class="packetmon-group ${expanded ? 'is-expanded' : ''}" data-expkey="${escapeHtml(expKey)}">
+        <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
+          <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+          <span class="packetmon-count">${g.total_count}</span>
+          ${headLabel}
+          ${ipsLabel2}
+          <span class="muted">· ${escapeHtml(protoLabel)}</span>
+        </button>
+        ${expanded ? `<table class="packetmon-table packetmon-group-detail">
+          <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
+          <tbody>${detailRowsHtml(g.remotes)}</tbody>
+        </table>` : ''}
+      </div>`;
+    }
 
+    const outboundBlocks = a.outbound.map(outboundGroupHtml).join('');
+    const inboundBlocks = a.inbound.map(inboundGroupHtml).join('');
     const hintsRows = a.outbound_hints.map((h) =>
       `<li><span class="packetmon-count">${h.count}</span> ${escapeHtml(h.hint)}</li>`
     ).join('');
 
     return `
-      <article class="card packetmon-card">
+      <article class="card packetmon-card" data-adapter="${escapeHtml(a.adapter)}">
         <header class="packetmon-card-head">
           <strong>${escapeHtml(a.adapter)}</strong>
           <span class="muted">${escapeHtml(a.alias || '')}</span>
@@ -11553,13 +11620,10 @@ function renderPacketMonitor(data: PacketMonSummary) {
         </div>
 
         <div class="packetmon-section">
-          <h4>📤 OUTBOUND 接続先 (接続先 IP:port + 渡しているホスト名)</h4>
+          <h4>📤 OUTBOUND 接続先 (ドメインで集約、 行をクリックで IP/proto 内訳)</h4>
           ${a.outbound.length === 0
             ? '<p class="muted">outbound 接続はありません</p>'
-            : `<table class="packetmon-table">
-                <thead><tr><th>count</th><th>proto</th><th>remote</th><th>hint</th></tr></thead>
-                <tbody>${outboundRows}</tbody>
-              </table>`}
+            : `<div class="packetmon-groups">${outboundBlocks}</div>`}
         </div>
 
         <div class="packetmon-section">
@@ -11570,17 +11634,26 @@ function renderPacketMonitor(data: PacketMonSummary) {
         </div>
 
         <div class="packetmon-section">
-          <h4>📥 INBOUND 接続元 (IP:port + 逆引き)</h4>
+          <h4>📥 INBOUND 接続元 (逆引き で集約、 行をクリックで IP/proto 内訳)</h4>
           ${a.inbound.length === 0
             ? '<p class="muted">inbound 接続はありません</p>'
-            : `<table class="packetmon-table">
-                <thead><tr><th>count</th><th>proto</th><th>remote</th><th>hostname (PTR)</th></tr></thead>
-                <tbody>${inboundRows}</tbody>
-              </table>`}
+            : `<div class="packetmon-groups">${inboundBlocks}</div>`}
         </div>
       </article>`;
   }).join('');
 }
+
+// グループ行のトグル — re-render を経由してデータの整合を保ったまま展開状態を更新。
+document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => {
+  const t = ev.target as HTMLElement;
+  const head = t.closest('.packetmon-group-head') as HTMLElement | null;
+  if (!head) return;
+  const key = head.dataset.expkey;
+  if (!key) return;
+  if (packetmonExpanded.has(key)) packetmonExpanded.delete(key);
+  else packetmonExpanded.add(key);
+  void loadPacketMonitor({ silent: true });
+});
 
 // イベント結線 (refresh ボタン + フィルタ変更)
 document.getElementById('packetmonRefreshBtn')?.addEventListener('click', () => void loadPacketMonitor());
