@@ -19,7 +19,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   openDb, ensureUserStopwordsTable,
-  getAppSettings, setAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
+  getAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
   insertGpsLocation, listPendingMeals,
 } from './db.js';
 import { resolveUnresolvedBatch } from './lib/place-resolver.js';
