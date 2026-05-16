@@ -19,13 +19,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   openDb, ensureUserStopwordsTable,
-  getAppSettings, setAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
+  getAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
   insertGpsLocation, listPendingMeals,
 } from './db.js';
-import {
-  hasInfisicalCreds, missingWantedKeys, applyInfisicalCreds,
-  type InfisicalCreds,
-} from './lib/env-bootstrap.js';
 import { resolveUnresolvedBatch } from './lib/place-resolver.js';
 import { loadLlmConfigFromSettings } from './llm.js';
 import { initWebPush } from './push.js';
@@ -173,63 +169,9 @@ app.use('*', async (c, next) => {
   }
 });
 
-// ── Infisical セットアップ (Multi Mode 専用) ─────────────────────────────
-//
-// Local Mode の Memoria は Infisical を使わない (= 全機能ローカル完結)。
-// Multi Mode (Hub 連携) でだけ Cernere 認証が要り、 その CERNERE_BASE_URL 等を
-// Infisical から取る。 なので global gate は張らず、 frontend の Multi view が
-// status を見て「未設定なら setup フォームを出す」 方式にする。
-//
-// machine identity の取得経路 (優先順):
-//   1. Excubitor inject / host shell env
-//   2. app_settings (前回の Multi view 入力)  — bootstrap.ts が起動時に読込済
-//   3. Multi view の setup フォーム            — /api/setup/infisical
-let infisicalConfigured = hasInfisicalCreds();
-if (infisicalConfigured) {
-  const missing = missingWantedKeys();
-  if (missing.length > 0) {
-    console.warn(`[infisical] 接続済だが未取得の設定キー: ${missing.join(', ')} (= Hub 連携の一部が degraded)`);
-  }
-} else {
-  console.log('[infisical] machine identity 未設定 — Local Mode は通常動作、 Multi Mode 利用時に setup を促す');
-}
-
-// Multi view が叩く: Infisical が設定済か (= setup フォームを出すかの判定)。
-app.get('/api/setup/infisical/status', (c) =>
-  c.json({ configured: infisicalConfigured, missing: missingWantedKeys() }));
-
-// Multi view の setup フォームからの machine identity 受け口。
-app.post('/api/setup/infisical', async (c) => {
-  const body = await c.req.json().catch(() => null) as Partial<InfisicalCreds> | null;
-  const creds: InfisicalCreds = {
-    siteUrl: String(body?.siteUrl ?? '').trim().replace(/\/$/, ''),
-    projectId: String(body?.projectId ?? '').trim(),
-    environment: String(body?.environment ?? 'dev').trim() || 'dev',
-    clientId: String(body?.clientId ?? '').trim(),
-    clientSecret: String(body?.clientSecret ?? '').trim(),
-  };
-  if (!creds.siteUrl || !creds.projectId || !creds.clientId || !creds.clientSecret) {
-    return c.json({ error: 'siteUrl / projectId / clientId / clientSecret は必須' }, 400);
-  }
-  let injected = 0;
-  try {
-    ({ injected } = await applyInfisicalCreds(creds));
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return c.json({ error: `Infisical 接続失敗: ${msg}` }, 502);
-  }
-  // 成功したら app_settings に永続化 (次回起動は bootstrap.ts が読む)。
-  setAppSettings(db, {
-    'infisical.site_url': creds.siteUrl,
-    'infisical.project_id': creds.projectId,
-    'infisical.environment': creds.environment,
-    'infisical.client_id': creds.clientId,
-    'infisical.client_secret': creds.clientSecret,
-  });
-  infisicalConfigured = true;
-  console.log(`[infisical] 接続成功 — ${injected} secrets inject`);
-  return c.json({ ok: true, injected });
-});
+// Local Memoria は Infisical / Cernere を直接知らない設計に統一済。
+// 旧 /api/setup/infisical* と writeEnvSecrets() は撤去 — Hub 連携は Hub 側 (server/multi/)
+// の Infisical 設定 (= env-cli) で完結する。
 
 // ── Multi モード proxy 層 ─────────────────────────────────────────────────
 //

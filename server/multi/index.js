@@ -30,6 +30,8 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { createHmac } from 'node:crypto';
 import { initCernereBridge, getAdapter } from './cernere-bridge.js';
+import { CernereComposite } from '@ludiars/cernere-composite';
+import { WebSocket as NodeWebSocket } from 'ws';
 import {
   applyInfisicalCreds, hasInfisicalCreds, missingWantedKeys,
 } from './env-bootstrap.js';
@@ -234,40 +236,51 @@ function hubPublicUrl(c) {
   return `${proto}://${host}`;
 }
 
-app.post('/api/auth/login', async (c) => {
+// ── Cernere Composite SSO ────────────────────────────────────────────────
+//
+// 旧 cernere-login.js (email/password 代理ログイン) は撤去。 代わりに
+// @ludiars/cernere-composite を使い、 Cernere の native login UI (Passkey /
+// OAuth / Password / FIDO2) を popup で開いて auth_code を交換するフローへ。
+// Memoria 側で password を受け付けない (= ログイン処理の独自実装を排除)。
+const composite = new CernereComposite(
+  {
+    cernereUrl:    process.env.CERNERE_BASE_URL    || 'http://localhost:8080',
+    cernereWsUrl:  process.env.CERNERE_WS_URL      || 'ws://localhost:8080/ws/service',
+    serviceCode:   process.env.CERNERE_SERVICE_CODE   || 'memoria-hub',
+    serviceSecret: process.env.CERNERE_SERVICE_SECRET || '',
+    jwtSecret:     process.env.SERVICE_JWT_SECRET     || '',
+    tokenExpiresIn: 60 * 60 * 24, // 24 時間 (= Memoria セッションの感覚に合わせる)
+  },
+  {}, // ServiceAdapterCallbacks (admission push 等は cernere-bridge.js 側で処理)
+  NodeWebSocket, // Node の ws 実装 (browser global WebSocket は無い)
+);
+
+/** popup に渡す Cernere composite login URL を返す。 origin は postMessage の戻り先 */
+app.get('/api/auth/login-url', (c) => {
+  const origin = c.req.query('origin') || hubPublicUrl(c);
+  return c.json({ url: composite.getLoginUrl(origin) });
+});
+
+/** popup から受け取った auth_code を service_token に交換 */
+app.post('/api/auth/exchange', async (c) => {
   const body = await c.req.json().catch(() => null);
-  const email = body?.email?.trim();
-  const password = body?.password;
-  if (!email || !password) return c.json({ error: 'email + password は必須です' }, 400);
-  if (!hasInfisicalCreds()) {
-    return c.json({ error: 'Hub が未設定です (Infisical)' }, 503);
+  const authCode = body?.authCode || body?.code;
+  if (!authCode || typeof authCode !== 'string') {
+    return c.json({ error: 'authCode は必須です' }, 400);
   }
-
-  let login;
   try {
-    login = await cernereLogin(email, password);
+    const r = await composite.exchange(authCode);
+    return c.json({
+      sessionToken: r.serviceToken,
+      user: {
+        userId: r.user.id,
+        displayName: r.user.displayName,
+        role: r.user.role,
+      },
+    });
   } catch (err) {
-    return c.json({ error: err.message, detail: err.detail }, err.status || 502);
+    return c.json({ error: err.message }, 502);
   }
-
-  const accessToken = login.accessToken;
-  const u = login.user || {};
-  let sessionToken = accessToken;
-  try {
-    const pt = await cernereProjectToken(accessToken, hubPublicUrl(c));
-    if (pt?.accessToken) sessionToken = pt.accessToken;
-  } catch (err) {
-    console.warn(`[auth] project-token 取得失敗、 accessToken を session token に転用: ${err.message}`);
-  }
-
-  return c.json({
-    sessionToken,
-    user: {
-      userId: u.id || u.userId || null,
-      displayName: u.displayName || u.name || u.email || email,
-      role: u.role || 'general',
-    },
-  });
 });
 
 // /api/auth/me, /api/auth/logout は authMiddleware に依存するため、

@@ -36,22 +36,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # .env を全部 container に流す (Infisical machine identity + CERNERE_BASE_URL +
+    # MEMORIA_HUB_PUBLIC_URL 等 env-cli の infraKeys を漏れなく渡す)。 個別宣言だと
+    # 新キー追加のたびに docker-compose.yml も触る必要があったが、 env_file で一括。
+    env_file:
+      - .env
     environment:
-      MEMORIA_HUB_PORT: 5280
-      MEMORIA_HUB_BASE: ${MEMORIA_HUB_BASE}
+      # docker compose 経由なら postgres は内部 DNS で参照する (= .env の値を override)
       MEMORIA_PG_URL: postgres://${POSTGRES_USER:-memoria}:${POSTGRES_PASSWORD:-memoria}@postgres:5432/${POSTGRES_DB:-memoria_hub}
       MEMORIA_PG_POOL: 10
-      # service-adapter 接続先。 standalone-dev なら ws://host.docker.internal:8080/ws/service
-      CERNERE_WS_URL: ${CERNERE_WS_URL}
-      CERNERE_SERVICE_CODE: ${CERNERE_SERVICE_CODE:-memoria-hub}
-      CERNERE_SERVICE_SECRET: ${CERNERE_SERVICE_SECRET}
-      SERVICE_JWT_SECRET: ${SERVICE_JWT_SECRET}
-      # Hub の authMiddleware が Bearer JWT を HS256 検証するための共有鍵。
-      # Cernere の JWT_SECRET と必ず同値にする (Infisical 経由で揃えるのが本筋)。
-      CERNERE_JWT_SECRET: ${CERNERE_JWT_SECRET}
-      MEMORIA_HUB_ALLOWED_ORIGINS: ${MEMORIA_HUB_ALLOWED_ORIGINS}
+      # ── 開発時 override: 本番 prod URL (cernere-d.vtn-game.com) は cloudflared
+      # 経由なので、 同じ host で local cernere container が動いていれば直結したい。
+      # 値を override したい時はここをコメント解除。 本番デプロイ時は外す。
+      # CERNERE_BASE_URL: http://host.docker.internal:8080
+      # CERNERE_WS_URL:   ws://host.docker.internal:8080/ws/service
     ports:
       - "${MEMORIA_HUB_HOST_PORT:-5280}:5280"
+    # ── creds 配布の推奨フロー ─────────────────────────────────────────
+    # docker 経由で動かす場合、 host 側で先に env-cli setup を実行する:
+    #   npm run env:setup        # .env.secrets を host に書く
+    #   docker compose up -d --build   # build が .env.secrets を image に焼き込む
+    # 起動後に GET / の setup フォームで更新した creds は container 内のみで
+    # 永続化される (image rebuild で吹き飛ぶ)。 永続更新したいなら env-cli で
+    # host 側の .env.secrets を書き換えてから rebuild する。
 
 volumes:
   memoria-hub-pg:

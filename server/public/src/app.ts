@@ -269,7 +269,7 @@ const state: State = {
   visits: [],
   visitsSelected: new Set<unknown>(),
   visitsRange: '7',
-  trendsRange: '30',
+  trendsRange: '7',
   recommendations: { available: true, running: false, items: [], run: null, reason: '' },
   digSession: null,
   digHistory: [],
@@ -3947,8 +3947,15 @@ async function triggerRecommendationRun() {
   const btn = $('recRunNow');
   if (!btn) return;
   btn.disabled = true;
+  // 既に running 中なら force=true で旧キューを cancel して上書き再実行する。
+  // (= キューが詰まって動かなくなった時に「再実行」 で抜け出せるようにする)
+  const force = !!state.recommendations?.running;
   try {
-    await api('/api/recommendations/run', { method: 'POST' });
+    await api('/api/recommendations/run', {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+      headers: { 'Content-Type': 'application/json' },
+    });
     state.recommendations.running = true;
     renderRecommendations();
     startRecPolling();
@@ -3983,7 +3990,12 @@ function renderRecommendations() {
     return;
   }
   disabled.classList.add('hidden');
-  if (runBtn) runBtn.disabled = rec.running;
+  // running 中でも 「再実行」 で旧キューをキャンセル + 上書き開始できるよう
+  // 押下可能にする。 ラベルは状況に応じて切替。
+  if (runBtn) {
+    runBtn.disabled = false;
+    runBtn.textContent = rec.running ? '↻ 再実行 (キュー上書き)' : 'いま生成 (5–30 分)';
+  }
 
   if (runMeta) {
     runMeta.textContent = rec.run
@@ -4158,6 +4170,11 @@ function renderTrendKeywords(items) {
   }).join('');
 }
 
+// 小数第 2 位を切り上げて第 1 位までに丸める。 5.21 → 5.3 / 5.30 → 5.3。
+function ceilTenth(x: number): string {
+  return (Math.ceil((Number(x) || 0) * 10) / 10).toFixed(1);
+}
+
 function renderTrendWorkHours(items) {
   const el = $('trendWorkHours');
   if (!el) return;
@@ -4170,13 +4187,17 @@ function renderTrendWorkHours(items) {
     ...d,
     hours: Number(d.minutes || 0) / 60,
   }));
-  el.innerHTML = svgHorizontalBar(
+  // 週合計 = 直近 7 日 (日記未生成日は present から落ちる)
+  const last7 = presentHours.slice(-7);
+  const weeklyHours = last7.reduce((s, d) => s + (d.hours || 0), 0);
+  const weeklyLabel = `<div class="trend-weekly-summary">週合計 (直近 ${last7.length} 日): <b>${ceilTenth(weeklyHours)}時間</b></div>`;
+  el.innerHTML = weeklyLabel + svgHorizontalBar(
     presentHours,
     (d) => String(d.date || '').slice(5),
     (d) => Number(d.hours || 0),
     '時間',
     {
-      valueLabel: (v) => `${v.toFixed(1)} 時間`,
+      valueLabel: (v) => `${ceilTenth(v)}時間`,
     }
   );
 }
@@ -4196,35 +4217,130 @@ function wireTaskEditorDueShortcuts() {
 }
 
 function renderTrendGpsWalking(items) {
-  // items: [{date, distance_km, walking_minutes, travel_minutes}]
-  const distEl = $('trendWalkDistance');
-  const minsEl = $('trendWalkMinutes');
-  if (!distEl && !minsEl) return;
+  // items: [{date, distance_km, walking_minutes, travel_minutes,
+  //          home_minutes, away_minutes, away_moving_minutes,
+  //          away_places: [{name, minutes}], away_unknown_minutes}]
+  const calEl = $('trendWalkCalories');
+  const awayEl = $('trendAwayStacked');
+  if (!calEl && !awayEl) return;
 
   const list = items || [];
-  const hasAny = list.some(d => d.distance_km > 0 || d.walking_minutes > 0);
+  const hasAny = list.some(d => d.distance_km > 0 || (d.away_minutes || 0) > 0);
   if (!hasAny) {
-    if (distEl) distEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
-    if (minsEl) minsEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
+    if (calEl) calEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
+    if (awayEl) awayEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
     return;
   }
-  if (distEl) {
-    const data = list.map(d => ({ date: d.date, value: d.distance_km, raw: d }));
-    distEl.innerHTML = renderLineChartSvg(data, {
-      yLabel: (v) => `${v.toFixed(1)}km`,
-      pointLabel: (d) => `${d.date} : ${d.value.toFixed(2)} km (歩行 ${d.raw.walking_minutes} 分 / 移動 ${d.raw.travel_minutes} 分)`,
+
+  // 消費カロリー (徒歩): kcal = METs × 体重kg × 時間h で算出。
+  // 徒歩 = 3.5 METs (moderate)、 時間は walking_minutes / 60。
+  // 体重未登録は 60kg。 距離 (distance_km) は vehicle 含むので使わず、
+  // 速度フィルタ済の walking_minutes / walking_distance_km を根拠にする。
+  if (calEl) {
+    const weightKg = Number(state.config?.user_profile?.weight_kg) || 60;
+    const MET_WALK = 3.5;
+    const data = list.map(d => {
+      const hours = (d.walking_minutes || 0) / 60;
+      const kcal = MET_WALK * weightKg * hours;
+      return { date: d.date, value: kcal, raw: { ...d, weightKg } };
     });
-    attachLineChartTooltip(distEl);
+    calEl.innerHTML = renderLineChartSvg(data, {
+      yLabel: (v) => `${Math.round(v)} kcal`,
+      pointLabel: (d) => `${d.date} : ${d.value.toFixed(0)} kcal (徒歩 ${d.raw.walking_minutes} 分 / ${(d.raw.walking_distance_km || 0).toFixed(2)} km × 体重 ${d.raw.weightKg}kg × 3.5 MET)`,
+    });
+    attachLineChartTooltip(calEl);
   }
-  if (minsEl) {
-    const data = list.map(d => ({ date: d.date, value: d.walking_minutes, raw: d }));
-    minsEl.innerHTML = renderLineChartSvg(data, {
-      yLabel: (v) => `${Math.round(v)}分`,
-      pointLabel: (d) => `${d.date} : 歩行 ${d.value} 分 (距離 ${d.raw.distance_km.toFixed(2)} km / 移動 ${d.raw.travel_minutes} 分)`,
-    });
-    attachLineChartTooltip(minsEl);
+
+  if (awayEl) {
+    awayEl.innerHTML = renderAwayStackedBar(list);
   }
 }
+
+// 自宅以外にいた時間 を 面積 (積み上げ) 棒グラフ で描画する。
+// 各日 = [移動, 場所A, 場所B, ..., 不明] の積み上げ。
+// 場所は出現回数が多い上位 6 件 + 「その他」 に折り畳む。
+function renderAwayStackedBar(list: Loose[]): string {
+  if (!list.length) return '<div class="queue-empty">データなし</div>';
+  // 全期間集計で 主要 6 場所 を決める
+  const placeTotals = new Map<string, number>();
+  for (const d of list) {
+    for (const p of (d.away_places || [])) {
+      placeTotals.set(p.name, (placeTotals.get(p.name) || 0) + (p.minutes || 0));
+    }
+  }
+  const topPlaces = [...placeTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name]) => name);
+
+  // 各日の segment を [移動, 場所1, 場所2, ..., 場所N (= 上位以外+不明)] の順で並べる
+  const segments = ['移動', ...topPlaces, '不明 (場所未登録)'];
+  // 色 palette (面積棒で隣同士を区別できるよう低彩度)
+  const colors = ['#5b9bd5', '#70ad47', '#ed7d31', '#7030a0', '#ffc000', '#264478', '#9e480e', '#a5a5a5'];
+
+  // 各日 stack 値を算出
+  const stacks = list.map(d => {
+    const otherPlaceTotal = (d.away_places || [])
+      .filter(p => !topPlaces.includes(p.name))
+      .reduce((s, p) => s + (p.minutes || 0), 0);
+    const placeBuckets = topPlaces.map(name => {
+      const hit = (d.away_places || []).find(p => p.name === name);
+      return hit ? (hit.minutes || 0) : 0;
+    });
+    const values = [
+      d.away_moving_minutes || 0,
+      ...placeBuckets,
+      (d.away_unknown_minutes || 0) + otherPlaceTotal,
+    ];
+    const total = values.reduce((s, v) => s + v, 0);
+    return { date: d.date, values, total };
+  });
+  const maxTotal = Math.max(1, ...stacks.map(s => s.total));
+
+  // SVG レイアウト
+  const w = 700, padTop = 20, padBottom = 40, padLeft = 80, padRight = 16;
+  const barH = 18, barGap = 4;
+  const innerW = w - padLeft - padRight;
+  const h = padTop + padBottom + stacks.length * (barH + barGap);
+
+  const bars = stacks.map((s, i) => {
+    const y = padTop + i * (barH + barGap);
+    let x = padLeft;
+    const segs = s.values.map((v, j) => {
+      if (v <= 0) return '';
+      const len = (v / maxTotal) * innerW;
+      const seg = `<rect x="${x}" y="${y}" width="${len}" height="${barH}" fill="${colors[j % colors.length]}" data-label="${escapeHtml(`${s.date} ${segments[j]}: ${formatMinutes(v)}`)}"><title>${s.date} ${segments[j]}: ${formatMinutes(v)}</title></rect>`;
+      x += len;
+      return seg;
+    }).join('');
+    const dateLabel = String(s.date || '').slice(5);
+    const totalLabel = s.total > 0 ? formatMinutes(s.total) : '—';
+    return `
+      <g>
+        <text x="${padLeft - 8}" y="${y + barH * 0.72}" text-anchor="end" font-size="11" fill="#666">${escapeHtml(dateLabel)}</text>
+        ${segs}
+        <text x="${x + 4}" y="${y + barH * 0.72}" font-size="11" fill="#666">${escapeHtml(totalLabel)}</text>
+      </g>`;
+  }).join('');
+
+  // 凡例
+  const legend = segments.map((name, j) =>
+    `<span class="away-legend-item"><span class="away-legend-swatch" style="background:${colors[j % colors.length]}"></span>${escapeHtml(name)}</span>`
+  ).join('');
+
+  return `
+    <div class="away-legend">${legend}</div>
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">${bars}</svg>
+  `;
+}
+
+function formatMinutes(min: number): string {
+  const m = Math.round(Number(min) || 0);
+  if (m < 60) return `${m}分`;
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm === 0 ? `${h}時間` : `${h}時間${mm}分`;
+}
+
 
 function renderTrendGithub(payload) {
   const card = $('trendGithubCard');
@@ -4259,7 +4375,7 @@ function renderTrendGithub(payload) {
 function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts: Loose = {}) {
   if (!items.length) return '<div class="queue-empty">データなし</div>';
   const max = Math.max(...items.map(valueFn), 1);
-  const rowH = 22, padTop = 4, padLeft = 130, padRight = 40, w = 460;
+  const rowH = 22, padTop = 4, padLeft = 130, padRight = 60, w = 480;
   const h = padTop * 2 + items.length * rowH;
   const rows = items.map((it, i) => {
     const v = valueFn(it);
@@ -4268,12 +4384,15 @@ function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts: Loose = {})
     const label = String(labelFn(it)).slice(0, 18);
     const attr = opts.rowAttr ? opts.rowAttr(it) : '';
     const rowClass = opts.rowClass || '';
+    // opts.valueLabel(v) で表示テキストを差し替えられるようにする
+    // (= 「5.3時間」 のように単位付き / 切り上げ整形)
+    const valText = opts.valueLabel ? opts.valueLabel(v) : String(v);
     return `
       <g class="bar-row ${rowClass}" ${attr}>
         <rect class="bar-hit" x="0" y="${y}" width="${w}" height="${rowH}" fill="transparent" />
         <text class="label" x="${padLeft - 8}" y="${y + 14}" text-anchor="end">${escapeHtml(label)}</text>
         <rect class="bar ${klass}" x="${padLeft}" y="${y + 4}" width="${len}" height="14" rx="2" />
-        <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${v}</text>
+        <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${escapeHtml(valText)}</text>
       </g>
     `;
   }).join('');
@@ -5240,6 +5359,8 @@ async function selectDataSource(url) {
     if (j.needs_login) {
       const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
       if (urlInput && j.url) urlInput.value = j.url;
+      const urlDisplay = $('multiLoginUrlDisplay');
+      if (urlDisplay && j.url) urlDisplay.textContent = j.url;
       switchTab('multi');
       return;
     }
@@ -5332,9 +5453,11 @@ function renderMultiServersList(s) {
 async function multiServerAction(action, url) {
   if (action === 'connect') {
     // Cernere ログインは Multi タブのフォームで行う (= OAuth dance 廃止)。
-    // URL を pre-fill しておいてタブを切り替える。
+    // URL を hidden field と display に流して タブを切り替える。
     const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
     if (urlInput) urlInput.value = url;
+    const urlDisplay = $('multiLoginUrlDisplay');
+    if (urlDisplay) urlDisplay.textContent = url;
     switchTab('multi');
     return;
   }
@@ -8884,7 +9007,9 @@ $('wlGeminiWebContent')?.addEventListener('keydown', (e) => {
 function refreshMultiTabVisibility() {
   const visible = !!state.multi?.connected;
   document.querySelectorAll('.tab-multi-only').forEach(t => { (t as HTMLElement).hidden = !visible; });
-  if (!visible && state.tab === 'multi') switchTab('database');
+  // 未接続でも multi タブに居る場合 (= Hub login をしようとしている) はそのまま居らせる。
+  // 旧仕様では database へ自動リダイレクトしていたが、 二層設計では multi タブは
+  // login フォーム専用ビューなので、 未接続 = 表示すべき状態 になる。
   if (visible) {
     const badge = $('multiUserBadge');
     if (badge) badge.textContent = `🌐 ${state.multi.user.name} (${state.multi.user.role})`;
@@ -8895,30 +9020,27 @@ function refreshMultiTabVisibility() {
 // Hub ログインフォームを出す。 旧 browse 部 (#multiMainContent) は常に隠す。
 async function loadMulti() {
   refreshMultiTabVisibility();
-  let infiConfigured = true;
-  try {
-    const st = await api('/api/setup/infisical/status') as { configured?: boolean };
-    infiConfigured = st.configured !== false;
-  } catch { infiConfigured = true; }
-  const setupEl = $('multiInfisicalSetup');
+  // Local Memoria は Infisical を使わないので、 旧 multiInfisicalSetup の
+  // 出し分けは廃止。 Hub ログインフォームを常に表示する。
   const loginEl = $('multiCernereLogin');
   const mainEl = $('multiMainContent');
   mainEl?.classList.add('hidden');
-  if (!infiConfigured) {
-    setupEl?.classList.remove('hidden');
-    loginEl?.classList.add('hidden');
-    return;
-  }
-  setupEl?.classList.add('hidden');
   loginEl?.classList.remove('hidden');
-  // Hub URL 欄に登録済 server を pre-fill
+  // Hub URL は hidden field に保持。 表示は #multiLoginUrlDisplay に流す。
   const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+  const urlDisplay = $('multiLoginUrlDisplay');
   const firstUrl = state.multi?.servers?.[0]?.url;
   if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
+  if (urlDisplay) urlDisplay.textContent = (urlInput?.value || firstUrl || '— (Hub が未登録)');
 }
 
 // Hub ログインフォーム (#multiView 内) の送信。 成功したら selectDataSource で
 // その Hub を Multi モードのデータソースに切り替える。
+// Cernere Composite SSO popup flow.
+// 1) Local /api/multi/login-url で Cernere popup URL を取得
+// 2) window.open() で popup を開く
+// 3) postMessage({ type: 'cernere:auth', authCode }) を Cernere popup から受け取る
+// 4) Local /api/multi/exchange に authCode を渡して session を確立
 document.getElementById('multiLoginSubmit')?.addEventListener('click', async () => {
   const btn = $('multiLoginSubmit') as HTMLButtonElement | null;
   const msg = $('multiLoginMsg');
@@ -8928,69 +9050,85 @@ document.getElementById('multiLoginSubmit')?.addEventListener('click', async () 
     msg.style.color = ok ? '#1f7a1f' : '#c0392b';
     msg.hidden = false;
   };
-  const url = ($('multiLoginUrl') as HTMLInputElement).value.trim();
-  const email = ($('multiLoginEmail') as HTMLInputElement).value.trim();
-  const password = ($('multiLoginPassword') as HTMLInputElement).value;
-  if (!url || !email || !password) {
-    return setMsg('⚠ Hub URL / メールアドレス / パスワードは必須');
-  }
+  const url = (($('multiLoginUrl') as HTMLInputElement)?.value || state.multi?.servers?.[0]?.url || '').trim().replace(/\/$/, '');
+  if (!url) return setMsg('⚠ Hub が登録されていません。 設定タブから Hub を追加してください');
   if (btn) { btn.disabled = true; btn.textContent = 'ログイン中…'; }
+  let popup: Window | null = null;
+  let onMessage: ((ev: MessageEvent) => void) | null = null;
+  let popupWatch: number | null = null;
+  const cleanup = () => {
+    if (onMessage) window.removeEventListener('message', onMessage);
+    if (popupWatch != null) clearInterval(popupWatch);
+    if (popup && !popup.closed) { try { popup.close(); } catch { /* ignore */ } }
+    if (btn) { btn.disabled = false; btn.textContent = '🔐 Cernere でログイン'; }
+  };
   try {
-    const res = await fetch('/api/multi/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, email, password }),
+    // 1. Cernere の popup URL を Local server 経由で取得 (= Hub に問い合わせ)
+    const luQs = `url=${encodeURIComponent(url)}&origin=${encodeURIComponent(window.location.origin)}`;
+    const luRes = await fetch(`/api/multi/login-url?${luQs}`);
+    const luData = await luRes.json() as { url?: string; error?: string };
+    if (!luRes.ok || !luData.url) {
+      setMsg(`⚠ ${luData.error || `login-url 取得失敗: ${luRes.status}`}`);
+      cleanup();
+      return;
+    }
+    // 2. popup を中央寄せで開く (500x700)
+    const w = 500, h = 700;
+    const x = Math.max(0, window.screenX + (window.outerWidth - w) / 2);
+    const y = Math.max(0, window.screenY + (window.outerHeight - h) / 2);
+    popup = window.open(
+      luData.url, 'cernere-login',
+      `width=${w},height=${h},left=${x},top=${y}`,
+    );
+    if (!popup) {
+      setMsg('⚠ popup が開けませんでした (ブラウザのポップアップブロック?)');
+      cleanup();
+      return;
+    }
+    setMsg('Cernere ログインを popup で開きました');
+
+    // 3. postMessage で authCode を受け取る
+    const expectedOrigin = new URL(luData.url).origin;
+    await new Promise<void>((resolve, reject) => {
+      onMessage = (ev: MessageEvent) => {
+        if (ev.origin !== expectedOrigin) return;
+        const m = ev.data as { type?: string; authCode?: string };
+        if (m?.type !== 'cernere:auth' || !m.authCode) return;
+        (async () => {
+          try {
+            const exRes = await fetch('/api/multi/exchange', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url, authCode: m.authCode }),
+            });
+            const exData = await exRes.json() as { user?: { displayName?: string }; error?: string };
+            if (!exRes.ok) {
+              setMsg(`⚠ ${exData.error || `exchange 失敗: ${exRes.status}`}`);
+              return reject(new Error('exchange failed'));
+            }
+            setMsg(`✓ ${exData.user?.displayName || ''} としてログインしました`, true);
+            await refreshMultiStatus();
+            setTimeout(() => { void selectDataSource(url); }, 400);
+            resolve();
+          } catch (e) { reject(e); }
+        })();
+      };
+      window.addEventListener('message', onMessage);
+      // popup が閉じられたら abort
+      popupWatch = window.setInterval(() => {
+        if (popup && popup.closed) reject(new Error('popup closed by user'));
+      }, 500);
     });
-    const j = await res.json() as { user?: { displayName?: string }; error?: string };
-    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
-    setMsg(`✓ ${j.user?.displayName || ''} としてログインしました`, true);
-    ($('multiLoginPassword') as HTMLInputElement).value = '';
-    await refreshMultiStatus();
-    // ログイン成功 → そのままその Hub をデータソースに切り替える (Multi モードへ)。
-    setTimeout(() => { void selectDataSource(url); }, 400);
   } catch (e: unknown) {
     setMsg(`⚠ ${(e as Error).message}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'ログイン'; }
+    cleanup();
   }
 });
 
 // Infisical setup フォーム (Multi view 内) の送信。 成功したら loadMulti を
 // 呼び直して通常の Hub 内容に切り替える。
-document.getElementById('infiSetupSubmit')?.addEventListener('click', async () => {
-  const btn = $('infiSetupSubmit') as HTMLButtonElement | null;
-  const msg = $('infiSetupMsg');
-  const setMsg = (text: string, ok = false) => {
-    if (!msg) return;
-    msg.textContent = text;
-    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
-    msg.hidden = false;
-  };
-  const body = {
-    siteUrl: ($('infiSiteUrl') as HTMLInputElement).value.trim(),
-    projectId: ($('infiProjectId') as HTMLInputElement).value.trim(),
-    environment: ($('infiEnvironment') as HTMLInputElement).value.trim() || 'dev',
-    clientId: ($('infiClientId') as HTMLInputElement).value.trim(),
-    clientSecret: ($('infiClientSecret') as HTMLInputElement).value.trim(),
-  };
-  if (!body.siteUrl || !body.projectId || !body.clientId || !body.clientSecret) {
-    return setMsg('⚠ Site URL / Project ID / Client ID / Client Secret は必須');
-  }
-  if (btn) { btn.disabled = true; btn.textContent = '接続中…'; }
-  try {
-    const res = await fetch('/api/setup/infisical', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await res.json() as { injected?: number; error?: string };
-    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
-    setMsg(`✓ ${j.injected ?? 0} 件の secret を取得しました`, true);
-    setTimeout(() => { void loadMulti(); }, 900);
-  } catch (e: unknown) {
-    setMsg(`⚠ ${(e as Error).message}`);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '接続して保存'; }
-  }
-});
+// Local Memoria は Infisical を直接知らない設計に統一済 — 旧 infiSetupSubmit
+// ハンドラ + /api/setup/infisical 経路は撤去された。
 
 // First paint: surface the multi tab if we're already connected.
 refreshMultiTabVisibility();
