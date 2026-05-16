@@ -683,6 +683,23 @@
         <ul id="appsList" class="dict-list pin-grid"></ul>
       </div>
 
+      <!-- 🛡 既知エンドポイント — packet 監視で接続先を識別するための辞書一覧。
+           内蔵 well-known 辞書 + ユーザ登録の 2 セクション。 編集は登録分だけ
+           可能 (内蔵分はソース内 const)。 -->
+      <div id="endpointsView" class="hidden">
+        <div class="dict-bar">
+          <span id="endpointsCount" class="muted"></span>
+          <span class="grow"></span>
+          <button id="endpointsRefresh" class="ghost" title="再読込">↻</button>
+        </div>
+        <h4>📕 内蔵 well-known 辞書 (read-only)</h4>
+        <p class="muted" style="font-size:12px">パケット監視 タブで接続先を識別するための内蔵リスト。 該当する接続先には自動的にサービス名バッジが付きます。</p>
+        <div id="endpointsWellKnown" class="endpoints-list"></div>
+        <h4 style="margin-top:14px">✓ あなたが登録した宛先</h4>
+        <p class="muted" style="font-size:12px">🛡 パケット監視 タブの「＋ 登録」 で追加した宛先。 ここから削除もできます。</p>
+        <div id="endpointsRegistered" class="endpoints-list"></div>
+      </div>
+
       <div id="databaseView" class="hidden">
         <nav class="worklog-subtabs" id="databaseSubtabs">
           <button class="wl-subtab active" data-db-sub="bookmarks">📚 ブックマーク</button>
@@ -690,6 +707,7 @@
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
+          <button class="wl-subtab" data-db-sub="endpoints">🛡 既知エンドポイント</button>
         </nav>
       </div>
 

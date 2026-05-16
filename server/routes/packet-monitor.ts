@@ -25,6 +25,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as dns from 'node:dns/promises';
 import { spawn } from 'node:child_process';
+import { WELL_KNOWN_RULES, lookupFriendlyName } from '../lib/packet-known-endpoints.js';
 
 interface Meta {
   Friendly: string;
@@ -50,6 +51,9 @@ interface OutboundGroup {
   hint: string;
   /** 名前を PTR (= 逆引き) から取った場合 true。 UI で 「(PTR)」 表示する */
   derived_from_ptr: boolean;
+  /** well-known 辞書でマッチしたサービス名 (= "Anthropic" / "Cloudflare" 等)。
+   *  null ならマッチなし。 */
+  friendly_name: string | null;
   /** この group 内に集まった (proto, ip, port) のユニーク一覧。 count 降順 */
   remotes: FlowRemote[];
   /** group 内の全 packet 数 */
@@ -66,6 +70,7 @@ interface InboundGroup {
   key: string;
   is_domain: boolean;
   remote_name: string;      // PTR (空なら is_domain=false)
+  friendly_name: string | null;
   remotes: FlowRemote[];
   total_count: number;
   unique_ips: number;
@@ -317,6 +322,7 @@ async function summarizeAdapter(
           is_domain: !!hint || !!ptr,
           hint: hint || '',
           derived_from_ptr: !hint && !!ptr,
+          friendly_name: null,
           remotes: [],
           total_count: 0,
           unique_ips: 0,
@@ -335,6 +341,12 @@ async function summarizeAdapter(
       // is_localhost: 全 remote が link-local / loopback / APIPA に該当する場合
       g.is_localhost = g.remotes.length > 0
         && g.remotes.every((r) => localhostCidrs(r.remote_ip));
+      // well-known 辞書を引いてサービス名 (Anthropic / Cloudflare 等) を付ける
+      g.friendly_name = lookupFriendlyName({
+        hint: g.hint,
+        ptr: g.derived_from_ptr ? g.key : '',
+        remote_ips: g.remotes.map((r) => r.remote_ip).filter(Boolean),
+      });
     }
     out.outbound = [...groupMap.values()]
       .sort((a, b) => b.total_count - a.total_count)
@@ -376,6 +388,7 @@ async function summarizeAdapter(
           key: groupKey,
           is_domain: !!name,
           remote_name: name,
+          friendly_name: null,
           remotes: [],
           total_count: 0,
           unique_ips: 0,
@@ -393,6 +406,11 @@ async function summarizeAdapter(
       g.registered = registered.has(g.key);
       g.is_localhost = g.remotes.length > 0
         && g.remotes.every((r) => localhostCidrs(r.remote_ip));
+      g.friendly_name = lookupFriendlyName({
+        hint: '',
+        ptr: g.remote_name || '',
+        remote_ips: g.remotes.map((r) => r.remote_ip).filter(Boolean),
+      });
     }
     out.inbound = [...groupMap.values()]
       .sort((a, b) => b.total_count - a.total_count)
@@ -594,6 +612,11 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
       adapters,
       generated_at: new Date().toISOString(),
     } satisfies PacketMonitorSummary);
+  });
+
+  // ── well-known エンドポイント 辞書 (= 内蔵 IP/PTR/host 辞書、 read-only) ──
+  r.get('/api/packet-monitor/well-known', (c: Context) => {
+    return c.json({ items: WELL_KNOWN_RULES });
   });
 
   // ── 登録済み宛先 (= ユーザが「確認した OK」 と印を付けたドメイン / IP) ──

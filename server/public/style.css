@@ -6913,6 +6913,36 @@ dialog.loc-edit-modal[open] {
   border: 1px solid var(--border);
   font-size: 10px; font-family: monospace; vertical-align: middle;
 }
+/* well-known 辞書でマッチしたサービス名 (Anthropic / Cloudflare 等) */
+.packetmon-friendly {
+  display: inline-block; padding: 1px 8px; border-radius: 12px;
+  background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 600; vertical-align: middle;
+}
+
+/* ── 🛡 既知エンドポイント sub-tab ─────────────────────────────── */
+.endpoints-list { margin: 4px 0 12px; }
+.endpoints-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.endpoints-table th, .endpoints-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.endpoints-table th {
+  text-align: left; color: var(--muted); font-weight: 600;
+  background: var(--bg);
+}
+.endpoints-namecell { width: 28%; }
+.endpoints-typecell { width: 18%; }
+.endpoints-name { font-weight: 600; color: var(--accent); }
+.endpoints-type {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  background: var(--bg); border: 1px solid var(--border);
+  font-size: 10px; color: var(--muted);
+}
+.endpoints-delete-btn { padding: 2px 8px; font-size: 11px; }
 
 /* inspect (= on-demand tshark の出力) パネル */
 .packetmon-inspect-panel {

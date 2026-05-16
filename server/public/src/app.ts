@@ -8087,6 +8087,7 @@ const DB_SUB_VIEWS = {
   domain: 'domainView',
   workplace: 'workplaceView',
   apps: 'appsView',
+  endpoints: 'endpointsView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -8120,6 +8121,7 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
+  if (sub === 'endpoints') loadKnownEndpoints().catch(console.warn);
 }
 
 interface ApplicationCatalogRow {
@@ -8143,6 +8145,108 @@ const APP_KIND_LABELS: Record<string, string> = {
   creative: '🎨 クリエイティブ',
   other: '❓ その他',
 };
+
+// ── 🛡 既知エンドポイント (= packet 監視で接続先を識別する辞書一覧) ──
+// 内蔵 well-known 辞書 + ユーザ登録 (packet-monitor タブの「＋ 登録」) の 2 セクション。
+
+interface WellKnownRule {
+  name: string;
+  match:
+    | { type: 'host_suffix'; value: string }
+    | { type: 'host_exact';  value: string }
+    | { type: 'ptr_suffix';  value: string }
+    | { type: 'ip_cidr';     value: string };
+}
+interface RegisteredEndpointEntry { key: string; note: string; added_at: string }
+
+async function loadKnownEndpoints() {
+  const wkEl = document.getElementById('endpointsWellKnown');
+  const regEl = document.getElementById('endpointsRegistered');
+  const countEl = document.getElementById('endpointsCount');
+  if (!wkEl || !regEl) return;
+  wkEl.innerHTML = '<p class="muted">読み込み中…</p>';
+  regEl.innerHTML = '<p class="muted">読み込み中…</p>';
+  try {
+    const [wkRes, regRes] = await Promise.all([
+      api('/api/packet-monitor/well-known') as Promise<{ items: WellKnownRule[] }>,
+      api('/api/packet-monitor/registered') as Promise<{ items: RegisteredEndpointEntry[] }>,
+    ]);
+    renderKnownEndpoints(wkRes.items || [], regRes.items || []);
+    if (countEl) countEl.textContent = `内蔵 ${wkRes.items?.length || 0} 件 / 登録 ${regRes.items?.length || 0} 件`;
+  } catch (e) {
+    wkEl.innerHTML = `<p class="muted">取得失敗: ${escapeHtml((e as Error).message)}</p>`;
+    regEl.innerHTML = '';
+  }
+}
+
+function renderKnownEndpoints(wellKnown: WellKnownRule[], registered: RegisteredEndpointEntry[]) {
+  const wkEl = document.getElementById('endpointsWellKnown');
+  const regEl = document.getElementById('endpointsRegistered');
+  if (!wkEl || !regEl) return;
+
+  // 同じ name の行は最初の name セルだけに名前を見せる (= 「Cloudflare には 5 条件」 を視覚的に)
+  const groupedByName = new Map<string, WellKnownRule[]>();
+  for (const r of wellKnown) {
+    const arr = groupedByName.get(r.name) || [];
+    arr.push(r);
+    groupedByName.set(r.name, arr);
+  }
+  const wkRows: string[] = [];
+  for (const [name, rules] of groupedByName) {
+    rules.forEach((r, idx) => {
+      const tname = r.match.type;
+      const v = r.match.value;
+      const typeLabel = tname === 'host_suffix' ? 'host サフィックス'
+        : tname === 'host_exact' ? 'host 完全一致'
+        : tname === 'ptr_suffix' ? 'PTR サフィックス'
+        : 'IP CIDR';
+      const nameCell = idx === 0
+        ? `<span class="endpoints-name">${escapeHtml(name)}</span>${rules.length > 1 ? ` <span class="muted">×${rules.length}</span>` : ''}`
+        : '';
+      wkRows.push(`<tr>
+        <td class="endpoints-namecell">${nameCell}</td>
+        <td class="endpoints-typecell"><span class="endpoints-type">${typeLabel}</span></td>
+        <td class="endpoints-valcell"><code>${escapeHtml(v)}</code></td>
+      </tr>`);
+    });
+  }
+  wkEl.innerHTML = wellKnown.length === 0
+    ? '<p class="muted">内蔵 well-known 辞書は空です</p>'
+    : `<table class="endpoints-table">
+        <thead><tr><th>サービス名</th><th>マッチ種別</th><th>値</th></tr></thead>
+        <tbody>${wkRows.join('')}</tbody>
+      </table>`;
+
+  if (registered.length === 0) {
+    regEl.innerHTML = '<p class="muted">まだ登録された宛先はありません。 🛡 パケット監視 タブで「＋ 登録」 を押すとここに溜まります。</p>';
+    return;
+  }
+  regEl.innerHTML = `<table class="endpoints-table">
+    <thead><tr><th>宛先 (ドメイン / IP)</th><th>メモ</th><th>登録時刻</th><th></th></tr></thead>
+    <tbody>${registered.map((e) => `<tr>
+      <td><code>${escapeHtml(e.key)}</code></td>
+      <td class="muted">${escapeHtml(e.note || '')}</td>
+      <td class="muted" style="font-size:11px">${escapeHtml(fmtDate(e.added_at))}</td>
+      <td><button class="ghost endpoints-delete-btn" type="button" data-key="${escapeHtml(e.key)}" title="登録を削除">削除</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+document.getElementById('endpointsRefresh')?.addEventListener('click', () => void loadKnownEndpoints());
+document.getElementById('endpointsRegistered')?.addEventListener('click', async (ev) => {
+  const btn = (ev.target as HTMLElement).closest('.endpoints-delete-btn') as HTMLElement | null;
+  if (!btn) return;
+  const key = btn.dataset.key || '';
+  if (!key) return;
+  if (!confirm(`「${key}」 の登録を削除しますか?`)) return;
+  try {
+    await api(`/api/packet-monitor/registered/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    flashToast(`✓ 「${key}」 を削除しました`);
+    void loadKnownEndpoints();
+  } catch (e) {
+    flashToast(`⚠ 削除失敗: ${(e as Error).message}`);
+  }
+});
 
 // ── アプリカタログ (カード形式) ─────────────────────────────────────
 // ドメインタブと同じ pin-grid カードレイアウト。 詳細編集は appsDetail モーダル。
@@ -11439,6 +11543,7 @@ interface PacketMonOutboundGroup {
   is_domain: boolean;
   hint: string;
   derived_from_ptr: boolean;
+  friendly_name: string | null;
   remotes: PacketMonFlowRemote[];
   total_count: number;
   unique_ips: number;
@@ -11449,6 +11554,7 @@ interface PacketMonInboundGroup {
   key: string;
   is_domain: boolean;
   remote_name: string;
+  friendly_name: string | null;
   remotes: PacketMonFlowRemote[];
   total_count: number;
   unique_ips: number;
@@ -11646,9 +11752,12 @@ function renderPacketMonitor(data: PacketMonSummary) {
       const ptrBadge = g.derived_from_ptr
         ? ' <span class="packetmon-ptr-badge" title="逆引き PTR から推定したドメイン (= SNI/HTTP host/DNS query 由来ではない)">PTR</span>'
         : '';
+      const friendlyBadge = g.friendly_name
+        ? ` <span class="packetmon-friendly" title="well-known エンドポイント辞書のマッチ">${escapeHtml(g.friendly_name)}</span>`
+        : '';
       const headLabel = g.is_domain
-        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>${ptrBadge}`
-        : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>`;
+        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>${ptrBadge}${friendlyBadge}`
+        : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>${friendlyBadge}`;
       const ipsLabel2 = g.unique_ips > 1
         ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
         : '';
@@ -11679,9 +11788,12 @@ function renderPacketMonitor(data: PacketMonSummary) {
     function inboundGroupHtml(g: PacketMonInboundGroup): string {
       const expKey = `in|${a.adapter}|${g.key}`;
       const expanded = packetmonExpanded.has(expKey);
+      const friendlyBadge = g.friendly_name
+        ? ` <span class="packetmon-friendly" title="well-known エンドポイント辞書のマッチ">${escapeHtml(g.friendly_name)}</span>`
+        : '';
       const headLabel = g.is_domain
-        ? `<span class="packetmon-ptr">${escapeHtml(g.key)}</span>`
-        : `<span class="packetmon-src">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>`;
+        ? `<span class="packetmon-ptr">${escapeHtml(g.key)}</span>${friendlyBadge}`
+        : `<span class="packetmon-src">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>${friendlyBadge}`;
       const ipsLabel2 = g.unique_ips > 1
         ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
         : '';
