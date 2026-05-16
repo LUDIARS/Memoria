@@ -250,7 +250,7 @@ app.route('/', makeMultiRouter({
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
 app.route('/', makeReviewRouter({ db }));
 app.route('/', makeRepoRouter({ db }));
-app.route('/', makePacketMonitorRouter());
+app.route('/', makePacketMonitorRouter({ dataDir: DATA_DIR }));
 app.route('/', makeWeatherRouter({ db }));
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));

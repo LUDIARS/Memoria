@@ -11441,6 +11441,8 @@ interface PacketMonOutboundGroup {
   remotes: PacketMonFlowRemote[];
   total_count: number;
   unique_ips: number;
+  registered: boolean;
+  is_localhost: boolean;
 }
 interface PacketMonInboundGroup {
   key: string;
@@ -11449,15 +11451,27 @@ interface PacketMonInboundGroup {
   remotes: PacketMonFlowRemote[];
   total_count: number;
   unique_ips: number;
+  registered: boolean;
+  is_localhost: boolean;
 }
 interface PacketMonAdapter {
   adapter: string;
   alias: string;
+  adapter_index: number;
   local_ips: string[];
   packet_counts: { outbound: number; inbound: number; self_loop: number; off_adapter: number };
   outbound: PacketMonOutboundGroup[];
   inbound: PacketMonInboundGroup[];
   outbound_hints: Array<{ hint: string; count: number }>;
+}
+interface PacketMonInspectResult {
+  target: string;
+  adapter_index: number;
+  bpf_filter: string;
+  display_filter: string;
+  packets: number;
+  text: string;
+  error: string | null;
 }
 interface PacketMonSummary {
   log_root: string | null;
@@ -11470,6 +11484,13 @@ interface PacketMonSummary {
 // 折り畳み: 「あるアダプタの group key を 展開中」 にしている set。 同じ
 // セッション内では再描画後も状態を保持する。
 const packetmonExpanded: Set<string> = new Set();
+// 「中身を見る」 を押した group の inspect 結果。 summary 更新で破棄する。
+// key = `${adapter_index}|${target}`
+const packetmonInspectShown: Set<string> = new Set();
+const packetmonInspectCache: Map<string, PacketMonInspectResult> = new Map();
+// 最後に fetch した summary。 inspect のトグル / 結果反映で UI を再描画する
+// 際に再 fetch せず使い回す。 60s auto refresh / 手動更新で上書き。
+let _lastPacketmonSummary: PacketMonSummary | null = null;
 // 60s ごとの auto refresh は タブが active な間だけ動かす。
 let _packetmonAutoTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -11493,14 +11514,69 @@ async function loadPacketMonitor(opts: { silent?: boolean } = {}) {
   const statusEl = document.getElementById('packetmonStatus');
   if (statusEl && !opts.silent) statusEl.textContent = '読み込み中…';
   try {
+    // summary 更新で inspect 表示状態もリセット (= 「中身はメモリに置き、 更新に合わせて破棄」)
+    packetmonInspectShown.clear();
+    packetmonInspectCache.clear();
     const qs = `since_minutes=${encodeURIComponent(since)}&top_n=${encodeURIComponent(topN)}&resolve_ptr=${resolve}`;
     const apiFn = opts.silent ? apiSilent : api;
     const r = await apiFn(`/api/packet-monitor/summary?${qs}`) as PacketMonSummary;
+    _lastPacketmonSummary = r;
     renderPacketMonitor(r);
     startPacketmonAutoRefresh();
   } catch (e) {
     if (statusEl) statusEl.textContent = `読み込みエラー: ${(e as Error).message}`;
   }
+}
+
+/** 最後の summary を使って再描画 (= 再 fetch しない / inspect 状態は維持)。 */
+function rerenderPacketMonitor() {
+  if (_lastPacketmonSummary) renderPacketMonitor(_lastPacketmonSummary);
+}
+
+async function registerPacketmonDomain(key: string) {
+  if (!key) return;
+  const note = prompt(`「${key}」 を「確認済」 として登録します。 メモ (任意):`, '') ?? '';
+  try {
+    await api('/api/packet-monitor/registered', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, note }),
+    });
+    flashToast(`✓ 「${key}」 を登録しました`);
+    // 登録結果は再 fetch しないと反映できない (registered フラグ算出はサーバ)。
+    void loadPacketMonitor({ silent: true });
+  } catch (e) {
+    flashToast(`⚠ 登録失敗: ${(e as Error).message}`);
+  }
+}
+
+async function inspectPacketmonTarget(target: string, adapterIndex: number) {
+  if (!target) return;
+  const key = `${adapterIndex}|${target}`;
+  if (packetmonInspectShown.has(key)) {
+    // 2 回目クリックで閉じる
+    packetmonInspectShown.delete(key);
+    packetmonInspectCache.delete(key);
+    rerenderPacketMonitor();
+    return;
+  }
+  packetmonInspectShown.add(key);
+  packetmonInspectCache.delete(key);
+  rerenderPacketMonitor();  // ローディング行を出す
+  try {
+    const r = await api('/api/packet-monitor/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, adapter_index: adapterIndex, max_packets: 30, max_seconds: 5 }),
+    }) as { item: PacketMonInspectResult };
+    packetmonInspectCache.set(key, r.item);
+  } catch (e) {
+    packetmonInspectCache.set(key, {
+      target, adapter_index: adapterIndex, bpf_filter: '', display_filter: '',
+      packets: 0, text: '', error: (e as Error).message,
+    });
+  }
+  rerenderPacketMonitor();
 }
 
 function renderPacketMonitor(data: PacketMonSummary) {
@@ -11546,7 +11622,24 @@ function renderPacketMonitor(data: PacketMonSummary) {
       }).join('');
     }
 
-    function outboundGroupHtml(g: PacketMonOutboundGroup, idx: number): string {
+    // group の右側に出すアクション (登録 / 中身) ボタン。 localhost / 登録済は出さない。
+    function groupActions(g: { key: string; is_domain: boolean; registered: boolean; is_localhost: boolean }, direction: 'out' | 'in'): string {
+      if (g.is_localhost) return ''; // localhost は対象外
+      const parts: string[] = [];
+      if (g.is_domain && !g.registered) {
+        parts.push(`<button type="button" class="ghost packetmon-register-btn" data-key="${escapeHtml(g.key)}" title="このドメインを「確認済」 として登録">＋ 登録</button>`);
+      } else if (g.registered) {
+        parts.push(`<span class="packetmon-badge packetmon-badge-ok" title="登録済">✓ 登録済</span>`);
+      } else {
+        parts.push(`<span class="packetmon-badge packetmon-badge-unknown" title="ドメイン未取得">? 不明</span>`);
+      }
+      if (!g.registered) {
+        parts.push(`<button type="button" class="ghost packetmon-inspect-btn" data-target="${escapeHtml(g.key)}" data-adapter-index="${a.adapter_index}" data-direction="${direction}" title="この宛先のパケットを on-demand で 5 秒キャプチャして中身を見る">🔍 中身</button>`);
+      }
+      return `<span class="packetmon-group-actions">${parts.join('')}</span>`;
+    }
+
+    function outboundGroupHtml(g: PacketMonOutboundGroup, _idx: number): string {
       const expKey = `out|${a.adapter}|${g.key}`;
       const expanded = packetmonExpanded.has(expKey);
       const headLabel = g.is_domain
@@ -11557,18 +11650,25 @@ function renderPacketMonitor(data: PacketMonSummary) {
         : '';
       const protos = new Set(g.remotes.map((r) => r.proto));
       const protoLabel = [...protos].slice(0, 3).join(', ') + (protos.size > 3 ? ' …' : '');
+      const inspectKey = `${a.adapter_index}|${g.key}`;
+      const inspectShown = packetmonInspectShown.has(inspectKey);
+      const inspectCached = packetmonInspectCache.get(inspectKey);
       return `<div class="packetmon-group ${expanded ? 'is-expanded' : ''}" data-expkey="${escapeHtml(expKey)}">
-        <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
-          <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
-          <span class="packetmon-count">${g.total_count}</span>
-          ${headLabel}
-          ${ipsLabel2}
-          <span class="muted">· ${escapeHtml(protoLabel)}</span>
-        </button>
+        <div class="packetmon-group-row">
+          <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
+            <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+            <span class="packetmon-count">${g.total_count}</span>
+            ${headLabel}
+            ${ipsLabel2}
+            <span class="muted">· ${escapeHtml(protoLabel)}</span>
+          </button>
+          ${groupActions(g, 'out')}
+        </div>
         ${expanded ? `<table class="packetmon-table packetmon-group-detail">
           <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
           <tbody>${detailRowsHtml(g.remotes)}</tbody>
         </table>` : ''}
+        ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
       </div>`;
     }
 
@@ -11583,18 +11683,43 @@ function renderPacketMonitor(data: PacketMonSummary) {
         : '';
       const protos = new Set(g.remotes.map((r) => r.proto));
       const protoLabel = [...protos].slice(0, 3).join(', ') + (protos.size > 3 ? ' …' : '');
+      const inspectKey = `${a.adapter_index}|${g.key}`;
+      const inspectShown = packetmonInspectShown.has(inspectKey);
+      const inspectCached = packetmonInspectCache.get(inspectKey);
       return `<div class="packetmon-group ${expanded ? 'is-expanded' : ''}" data-expkey="${escapeHtml(expKey)}">
-        <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
-          <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
-          <span class="packetmon-count">${g.total_count}</span>
-          ${headLabel}
-          ${ipsLabel2}
-          <span class="muted">· ${escapeHtml(protoLabel)}</span>
-        </button>
+        <div class="packetmon-group-row">
+          <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
+            <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+            <span class="packetmon-count">${g.total_count}</span>
+            ${headLabel}
+            ${ipsLabel2}
+            <span class="muted">· ${escapeHtml(protoLabel)}</span>
+          </button>
+          ${groupActions(g, 'in')}
+        </div>
         ${expanded ? `<table class="packetmon-table packetmon-group-detail">
           <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
           <tbody>${detailRowsHtml(g.remotes)}</tbody>
         </table>` : ''}
+        ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
+      </div>`;
+    }
+
+    function inspectPanelHtml(key: string, r: PacketMonInspectResult | undefined): string {
+      if (!r) {
+        return `<div class="packetmon-inspect-panel"><p class="muted">読み込み中… (tshark で 5 秒キャプチャ中)</p></div>`;
+      }
+      if (r.error) {
+        return `<div class="packetmon-inspect-panel">
+          <p class="muted" style="color:#c0392b">⚠ ${escapeHtml(r.error)}</p>
+          <p class="muted" style="font-size:11px">filter: BPF=${escapeHtml(r.bpf_filter)} / display=${escapeHtml(r.display_filter)}</p>
+        </div>`;
+      }
+      return `<div class="packetmon-inspect-panel">
+        <div class="packetmon-inspect-meta muted">
+          ${r.packets} 件 / BPF=${escapeHtml(r.bpf_filter)} / display=${escapeHtml(r.display_filter)}
+        </div>
+        <pre class="packetmon-inspect-text">${escapeHtml(r.text || '(empty)')}</pre>
       </div>`;
     }
 
@@ -11643,16 +11768,30 @@ function renderPacketMonitor(data: PacketMonSummary) {
   }).join('');
 }
 
-// グループ行のトグル — re-render を経由してデータの整合を保ったまま展開状態を更新。
+// グループ行のトグル + 登録ボタン + 中身ボタン。
 document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => {
   const t = ev.target as HTMLElement;
+  const regBtn = t.closest('.packetmon-register-btn') as HTMLElement | null;
+  if (regBtn) {
+    ev.stopPropagation();
+    void registerPacketmonDomain(regBtn.dataset.key || '');
+    return;
+  }
+  const inspBtn = t.closest('.packetmon-inspect-btn') as HTMLElement | null;
+  if (inspBtn) {
+    ev.stopPropagation();
+    const target = inspBtn.dataset.target || '';
+    const ai = Number(inspBtn.dataset.adapterIndex) || 1;
+    void inspectPacketmonTarget(target, ai);
+    return;
+  }
   const head = t.closest('.packetmon-group-head') as HTMLElement | null;
   if (!head) return;
   const key = head.dataset.expkey;
   if (!key) return;
   if (packetmonExpanded.has(key)) packetmonExpanded.delete(key);
   else packetmonExpanded.add(key);
-  void loadPacketMonitor({ silent: true });
+  rerenderPacketMonitor();
 });
 
 // イベント結線 (refresh ボタン + フィルタ変更)

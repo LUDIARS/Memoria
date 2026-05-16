@@ -6891,6 +6891,44 @@ dialog.loc-edit-modal[open] {
 .packetmon-domain { color: var(--accent); font-weight: 600; }
 .packetmon-group-detail { margin: 0 6px 6px 24px; }
 
+/* グループの行は head (= 展開) + actions (= 登録/中身) を flex で並べる */
+.packetmon-group-row { display: flex; align-items: center; }
+.packetmon-group-row .packetmon-group-head { flex: 1; min-width: 0; }
+.packetmon-group-actions {
+  display: inline-flex; gap: 4px; flex-shrink: 0; padding: 0 8px;
+}
+.packetmon-register-btn, .packetmon-inspect-btn {
+  padding: 2px 8px; font-size: 11px;
+}
+.packetmon-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; border: 1px solid var(--border);
+}
+.packetmon-badge-ok { background: #e7f6e7; color: #1f7a1f; border-color: #b8e0b8; }
+.packetmon-badge-unknown { background: var(--bg); color: var(--muted); }
+
+/* inspect (= on-demand tshark の出力) パネル */
+.packetmon-inspect-panel {
+  margin: 4px 6px 6px 24px;
+  padding: 6px 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+}
+.packetmon-inspect-meta {
+  font-size: 11px;
+  margin-bottom: 4px;
+  font-family: monospace;
+  word-break: break-all;
+}
+.packetmon-inspect-text {
+  max-height: 360px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: monospace;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ── 「開く」 トグル + 直近の作業 サマリ ────────────────────────── */
 .repo-toggle-btn {
   padding: 0 6px;
