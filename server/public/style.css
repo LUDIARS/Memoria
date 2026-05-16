@@ -2123,8 +2123,10 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
   border-radius: 12px;
   padding: 18px 22px;
   box-shadow: 0 12px 48px rgba(0,0,0,0.2);
-  /* PC は横 2.5x (= 1400px) + 最大の高さで固定。 viewport より大きい時は cap */
+  /* PC は横 2.5x (= 1400px) + 縦は常に viewport の 92% に固定。
+   * タブ切替で内容量が変わっても外枠は変わらない (= ガクッと縮まない)。 */
   width: min(1400px, calc(100vw - 24px));
+  height: 92vh;
   max-height: 92vh;
   overflow-y: auto;
   resize: none;
@@ -2257,13 +2259,21 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 .ai-settings h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ai-task-row {
   display: grid;
-  grid-template-columns: 130px 160px 1fr;
+  /* 日本語ラベル「📚 ブックマーク要約」 等を 1 行で収めるため label 列を 2 倍 (130 → 260px) */
+  grid-template-columns: 260px 160px 1fr;
   gap: 8px;
   align-items: center;
   margin-bottom: 6px;
   font-size: 12px;
 }
-.ai-task-row label { color: var(--text); font-family: ui-monospace, monospace; }
+.ai-task-row label {
+  color: var(--text);
+  /* monospace だと日本語が伸びるので、 ラベルは inherit に戻して幅を稼ぐ */
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* select / input の base は .foundation-form から継承。 */
 /* input の base は .foundation-form から継承。 label レイアウトだけ。 */
 .ai-settings label { display: block; margin-bottom: 8px; }
@@ -6817,6 +6827,260 @@ dialog.loc-edit-modal[open] {
 .repo-watch-more-row { margin-top: 4px; }
 .repo-watch-more-btn { font-size: 11px; padding: 2px 8px; }
 .repo-watch-empty-items { font-size: 11px; margin: 6px 0 0; }
+
+/* ── 🛡 パケット監視 タブ ──────────────────────────────────────── */
+.packetmon-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; }
+.packetmon-bar label { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; }
+.packetmon-adapters { display: grid; gap: 12px; }
+.packetmon-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.packetmon-card-head {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+}
+.packetmon-card-head strong { font-size: 14px; }
+.packetmon-ip-pill {
+  background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 2px 10px; font-size: 11px; font-family: monospace;
+}
+.packetmon-counts {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  font-size: 12px; color: var(--text);
+  padding: 4px 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.packetmon-counts b { color: var(--accent); }
+.packetmon-section { margin-top: 4px; }
+.packetmon-section h4 {
+  margin: 0 0 4px;
+  font-size: 12px; color: var(--muted);
+  text-transform: none; letter-spacing: 0;
+}
+.packetmon-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12px; table-layout: fixed;
+}
+.packetmon-table th {
+  text-align: left; padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600; color: var(--muted);
+}
+.packetmon-table td {
+  padding: 2px 6px; vertical-align: top;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.packetmon-table tr:nth-child(2n) { background: var(--bg); }
+.packetmon-count { width: 50px; font-family: monospace; color: var(--muted); }
+.packetmon-proto { width: 70px; font-family: monospace; }
+.packetmon-dst, .packetmon-src { font-family: monospace; }
+.packetmon-hint { color: var(--accent); }
+.packetmon-ptr { color: var(--accent); }
+.packetmon-hints {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 12px;
+}
+.packetmon-hints li { display: flex; gap: 8px; align-items: baseline; }
+
+/* ドメイン (or PTR) で集約したグループ行 + 展開 detail */
+.packetmon-groups { display: flex; flex-direction: column; gap: 2px; }
+.packetmon-group {
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  background: var(--panel);
+}
+.packetmon-group.is-expanded { background: var(--accent-bg); }
+.packetmon-group-head {
+  display: flex; gap: 8px; align-items: baseline;
+  width: 100%; padding: 4px 8px; font-size: 12px;
+  /* global `button { color:#fff; background: var(--accent); }` を打ち消す */
+  background: transparent; border: 0; cursor: pointer; text-align: left;
+  color: var(--text);
+  border-radius: 0;
+}
+.packetmon-group-head:hover { background: var(--accent-bg); }
+.packetmon-arrow { width: 12px; flex-shrink: 0; color: var(--muted); }
+.packetmon-domain { color: var(--accent); font-weight: 600; }
+.packetmon-group-detail { margin: 0 6px 6px 24px; }
+
+/* グループの行は head (= 展開) + actions (= 登録/中身) を flex で並べる */
+.packetmon-group-row { display: flex; align-items: center; }
+.packetmon-group-row .packetmon-group-head { flex: 1; min-width: 0; }
+.packetmon-group-actions {
+  display: inline-flex; gap: 4px; flex-shrink: 0; padding: 0 8px;
+}
+.packetmon-register-btn, .packetmon-inspect-btn {
+  padding: 2px 8px; font-size: 11px;
+}
+.packetmon-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; border: 1px solid var(--border);
+}
+.packetmon-badge-ok { background: #e7f6e7; color: #1f7a1f; border-color: #b8e0b8; }
+.packetmon-badge-unknown { background: var(--bg); color: var(--muted); }
+button.packetmon-badge-unknown { cursor: pointer; }
+button.packetmon-badge-unknown:hover:not(:disabled) {
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent);
+}
+button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
+/* 逆引き PTR から推定したドメインに付ける小さなマーク */
+.packetmon-ptr-badge {
+  display: inline-block; padding: 0 5px; border-radius: 3px;
+  background: var(--bg); color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 10px; font-family: monospace; vertical-align: middle;
+}
+/* well-known 辞書でマッチしたサービス名 (Anthropic / Cloudflare 等) */
+.packetmon-friendly {
+  display: inline-block; padding: 1px 8px; border-radius: 12px;
+  background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 600; vertical-align: middle;
+}
+
+/* プロセス行は head (展開トグル) + 右側 AI 解析 ボタン の flex */
+.packetmon-proc-row { display: flex; align-items: stretch; }
+.packetmon-proc-row .packetmon-proc-head { flex: 1; min-width: 0; }
+.packetmon-proc-ai-btn { padding: 2px 8px; font-size: 11px; align-self: center; margin-right: 4px; }
+
+/* AI 解析 結果 (= 「このプロセスは何の exe か」) パネル */
+.packetmon-proc-ai-panel {
+  margin: 4px 6px 4px 24px;
+  padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); font-size: 12px;
+}
+.packetmon-proc-ai-panel.packetmon-ai-high { border-color: #1f7a1f; background: #e7f6e7; }
+.packetmon-proc-ai-panel.packetmon-ai-mid  { border-color: #b58a00; background: #fff8e1; }
+.packetmon-proc-ai-panel.packetmon-ai-low  { border-color: #c0392b; background: #fde7e7; }
+.packetmon-proc-ai-head {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 12px;
+}
+.packetmon-proc-ai-cat {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  background: var(--accent); color: #fff; font-size: 10px;
+}
+.packetmon-proc-ai-desc { margin-top: 4px; line-height: 1.45; }
+.packetmon-proc-ai-behavior { margin-top: 2px; font-size: 11px; line-height: 1.4; }
+
+/* OUTBOUND 通信経路に inline で出すプロセス名 chip */
+.packetmon-proc-chip {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 10px; font-family: monospace;
+  margin-right: 2px;
+}
+.packetmon-proc-chip-row { margin-left: 4px; }
+.packetmon-proc-cell { font-family: monospace; font-size: 11px; }
+/* プロセス別 セクションの exe パス表示 */
+.packetmon-proc-path {
+  font-family: monospace; font-size: 11px; color: var(--muted);
+  max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-block; vertical-align: middle;
+}
+.packetmon-proc-paths { grid-column: 1 / -1; }
+.packetmon-proc-paths h5 { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
+.packetmon-proc-paths ul { list-style: none; padding: 0; margin: 0; }
+.packetmon-proc-paths li { font-family: monospace; font-size: 11px; word-break: break-all; }
+
+/* 🤖 AI 識別 ボタン + 結果パネル */
+.packetmon-ai-btn { padding: 2px 8px; font-size: 11px; }
+.packetmon-ai-panel {
+  margin: 4px 6px 6px 24px;
+  padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg);
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+  font-size: 12px;
+}
+.packetmon-ai-panel.packetmon-ai-high { border-color: #1f7a1f; background: #e7f6e7; }
+.packetmon-ai-panel.packetmon-ai-mid  { border-color: #b58a00; background: #fff8e1; }
+.packetmon-ai-panel.packetmon-ai-low  { border-color: #c0392b; background: #fde7e7; }
+.packetmon-ai-name { font-weight: 600; }
+.packetmon-ai-conf { font-family: monospace; font-size: 11px; color: var(--muted); }
+.packetmon-ai-reasoning { flex-basis: 100%; font-size: 11px; line-height: 1.4; }
+
+/* ── 🔧 プロセス別 IN/OUT (packet 監視 タブ上部の collapsible card) ── */
+.packetmon-proc-card { padding: 8px 12px; margin-bottom: 12px; }
+.packetmon-proc-summary {
+  display: flex; align-items: baseline; gap: 6px; cursor: pointer; user-select: none;
+  font-size: 13px; padding: 4px 0;
+}
+.packetmon-proc-summary::-webkit-details-marker { display: none; }
+.packetmon-proc-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.packetmon-proc-item {
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  background: var(--panel);
+}
+.packetmon-proc-item.is-expanded { background: var(--accent-bg); }
+.packetmon-proc-head {
+  display: flex; align-items: baseline; gap: 8px;
+  width: 100%; padding: 4px 8px; font-size: 12px;
+  background: transparent; border: 0; cursor: pointer; text-align: left;
+  color: var(--text); border-radius: 0;
+}
+.packetmon-proc-head:hover { background: var(--accent-bg); }
+.packetmon-proc-name { color: var(--accent); }
+.packetmon-proc-counts { font-family: monospace; font-size: 11px; }
+.packetmon-proc-counts span { margin-left: 8px; }
+.packetmon-proc-detail {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  padding: 6px 8px 8px 24px; font-size: 12px;
+}
+.packetmon-proc-detail h5 { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
+.packetmon-proc-flows { list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 2px; font-family: monospace;
+}
+.packetmon-proc-flows li { display: flex; gap: 6px; align-items: baseline; }
+.packetmon-src-tag {
+  display: inline-block; padding: 0 4px; border-radius: 3px;
+  background: var(--accent); color: #fff; font-size: 9px;
+}
+@media (max-width: 760px) { .packetmon-proc-detail { grid-template-columns: 1fr; } }
+
+/* ── 🛡 既知エンドポイント sub-tab ─────────────────────────────── */
+.endpoints-list { margin: 4px 0 12px; }
+.endpoints-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.endpoints-table th, .endpoints-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.endpoints-table th {
+  text-align: left; color: var(--muted); font-weight: 600;
+  background: var(--bg);
+}
+.endpoints-namecell { width: 28%; }
+.endpoints-typecell { width: 18%; }
+.endpoints-name { font-weight: 600; color: var(--accent); }
+.endpoints-type {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  background: var(--bg); border: 1px solid var(--border);
+  font-size: 10px; color: var(--muted);
+}
+.endpoints-delete-btn { padding: 2px 8px; font-size: 11px; }
+
+/* inspect (= on-demand tshark の出力) パネル */
+.packetmon-inspect-panel {
+  margin: 4px 6px 6px 24px;
+  padding: 6px 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+}
+.packetmon-inspect-meta {
+  font-size: 11px;
+  margin-bottom: 4px;
+  font-family: monospace;
+  word-break: break-all;
+}
+.packetmon-inspect-text {
+  max-height: 360px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: monospace;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 
 /* ── 「開く」 トグル + 直近の作業 サマリ ────────────────────────── */
 .repo-toggle-btn {

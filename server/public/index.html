@@ -315,6 +315,9 @@
             <span class="tab-label" data-full="⚙ キュー" data-short="⚙ キュー">⚙ キュー</span>
             <span id="tabQueueBadge" class="tab-count hidden">0</span>
           </button>
+          <button class="tab" data-tab="packetmon">
+            <span class="tab-label" data-full="🛡 パケット監視" data-short="🛡 監視">🛡 パケット監視</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -629,6 +632,56 @@
         <div id="queueHistory" class="queue-history-list"></div>
       </div>
 
+      <!-- 🛡 パケット監視 — ローカル PacketMonitor (tools/PacketMonitor) の
+           アダプタ別 raw.tsv をサーバが読み、 outbound / inbound のサマリを
+           出す。 capture 自体は外部ツール、 Memoria は表示専用。 -->
+      <div id="packetmonView" class="hidden">
+        <div class="queue-bar packetmon-bar">
+          <span>アダプタ別 outbound / inbound のリアルタイムサマリ。 capture は外部ツール (tools/PacketMonitor)。</span>
+          <span class="grow"></span>
+          <label>期間
+            <select id="packetmonSince">
+              <option value="0">全期間</option>
+              <option value="1">直近 1 分</option>
+              <option value="5" selected>直近 5 分</option>
+              <option value="15">直近 15 分</option>
+              <option value="60">直近 60 分</option>
+            </select>
+          </label>
+          <label>上位
+            <select id="packetmonTopN">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <label class="check-inline">
+            <input id="packetmonResolvePtr" type="checkbox" checked />
+            inbound 逆引き
+          </label>
+          <button id="packetmonRefreshBtn" type="button">↻ 更新</button>
+        </div>
+        <div id="packetmonStatus" class="muted" style="font-size:12px;margin:6px 0"></div>
+
+        <!-- 🔧 プロセス別 IN/OUT (Sysmon Event 3 + Get-NetTCPConnection) ─
+             アダプタ別サマリ (= 下) とは別軸の「どのプロセスが何処へ繋いでいるか」 ビュー -->
+        <details id="packetmonProcDetails" class="card packetmon-proc-card" open>
+          <summary class="packetmon-proc-summary">
+            <strong>🔧 プロセス別 IN/OUT</strong>
+            <span id="packetmonProcStatus" class="muted" style="font-size:11px;margin-left:8px"></span>
+            <span class="grow"></span>
+            <button id="packetmonProcRefreshBtn" type="button" class="ghost" style="font-size:11px;padding:2px 8px" title="PowerShell で再取得 (30 秒キャッシュ)">↻ 更新</button>
+          </summary>
+          <div id="packetmonProcList" class="packetmon-proc-list"></div>
+        </details>
+
+        <div id="packetmonAdapters" class="packetmon-adapters"></div>
+        <div id="packetmonEmpty" class="hint hidden">
+          PacketMonitor が動いていません。 設定 → 📚 セットアップ手順 → 🛡 パケット監視 を参照してください。
+        </div>
+      </div>
+
       <!-- 💻 アプリ (Application catalog) — process_name 単位の AI 分類カタログ。
            ドメイン辞書と同じ構造 (= 自動分類 + 手動上書き)。
            data: app_samples (= sampling 元) / applications (= AI 分類済 row) -->
@@ -643,6 +696,23 @@
         <ul id="appsList" class="dict-list pin-grid"></ul>
       </div>
 
+      <!-- 🛡 既知エンドポイント — packet 監視で接続先を識別するための辞書一覧。
+           内蔵 well-known 辞書 + ユーザ登録の 2 セクション。 編集は登録分だけ
+           可能 (内蔵分はソース内 const)。 -->
+      <div id="endpointsView" class="hidden">
+        <div class="dict-bar">
+          <span id="endpointsCount" class="muted"></span>
+          <span class="grow"></span>
+          <button id="endpointsRefresh" class="ghost" title="再読込">↻</button>
+        </div>
+        <h4>📕 内蔵 well-known 辞書 (read-only)</h4>
+        <p class="muted" style="font-size:12px">パケット監視 タブで接続先を識別するための内蔵リスト。 該当する接続先には自動的にサービス名バッジが付きます。</p>
+        <div id="endpointsWellKnown" class="endpoints-list"></div>
+        <h4 style="margin-top:14px">✓ あなたが登録した宛先</h4>
+        <p class="muted" style="font-size:12px">🛡 パケット監視 タブの「＋ 登録」 で追加した宛先。 ここから削除もできます。</p>
+        <div id="endpointsRegistered" class="endpoints-list"></div>
+      </div>
+
       <div id="databaseView" class="hidden">
         <nav class="worklog-subtabs" id="databaseSubtabs">
           <button class="wl-subtab active" data-db-sub="bookmarks">📚 ブックマーク</button>
@@ -650,6 +720,7 @@
           <button class="wl-subtab" data-db-sub="domain">🏷 ドメイン</button>
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
+          <button class="wl-subtab" data-db-sub="endpoints">🛡 既知エンドポイント</button>
         </nav>
       </div>
 
@@ -1738,6 +1809,13 @@
           </select>
         </label>
       </div>
+
+      <h4>🚶 移動速度の閾値 (作業場所判定)</h4>
+      <p class="ai-settings-help">これより速い瞬間速度 (= 直前 GPS 点との距離 / 時間差) の点は「移動中」 とみなして場所タグ付けの対象から外します。 通り過ぎただけの場所を誤検出しないため。 既定 5 km/h (= 徒歩速度の上限近辺)。 0 を入れるとフィルタ無効。</p>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">移動速度の閾値:
+        <input id="workplaceMaxSpeedKmh" type="number" min="0" max="200" step="1" style="width:80px" />
+        km/h
+      </label>
 
       <h4>📝 日記の常設メモ</h4>
       <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>

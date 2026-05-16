@@ -1023,14 +1023,15 @@ function fmtElapsed(ms) {
 }
 
 const QUEUE_GROUP_LABELS = {
-  summary:   '📑 ブックマーク要約',
-  dig:       '🔎 ディグ (deep research)',
-  wordcloud: '🌐 ワードクラウド',
-  diary:     '📅 日記',
-  weekly:    '📆 週報',
-  domain:    '🏷 ドメイン分類',
-  page:      '📄 ページメタ',
-  meal:      '🍽 食事解析',
+  summary:     '📑 ブックマーク要約',
+  dig:         '🔎 ディグ (deep research)',
+  wordcloud:   '🌐 ワードクラウド',
+  diary:       '📅 日記',
+  weekly:      '📆 週報',
+  domain:      '🏷 ドメイン分類',
+  page:        '📄 ページメタ',
+  meal:        '🍽 食事解析',
+  ai_analysis: '🤖 AI 分析 (接続先 / プロセス 等)',
 };
 
 function collectQueueJobs(snap) {
@@ -1175,6 +1176,9 @@ function switchTab(tab) {
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
+  $('packetmonView')?.classList.toggle('hidden', tab !== 'packetmon');
+  // 🛡 パケット監視 タブから離れたら 60s auto-refresh を止める。
+  if (tab !== 'packetmon') stopPacketmonAutoRefresh();
   if (tab === 'database') {
     // Re-show whichever DB sub was last picked.
     const sub = state.database?.sub || 'bookmarks';
@@ -1194,6 +1198,7 @@ function switchTab(tab) {
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
+  if (tab === 'packetmon') { loadPacketMonitor(); void loadPacketmonProcesses(); }
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
@@ -5174,6 +5179,7 @@ async function openAiSettings() {
       app_classify: '💻 アプリ 分類 (PC使用統計)',
       recommendation_agent: '✨ おすすめ (候補抽出)',
       recommendation_synthesize: '✨ おすすめ (統合)',
+      endpoint_identify: '🛡 パケット監視 (接続先 AI 識別)',
     };
     $('aiTaskRows').innerHTML = tasks.map(t => `
       <div class="ai-task-row">
@@ -5610,7 +5616,7 @@ const SETTINGS_STAB_LABELS: Record<string, string> = {
   privacy: '🔒 プライバシー / 表示',
 };
 // 「全部」 タブで非表示にする 手順系 (= 一度しか見ない / 別 UI)。
-const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup', 'agent-projects']);
+const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup']);
 
 function applyAllModeHeadings(panel: HTMLElement, isAll: boolean) {
   // 既存の見出しを除去
@@ -5660,7 +5666,7 @@ document.addEventListener('click', (ev) => {
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
-  if (stab === 'agent-projects') loadAgentProjects().catch(console.warn);
+  // 'agent-projects' タブは廃止 (AI 実装プロジェクト機能を休止)
   panel.scrollTop = 0;
 });
 
@@ -5930,11 +5936,18 @@ let ensureMemoriaFeatureViews = function () {
   const settingsTabs = document.querySelector('.settings-tabs');
   const footer = document.querySelector('.settings-footer');
   if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
+    // 🌐 全部 タブは一番左に置きたいので prepend、 他は順番通り append。
+    // 「🤖 AI 実装プロジェクト」 は今回廃止。
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = 'settings-tab';
+    allBtn.dataset.stab = 'all';
+    allBtn.setAttribute('role', 'tab');
+    allBtn.textContent = '🌐 全部';
+    settingsTabs.insertBefore(allBtn, settingsTabs.firstChild);
     for (const spec of [
       ['privacy', '🔒 プライバシー / 表示'],
       ['setup', '📚 セットアップ手順'],
-      ['agent-projects', '🤖 AI 実装プロジェクト'],
-      ['all', '🌐 全部'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -5984,15 +5997,7 @@ let ensureMemoriaFeatureViews = function () {
         この半径を超えた点で「離脱」と判定し、 セッションがそこで終了します。
         場所ごとに <code>radius_m</code> を個別設定すると、 そちらが優先されます (= 作業場所編集画面で入力)。
       </p>
-      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">移動速度の閾値:
-        <input id="workplaceMaxSpeedKmh" type="number" min="0" max="200" step="1" style="width:80px" />
-        km/h
-      </label>
-      <p class="diary-settings-help" style="margin-top:6px">
-        これより速い瞬間速度 (= 直前 GPS 点との距離 / 時間差) の点は「移動中」とみなして
-        場所タグ付けの対象から外します。 通り過ぎただけの場所を誤検出しないため。
-        既定 5 km/h (= 徒歩速度の上限近辺)。 0 を入れるとフィルタ無効。
-      </p>
+      <p class="diary-settings-help" style="margin-top:6px">「移動速度の閾値」 はプロフィール タブに移動しました。</p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
@@ -6007,47 +6012,7 @@ let ensureMemoriaFeatureViews = function () {
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
     footer.parentNode.insertBefore(sec, footer);
   }
-  if (footer && !$('agentProjectsBody')) {
-    const sec = document.createElement('section');
-    sec.id = 'agentProjectsBody';
-    sec.className = 'settings-tab-body hidden';
-    sec.dataset.stab = 'agent-projects';
-    sec.innerHTML = `
-      <h4>AI 実装プロジェクト</h4>
-      <p class="diary-settings-help">タスクに「🤖 AI実装」を依頼するときに使うプロジェクト一覧です。プロジェクトごとにルール・パス・既定エージェントを登録します。</p>
-      <div id="agentProjectsList" class="simple-list"></div>
-      <div class="simple-actions"><button id="agentProjectAddBtn" type="button">+ プロジェクト追加</button></div>
-      <section id="agentProjectEditor" class="dict-detail modal-panel hidden foundation-form">
-        <button type="button" class="modal-close" id="agentProjectEditorClose" aria-label="close">×</button>
-        <h3 id="agentProjectEditorHeading">プロジェクトを追加</h3>
-        <input type="hidden" id="agentProjectEditorId" />
-        <label class="simple-field">
-          <span>名前</span>
-          <input id="agentProjectEditorName" type="text" placeholder="例: Memoria" />
-        </label>
-        <label class="simple-field">
-          <span>パス (絶対パス)</span>
-          <input id="agentProjectEditorPath" type="text" placeholder="例: E:\\Document\\Ars\\Memoria" />
-        </label>
-        <label class="simple-field">
-          <span>既定エージェント</span>
-          <select id="agentProjectEditorAgent">
-            <option value="claude_code">Claude Code</option>
-            <option value="codex">Codex CLI</option>
-            <option value="gemini">Gemini CLI</option>
-          </select>
-        </label>
-        <label class="simple-field">
-          <span>ルール (Markdown)</span>
-          <textarea id="agentProjectEditorRules" rows="14" placeholder="技術スタック・規約・Do/Don't・完了条件 など。AI 実装時にプロンプトの先頭に貼られます。"></textarea>
-        </label>
-        <div class="simple-actions">
-          <button id="agentProjectEditorSaveBtn">保存</button>
-          <button id="agentProjectEditorCancelBtn" type="button" class="ghost">キャンセル</button>
-        </div>
-      </section>`;
-    footer.parentNode.insertBefore(sec, footer);
-  }
+  // 「AI 実装プロジェクト」 タブは廃止 (タスクの 🤖 AI実装 機能と共に休止)。
 
   upgradeTaskFormMarkup();
   upgradeImplementationFormMarkup();
@@ -6773,7 +6738,7 @@ function taskCardHtml(t) {
       <p>${escapeHtml(t.details || '')}</p>
       <div class="simple-actions">
         ${doneBtn}
-        <button class="ghost" data-task-agent="${t.id}">🤖 AI実装</button>
+        <!-- 🤖 AI実装 は一旦休止 (= 設定 → AI 実装プロジェクト タブの削除と同期) -->
         <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
         <button class="danger" data-task-delete="${t.id}">削除</button>
       </div>
@@ -8083,6 +8048,7 @@ const DB_SUB_VIEWS = {
   domain: 'domainView',
   workplace: 'workplaceView',
   apps: 'appsView',
+  endpoints: 'endpointsView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -8116,6 +8082,7 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
+  if (sub === 'endpoints') loadKnownEndpoints().catch(console.warn);
 }
 
 interface ApplicationCatalogRow {
@@ -8139,6 +8106,108 @@ const APP_KIND_LABELS: Record<string, string> = {
   creative: '🎨 クリエイティブ',
   other: '❓ その他',
 };
+
+// ── 🛡 既知エンドポイント (= packet 監視で接続先を識別する辞書一覧) ──
+// 内蔵 well-known 辞書 + ユーザ登録 (packet-monitor タブの「＋ 登録」) の 2 セクション。
+
+interface WellKnownRule {
+  name: string;
+  match:
+    | { type: 'host_suffix'; value: string }
+    | { type: 'host_exact';  value: string }
+    | { type: 'ptr_suffix';  value: string }
+    | { type: 'ip_cidr';     value: string };
+}
+interface RegisteredEndpointEntry { key: string; note: string; added_at: string }
+
+async function loadKnownEndpoints() {
+  const wkEl = document.getElementById('endpointsWellKnown');
+  const regEl = document.getElementById('endpointsRegistered');
+  const countEl = document.getElementById('endpointsCount');
+  if (!wkEl || !regEl) return;
+  wkEl.innerHTML = '<p class="muted">読み込み中…</p>';
+  regEl.innerHTML = '<p class="muted">読み込み中…</p>';
+  try {
+    const [wkRes, regRes] = await Promise.all([
+      api('/api/packet-monitor/well-known') as Promise<{ items: WellKnownRule[] }>,
+      api('/api/packet-monitor/registered') as Promise<{ items: RegisteredEndpointEntry[] }>,
+    ]);
+    renderKnownEndpoints(wkRes.items || [], regRes.items || []);
+    if (countEl) countEl.textContent = `内蔵 ${wkRes.items?.length || 0} 件 / 登録 ${regRes.items?.length || 0} 件`;
+  } catch (e) {
+    wkEl.innerHTML = `<p class="muted">取得失敗: ${escapeHtml((e as Error).message)}</p>`;
+    regEl.innerHTML = '';
+  }
+}
+
+function renderKnownEndpoints(wellKnown: WellKnownRule[], registered: RegisteredEndpointEntry[]) {
+  const wkEl = document.getElementById('endpointsWellKnown');
+  const regEl = document.getElementById('endpointsRegistered');
+  if (!wkEl || !regEl) return;
+
+  // 同じ name の行は最初の name セルだけに名前を見せる (= 「Cloudflare には 5 条件」 を視覚的に)
+  const groupedByName = new Map<string, WellKnownRule[]>();
+  for (const r of wellKnown) {
+    const arr = groupedByName.get(r.name) || [];
+    arr.push(r);
+    groupedByName.set(r.name, arr);
+  }
+  const wkRows: string[] = [];
+  for (const [name, rules] of groupedByName) {
+    rules.forEach((r, idx) => {
+      const tname = r.match.type;
+      const v = r.match.value;
+      const typeLabel = tname === 'host_suffix' ? 'host サフィックス'
+        : tname === 'host_exact' ? 'host 完全一致'
+        : tname === 'ptr_suffix' ? 'PTR サフィックス'
+        : 'IP CIDR';
+      const nameCell = idx === 0
+        ? `<span class="endpoints-name">${escapeHtml(name)}</span>${rules.length > 1 ? ` <span class="muted">×${rules.length}</span>` : ''}`
+        : '';
+      wkRows.push(`<tr>
+        <td class="endpoints-namecell">${nameCell}</td>
+        <td class="endpoints-typecell"><span class="endpoints-type">${typeLabel}</span></td>
+        <td class="endpoints-valcell"><code>${escapeHtml(v)}</code></td>
+      </tr>`);
+    });
+  }
+  wkEl.innerHTML = wellKnown.length === 0
+    ? '<p class="muted">内蔵 well-known 辞書は空です</p>'
+    : `<table class="endpoints-table">
+        <thead><tr><th>サービス名</th><th>マッチ種別</th><th>値</th></tr></thead>
+        <tbody>${wkRows.join('')}</tbody>
+      </table>`;
+
+  if (registered.length === 0) {
+    regEl.innerHTML = '<p class="muted">まだ登録された宛先はありません。 🛡 パケット監視 タブで「＋ 登録」 を押すとここに溜まります。</p>';
+    return;
+  }
+  regEl.innerHTML = `<table class="endpoints-table">
+    <thead><tr><th>宛先 (ドメイン / IP)</th><th>メモ</th><th>登録時刻</th><th></th></tr></thead>
+    <tbody>${registered.map((e) => `<tr>
+      <td><code>${escapeHtml(e.key)}</code></td>
+      <td class="muted">${escapeHtml(e.note || '')}</td>
+      <td class="muted" style="font-size:11px">${escapeHtml(fmtDate(e.added_at))}</td>
+      <td><button class="ghost endpoints-delete-btn" type="button" data-key="${escapeHtml(e.key)}" title="登録を削除">削除</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+document.getElementById('endpointsRefresh')?.addEventListener('click', () => void loadKnownEndpoints());
+document.getElementById('endpointsRegistered')?.addEventListener('click', async (ev) => {
+  const btn = (ev.target as HTMLElement).closest('.endpoints-delete-btn') as HTMLElement | null;
+  if (!btn) return;
+  const key = btn.dataset.key || '';
+  if (!key) return;
+  if (!confirm(`「${key}」 の登録を削除しますか?`)) return;
+  try {
+    await api(`/api/packet-monitor/registered/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    flashToast(`✓ 「${key}」 を削除しました`);
+    void loadKnownEndpoints();
+  } catch (e) {
+    flashToast(`⚠ 削除失敗: ${(e as Error).message}`);
+  }
+});
 
 // ── アプリカタログ (カード形式) ─────────────────────────────────────
 // ドメインタブと同じ pin-grid カードレイアウト。 詳細編集は appsDetail モーダル。
@@ -11416,6 +11485,783 @@ document.getElementById('repoList')?.addEventListener('click', (ev) => {
     void loadRepoItemsMore(Number(moreBtn.dataset.repoId));
   }
 });
+
+// ── 🛡 パケット監視 タブ ──────────────────────────────────────────────────
+//
+// 外部ツール tools/PacketMonitor (tshark を per-adapter で走らせて raw.tsv を
+// append し続ける) の出力を Memoria サーバが読み、 アダプタ別 outbound /
+// inbound のサマリを表示する。 capture 自体は外部ツール、 Memoria は表示
+// 専用。 起動手順は 設定 → 📚 セットアップ手順 → 🛡 パケット監視 を参照。
+
+interface PacketMonFlowRemote {
+  proto: string;
+  remote_ip: string;
+  remote_port: string;
+  count: number;
+  /** この remote へ繋いだプロセス名 (outbound のみ)。 backend が attach */
+  processes?: string[];
+}
+interface PacketMonOutboundGroup {
+  key: string;
+  is_domain: boolean;
+  hint: string;
+  derived_from_ptr: boolean;
+  friendly_name: string | null;
+  remotes: PacketMonFlowRemote[];
+  total_count: number;
+  unique_ips: number;
+  registered: boolean;
+  is_localhost: boolean;
+  /** Sysmon / NetTCPConnection から特定できた送信元プロセス (= 通信経路) */
+  processes?: Array<{ name: string; count: number }>;
+}
+interface PacketMonInboundGroup {
+  key: string;
+  is_domain: boolean;
+  remote_name: string;
+  friendly_name: string | null;
+  remotes: PacketMonFlowRemote[];
+  total_count: number;
+  unique_ips: number;
+  registered: boolean;
+  is_localhost: boolean;
+}
+interface PacketMonAdapter {
+  adapter: string;
+  alias: string;
+  adapter_index: number;
+  local_ips: string[];
+  packet_counts: { outbound: number; inbound: number; self_loop: number; off_adapter: number };
+  outbound: PacketMonOutboundGroup[];
+  inbound: PacketMonInboundGroup[];
+  outbound_hints: Array<{ hint: string; count: number }>;
+}
+interface PacketMonInspectResult {
+  target: string;
+  adapter_index: number;
+  bpf_filter: string;
+  display_filter: string;
+  packets: number;
+  text: string;
+  error: string | null;
+}
+interface PacketMonSummary {
+  log_root: string | null;
+  available: boolean;
+  reason: string | null;
+  adapters: PacketMonAdapter[];
+  generated_at: string;
+}
+
+// 折り畳み: 「あるアダプタの group key を 展開中」 にしている set。 同じ
+// セッション内では再描画後も状態を保持する。
+const packetmonExpanded: Set<string> = new Set();
+// 「中身を見る」 を押した group の inspect 結果。 summary 更新で破棄する。
+// key = `${adapter_index}|${target}`
+const packetmonInspectShown: Set<string> = new Set();
+const packetmonInspectCache: Map<string, PacketMonInspectResult> = new Map();
+// 「? 不明」 を押して PTR 再試行中の group (= UI 上で ⏳ にする)。
+const packetmonPtrPending: Set<string> = new Set();
+// 🤖 AI 識別 の進行中 / 結果。 key = `${adapter}|${direction}|${groupKey}`
+const packetmonAiPending: Set<string> = new Set();
+interface PacketmonAiResult { name: string; confidence: number; reasoning: string }
+const packetmonAiResults: Map<string, PacketmonAiResult> = new Map();
+// 最後に fetch した summary。 inspect のトグル / 結果反映で UI を再描画する
+// 際に再 fetch せず使い回す。 60s auto refresh / 手動更新で上書き。
+let _lastPacketmonSummary: PacketMonSummary | null = null;
+// 60s ごとの auto refresh は タブが active な間だけ動かす。
+let _packetmonAutoTimer: ReturnType<typeof setInterval> | null = null;
+
+function startPacketmonAutoRefresh() {
+  if (_packetmonAutoTimer != null) return;
+  _packetmonAutoTimer = setInterval(() => {
+    if (state.tab === 'packetmon') {
+      void loadPacketMonitor({ silent: true });
+      void loadPacketmonProcesses({ silent: true });
+    }
+  }, 60_000);
+}
+function stopPacketmonAutoRefresh() {
+  if (_packetmonAutoTimer != null) { clearInterval(_packetmonAutoTimer); _packetmonAutoTimer = null; }
+}
+
+async function loadPacketMonitor(opts: { silent?: boolean } = {}) {
+  const sinceSel = document.getElementById('packetmonSince') as HTMLSelectElement | null;
+  const topSel = document.getElementById('packetmonTopN') as HTMLSelectElement | null;
+  const ptrEl = document.getElementById('packetmonResolvePtr') as HTMLInputElement | null;
+  const since = sinceSel?.value || '5';
+  const topN = topSel?.value || '20';
+  const resolve = ptrEl?.checked ? '1' : '0';
+  const statusEl = document.getElementById('packetmonStatus');
+  if (statusEl && !opts.silent) statusEl.textContent = '読み込み中…';
+  try {
+    // summary 更新で inspect 表示状態もリセット (= 「中身はメモリに置き、 更新に合わせて破棄」)
+    packetmonInspectShown.clear();
+    packetmonInspectCache.clear();
+    const qs = `since_minutes=${encodeURIComponent(since)}&top_n=${encodeURIComponent(topN)}&resolve_ptr=${resolve}`;
+    const apiFn = opts.silent ? apiSilent : api;
+    const r = await apiFn(`/api/packet-monitor/summary?${qs}`) as PacketMonSummary;
+    _lastPacketmonSummary = r;
+    renderPacketMonitor(r);
+    startPacketmonAutoRefresh();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `読み込みエラー: ${(e as Error).message}`;
+  }
+}
+
+/** 最後の summary を使って再描画 (= 再 fetch しない / inspect 状態は維持)。 */
+function rerenderPacketMonitor() {
+  if (_lastPacketmonSummary) renderPacketMonitor(_lastPacketmonSummary);
+}
+
+async function registerPacketmonDomain(key: string) {
+  if (!key) return;
+  const note = prompt(`「${key}」 を「確認済」 として登録します。 メモ (任意):`, '') ?? '';
+  try {
+    await api('/api/packet-monitor/registered', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, note }),
+    });
+    flashToast(`✓ 「${key}」 を登録しました`);
+    // 登録結果は再 fetch しないと反映できない (registered フラグ算出はサーバ)。
+    void loadPacketMonitor({ silent: true });
+  } catch (e) {
+    flashToast(`⚠ 登録失敗: ${(e as Error).message}`);
+  }
+}
+
+async function retryPtrForGroup(expKey: string, groupKey: string, direction: 'out' | 'in', adapter: string, ips: string[]) {
+  if (!ips || ips.length === 0) {
+    flashToast('対象 IP が空です');
+    return;
+  }
+  if (packetmonPtrPending.has(expKey)) return;
+  packetmonPtrPending.add(expKey);
+  rerenderPacketMonitor();
+  try {
+    const r = await api('/api/packet-monitor/lookup-ptr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ips, force: true, timeout_ms: 3000 }),
+    }) as { results: Array<{ ip: string; name: string }> };
+    // どれか 1 つでも名前が取れたら 「最多の name」 を group に被せる。
+    const nameCount = new Map<string, number>();
+    for (const it of r.results) {
+      if (it.name) nameCount.set(it.name, (nameCount.get(it.name) || 0) + 1);
+    }
+    let resolved = '';
+    let best = 0;
+    for (const [n, c] of nameCount) { if (c > best) { resolved = n; best = c; } }
+
+    if (!resolved) {
+      flashToast(`逆引き失敗: ${ips.join(', ')}`);
+    } else {
+      // _lastPacketmonSummary を直接書き換えて再描画 (= 次の 60s 自動更新まで持つ)
+      patchLastSummaryGroupKey(adapter, direction, groupKey, resolved);
+      flashToast(`✓ 逆引き成立: ${resolved}`);
+    }
+  } catch (e) {
+    flashToast(`⚠ 逆引き失敗: ${(e as Error).message}`);
+  } finally {
+    packetmonPtrPending.delete(expKey);
+    rerenderPacketMonitor();
+  }
+}
+
+/** _lastPacketmonSummary の中で「アダプタ+方向+元の group key」 を新しいキーへ差し替える。 */
+function patchLastSummaryGroupKey(adapter: string, direction: 'out' | 'in', oldKey: string, newKey: string): void {
+  const s = _lastPacketmonSummary;
+  if (!s) return;
+  const a = s.adapters.find((x) => x.adapter === adapter);
+  if (!a) return;
+  const list = direction === 'out' ? a.outbound : a.inbound;
+  const g = list.find((x) => x.key === oldKey);
+  if (!g) return;
+  g.key = newKey;
+  g.is_domain = true;
+  if (direction === 'out') {
+    (g as PacketMonOutboundGroup).derived_from_ptr = true;
+  } else {
+    (g as PacketMonInboundGroup).remote_name = newKey;
+  }
+}
+
+async function identifyEndpointWithAi(aiKey: string, target: string, adapter: string, direction: 'in' | 'out') {
+  if (packetmonAiPending.has(aiKey)) return;
+  // 該当 group を _lastPacketmonSummary から探す
+  const s = _lastPacketmonSummary;
+  if (!s) return;
+  const a = s.adapters.find((x) => x.adapter === adapter);
+  if (!a) return;
+  const list = direction === 'out' ? a.outbound : a.inbound;
+  const g = list.find((x) => x.key === target);
+  if (!g) return;
+  // body 組み立て
+  const body = {
+    target,
+    remotes: g.remotes.slice(0, 20),
+    hint: (g as PacketMonOutboundGroup).hint || '',
+    ptr: direction === 'in' ? (g as PacketMonInboundGroup).remote_name : ((g as PacketMonOutboundGroup).derived_from_ptr ? g.key : ''),
+    // 同じ remote IP+port に紐付くプロセスがあれば付ける (= 補助情報)
+    processes: collectProcessesForGroup(g.remotes),
+  };
+  packetmonAiPending.add(aiKey);
+  rerenderPacketMonitor();
+  try {
+    const r = await api('/api/packet-monitor/identify-with-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }) as PacketmonAiResult;
+    packetmonAiResults.set(aiKey, r);
+    flashToast(`🤖 ${r.name} (${Math.round((r.confidence || 0) * 100)}%)`);
+  } catch (e) {
+    packetmonAiResults.set(aiKey, { name: 'エラー', confidence: 0, reasoning: (e as Error).message });
+    flashToast(`⚠ AI 識別失敗: ${(e as Error).message}`);
+  } finally {
+    packetmonAiPending.delete(aiKey);
+    rerenderPacketMonitor();
+  }
+}
+
+// 直近のプロセス一覧 (`loadPacketmonProcesses` の結果) を保持しておいて、
+// AI 識別の補助情報として「この remote へ繋いでいるプロセス」 を抽出する。
+// _lastPacketmonProcResponse は AI 解析 後の即時再描画 (= fetch せず) で使う。
+let _lastPacketmonProcesses: PacketMonProcSummary[] = [];
+let _lastPacketmonProcResponse: PacketMonProcResponse | null = null;
+function collectProcessesForGroup(remotes: PacketMonFlowRemote[]): string[] {
+  if (!_lastPacketmonProcesses.length) return [];
+  const wanted = new Set(remotes.map((r) => `${r.remote_ip}:${r.remote_port}`));
+  const procs = new Set<string>();
+  for (const p of _lastPacketmonProcesses) {
+    const hit = [...p.outbound, ...p.inbound].some((f) => wanted.has(`${f.remote_ip}:${f.remote_port}`));
+    if (hit) procs.add(p.process);
+  }
+  return [...procs].slice(0, 10);
+}
+
+async function inspectPacketmonTarget(target: string, adapterIndex: number) {
+  if (!target) return;
+  const key = `${adapterIndex}|${target}`;
+  if (packetmonInspectShown.has(key)) {
+    // 2 回目クリックで閉じる
+    packetmonInspectShown.delete(key);
+    packetmonInspectCache.delete(key);
+    rerenderPacketMonitor();
+    return;
+  }
+  packetmonInspectShown.add(key);
+  packetmonInspectCache.delete(key);
+  rerenderPacketMonitor();  // ローディング行を出す
+  try {
+    const r = await api('/api/packet-monitor/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, adapter_index: adapterIndex, max_packets: 30, max_seconds: 5 }),
+    }) as { item: PacketMonInspectResult };
+    packetmonInspectCache.set(key, r.item);
+  } catch (e) {
+    packetmonInspectCache.set(key, {
+      target, adapter_index: adapterIndex, bpf_filter: '', display_filter: '',
+      packets: 0, text: '', error: (e as Error).message,
+    });
+  }
+  rerenderPacketMonitor();
+}
+
+function renderPacketMonitor(data: PacketMonSummary) {
+  const wrap = document.getElementById('packetmonAdapters');
+  const empty = document.getElementById('packetmonEmpty');
+  const statusEl = document.getElementById('packetmonStatus');
+  if (!wrap || !empty) return;
+
+  if (!data.available) {
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+    if (statusEl) statusEl.textContent = data.reason || 'PacketMonitor logs が見つかりません';
+    return;
+  }
+
+  if (!data.adapters || data.adapters.length === 0) {
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+    if (statusEl) statusEl.textContent = `logs root: ${data.log_root || '—'} — まだログがありません`;
+    return;
+  }
+
+  empty.classList.add('hidden');
+  if (statusEl) {
+    const total = data.adapters.reduce((s, a) =>
+      s + a.packet_counts.outbound + a.packet_counts.inbound, 0);
+    statusEl.textContent = `logs root: ${data.log_root || '—'} · ${data.adapters.length} アダプタ · 合計 ${total} パケット · 生成 ${new Date(data.generated_at).toLocaleTimeString()} · 60 秒ごとに自動更新`;
+  }
+
+  wrap.innerHTML = data.adapters.map((a) => {
+    const ipsLabel = a.local_ips.length > 0 ? a.local_ips.join(', ') : '(IPv4 なし)';
+    const counts = a.packet_counts;
+    const totalPkt = counts.outbound + counts.inbound;
+
+    function detailRowsHtml(remotes: PacketMonFlowRemote[], includeProcesses: boolean): string {
+      return remotes.map((r) => {
+        const hp = r.remote_port ? `${r.remote_ip}:${r.remote_port}` : r.remote_ip;
+        const procCell = includeProcesses
+          ? `<td class="packetmon-proc-cell">${r.processes && r.processes.length > 0
+              ? r.processes.slice(0, 3).map((n) => `<span class="packetmon-proc-chip">${escapeHtml(n)}</span>`).join(' ')
+              : '<span class="muted">—</span>'}</td>`
+          : '';
+        return `<tr>
+          <td class="packetmon-count">${r.count}</td>
+          <td class="packetmon-proto">${escapeHtml(r.proto)}</td>
+          <td class="packetmon-dst">${escapeHtml(hp)}</td>
+          ${procCell}
+        </tr>`;
+      }).join('');
+    }
+
+    // group の右側に出すアクション (登録 / 中身 / AI) ボタン。 localhost / 登録済は出さない。
+    function groupActions(g: { key: string; is_domain: boolean; registered: boolean; is_localhost: boolean; remotes: PacketMonFlowRemote[]; friendly_name: string | null; hint?: string; remote_name?: string }, direction: 'out' | 'in'): string {
+      if (g.is_localhost) return ''; // localhost は対象外
+      const parts: string[] = [];
+      const aiKey = `${a.adapter}|${direction}|${g.key}`;
+      if (g.is_domain && !g.registered) {
+        parts.push(`<button type="button" class="ghost packetmon-register-btn" data-key="${escapeHtml(g.key)}" title="このドメインを「確認済」 として登録">＋ 登録</button>`);
+      } else if (g.registered) {
+        parts.push(`<span class="packetmon-badge packetmon-badge-ok" title="登録済">✓ 登録済</span>`);
+      } else {
+        // 不明バッジは「クリックで PTR 再試行」 (= force=true、 cache bypass)。
+        const ips = g.remotes.map((r) => r.remote_ip).filter(Boolean).slice(0, 5);
+        const ipsAttr = escapeHtml(ips.join(','));
+        const expKey = `${direction}|${a.adapter}|${g.key}`;
+        const pending = packetmonPtrPending.has(expKey);
+        const label = pending ? '⏳ 解決中…' : '? 不明';
+        parts.push(`<button type="button" class="packetmon-badge packetmon-badge-unknown packetmon-ptr-retry-btn" data-ips="${ipsAttr}" data-expkey="${escapeHtml(expKey)}" data-group-key="${escapeHtml(g.key)}" data-direction="${direction}" data-adapter="${escapeHtml(a.adapter)}" title="クリックで逆引き (PTR) を再試行 (cache bypass / 3 秒待ち)" ${pending ? 'disabled' : ''}>${label}</button>`);
+      }
+      // 🤖 AI 識別 ボタン: well-known マッチも PTR もなく、 登録もされていない group に表示
+      const aiPending = packetmonAiPending.has(aiKey);
+      const aiResult = packetmonAiResults.get(aiKey);
+      const showAi = !g.is_localhost && !g.registered && !g.friendly_name;
+      if (showAi) {
+        const aiLabel = aiPending ? '⏳ AI 識別中…' : (aiResult ? '🤖 AI 再識別' : '🤖 AI 識別');
+        parts.push(`<button type="button" class="ghost packetmon-ai-btn" data-ai-key="${escapeHtml(aiKey)}" data-target="${escapeHtml(g.key)}" data-direction="${direction}" data-adapter="${escapeHtml(a.adapter)}" title="LLM (Claude/Gemini/OpenAI 等) に観測情報を渡してサービス名を推定" ${aiPending ? 'disabled' : ''}>${aiLabel}</button>`);
+      }
+      if (!g.registered) {
+        parts.push(`<button type="button" class="ghost packetmon-inspect-btn" data-target="${escapeHtml(g.key)}" data-adapter-index="${a.adapter_index}" data-direction="${direction}" title="この宛先のパケットを on-demand で 5 秒キャプチャして中身を見る">🔍 中身</button>`);
+      }
+      return `<span class="packetmon-group-actions">${parts.join('')}</span>`;
+    }
+
+    function outboundGroupHtml(g: PacketMonOutboundGroup, _idx: number): string {
+      const expKey = `out|${a.adapter}|${g.key}`;
+      const expanded = packetmonExpanded.has(expKey);
+      const ptrBadge = g.derived_from_ptr
+        ? ' <span class="packetmon-ptr-badge" title="逆引き PTR から推定したドメイン (= SNI/HTTP host/DNS query 由来ではない)">PTR</span>'
+        : '';
+      const friendlyBadge = g.friendly_name
+        ? ` <span class="packetmon-friendly" title="well-known エンドポイント辞書のマッチ">${escapeHtml(g.friendly_name)}</span>`
+        : '';
+      // OUTBOUND 通信経路として 「どのプロセスが出したか」 を header にチラ見せ
+      const procChips = g.processes && g.processes.length > 0
+        ? ` <span class="packetmon-proc-chip-row" title="${escapeHtml(g.processes.map((x) => `${x.name} (${x.count})`).join('\n'))}">${
+            g.processes.slice(0, 2).map((x) => `<span class="packetmon-proc-chip">${escapeHtml(x.name)}</span>`).join('')
+          }${g.processes.length > 2 ? `<span class="muted">+${g.processes.length - 2}</span>` : ''}</span>`
+        : '';
+      const headLabel = g.is_domain
+        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>${ptrBadge}${friendlyBadge}${procChips}`
+        : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>${friendlyBadge}${procChips}`;
+      const ipsLabel2 = g.unique_ips > 1
+        ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
+        : '';
+      const protos = new Set(g.remotes.map((r) => r.proto));
+      const protoLabel = [...protos].slice(0, 3).join(', ') + (protos.size > 3 ? ' …' : '');
+      const inspectKey = `${a.adapter_index}|${g.key}`;
+      const inspectShown = packetmonInspectShown.has(inspectKey);
+      const inspectCached = packetmonInspectCache.get(inspectKey);
+      return `<div class="packetmon-group ${expanded ? 'is-expanded' : ''}" data-expkey="${escapeHtml(expKey)}">
+        <div class="packetmon-group-row">
+          <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
+            <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+            <span class="packetmon-count">${g.total_count}</span>
+            ${headLabel}
+            ${ipsLabel2}
+            <span class="muted">· ${escapeHtml(protoLabel)}</span>
+          </button>
+          ${groupActions(g, 'out')}
+        </div>
+        ${expanded ? `<table class="packetmon-table packetmon-group-detail">
+          <thead><tr><th>count</th><th>proto</th><th>remote</th><th>プロセス</th></tr></thead>
+          <tbody>${detailRowsHtml(g.remotes, true)}</tbody>
+        </table>` : ''}
+        ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
+        ${aiPanelHtml(`${a.adapter}|out|${g.key}`)}
+      </div>`;
+    }
+
+    function inboundGroupHtml(g: PacketMonInboundGroup): string {
+      const expKey = `in|${a.adapter}|${g.key}`;
+      const expanded = packetmonExpanded.has(expKey);
+      const friendlyBadge = g.friendly_name
+        ? ` <span class="packetmon-friendly" title="well-known エンドポイント辞書のマッチ">${escapeHtml(g.friendly_name)}</span>`
+        : '';
+      const headLabel = g.is_domain
+        ? `<span class="packetmon-ptr">${escapeHtml(g.key)}</span>${friendlyBadge}`
+        : `<span class="packetmon-src">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>${friendlyBadge}`;
+      const ipsLabel2 = g.unique_ips > 1
+        ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
+        : '';
+      const protos = new Set(g.remotes.map((r) => r.proto));
+      const protoLabel = [...protos].slice(0, 3).join(', ') + (protos.size > 3 ? ' …' : '');
+      const inspectKey = `${a.adapter_index}|${g.key}`;
+      const inspectShown = packetmonInspectShown.has(inspectKey);
+      const inspectCached = packetmonInspectCache.get(inspectKey);
+      return `<div class="packetmon-group ${expanded ? 'is-expanded' : ''}" data-expkey="${escapeHtml(expKey)}">
+        <div class="packetmon-group-row">
+          <button type="button" class="packetmon-group-head" data-expkey="${escapeHtml(expKey)}">
+            <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+            <span class="packetmon-count">${g.total_count}</span>
+            ${headLabel}
+            ${ipsLabel2}
+            <span class="muted">· ${escapeHtml(protoLabel)}</span>
+          </button>
+          ${groupActions(g, 'in')}
+        </div>
+        ${expanded ? `<table class="packetmon-table packetmon-group-detail">
+          <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
+          <tbody>${detailRowsHtml(g.remotes, false)}</tbody>
+        </table>` : ''}
+        ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
+        ${aiPanelHtml(`${a.adapter}|in|${g.key}`)}
+      </div>`;
+    }
+
+    // AI 識別結果パネル (group の下に挿入)
+    function aiPanelHtml(aiKey: string): string {
+      const r = packetmonAiResults.get(aiKey);
+      if (!r) return '';
+      const pct = Math.round((r.confidence || 0) * 100);
+      const cls = r.confidence >= 0.7 ? 'high' : r.confidence >= 0.3 ? 'mid' : 'low';
+      return `<div class="packetmon-ai-panel packetmon-ai-${cls}">
+        <span class="packetmon-ai-name">🤖 ${escapeHtml(r.name)}</span>
+        <span class="packetmon-ai-conf">確信度 ${pct}%</span>
+        ${r.reasoning ? `<div class="packetmon-ai-reasoning muted">${escapeHtml(r.reasoning)}</div>` : ''}
+      </div>`;
+    }
+
+    function inspectPanelHtml(key: string, r: PacketMonInspectResult | undefined): string {
+      if (!r) {
+        return `<div class="packetmon-inspect-panel"><p class="muted">読み込み中… (tshark で 5 秒キャプチャ中)</p></div>`;
+      }
+      if (r.error) {
+        return `<div class="packetmon-inspect-panel">
+          <p class="muted" style="color:#c0392b">⚠ ${escapeHtml(r.error)}</p>
+          <p class="muted" style="font-size:11px">filter: BPF=${escapeHtml(r.bpf_filter)} / display=${escapeHtml(r.display_filter)}</p>
+        </div>`;
+      }
+      return `<div class="packetmon-inspect-panel">
+        <div class="packetmon-inspect-meta muted">
+          ${r.packets} 件 / BPF=${escapeHtml(r.bpf_filter)} / display=${escapeHtml(r.display_filter)}
+        </div>
+        <pre class="packetmon-inspect-text">${escapeHtml(r.text || '(empty)')}</pre>
+      </div>`;
+    }
+
+    const outboundBlocks = a.outbound.map(outboundGroupHtml).join('');
+    const inboundBlocks = a.inbound.map(inboundGroupHtml).join('');
+    const hintsRows = a.outbound_hints.map((h) =>
+      `<li><span class="packetmon-count">${h.count}</span> ${escapeHtml(h.hint)}</li>`
+    ).join('');
+
+    return `
+      <article class="card packetmon-card" data-adapter="${escapeHtml(a.adapter)}">
+        <header class="packetmon-card-head">
+          <strong>${escapeHtml(a.adapter)}</strong>
+          <span class="muted">${escapeHtml(a.alias || '')}</span>
+          <span class="grow"></span>
+          <span class="packetmon-ip-pill" title="この NIC の IPv4">${escapeHtml(ipsLabel)}</span>
+        </header>
+        <div class="packetmon-counts">
+          <span>📤 out <b>${counts.outbound}</b></span>
+          <span>📥 in <b>${counts.inbound}</b></span>
+          <span class="muted">self ${counts.self_loop} · off-adapter ${counts.off_adapter}</span>
+          <span class="muted">total ${totalPkt}</span>
+        </div>
+
+        <div class="packetmon-section">
+          <h4>📤 OUTBOUND 接続先 (ドメインで集約、 行をクリックで IP/proto 内訳)</h4>
+          ${a.outbound.length === 0
+            ? '<p class="muted">outbound 接続はありません</p>'
+            : `<div class="packetmon-groups">${outboundBlocks}</div>`}
+        </div>
+
+        <div class="packetmon-section">
+          <h4>📤 渡しているホスト名 (SNI / HTTP host / DNS query 統合)</h4>
+          ${a.outbound_hints.length === 0
+            ? '<p class="muted">ホスト名は捕捉できていません (= TLS SNI / DNS query 未観測)</p>'
+            : `<ul class="packetmon-hints">${hintsRows}</ul>`}
+        </div>
+
+        <div class="packetmon-section">
+          <h4>📥 INBOUND 接続元 (逆引き で集約、 行をクリックで IP/proto 内訳)</h4>
+          ${a.inbound.length === 0
+            ? '<p class="muted">inbound 接続はありません</p>'
+            : `<div class="packetmon-groups">${inboundBlocks}</div>`}
+        </div>
+      </article>`;
+  }).join('');
+}
+
+// グループ行のトグル + 登録ボタン + 中身ボタン + 不明 → PTR 再試行。
+document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => {
+  const t = ev.target as HTMLElement;
+  const regBtn = t.closest('.packetmon-register-btn') as HTMLElement | null;
+  if (regBtn) {
+    ev.stopPropagation();
+    void registerPacketmonDomain(regBtn.dataset.key || '');
+    return;
+  }
+  const inspBtn = t.closest('.packetmon-inspect-btn') as HTMLElement | null;
+  if (inspBtn) {
+    ev.stopPropagation();
+    const target = inspBtn.dataset.target || '';
+    const ai = Number(inspBtn.dataset.adapterIndex) || 1;
+    void inspectPacketmonTarget(target, ai);
+    return;
+  }
+  const ptrBtn = t.closest('.packetmon-ptr-retry-btn') as HTMLElement | null;
+  if (ptrBtn) {
+    ev.stopPropagation();
+    const ips = (ptrBtn.dataset.ips || '').split(',').filter(Boolean);
+    const expKey = ptrBtn.dataset.expkey || '';
+    const groupKey = ptrBtn.dataset.groupKey || '';
+    const direction = (ptrBtn.dataset.direction === 'in' ? 'in' : 'out') as 'in' | 'out';
+    const adapter = ptrBtn.dataset.adapter || '';
+    void retryPtrForGroup(expKey, groupKey, direction, adapter, ips);
+    return;
+  }
+  const aiBtn = t.closest('.packetmon-ai-btn') as HTMLElement | null;
+  if (aiBtn) {
+    ev.stopPropagation();
+    const aiKey = aiBtn.dataset.aiKey || '';
+    const target = aiBtn.dataset.target || '';
+    const adapter = aiBtn.dataset.adapter || '';
+    const direction = (aiBtn.dataset.direction === 'in' ? 'in' : 'out') as 'in' | 'out';
+    void identifyEndpointWithAi(aiKey, target, adapter, direction);
+    return;
+  }
+  const head = t.closest('.packetmon-group-head') as HTMLElement | null;
+  if (!head) return;
+  const key = head.dataset.expkey;
+  if (!key) return;
+  if (packetmonExpanded.has(key)) packetmonExpanded.delete(key);
+  else packetmonExpanded.add(key);
+  rerenderPacketMonitor();
+});
+
+// イベント結線 (refresh ボタン + フィルタ変更)
+document.getElementById('packetmonRefreshBtn')?.addEventListener('click', () => {
+  void loadPacketMonitor();
+  void loadPacketmonProcesses();
+});
+['packetmonSince','packetmonTopN','packetmonResolvePtr'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('change', () => {
+    void loadPacketMonitor();
+    if (id === 'packetmonSince') void loadPacketmonProcesses();
+  });
+});
+document.getElementById('packetmonProcRefreshBtn')?.addEventListener('click', () => void loadPacketmonProcesses());
+
+// ── プロセス別 IN/OUT (Sysmon + Get-NetTCPConnection) ────────────
+interface PacketMonProcFlowRemote {
+  proto: string; remote_ip: string; remote_port: number; count: number;
+  source: string[];
+}
+interface PacketMonProcSummary {
+  process: string; pids: number[];
+  /** exe フルパス (Sysmon Image / Get-Process Path)。 取れない場合は空配列 */
+  paths: string[];
+  outbound: PacketMonProcFlowRemote[];
+  inbound: PacketMonProcFlowRemote[];
+  total_count: number;
+}
+interface PacketMonProcResponse {
+  available: boolean; reason: string | null;
+  sysmon_available: boolean; process_count: number;
+  processes: PacketMonProcSummary[]; generated_at: string;
+}
+
+// 折り畳み: 「あるプロセスの out/in リスト」 を展開中 set。
+const packetmonProcExpanded: Set<string> = new Set();
+// 🤖 AI 解析 (= 「このプロセスが何の exe か」) の進行中 set + 結果キャッシュ
+const packetmonProcAiPending: Set<string> = new Set();
+interface PacketmonProcAiResult {
+  vendor: string; product: string; category: string;
+  description: string; expected_behavior: string;
+  confidence: number;
+}
+const packetmonProcAiResults: Map<string, PacketmonProcAiResult> = new Map();
+
+async function loadPacketmonProcesses(opts: { silent?: boolean } = {}) {
+  const sinceSel = document.getElementById('packetmonSince') as HTMLSelectElement | null;
+  const since = sinceSel?.value || '5';
+  const statusEl = document.getElementById('packetmonProcStatus');
+  const listEl = document.getElementById('packetmonProcList');
+  if (!listEl) return;
+  if (statusEl && !opts.silent) statusEl.textContent = '読み込み中… (PowerShell)';
+  try {
+    const qs = `since_minutes=${encodeURIComponent(since === '0' ? '5' : since)}&top_n=30&per_proc_top=10`;
+    const apiFn = opts.silent ? apiSilent : api;
+    const r = await apiFn(`/api/packet-monitor/processes?${qs}`) as PacketMonProcResponse;
+    renderPacketmonProcesses(r);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `読み込みエラー: ${(e as Error).message}`;
+  }
+}
+
+function renderPacketmonProcesses(r: PacketMonProcResponse) {
+  _lastPacketmonProcesses = r.processes || [];
+  _lastPacketmonProcResponse = r;
+  const listEl = document.getElementById('packetmonProcList');
+  const statusEl = document.getElementById('packetmonProcStatus');
+  if (!listEl) return;
+  if (statusEl) {
+    const sysmonMark = r.sysmon_available ? '✓ Sysmon' : '⚠ Sysmon 未稼働 (snapshot のみ)';
+    statusEl.textContent = `${r.process_count} プロセス · ${sysmonMark} · ${new Date(r.generated_at).toLocaleTimeString()}`;
+    statusEl.title = r.reason || '';
+  }
+  if (!r.processes || r.processes.length === 0) {
+    listEl.innerHTML = '<p class="muted">プロセスが検出されませんでした</p>';
+    return;
+  }
+
+  function flowRow(f: PacketMonProcFlowRemote): string {
+    const srcTag = f.source.includes('sysmon') ? ' <span class="packetmon-src-tag" title="Sysmon Event 3 由来">S</span>' : '';
+    return `<li>
+      <span class="packetmon-count">${f.count}</span>
+      <span class="packetmon-proto">${escapeHtml(f.proto)}</span>
+      <span class="packetmon-dst">${escapeHtml(f.remote_ip)}:${f.remote_port}</span>
+      ${srcTag}
+    </li>`;
+  }
+
+  listEl.innerHTML = r.processes.map((p) => {
+    const expanded = packetmonProcExpanded.has(p.process);
+    const outCount = p.outbound.reduce((s, f) => s + f.count, 0);
+    const inCount = p.inbound.reduce((s, f) => s + f.count, 0);
+    const pidsLabel = p.pids.length > 0 ? ` <span class="muted">pid ${p.pids.slice(0, 3).join(',')}${p.pids.length > 3 ? `+${p.pids.length - 3}` : ''}</span>` : '';
+    // exe フルパスは head に最大 1 件チラ見せ (= 同じプロセス名で複数 path の時は + N)。
+    const paths = p.paths || [];
+    const pathLabel = paths.length > 0
+      ? ` <span class="packetmon-proc-path" title="${escapeHtml(paths.join('\n'))}">${escapeHtml(paths[0])}${paths.length > 1 ? ` <span class=\"muted\">+${paths.length - 1}</span>` : ''}</span>`
+      : ' <span class="muted" title="exe パス取得失敗 (権限なし / システムプロセス)">パス不明</span>';
+    const pathsDetail = paths.length > 1
+      ? `<div class="packetmon-proc-paths"><h5>📂 exe パス (${paths.length})</h5><ul>${paths.map((pp) => `<li><code>${escapeHtml(pp)}</code></li>`).join('')}</ul></div>`
+      : '';
+    // 🤖 AI 解析 ボタン状態 (= 「このプロセスが何の exe か」)
+    const aiPending = packetmonProcAiPending.has(p.process);
+    const aiResult = packetmonProcAiResults.get(p.process);
+    const aiLabel = aiPending ? '⏳ AI 解析中…' : (aiResult ? '🤖 AI 再解析' : '🤖 AI 解析');
+    return `<div class="packetmon-proc-item ${expanded ? 'is-expanded' : ''}" data-proc="${escapeHtml(p.process)}">
+      <div class="packetmon-proc-row">
+        <button type="button" class="packetmon-proc-head" data-proc="${escapeHtml(p.process)}">
+          <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+          <span class="packetmon-proc-name"><b>${escapeHtml(p.process)}</b></span>
+          ${pidsLabel}
+          ${pathLabel}
+          <span class="grow"></span>
+          <span class="packetmon-proc-counts">
+            <span title="outbound">📤 ${outCount}</span>
+            <span title="inbound">📥 ${inCount}</span>
+          </span>
+        </button>
+        <button type="button" class="ghost packetmon-proc-ai-btn" data-proc="${escapeHtml(p.process)}" title="LLM にプロセス情報と通信パターンを渡して何の exe か推定" ${aiPending ? 'disabled' : ''}>${aiLabel}</button>
+      </div>
+      ${aiResult ? procAiPanelHtml(aiResult) : ''}
+      ${expanded ? `<div class="packetmon-proc-detail">
+        ${pathsDetail}
+        <div class="packetmon-proc-col">
+          <h5>📤 OUTBOUND (${p.outbound.length})</h5>
+          ${p.outbound.length === 0 ? '<p class="muted">なし</p>' : `<ul class="packetmon-proc-flows">${p.outbound.map(flowRow).join('')}</ul>`}
+        </div>
+        <div class="packetmon-proc-col">
+          <h5>📥 INBOUND (${p.inbound.length})</h5>
+          ${p.inbound.length === 0 ? '<p class="muted">なし</p>' : `<ul class="packetmon-proc-flows">${p.inbound.map(flowRow).join('')}</ul>`}
+        </div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function procAiPanelHtml(r: PacketmonProcAiResult): string {
+  const pct = Math.round((r.confidence || 0) * 100);
+  const cls = r.confidence >= 0.7 ? 'high' : r.confidence >= 0.3 ? 'mid' : 'low';
+  const catLabel = r.category ? `<span class="packetmon-proc-ai-cat">${escapeHtml(r.category)}</span>` : '';
+  const vendor = r.vendor ? `<span class="muted">${escapeHtml(r.vendor)} ·</span> ` : '';
+  return `<div class="packetmon-proc-ai-panel packetmon-ai-${cls}">
+    <div class="packetmon-proc-ai-head">
+      🤖 ${vendor}<b>${escapeHtml(r.product)}</b> ${catLabel}
+      <span class="packetmon-ai-conf">確信度 ${pct}%</span>
+    </div>
+    ${r.description ? `<div class="packetmon-proc-ai-desc">${escapeHtml(r.description)}</div>` : ''}
+    ${r.expected_behavior ? `<div class="packetmon-proc-ai-behavior muted">想定挙動: ${escapeHtml(r.expected_behavior)}</div>` : ''}
+  </div>`;
+}
+
+// プロセス行のトグル + AI 解析 ボタン
+document.getElementById('packetmonProcList')?.addEventListener('click', (ev) => {
+  const t = ev.target as HTMLElement;
+  const aiBtn = t.closest('.packetmon-proc-ai-btn') as HTMLElement | null;
+  if (aiBtn) {
+    ev.stopPropagation();
+    void identifyProcessWithAi(aiBtn.dataset.proc || '');
+    return;
+  }
+  const head = t.closest('.packetmon-proc-head') as HTMLElement | null;
+  if (!head) return;
+  const proc = head.dataset.proc || '';
+  if (!proc) return;
+  if (packetmonProcExpanded.has(proc)) packetmonProcExpanded.delete(proc);
+  else packetmonProcExpanded.add(proc);
+  // 直接再 fetch せず、 最後の結果から再描画したいので fetch を silent で実行
+  void loadPacketmonProcesses({ silent: true });
+});
+
+async function identifyProcessWithAi(procName: string) {
+  if (!procName) return;
+  if (packetmonProcAiPending.has(procName)) return;
+  // 該当プロセスを _lastPacketmonProcesses から探す
+  const p = _lastPacketmonProcesses.find((x) => x.process === procName);
+  if (!p) {
+    flashToast(`プロセス情報が見つかりません: ${procName}`);
+    return;
+  }
+  packetmonProcAiPending.add(procName);
+  // proc セクションを即時 re-render (= ⏳ 表示にするため fetch を bypass)
+  if (_lastPacketmonProcResponse) renderPacketmonProcesses(_lastPacketmonProcResponse);
+  try {
+    const r = await api('/api/packet-monitor/identify-process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        process: p.process,
+        pids: p.pids,
+        paths: p.paths,
+        outbound: p.outbound.slice(0, 8),
+        inbound: p.inbound.slice(0, 8),
+      }),
+    }) as PacketmonProcAiResult;
+    packetmonProcAiResults.set(procName, r);
+    flashToast(`🤖 ${procName}: ${r.product} (${Math.round((r.confidence || 0) * 100)}%)`);
+  } catch (e) {
+    packetmonProcAiResults.set(procName, {
+      vendor: '', product: 'エラー', category: 'other',
+      description: (e as Error).message, expected_behavior: '', confidence: 0,
+    });
+    flashToast(`⚠ AI 解析失敗: ${(e as Error).message}`);
+  } finally {
+    packetmonProcAiPending.delete(procName);
+    if (_lastPacketmonProcResponse) renderPacketmonProcesses(_lastPacketmonProcResponse);
+  }
+}
 
 // ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────
 //
