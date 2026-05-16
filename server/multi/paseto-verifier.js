@@ -87,6 +87,11 @@ export async function verifyPaseto(token) {
       if (!HUB_PUBLIC_URL) {
         console.warn('[paseto] MEMORIA_HUB_PUBLIC_URL not set — aud check skipped');
       }
+      // paseto v3 規約で iat/exp は ISO 8601 文字列。 Hub 内部表現は Unix epoch
+      // (秒) に揃えるため変換する。 未パースは null。
+      const expUnix = typeof payload.exp === 'string'
+        ? Math.floor(new Date(payload.exp).getTime() / 1000)
+        : typeof payload.exp === 'number' ? payload.exp : null;
       return {
         userId: typeof payload.sub === 'string' ? payload.sub : null,
         role: typeof payload.role === 'string' ? payload.role : 'general',
@@ -94,7 +99,7 @@ export async function verifyPaseto(token) {
         projectKey: typeof payload.projectKey === 'string' ? payload.projectKey : null,
         kid,
         jti: typeof payload.jti === 'string' ? payload.jti : null,
-        exp: typeof payload.exp === 'number' ? payload.exp : null,
+        exp: Number.isFinite(expUnix) ? expUnix : null,
       };
     } catch (e) {
       // kid 違い or invalid → 次の key を試す
