@@ -6881,7 +6881,10 @@ dialog.loc-edit-modal[open] {
 .packetmon-group-head {
   display: flex; gap: 8px; align-items: baseline;
   width: 100%; padding: 4px 8px; font-size: 12px;
+  /* global `button { color:#fff; background: var(--accent); }` を打ち消す */
   background: transparent; border: 0; cursor: pointer; text-align: left;
+  color: var(--text);
+  border-radius: 0;
 }
 .packetmon-group-head:hover { background: var(--accent-bg); }
 .packetmon-arrow { width: 12px; flex-shrink: 0; color: var(--muted); }
