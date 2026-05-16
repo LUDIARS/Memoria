@@ -26,6 +26,7 @@ import * as os from 'node:os';
 import * as dns from 'node:dns/promises';
 import { spawn } from 'node:child_process';
 import { WELL_KNOWN_RULES, lookupFriendlyName } from '../lib/packet-known-endpoints.js';
+import { getProcessAttribution } from '../lib/packet-process-attribution.js';
 
 interface Meta {
   Friendly: string;
@@ -622,6 +623,26 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
   // ── well-known エンドポイント 辞書 (= 内蔵 IP/PTR/host 辞書、 read-only) ──
   r.get('/api/packet-monitor/well-known', (c: Context) => {
     return c.json({ items: WELL_KNOWN_RULES });
+  });
+
+  // ── プロセス別 IN/OUT (Sysmon Event 3 + Get-NetTCPConnection スナップショット) ──
+  //   ?since_minutes=N  (Sysmon の取得範囲、 既定 5)
+  //   ?top_n=N          (プロセス上位件数、 既定 30)
+  //   ?per_proc_top=N   (各プロセスの remote 上位件数、 既定 10)
+  // PowerShell を spawn するので 30s キャッシュ済。
+  r.get('/api/packet-monitor/processes', async (c: Context) => {
+    const sinceMin = Math.max(1, Math.min(60, Number(c.req.query('since_minutes')) || 5));
+    const topN = Math.max(1, Math.min(200, Number(c.req.query('top_n')) || 30));
+    const perTop = Math.max(1, Math.min(50, Number(c.req.query('per_proc_top')) || 10));
+    const r2 = await getProcessAttribution(sinceMin);
+    return c.json({
+      ...r2,
+      processes: r2.processes.slice(0, topN).map((p) => ({
+        ...p,
+        outbound: p.outbound.slice(0, perTop),
+        inbound: p.inbound.slice(0, perTop),
+      })),
+    });
   });
 
   // ── 登録済み宛先 (= ユーザが「確認した OK」 と印を付けたドメイン / IP) ──

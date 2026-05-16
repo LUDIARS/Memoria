@@ -663,6 +663,19 @@
           <button id="packetmonRefreshBtn" type="button">↻ 更新</button>
         </div>
         <div id="packetmonStatus" class="muted" style="font-size:12px;margin:6px 0"></div>
+
+        <!-- 🔧 プロセス別 IN/OUT (Sysmon Event 3 + Get-NetTCPConnection) ─
+             アダプタ別サマリ (= 下) とは別軸の「どのプロセスが何処へ繋いでいるか」 ビュー -->
+        <details id="packetmonProcDetails" class="card packetmon-proc-card" open>
+          <summary class="packetmon-proc-summary">
+            <strong>🔧 プロセス別 IN/OUT</strong>
+            <span id="packetmonProcStatus" class="muted" style="font-size:11px;margin-left:8px"></span>
+            <span class="grow"></span>
+            <button id="packetmonProcRefreshBtn" type="button" class="ghost" style="font-size:11px;padding:2px 8px" title="PowerShell で再取得 (30 秒キャッシュ)">↻ 更新</button>
+          </summary>
+          <div id="packetmonProcList" class="packetmon-proc-list"></div>
+        </details>
+
         <div id="packetmonAdapters" class="packetmon-adapters"></div>
         <div id="packetmonEmpty" class="hint hidden">
           PacketMonitor が動いていません。 設定 → 📚 セットアップ手順 → 🛡 パケット監視 を参照してください。

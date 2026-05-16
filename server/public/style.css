@@ -6925,6 +6925,44 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   font-size: 11px; font-weight: 600; vertical-align: middle;
 }
 
+/* ── 🔧 プロセス別 IN/OUT (packet 監視 タブ上部の collapsible card) ── */
+.packetmon-proc-card { padding: 8px 12px; margin-bottom: 12px; }
+.packetmon-proc-summary {
+  display: flex; align-items: baseline; gap: 6px; cursor: pointer; user-select: none;
+  font-size: 13px; padding: 4px 0;
+}
+.packetmon-proc-summary::-webkit-details-marker { display: none; }
+.packetmon-proc-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.packetmon-proc-item {
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  background: var(--panel);
+}
+.packetmon-proc-item.is-expanded { background: var(--accent-bg); }
+.packetmon-proc-head {
+  display: flex; align-items: baseline; gap: 8px;
+  width: 100%; padding: 4px 8px; font-size: 12px;
+  background: transparent; border: 0; cursor: pointer; text-align: left;
+  color: var(--text); border-radius: 0;
+}
+.packetmon-proc-head:hover { background: var(--accent-bg); }
+.packetmon-proc-name { color: var(--accent); }
+.packetmon-proc-counts { font-family: monospace; font-size: 11px; }
+.packetmon-proc-counts span { margin-left: 8px; }
+.packetmon-proc-detail {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  padding: 6px 8px 8px 24px; font-size: 12px;
+}
+.packetmon-proc-detail h5 { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
+.packetmon-proc-flows { list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 2px; font-family: monospace;
+}
+.packetmon-proc-flows li { display: flex; gap: 6px; align-items: baseline; }
+.packetmon-src-tag {
+  display: inline-block; padding: 0 4px; border-radius: 3px;
+  background: var(--accent); color: #fff; font-size: 9px;
+}
+@media (max-width: 760px) { .packetmon-proc-detail { grid-template-columns: 1fr; } }
+
 /* ── 🛡 既知エンドポイント sub-tab ─────────────────────────────── */
 .endpoints-list { margin: 4px 0 12px; }
 .endpoints-table {

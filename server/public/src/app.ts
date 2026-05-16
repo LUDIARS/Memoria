@@ -1197,7 +1197,7 @@ function switchTab(tab) {
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
-  if (tab === 'packetmon') loadPacketMonitor();
+  if (tab === 'packetmon') { loadPacketMonitor(); void loadPacketmonProcesses(); }
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
@@ -11606,7 +11606,10 @@ let _packetmonAutoTimer: ReturnType<typeof setInterval> | null = null;
 function startPacketmonAutoRefresh() {
   if (_packetmonAutoTimer != null) return;
   _packetmonAutoTimer = setInterval(() => {
-    if (state.tab === 'packetmon') void loadPacketMonitor({ silent: true });
+    if (state.tab === 'packetmon') {
+      void loadPacketMonitor({ silent: true });
+      void loadPacketmonProcesses({ silent: true });
+    }
   }, 60_000);
 }
 function stopPacketmonAutoRefresh() {
@@ -11986,9 +11989,119 @@ document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => 
 });
 
 // イベント結線 (refresh ボタン + フィルタ変更)
-document.getElementById('packetmonRefreshBtn')?.addEventListener('click', () => void loadPacketMonitor());
+document.getElementById('packetmonRefreshBtn')?.addEventListener('click', () => {
+  void loadPacketMonitor();
+  void loadPacketmonProcesses();
+});
 ['packetmonSince','packetmonTopN','packetmonResolvePtr'].forEach((id) => {
-  document.getElementById(id)?.addEventListener('change', () => void loadPacketMonitor());
+  document.getElementById(id)?.addEventListener('change', () => {
+    void loadPacketMonitor();
+    if (id === 'packetmonSince') void loadPacketmonProcesses();
+  });
+});
+document.getElementById('packetmonProcRefreshBtn')?.addEventListener('click', () => void loadPacketmonProcesses());
+
+// ── プロセス別 IN/OUT (Sysmon + Get-NetTCPConnection) ────────────
+interface PacketMonProcFlowRemote {
+  proto: string; remote_ip: string; remote_port: number; count: number;
+  source: string[];
+}
+interface PacketMonProcSummary {
+  process: string; pids: number[];
+  outbound: PacketMonProcFlowRemote[];
+  inbound: PacketMonProcFlowRemote[];
+  total_count: number;
+}
+interface PacketMonProcResponse {
+  available: boolean; reason: string | null;
+  sysmon_available: boolean; process_count: number;
+  processes: PacketMonProcSummary[]; generated_at: string;
+}
+
+// 折り畳み: 「あるプロセスの out/in リスト」 を展開中 set。
+const packetmonProcExpanded: Set<string> = new Set();
+
+async function loadPacketmonProcesses(opts: { silent?: boolean } = {}) {
+  const sinceSel = document.getElementById('packetmonSince') as HTMLSelectElement | null;
+  const since = sinceSel?.value || '5';
+  const statusEl = document.getElementById('packetmonProcStatus');
+  const listEl = document.getElementById('packetmonProcList');
+  if (!listEl) return;
+  if (statusEl && !opts.silent) statusEl.textContent = '読み込み中… (PowerShell)';
+  try {
+    const qs = `since_minutes=${encodeURIComponent(since === '0' ? '5' : since)}&top_n=30&per_proc_top=10`;
+    const apiFn = opts.silent ? apiSilent : api;
+    const r = await apiFn(`/api/packet-monitor/processes?${qs}`) as PacketMonProcResponse;
+    renderPacketmonProcesses(r);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `読み込みエラー: ${(e as Error).message}`;
+  }
+}
+
+function renderPacketmonProcesses(r: PacketMonProcResponse) {
+  const listEl = document.getElementById('packetmonProcList');
+  const statusEl = document.getElementById('packetmonProcStatus');
+  if (!listEl) return;
+  if (statusEl) {
+    const sysmonMark = r.sysmon_available ? '✓ Sysmon' : '⚠ Sysmon 未稼働 (snapshot のみ)';
+    statusEl.textContent = `${r.process_count} プロセス · ${sysmonMark} · ${new Date(r.generated_at).toLocaleTimeString()}`;
+    statusEl.title = r.reason || '';
+  }
+  if (!r.processes || r.processes.length === 0) {
+    listEl.innerHTML = '<p class="muted">プロセスが検出されませんでした</p>';
+    return;
+  }
+
+  function flowRow(f: PacketMonProcFlowRemote): string {
+    const srcTag = f.source.includes('sysmon') ? ' <span class="packetmon-src-tag" title="Sysmon Event 3 由来">S</span>' : '';
+    return `<li>
+      <span class="packetmon-count">${f.count}</span>
+      <span class="packetmon-proto">${escapeHtml(f.proto)}</span>
+      <span class="packetmon-dst">${escapeHtml(f.remote_ip)}:${f.remote_port}</span>
+      ${srcTag}
+    </li>`;
+  }
+
+  listEl.innerHTML = r.processes.map((p) => {
+    const expanded = packetmonProcExpanded.has(p.process);
+    const outCount = p.outbound.reduce((s, f) => s + f.count, 0);
+    const inCount = p.inbound.reduce((s, f) => s + f.count, 0);
+    const pidsLabel = p.pids.length > 0 ? ` <span class="muted">pid ${p.pids.slice(0, 3).join(',')}${p.pids.length > 3 ? `+${p.pids.length - 3}` : ''}</span>` : '';
+    return `<div class="packetmon-proc-item ${expanded ? 'is-expanded' : ''}" data-proc="${escapeHtml(p.process)}">
+      <button type="button" class="packetmon-proc-head" data-proc="${escapeHtml(p.process)}">
+        <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+        <span class="packetmon-proc-name"><b>${escapeHtml(p.process)}</b></span>
+        ${pidsLabel}
+        <span class="grow"></span>
+        <span class="packetmon-proc-counts">
+          <span title="outbound">📤 ${outCount}</span>
+          <span title="inbound">📥 ${inCount}</span>
+        </span>
+      </button>
+      ${expanded ? `<div class="packetmon-proc-detail">
+        <div class="packetmon-proc-col">
+          <h5>📤 OUTBOUND (${p.outbound.length})</h5>
+          ${p.outbound.length === 0 ? '<p class="muted">なし</p>' : `<ul class="packetmon-proc-flows">${p.outbound.map(flowRow).join('')}</ul>`}
+        </div>
+        <div class="packetmon-proc-col">
+          <h5>📥 INBOUND (${p.inbound.length})</h5>
+          ${p.inbound.length === 0 ? '<p class="muted">なし</p>' : `<ul class="packetmon-proc-flows">${p.inbound.map(flowRow).join('')}</ul>`}
+        </div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// プロセス行のトグル
+document.getElementById('packetmonProcList')?.addEventListener('click', (ev) => {
+  const head = (ev.target as HTMLElement).closest('.packetmon-proc-head') as HTMLElement | null;
+  if (!head) return;
+  const proc = head.dataset.proc || '';
+  if (!proc) return;
+  if (packetmonProcExpanded.has(proc)) packetmonProcExpanded.delete(proc);
+  else packetmonProcExpanded.add(proc);
+  // 直接再 fetch せず、 最後の結果から再描画したいので fetch を silent で実行
+  void loadPacketmonProcesses({ silent: true });
 });
 
 // ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────
