@@ -40,10 +40,16 @@ interface FlowRemote {
   count: number;
 }
 interface OutboundGroup {
-  /** 表示キー: domain (hint) があればそれ、 なければ IP。 ドメイン単位で集約済 */
+  /** 表示キー: SNI/HTTP host/DNS query があればそれ、 無ければ PTR、
+   *  PTR も無ければ IP。 同じ key は merge 済 */
   key: string;
-  is_domain: boolean;       // key が domain なら true
-  hint: string;             // 集約に使った domain (空なら is_domain=false)
+  /** key が IP ではなく名前 (= SNI/HTTP/DNS or PTR) なら true */
+  is_domain: boolean;
+  /** packet から直接取れたヒント (TLS SNI / HTTP Host / DNS query 名)。
+   *  PTR 由来の場合は空 */
+  hint: string;
+  /** 名前を PTR (= 逆引き) から取った場合 true。 UI で 「(PTR)」 表示する */
+  derived_from_ptr: boolean;
   /** この group 内に集まった (proto, ip, port) のユニーク一覧。 count 降順 */
   remotes: FlowRemote[];
   /** group 内の全 packet 数 */
@@ -276,19 +282,41 @@ async function summarizeAdapter(
   }
 
   // ── outbound: ドメイン (hint) ごとに集約。 同じドメインへ別 IP / ポートで
-  //    繋がっていても 1 行にまとめる。 hint が空のときは IP がキー。
+  //    繋がっていても 1 行にまとめる。
+  //    hint が空 (= SNI/HTTP host/DNS query が観測できなかった) IP は、
+  //    PTR (逆引き) を引いて、 取れたら PTR をキーに格上げ。 取れない時だけ
+  //    IP のままの groupKey になる。 これで「IP のみ」 行も裏にドメインがある
+  //    なら同じドメインで merge できる。
   {
+    // 1) hint なし IP を集めて並列 PTR 逆引き
+    const ipsForPtr = new Set<string>();
+    for (const key of outboundByDst.keys()) {
+      const [, hp, hint] = splitN(key, '|', 3);
+      if (hint) continue;
+      const [ip] = splitN(hp, ':', 2);
+      if (ip && !localhostCidrs(ip)) ipsForPtr.add(ip);
+    }
+    const outboundPtr = new Map<string, string>();
+    if (resolvePtr && ipsForPtr.size > 0) {
+      await Promise.all([...ipsForPtr].map(async (ip) => {
+        outboundPtr.set(ip, await lookupPtr(ip, ptrCache));
+      }));
+    }
+
+    // 2) groupKey 決定: hint > PTR > IP の優先順で集約
     const groupMap = new Map<string, OutboundGroup>();
     for (const [key, count] of outboundByDst.entries()) {
       const [proto, hp, hint] = splitN(key, '|', 3);
       const [remote_ip, remote_port] = splitN(hp, ':', 2);
-      const groupKey = hint || remote_ip || '(unknown)';
+      const ptr = !hint ? (outboundPtr.get(remote_ip) || '') : '';
+      const groupKey = hint || ptr || remote_ip || '(unknown)';
       let g = groupMap.get(groupKey);
       if (!g) {
         g = {
           key: groupKey,
-          is_domain: !!hint,
+          is_domain: !!hint || !!ptr,
           hint: hint || '',
+          derived_from_ptr: !hint && !!ptr,
           remotes: [],
           total_count: 0,
           unique_ips: 0,

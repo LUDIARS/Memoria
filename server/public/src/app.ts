@@ -11438,6 +11438,7 @@ interface PacketMonOutboundGroup {
   key: string;
   is_domain: boolean;
   hint: string;
+  derived_from_ptr: boolean;
   remotes: PacketMonFlowRemote[];
   total_count: number;
   unique_ips: number;
@@ -11642,8 +11643,11 @@ function renderPacketMonitor(data: PacketMonSummary) {
     function outboundGroupHtml(g: PacketMonOutboundGroup, _idx: number): string {
       const expKey = `out|${a.adapter}|${g.key}`;
       const expanded = packetmonExpanded.has(expKey);
+      const ptrBadge = g.derived_from_ptr
+        ? ' <span class="packetmon-ptr-badge" title="逆引き PTR から推定したドメイン (= SNI/HTTP host/DNS query 由来ではない)">PTR</span>'
+        : '';
       const headLabel = g.is_domain
-        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>`
+        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>${ptrBadge}`
         : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>`;
       const ipsLabel2 = g.unique_ips > 1
         ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
