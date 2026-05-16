@@ -1567,10 +1567,8 @@
     <nav class="settings-tabs" role="tablist">
       <button type="button" class="settings-tab active" data-stab="ai" role="tab">🤖 AI / モデル</button>
       <button type="button" class="settings-tab" data-stab="api" role="tab">🔌 連携 / API key</button>
-      <button type="button" class="settings-tab" data-stab="notif" role="tab">🔔 通知 / 端末</button>
       <button type="button" class="settings-tab" data-stab="profile" role="tab">🧍 プロフィール</button>
       <button type="button" class="settings-tab" data-stab="data" role="tab">📦 データ / Hub</button>
-      <button type="button" class="settings-tab" data-stab="runtime" role="tab">🛠 ランタイム</button>
     </nav>
 
     <!-- ── 🤖 AI / モデル ── -->
@@ -1584,16 +1582,6 @@
       <h4>🐚 Bash (Windows のみ)</h4>
       <p class="ai-settings-help">Claude CLI は内部で bash を呼び出します。Windows でデスクトップアプリから動かすときだけ git-bash の絶対パスを指定してください (例: <code>C:\Program Files\Git\bin\bash.exe</code>)。空欄なら環境変数 <code>CLAUDE_CODE_GIT_BASH_PATH</code> を尊重します。</p>
       <label>git-bash path: <input id="aiGitBashPath" type="text" placeholder="C:\\Program Files\\Git\\bin\\bash.exe" /></label>
-      <h4>📝 日記の常設メモ</h4>
-      <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
-      <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
-
-      <h4>🎓 はじめての Memoria</h4>
-      <p class="ai-settings-help">起動チュートリアル (5 step wizard) を再表示します。 すでに設定済みの項目はそのまま残り、 必要なものだけ確認できます。</p>
-      <div class="ai-settings-actions">
-        <button id="tutorialReopenBtn" type="button" class="ghost">🎓 はじめての Memoria を表示</button>
-        <span id="tutorialReopenStatus" class="ai-keystatus"></span>
-      </div>
 
       <h4>🚦 AI 自動処理 (opt-out)</h4>
       <p class="ai-settings-help">既定では「保存と同時に AI が要約 / 分類 / カロリー推定 / 日記生成」を自動で走らせます。 claude / OpenAI などをまだ設定していない場合や、 ローカル単体で「素材だけ溜める」 運用にしたいときは OFF にしてください。 OFF にしても各画面の「再要約」「再分析」「日記生成」 等の手動ボタンは引き続き使えます。</p>
@@ -1627,13 +1615,16 @@
           🎮 Steam プレイ統計 (= 1 時間おきに最近プレイした game を取得)
         </label>
       </div>
+    </section>
 
-      <h4>🎮 Steam Web API (オプション)</h4>
-      <p class="ai-settings-help">API key + SteamID を入れると <a href="https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames" target="_blank" rel="noopener">公式 GetRecentlyPlayedGames</a> で取得します。 未設定でも同じ PC に Steam が入っていればローカル VDF ファイルからフォールバックで取得 (= key 不要)。</p>
-      <label>Steam Web API Key: <input id="activitySteamApiKey" type="password" placeholder="未設定 = VDF fallback" autocomplete="off" /></label>
-      <span id="activitySteamApiKeyStatus" class="ai-keystatus"></span>
-      <label>SteamID64 (17 桁): <input id="activitySteamId" type="text" placeholder="76561198..." autocomplete="off" /></label>
-      <p class="ai-settings-help">API key: <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener">steamcommunity.com/dev/apikey</a> で発行 (無料、 ドメインは <code>localhost</code> でも OK)。 SteamID64 は <a href="https://steamid.io/" target="_blank" rel="noopener">steamid.io</a> 等。 プロフィール公開設定が ON でないと空が返る。</p>
+    <!-- ── セットアップ手順 (移設): 🎓 はじめての Memoria ── -->
+    <section class="settings-tab-body hidden" data-stab="setup">
+      <h4>🎓 はじめての Memoria</h4>
+      <p class="ai-settings-help">起動チュートリアル (5 step wizard) を再表示します。 すでに設定済みの項目はそのまま残り、 必要なものだけ確認できます。</p>
+      <div class="ai-settings-actions">
+        <button id="tutorialReopenBtn" type="button" class="ghost">🎓 はじめての Memoria を表示</button>
+        <span id="tutorialReopenStatus" class="ai-keystatus"></span>
+      </div>
     </section>
 
     <!-- ── 🔌 連携 / API key ── -->
@@ -1706,10 +1697,17 @@
       </div>
       <p class="ai-settings-help">「🔧 gcloud から自動取得」は <code>gcloud services api-keys list</code> を叩いて active project の Maps key を引き当て、 そのまま設定に書き込みます (Maps API 制限の付いた key 優先 → 無制限 → その他)。 事前に <code>gcloud auth login</code> + <code>gcloud config set project &lt;ID&gt;</code> が必要。</p>
       <p class="ai-settings-help">優先順: <code>app_settings.maps.api_key</code> &gt; 環境変数 <code>GOOGLE_MAPS_API_KEY</code>。 ここで保存すれば DB 側に書かれ、 再起動不要で反映。</p>
+
+      <h4>🎮 Steam Web API (オプション)</h4>
+      <p class="ai-settings-help">API key + SteamID を入れると <a href="https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames" target="_blank" rel="noopener">公式 GetRecentlyPlayedGames</a> で取得します。 未設定でも同じ PC に Steam が入っていればローカル VDF ファイルからフォールバックで取得 (= key 不要)。</p>
+      <label>Steam Web API Key: <input id="activitySteamApiKey" type="password" placeholder="未設定 = VDF fallback" autocomplete="off" /></label>
+      <span id="activitySteamApiKeyStatus" class="ai-keystatus"></span>
+      <label>SteamID64 (17 桁): <input id="activitySteamId" type="text" placeholder="76561198..." autocomplete="off" /></label>
+      <p class="ai-settings-help">API key: <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener">steamcommunity.com/dev/apikey</a> で発行 (無料、 ドメインは <code>localhost</code> でも OK)。 SteamID64 は <a href="https://steamid.io/" target="_blank" rel="noopener">steamid.io</a> 等。 プロフィール公開設定が ON でないと空が返る。</p>
     </section>
 
-    <!-- ── 🔔 通知 / 端末 ── -->
-    <section class="settings-tab-body hidden" data-stab="notif">
+    <!-- ── 🔒 プライバシー側 (移設): デスクトップ自動起動 + WebPush 通知 ── -->
+    <section class="settings-tab-body hidden" data-stab="privacy">
       <h4 id="aiDesktopHead" hidden>🖥 デスクトップアプリ</h4>
       <div id="aiDesktopSection" hidden>
         <p class="ai-settings-help">この Memoria は Electron デスクトップアプリの中で動いています。 ウィンドウの × はトレイ最小化、 サーバは常駐し続けます (Chrome 拡張 / モバイル PWA からのアクセスは継続)。 完全終了はトレイ右クリック → 「Memoria を終了」。</p>
@@ -1720,11 +1718,6 @@
         <p class="ai-settings-help" style="margin-top:6px">
           ON にすると <code>--hidden</code> フラグでウィンドウなし起動 → トレイアイコンだけ表示されます。 普段は OS スタートアップに登録するこの方式で十分。 「ログアウト中も動かしたい」 ような用途は将来 Windows サービス化を検討します (別 PR)。
         </p>
-      </div>
-      <h4>📌 スマホでブックマークする方法</h4>
-      <p class="ai-settings-help">スマホには Chrome 拡張が使えないので、 Memoria を PWA 化して OS の共有メニューから保存します。 詳細手順:</p>
-      <div class="ai-settings-actions">
-        <button id="howToBookmarkBtnInSettings" class="ghost" type="button">💡 ブックマーク方法を表示</button>
       </div>
 
       <h4>📱 通知 (WebPush)</h4>
@@ -1766,6 +1759,10 @@
           </select>
         </label>
       </div>
+
+      <h4>📝 日記の常設メモ</h4>
+      <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
+      <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
     </section>
 
     <!-- ── 📦 データ / Hub ── -->
@@ -1779,14 +1776,6 @@
         </label>
       </div>
 
-      <h4>🧹 メンテナンス</h4>
-      <p class="ai-settings-help">過去のアクセス記録に出てきたドメインのうち、まだドメイン辞書に登録されていないものを fetch + 分類キューに積みます。 force にすると既存行も再分類します (user_edited 列は保護)。</p>
-      <div class="ai-settings-actions">
-        <button id="recatalogAllBtn">アクセス記録から全ドメインを走査</button>
-        <button id="recatalogAllForceBtn" class="ghost" title="既存の辞書行も含めて全部再分類する">force 再分類</button>
-      </div>
-      <div id="recatalogAllStatus" class="multi-status"></div>
-
       <h4>🌐 マルチサーバ (Memoria Hub)</h4>
       <p class="ai-settings-help">辞書 / ディグ / ブックマークを共有できるハブを複数登録できます。各エントリは独立した Cernere ログインを持ち、左の topbar スイッチで個別 ON/OFF (複数同時 ON 可)。</p>
       <ul id="multiServersList" class="multi-servers"></ul>
@@ -1796,13 +1785,6 @@
         <button id="multiAddBtn">＋ 追加</button>
       </div>
       <div id="multiStatus" class="multi-status"></div>
-    </section>
-
-    <!-- ── 🛠 ランタイム ── -->
-    <section class="settings-tab-body hidden" data-stab="runtime">
-      <h4>🛠 ランタイム情報 (読み取り専用)</h4>
-      <p class="ai-settings-help">これらは起動時に決まる値で、変更には再起動が必要です。デスクトップアプリから自動で渡されます。</p>
-      <div id="aiRuntimeInfo" class="ai-runtime-info"></div>
     </section>
 
     <!-- ── 共通 footer (どの tab でも見える) ── -->
