@@ -1810,6 +1810,13 @@
         </label>
       </div>
 
+      <h4>🚶 移動速度の閾値 (作業場所判定)</h4>
+      <p class="ai-settings-help">これより速い瞬間速度 (= 直前 GPS 点との距離 / 時間差) の点は「移動中」 とみなして場所タグ付けの対象から外します。 通り過ぎただけの場所を誤検出しないため。 既定 5 km/h (= 徒歩速度の上限近辺)。 0 を入れるとフィルタ無効。</p>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">移動速度の閾値:
+        <input id="workplaceMaxSpeedKmh" type="number" min="0" max="200" step="1" style="width:80px" />
+        km/h
+      </label>
+
       <h4>📝 日記の常設メモ</h4>
       <p class="ai-settings-help">日記生成時に毎回プロンプトに添える「常設メモ」。プロジェクトの背景・自分の役割・生成ルール (例: <code>Memoria は LUDIARS の個人ツール。曖昧な作業は推測で断定して書く</code>) などを書いておくと、毎日の日記の作業内容 / ハイライトに反映されます。空欄なら何も追加しません。</p>
       <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>

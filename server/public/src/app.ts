@@ -5615,7 +5615,7 @@ const SETTINGS_STAB_LABELS: Record<string, string> = {
   privacy: '🔒 プライバシー / 表示',
 };
 // 「全部」 タブで非表示にする 手順系 (= 一度しか見ない / 別 UI)。
-const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup', 'agent-projects']);
+const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup']);
 
 function applyAllModeHeadings(panel: HTMLElement, isAll: boolean) {
   // 既存の見出しを除去
@@ -5665,7 +5665,7 @@ document.addEventListener('click', (ev) => {
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
-  if (stab === 'agent-projects') loadAgentProjects().catch(console.warn);
+  // 'agent-projects' タブは廃止 (AI 実装プロジェクト機能を休止)
   panel.scrollTop = 0;
 });
 
@@ -5935,11 +5935,18 @@ let ensureMemoriaFeatureViews = function () {
   const settingsTabs = document.querySelector('.settings-tabs');
   const footer = document.querySelector('.settings-footer');
   if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
+    // 🌐 全部 タブは一番左に置きたいので prepend、 他は順番通り append。
+    // 「🤖 AI 実装プロジェクト」 は今回廃止。
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = 'settings-tab';
+    allBtn.dataset.stab = 'all';
+    allBtn.setAttribute('role', 'tab');
+    allBtn.textContent = '🌐 全部';
+    settingsTabs.insertBefore(allBtn, settingsTabs.firstChild);
     for (const spec of [
       ['privacy', '🔒 プライバシー / 表示'],
       ['setup', '📚 セットアップ手順'],
-      ['agent-projects', '🤖 AI 実装プロジェクト'],
-      ['all', '🌐 全部'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -5989,15 +5996,7 @@ let ensureMemoriaFeatureViews = function () {
         この半径を超えた点で「離脱」と判定し、 セッションがそこで終了します。
         場所ごとに <code>radius_m</code> を個別設定すると、 そちらが優先されます (= 作業場所編集画面で入力)。
       </p>
-      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">移動速度の閾値:
-        <input id="workplaceMaxSpeedKmh" type="number" min="0" max="200" step="1" style="width:80px" />
-        km/h
-      </label>
-      <p class="diary-settings-help" style="margin-top:6px">
-        これより速い瞬間速度 (= 直前 GPS 点との距離 / 時間差) の点は「移動中」とみなして
-        場所タグ付けの対象から外します。 通り過ぎただけの場所を誤検出しないため。
-        既定 5 km/h (= 徒歩速度の上限近辺)。 0 を入れるとフィルタ無効。
-      </p>
+      <p class="diary-settings-help" style="margin-top:6px">「移動速度の閾値」 はプロフィール タブに移動しました。</p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
@@ -6012,47 +6011,7 @@ let ensureMemoriaFeatureViews = function () {
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
     footer.parentNode.insertBefore(sec, footer);
   }
-  if (footer && !$('agentProjectsBody')) {
-    const sec = document.createElement('section');
-    sec.id = 'agentProjectsBody';
-    sec.className = 'settings-tab-body hidden';
-    sec.dataset.stab = 'agent-projects';
-    sec.innerHTML = `
-      <h4>AI 実装プロジェクト</h4>
-      <p class="diary-settings-help">タスクに「🤖 AI実装」を依頼するときに使うプロジェクト一覧です。プロジェクトごとにルール・パス・既定エージェントを登録します。</p>
-      <div id="agentProjectsList" class="simple-list"></div>
-      <div class="simple-actions"><button id="agentProjectAddBtn" type="button">+ プロジェクト追加</button></div>
-      <section id="agentProjectEditor" class="dict-detail modal-panel hidden foundation-form">
-        <button type="button" class="modal-close" id="agentProjectEditorClose" aria-label="close">×</button>
-        <h3 id="agentProjectEditorHeading">プロジェクトを追加</h3>
-        <input type="hidden" id="agentProjectEditorId" />
-        <label class="simple-field">
-          <span>名前</span>
-          <input id="agentProjectEditorName" type="text" placeholder="例: Memoria" />
-        </label>
-        <label class="simple-field">
-          <span>パス (絶対パス)</span>
-          <input id="agentProjectEditorPath" type="text" placeholder="例: E:\\Document\\Ars\\Memoria" />
-        </label>
-        <label class="simple-field">
-          <span>既定エージェント</span>
-          <select id="agentProjectEditorAgent">
-            <option value="claude_code">Claude Code</option>
-            <option value="codex">Codex CLI</option>
-            <option value="gemini">Gemini CLI</option>
-          </select>
-        </label>
-        <label class="simple-field">
-          <span>ルール (Markdown)</span>
-          <textarea id="agentProjectEditorRules" rows="14" placeholder="技術スタック・規約・Do/Don't・完了条件 など。AI 実装時にプロンプトの先頭に貼られます。"></textarea>
-        </label>
-        <div class="simple-actions">
-          <button id="agentProjectEditorSaveBtn">保存</button>
-          <button id="agentProjectEditorCancelBtn" type="button" class="ghost">キャンセル</button>
-        </div>
-      </section>`;
-    footer.parentNode.insertBefore(sec, footer);
-  }
+  // 「AI 実装プロジェクト」 タブは廃止 (タスクの 🤖 AI実装 機能と共に休止)。
 
   upgradeTaskFormMarkup();
   upgradeImplementationFormMarkup();
@@ -6778,7 +6737,7 @@ function taskCardHtml(t) {
       <p>${escapeHtml(t.details || '')}</p>
       <div class="simple-actions">
         ${doneBtn}
-        <button class="ghost" data-task-agent="${t.id}">🤖 AI実装</button>
+        <!-- 🤖 AI実装 は一旦休止 (= 設定 → AI 実装プロジェクト タブの削除と同期) -->
         <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
         <button class="danger" data-task-delete="${t.id}">削除</button>
       </div>
