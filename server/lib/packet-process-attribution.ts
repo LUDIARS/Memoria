@@ -22,6 +22,10 @@ export interface ProcessSummary {
   process: string;
   /** PID は同じプロセス名で複数あり得るので、 観測した PID 全部 */
   pids: number[];
+  /** 観測した exe フルパス (Sysmon の Image / Get-Process の Path)。
+   *  同じプロセス名でも別ディレクトリから走っているケースは複数入る。
+   *  取得できなかった場合は空配列 (= Windows 標準のシステムプロセス等)。 */
+  paths: string[];
   /** outbound (= 自分 → remote) で観測した接続先 */
   outbound: ProcessFlowRemote[];
   /** inbound (= remote → 自分) で観測した接続元 */
@@ -47,6 +51,7 @@ interface RawSocket {
   proto: 'TCP' | 'UDP';
   pid: number;
   proc: string;
+  path: string;          // exe フルパス (取れない場合は空)
   local_ip: string;
   local_port: number;
   remote_ip: string;
@@ -58,6 +63,7 @@ interface RawSysmonEvent {
   proto: string;
   pid: number;
   proc: string;
+  path: string;          // Sysmon Image (= exe フルパス)
   local_ip: string;
   local_port: number;
   remote_ip: string;
@@ -98,10 +104,24 @@ function dirByInitiated(initiated: string): 'in' | 'out' | null {
 
 const PS_SCRIPT = String.raw`
 $ErrorActionPreference = 'Continue'
+# PID → @{ name; path } の辞書を 1 回だけ構築する。
+# Path は SYSTEM プロセスや権限の問題で取れない場合があるので空文字許容。
 $procs = @{}
 try {
-  Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procs[[int]$_.Id] = $_.ProcessName }
+  Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+    $id = [int]$_.Id
+    $path = ''
+    try { $path = $_.Path } catch { $path = '' }
+    if (-not $path) { $path = '' }
+    $procs[$id] = @{ name = $_.ProcessName; path = $path }
+  }
 } catch {}
+
+function Get-ProcInfo([int]$id) {
+  $i = $procs[$id]
+  if ($null -eq $i) { return @{ name = ''; path = '' } }
+  return $i
+}
 
 # 現在のソケット (= Listen を除く Established 系)
 $sockets = @()
@@ -109,11 +129,14 @@ try {
   Get-NetTCPConnection -ErrorAction SilentlyContinue |
     Where-Object { $_.State -ne 'Listen' -and $_.State -ne 'Bound' } |
     ForEach-Object {
+      $i = Get-ProcInfo([int]$_.OwningProcess)
+      $procName = if ($i.name) { ($i.name + '.exe').TrimStart('.') } else { '' }
       $sockets += [PSCustomObject]@{
         src        = 'tcp_state'
         proto      = 'TCP'
         pid        = [int]$_.OwningProcess
-        proc       = ($procs[[int]$_.OwningProcess] + '.exe').TrimStart('.')
+        proc       = $procName
+        path       = $i.path
         local_ip   = $_.LocalAddress
         local_port = [int]$_.LocalPort
         remote_ip  = $_.RemoteAddress
@@ -127,11 +150,14 @@ try {
 try {
   Get-NetUDPEndpoint -ErrorAction SilentlyContinue |
     ForEach-Object {
+      $i = Get-ProcInfo([int]$_.OwningProcess)
+      $procName = if ($i.name) { ($i.name + '.exe').TrimStart('.') } else { '' }
       $sockets += [PSCustomObject]@{
         src        = 'udp_endpoint'
         proto      = 'UDP'
         pid        = [int]$_.OwningProcess
-        proc       = ($procs[[int]$_.OwningProcess] + '.exe').TrimStart('.')
+        proc       = $procName
+        path       = $i.path
         local_ip   = $_.LocalAddress
         local_port = [int]$_.LocalPort
         remote_ip  = ''
@@ -156,11 +182,13 @@ try {
       $xml = [xml]$_.ToXml()
       $d = @{}
       foreach ($n in $xml.Event.EventData.Data) { $d[$n.Name] = $n.'#text' }
+      $imagePath = if ($d['Image']) { $d['Image'] } else { '' }
       $events += [PSCustomObject]@{
         src        = 'sysmon_event3'
         proto      = ($d['Protocol'] | Out-String).Trim()
         pid        = [int]$d['ProcessId']
-        proc       = if ($d['Image']) { Split-Path $d['Image'] -Leaf } else { '?' }
+        proc       = if ($imagePath) { Split-Path $imagePath -Leaf } else { '?' }
+        path       = $imagePath
         local_ip   = $d['SourceIp']
         local_port = [int]$d['SourcePort']
         remote_ip  = $d['DestinationIp']
@@ -224,16 +252,17 @@ export async function getProcessAttribution(sinceMinutes: number): Promise<Proce
   }
   const ps = await runPowerShell(sm);
 
-  // プロセス名 (= proc) で集約。 in/out 別バケット。
+  // プロセス名 (= proc) で集約。 in/out 別バケット + 観測 path 集合。
   interface Bucket {
     pids: Set<number>;
+    paths: Set<string>;
     out: Map<string, ProcessFlowRemote>;
     in_: Map<string, ProcessFlowRemote>;
   }
   const byProc = new Map<string, Bucket>();
   function getBucket(procName: string): Bucket {
     let b = byProc.get(procName);
-    if (!b) { b = { pids: new Set(), out: new Map(), in_: new Map() }; byProc.set(procName, b); }
+    if (!b) { b = { pids: new Set(), paths: new Set(), out: new Map(), in_: new Map() }; byProc.set(procName, b); }
     return b;
   }
   function pushFlow(map: Map<string, ProcessFlowRemote>, proto: string, ip: string, port: number, src: ProcessFlowRemote['source'][number]) {
@@ -250,6 +279,7 @@ export async function getProcessAttribution(sinceMinutes: number): Promise<Proce
     if (!s.remote_ip && s.src === 'udp_endpoint') continue; // listen-only は表示しない
     const b = getBucket(s.proc);
     b.pids.add(s.pid);
+    if (s.path) b.paths.add(s.path);
     const dir = dirByPorts(s.local_port, s.remote_port);
     if (dir === 'out') pushFlow(b.out, s.proto, s.remote_ip, s.remote_port, s.src);
     else pushFlow(b.in_, s.proto, s.remote_ip, s.remote_port, s.src);
@@ -258,6 +288,7 @@ export async function getProcessAttribution(sinceMinutes: number): Promise<Proce
     if (!e.proc) continue;
     const b = getBucket(e.proc);
     b.pids.add(e.pid);
+    if (e.path) b.paths.add(e.path);
     const dir = dirByInitiated(e.initiated) ?? dirByPorts(e.local_port, e.remote_port);
     if (dir === 'out') pushFlow(b.out, e.proto, e.remote_ip, e.remote_port, 'sysmon');
     else pushFlow(b.in_, e.proto, e.remote_ip, e.remote_port, 'sysmon');
@@ -272,6 +303,7 @@ export async function getProcessAttribution(sinceMinutes: number): Promise<Proce
     processes.push({
       process: proc,
       pids: [...b.pids].sort((a, x) => a - x),
+      paths: [...b.paths].sort(),
       outbound: outArr,
       inbound: inArr,
       total_count: total,

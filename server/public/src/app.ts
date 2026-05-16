@@ -11538,6 +11538,8 @@ interface PacketMonFlowRemote {
   remote_ip: string;
   remote_port: string;
   count: number;
+  /** この remote へ繋いだプロセス名 (outbound のみ)。 backend が attach */
+  processes?: string[];
 }
 interface PacketMonOutboundGroup {
   key: string;
@@ -11550,6 +11552,8 @@ interface PacketMonOutboundGroup {
   unique_ips: number;
   registered: boolean;
   is_localhost: boolean;
+  /** Sysmon / NetTCPConnection から特定できた送信元プロセス (= 通信経路) */
+  processes?: Array<{ name: string; count: number }>;
 }
 interface PacketMonInboundGroup {
   key: string;
@@ -11836,13 +11840,19 @@ function renderPacketMonitor(data: PacketMonSummary) {
     const counts = a.packet_counts;
     const totalPkt = counts.outbound + counts.inbound;
 
-    function detailRowsHtml(remotes: PacketMonFlowRemote[]): string {
+    function detailRowsHtml(remotes: PacketMonFlowRemote[], includeProcesses: boolean): string {
       return remotes.map((r) => {
         const hp = r.remote_port ? `${r.remote_ip}:${r.remote_port}` : r.remote_ip;
+        const procCell = includeProcesses
+          ? `<td class="packetmon-proc-cell">${r.processes && r.processes.length > 0
+              ? r.processes.slice(0, 3).map((n) => `<span class="packetmon-proc-chip">${escapeHtml(n)}</span>`).join(' ')
+              : '<span class="muted">—</span>'}</td>`
+          : '';
         return `<tr>
           <td class="packetmon-count">${r.count}</td>
           <td class="packetmon-proto">${escapeHtml(r.proto)}</td>
           <td class="packetmon-dst">${escapeHtml(hp)}</td>
+          ${procCell}
         </tr>`;
       }).join('');
     }
@@ -11888,9 +11898,15 @@ function renderPacketMonitor(data: PacketMonSummary) {
       const friendlyBadge = g.friendly_name
         ? ` <span class="packetmon-friendly" title="well-known エンドポイント辞書のマッチ">${escapeHtml(g.friendly_name)}</span>`
         : '';
+      // OUTBOUND 通信経路として 「どのプロセスが出したか」 を header にチラ見せ
+      const procChips = g.processes && g.processes.length > 0
+        ? ` <span class="packetmon-proc-chip-row" title="${escapeHtml(g.processes.map((x) => `${x.name} (${x.count})`).join('\n'))}">${
+            g.processes.slice(0, 2).map((x) => `<span class="packetmon-proc-chip">${escapeHtml(x.name)}</span>`).join('')
+          }${g.processes.length > 2 ? `<span class="muted">+${g.processes.length - 2}</span>` : ''}</span>`
+        : '';
       const headLabel = g.is_domain
-        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>${ptrBadge}${friendlyBadge}`
-        : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>${friendlyBadge}`;
+        ? `<span class="packetmon-domain">${escapeHtml(g.key)}</span>${ptrBadge}${friendlyBadge}${procChips}`
+        : `<span class="packetmon-dst">${escapeHtml(g.key)}</span> <span class="muted">(逆引きなし)</span>${friendlyBadge}${procChips}`;
       const ipsLabel2 = g.unique_ips > 1
         ? ` · <span class="muted">${g.unique_ips} 個の IP</span>`
         : '';
@@ -11911,8 +11927,8 @@ function renderPacketMonitor(data: PacketMonSummary) {
           ${groupActions(g, 'out')}
         </div>
         ${expanded ? `<table class="packetmon-table packetmon-group-detail">
-          <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
-          <tbody>${detailRowsHtml(g.remotes)}</tbody>
+          <thead><tr><th>count</th><th>proto</th><th>remote</th><th>プロセス</th></tr></thead>
+          <tbody>${detailRowsHtml(g.remotes, true)}</tbody>
         </table>` : ''}
         ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
         ${aiPanelHtml(`${a.adapter}|out|${g.key}`)}
@@ -11949,7 +11965,7 @@ function renderPacketMonitor(data: PacketMonSummary) {
         </div>
         ${expanded ? `<table class="packetmon-table packetmon-group-detail">
           <thead><tr><th>count</th><th>proto</th><th>remote</th></tr></thead>
-          <tbody>${detailRowsHtml(g.remotes)}</tbody>
+          <tbody>${detailRowsHtml(g.remotes, false)}</tbody>
         </table>` : ''}
         ${inspectShown ? inspectPanelHtml(inspectKey, inspectCached) : ''}
         ${aiPanelHtml(`${a.adapter}|in|${g.key}`)}
@@ -12099,6 +12115,8 @@ interface PacketMonProcFlowRemote {
 }
 interface PacketMonProcSummary {
   process: string; pids: number[];
+  /** exe フルパス (Sysmon Image / Get-Process Path)。 取れない場合は空配列 */
+  paths: string[];
   outbound: PacketMonProcFlowRemote[];
   inbound: PacketMonProcFlowRemote[];
   total_count: number;
@@ -12159,11 +12177,20 @@ function renderPacketmonProcesses(r: PacketMonProcResponse) {
     const outCount = p.outbound.reduce((s, f) => s + f.count, 0);
     const inCount = p.inbound.reduce((s, f) => s + f.count, 0);
     const pidsLabel = p.pids.length > 0 ? ` <span class="muted">pid ${p.pids.slice(0, 3).join(',')}${p.pids.length > 3 ? `+${p.pids.length - 3}` : ''}</span>` : '';
+    // exe フルパスは head に最大 1 件チラ見せ (= 同じプロセス名で複数 path の時は + N)。
+    const paths = p.paths || [];
+    const pathLabel = paths.length > 0
+      ? ` <span class="packetmon-proc-path" title="${escapeHtml(paths.join('\n'))}">${escapeHtml(paths[0])}${paths.length > 1 ? ` <span class=\"muted\">+${paths.length - 1}</span>` : ''}</span>`
+      : ' <span class="muted" title="exe パス取得失敗 (権限なし / システムプロセス)">パス不明</span>';
+    const pathsDetail = paths.length > 1
+      ? `<div class="packetmon-proc-paths"><h5>📂 exe パス (${paths.length})</h5><ul>${paths.map((pp) => `<li><code>${escapeHtml(pp)}</code></li>`).join('')}</ul></div>`
+      : '';
     return `<div class="packetmon-proc-item ${expanded ? 'is-expanded' : ''}" data-proc="${escapeHtml(p.process)}">
       <button type="button" class="packetmon-proc-head" data-proc="${escapeHtml(p.process)}">
         <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
         <span class="packetmon-proc-name"><b>${escapeHtml(p.process)}</b></span>
         ${pidsLabel}
+        ${pathLabel}
         <span class="grow"></span>
         <span class="packetmon-proc-counts">
           <span title="outbound">📤 ${outCount}</span>
@@ -12171,6 +12198,7 @@ function renderPacketmonProcesses(r: PacketMonProcResponse) {
         </span>
       </button>
       ${expanded ? `<div class="packetmon-proc-detail">
+        ${pathsDetail}
         <div class="packetmon-proc-col">
           <h5>📤 OUTBOUND (${p.outbound.length})</h5>
           ${p.outbound.length === 0 ? '<p class="muted">なし</p>' : `<ul class="packetmon-proc-flows">${p.outbound.map(flowRow).join('')}</ul>`}

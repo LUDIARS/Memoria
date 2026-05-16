@@ -41,6 +41,9 @@ interface FlowRemote {
   remote_ip: string;
   remote_port: string;
   count: number;
+  /** この remote へ繋いだプロセス名 (Sysmon Event 3 / Get-NetTCPConnection 由来)。
+   *  該当プロセスが特定できなかったら空配列。 outbound 側でのみ埋まる */
+  processes?: string[];
 }
 interface OutboundGroup {
   /** 表示キー: SNI/HTTP host/DNS query があればそれ、 無ければ PTR、
@@ -66,6 +69,9 @@ interface OutboundGroup {
   registered: boolean;
   /** localhost 系か (= 中身チェック対象外)。 */
   is_localhost: boolean;
+  /** この group 全体で観測したプロセス名 + 件数 (= remotes[*].processes の union)。
+   *  Sysmon Event 3 / Get-NetTCPConnection から特定できた送信元プロセス。 */
+  processes?: Array<{ name: string; count: number }>;
 }
 interface InboundGroup {
   /** 表示キー: PTR があればそれ、 なければ IP。 PTR 単位で集約済 */
@@ -198,7 +204,9 @@ function resolveLogRoot(): string | null {
   return null;
 }
 
-/** 1 アダプタ分の raw.tsv を読んで集計する。 */
+/** 1 アダプタ分の raw.tsv を読んで集計する。
+ *  procByRemote: 「(proto, remote_ip, remote_port) → 観測されたプロセス名 + 件数」
+ *  Sysmon / NetTCPConnection から作った map。 outbound group に inline 表示するのに使う */
 async function summarizeAdapter(
   dirPath: string,
   meta: Meta,
@@ -207,6 +215,7 @@ async function summarizeAdapter(
   resolvePtr: boolean,
   ptrCache: Map<string, string>,
   registered: RegisteredStore,
+  procByRemote: Map<string, Map<string, number>>,
 ): Promise<AdapterSummary> {
   const rawPath = path.join(dirPath, 'raw.tsv');
   const out: AdapterSummary = {
@@ -349,6 +358,28 @@ async function summarizeAdapter(
         ptr: g.derived_from_ptr ? g.key : '',
         remote_ips: g.remotes.map((r) => r.remote_ip).filter(Boolean),
       });
+      // ── プロセス紐付け (outbound のみ): 各 remote と group 全体に attach ──
+      // remotes.processes は per-remote (= detail rows で表示)、
+      // g.processes は group 全体 (= header で 1〜2 件チラ見せ用)。
+      const procAgg = new Map<string, number>();
+      for (const r of g.remotes) {
+        const key = `${r.proto}|${r.remote_ip}|${r.remote_port}`;
+        // proto は raw.tsv 由来 (TCP/TLSv1.2/TLSv1.3/UDP/QUIC/DNS 等)、
+        // 一方 Sysmon/snapshot は 'TCP'/'UDP' しか持たないので
+        // L4 へ落として再探索する fallback も用意。
+        const procs = procByRemote.get(key) || procByRemote.get(`${l4Of(r.proto)}|${r.remote_ip}|${r.remote_port}`);
+        if (procs && procs.size > 0) {
+          const list = [...procs.entries()].sort((a, b) => b[1] - a[1]);
+          r.processes = list.map(([n]) => n);
+          for (const [n, c] of list) procAgg.set(n, (procAgg.get(n) || 0) + c);
+        }
+      }
+      if (procAgg.size > 0) {
+        g.processes = [...procAgg.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([name, count]) => ({ name, count }));
+      }
     }
     out.outbound = [...groupMap.values()]
       .sort((a, b) => b.total_count - a.total_count)
@@ -420,6 +451,15 @@ async function summarizeAdapter(
   }
 
   return out;
+}
+
+/** _ws.col.Protocol が "TLSv1.3" / "QUIC" / "DNS" 等の application-layer ラベルでも
+ *  Sysmon/NetTCPConnection の "TCP" / "UDP" と突き合わせられるよう L4 に正規化する */
+function l4Of(proto: string): string {
+  const p = (proto || '').toUpperCase();
+  if (p.startsWith('TLS') || p === 'HTTP' || p === 'HTTPS' || p === 'SSH') return 'TCP';
+  if (p === 'QUIC' || p === 'DNS' || p === 'DHCP' || p === 'NTP' || p === 'MDNS' || p === 'SSDP') return 'UDP';
+  return p;
 }
 
 function splitN(s: string, sep: string, n: number): string[] {
@@ -584,6 +624,21 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
     // 更新ごとに inspect キャッシュを破棄 (= 「中身はメモリに置き更新で破棄」)
     inspectCache.clear();
 
+    // ── プロセス紐付け map を 1 回だけ取得 (= 全アダプタで再利用) ──
+    // since_minutes が 0 (= 全期間) の時は Sysmon の探索範囲を 5 分にデフォルト
+    const procSinceMin = sinceMin > 0 ? Math.min(60, sinceMin) : 5;
+    const procResult = await getProcessAttribution(procSinceMin);
+    // key = `${proto}|${remote_ip}|${remote_port}` → Map<process_name, count>
+    const procByRemote = new Map<string, Map<string, number>>();
+    for (const p of procResult.processes) {
+      for (const f of p.outbound) {
+        const k = `${f.proto}|${f.remote_ip}|${f.remote_port}`;
+        let m = procByRemote.get(k);
+        if (!m) { m = new Map(); procByRemote.set(k, m); }
+        m.set(p.process, (m.get(p.process) || 0) + f.count);
+      }
+    }
+
     // サブディレクトリ列挙 (= 各アダプタ)
     const subdirs = fs.readdirSync(logRoot, { withFileTypes: true })
       .filter((d) => d.isDirectory());
@@ -602,7 +657,7 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
         continue;
       }
       const summary = await summarizeAdapter(
-        adapterDir, meta, sinceEpoch, topN, resolvePtr, ptrCache, registered,
+        adapterDir, meta, sinceEpoch, topN, resolvePtr, ptrCache, registered, procByRemote,
       );
       adapters.push(summary);
     }

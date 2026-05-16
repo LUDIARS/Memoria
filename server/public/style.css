@@ -6925,6 +6925,27 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   font-size: 11px; font-weight: 600; vertical-align: middle;
 }
 
+/* OUTBOUND 通信経路に inline で出すプロセス名 chip */
+.packetmon-proc-chip {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border);
+  font-size: 10px; font-family: monospace;
+  margin-right: 2px;
+}
+.packetmon-proc-chip-row { margin-left: 4px; }
+.packetmon-proc-cell { font-family: monospace; font-size: 11px; }
+/* プロセス別 セクションの exe パス表示 */
+.packetmon-proc-path {
+  font-family: monospace; font-size: 11px; color: var(--muted);
+  max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-block; vertical-align: middle;
+}
+.packetmon-proc-paths { grid-column: 1 / -1; }
+.packetmon-proc-paths h5 { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
+.packetmon-proc-paths ul { list-style: none; padding: 0; margin: 0; }
+.packetmon-proc-paths li { font-family: monospace; font-size: 11px; word-break: break-all; }
+
 /* 🤖 AI 識別 ボタン + 結果パネル */
 .packetmon-ai-btn { padding: 2px 8px; font-size: 11px; }
 .packetmon-ai-panel {
