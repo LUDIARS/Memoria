@@ -315,6 +315,9 @@
             <span class="tab-label" data-full="⚙ キュー" data-short="⚙ キュー">⚙ キュー</span>
             <span id="tabQueueBadge" class="tab-count hidden">0</span>
           </button>
+          <button class="tab" data-tab="packetmon">
+            <span class="tab-label" data-full="🛡 パケット監視" data-short="🛡 監視">🛡 パケット監視</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -627,6 +630,43 @@
         <div id="queueWaiting" class="queue-waiting"></div>
         <h4 class="queue-history-h">履歴</h4>
         <div id="queueHistory" class="queue-history-list"></div>
+      </div>
+
+      <!-- 🛡 パケット監視 — ローカル PacketMonitor (tools/PacketMonitor) の
+           アダプタ別 raw.tsv をサーバが読み、 outbound / inbound のサマリを
+           出す。 capture 自体は外部ツール、 Memoria は表示専用。 -->
+      <div id="packetmonView" class="hidden">
+        <div class="queue-bar packetmon-bar">
+          <span>アダプタ別 outbound / inbound のリアルタイムサマリ。 capture は外部ツール (tools/PacketMonitor)。</span>
+          <span class="grow"></span>
+          <label>期間
+            <select id="packetmonSince">
+              <option value="0">全期間</option>
+              <option value="1">直近 1 分</option>
+              <option value="5" selected>直近 5 分</option>
+              <option value="15">直近 15 分</option>
+              <option value="60">直近 60 分</option>
+            </select>
+          </label>
+          <label>上位
+            <select id="packetmonTopN">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <label class="check-inline">
+            <input id="packetmonResolvePtr" type="checkbox" checked />
+            inbound 逆引き
+          </label>
+          <button id="packetmonRefreshBtn" type="button">↻ 更新</button>
+        </div>
+        <div id="packetmonStatus" class="muted" style="font-size:12px;margin:6px 0"></div>
+        <div id="packetmonAdapters" class="packetmon-adapters"></div>
+        <div id="packetmonEmpty" class="hint hidden">
+          PacketMonitor が動いていません。 設定 → 📚 セットアップ手順 → 🛡 パケット監視 を参照してください。
+        </div>
       </div>
 
       <!-- 💻 アプリ (Application catalog) — process_name 単位の AI 分類カタログ。

@@ -1175,6 +1175,7 @@ function switchTab(tab) {
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
+  $('packetmonView')?.classList.toggle('hidden', tab !== 'packetmon');
   if (tab === 'database') {
     // Re-show whichever DB sub was last picked.
     const sub = state.database?.sub || 'bookmarks';
@@ -1194,6 +1195,7 @@ function switchTab(tab) {
   if (tab === 'tasks') loadTasks();
   if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
+  if (tab === 'packetmon') loadPacketMonitor();
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
@@ -11415,6 +11417,175 @@ document.getElementById('repoList')?.addEventListener('click', (ev) => {
   if (moreBtn) {
     void loadRepoItemsMore(Number(moreBtn.dataset.repoId));
   }
+});
+
+// ── 🛡 パケット監視 タブ ──────────────────────────────────────────────────
+//
+// 外部ツール tools/PacketMonitor (tshark を per-adapter で走らせて raw.tsv を
+// append し続ける) の出力を Memoria サーバが読み、 アダプタ別 outbound /
+// inbound のサマリを表示する。 capture 自体は外部ツール、 Memoria は表示
+// 専用。 起動手順は 設定 → 📚 セットアップ手順 → 🛡 パケット監視 を参照。
+
+interface PacketMonOutbound {
+  proto: string;
+  remote_ip: string;
+  remote_port: string;
+  hint: string;
+  count: number;
+}
+interface PacketMonInbound {
+  proto: string;
+  remote_ip: string;
+  remote_port: string;
+  remote_name: string;
+  count: number;
+}
+interface PacketMonAdapter {
+  adapter: string;
+  alias: string;
+  local_ips: string[];
+  packet_counts: { outbound: number; inbound: number; self_loop: number; off_adapter: number };
+  outbound: PacketMonOutbound[];
+  inbound: PacketMonInbound[];
+  outbound_hints: Array<{ hint: string; count: number }>;
+}
+interface PacketMonSummary {
+  log_root: string | null;
+  available: boolean;
+  reason: string | null;
+  adapters: PacketMonAdapter[];
+  generated_at: string;
+}
+
+async function loadPacketMonitor() {
+  const sinceSel = document.getElementById('packetmonSince') as HTMLSelectElement | null;
+  const topSel = document.getElementById('packetmonTopN') as HTMLSelectElement | null;
+  const ptrEl = document.getElementById('packetmonResolvePtr') as HTMLInputElement | null;
+  const since = sinceSel?.value || '5';
+  const topN = topSel?.value || '20';
+  const resolve = ptrEl?.checked ? '1' : '0';
+  const statusEl = document.getElementById('packetmonStatus');
+  if (statusEl) statusEl.textContent = '読み込み中…';
+  try {
+    const qs = `since_minutes=${encodeURIComponent(since)}&top_n=${encodeURIComponent(topN)}&resolve_ptr=${resolve}`;
+    const r = await api(`/api/packet-monitor/summary?${qs}`) as PacketMonSummary;
+    renderPacketMonitor(r);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `読み込みエラー: ${(e as Error).message}`;
+  }
+}
+
+function renderPacketMonitor(data: PacketMonSummary) {
+  const wrap = document.getElementById('packetmonAdapters');
+  const empty = document.getElementById('packetmonEmpty');
+  const statusEl = document.getElementById('packetmonStatus');
+  if (!wrap || !empty) return;
+
+  if (!data.available) {
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+    if (statusEl) statusEl.textContent = data.reason || 'PacketMonitor logs が見つかりません';
+    return;
+  }
+
+  if (!data.adapters || data.adapters.length === 0) {
+    wrap.innerHTML = '';
+    empty.classList.remove('hidden');
+    if (statusEl) statusEl.textContent = `logs root: ${data.log_root || '—'} — まだログがありません`;
+    return;
+  }
+
+  empty.classList.add('hidden');
+  if (statusEl) {
+    const total = data.adapters.reduce((s, a) =>
+      s + a.packet_counts.outbound + a.packet_counts.inbound, 0);
+    statusEl.textContent = `logs root: ${data.log_root || '—'} · ${data.adapters.length} アダプタ · 合計 ${total} パケット · 生成 ${new Date(data.generated_at).toLocaleTimeString()}`;
+  }
+
+  wrap.innerHTML = data.adapters.map((a) => {
+    const ipsLabel = a.local_ips.length > 0 ? a.local_ips.join(', ') : '(IPv4 なし)';
+    const counts = a.packet_counts;
+    const totalPkt = counts.outbound + counts.inbound;
+
+    const outboundRows = a.outbound.map((o) => {
+      const hp = o.remote_port ? `${o.remote_ip}:${o.remote_port}` : o.remote_ip;
+      const hint = o.hint
+        ? `<span class="packetmon-hint" title="渡しているホスト名 (SNI/HTTP host/DNS query)">${escapeHtml(o.hint)}</span>`
+        : '';
+      return `<tr>
+        <td class="packetmon-count">${o.count}</td>
+        <td class="packetmon-proto">${escapeHtml(o.proto)}</td>
+        <td class="packetmon-dst">${escapeHtml(hp)}</td>
+        <td class="packetmon-hint-cell">${hint}</td>
+      </tr>`;
+    }).join('');
+
+    const inboundRows = a.inbound.map((i) => {
+      const hp = i.remote_port ? `${i.remote_ip}:${i.remote_port}` : i.remote_ip;
+      const name = i.remote_name
+        ? `<span class="packetmon-ptr" title="${escapeHtml(i.remote_name)}">${escapeHtml(i.remote_name)}</span>`
+        : '<span class="muted">(逆引きなし)</span>';
+      return `<tr>
+        <td class="packetmon-count">${i.count}</td>
+        <td class="packetmon-proto">${escapeHtml(i.proto)}</td>
+        <td class="packetmon-src">${escapeHtml(hp)}</td>
+        <td class="packetmon-ptr-cell">${name}</td>
+      </tr>`;
+    }).join('');
+
+    const hintsRows = a.outbound_hints.map((h) =>
+      `<li><span class="packetmon-count">${h.count}</span> ${escapeHtml(h.hint)}</li>`
+    ).join('');
+
+    return `
+      <article class="card packetmon-card">
+        <header class="packetmon-card-head">
+          <strong>${escapeHtml(a.adapter)}</strong>
+          <span class="muted">${escapeHtml(a.alias || '')}</span>
+          <span class="grow"></span>
+          <span class="packetmon-ip-pill" title="この NIC の IPv4">${escapeHtml(ipsLabel)}</span>
+        </header>
+        <div class="packetmon-counts">
+          <span>📤 out <b>${counts.outbound}</b></span>
+          <span>📥 in <b>${counts.inbound}</b></span>
+          <span class="muted">self ${counts.self_loop} · off-adapter ${counts.off_adapter}</span>
+          <span class="muted">total ${totalPkt}</span>
+        </div>
+
+        <div class="packetmon-section">
+          <h4>📤 OUTBOUND 接続先 (接続先 IP:port + 渡しているホスト名)</h4>
+          ${a.outbound.length === 0
+            ? '<p class="muted">outbound 接続はありません</p>'
+            : `<table class="packetmon-table">
+                <thead><tr><th>count</th><th>proto</th><th>remote</th><th>hint</th></tr></thead>
+                <tbody>${outboundRows}</tbody>
+              </table>`}
+        </div>
+
+        <div class="packetmon-section">
+          <h4>📤 渡しているホスト名 (SNI / HTTP host / DNS query 統合)</h4>
+          ${a.outbound_hints.length === 0
+            ? '<p class="muted">ホスト名は捕捉できていません (= TLS SNI / DNS query 未観測)</p>'
+            : `<ul class="packetmon-hints">${hintsRows}</ul>`}
+        </div>
+
+        <div class="packetmon-section">
+          <h4>📥 INBOUND 接続元 (IP:port + 逆引き)</h4>
+          ${a.inbound.length === 0
+            ? '<p class="muted">inbound 接続はありません</p>'
+            : `<table class="packetmon-table">
+                <thead><tr><th>count</th><th>proto</th><th>remote</th><th>hostname (PTR)</th></tr></thead>
+                <tbody>${inboundRows}</tbody>
+              </table>`}
+        </div>
+      </article>`;
+  }).join('');
+}
+
+// イベント結線 (refresh ボタン + フィルタ変更)
+document.getElementById('packetmonRefreshBtn')?.addEventListener('click', () => void loadPacketMonitor());
+['packetmonSince','packetmonTopN','packetmonResolvePtr'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('change', () => void loadPacketMonitor());
 });
 
 // ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────

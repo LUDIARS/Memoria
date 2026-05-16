@@ -6818,6 +6818,59 @@ dialog.loc-edit-modal[open] {
 .repo-watch-more-btn { font-size: 11px; padding: 2px 8px; }
 .repo-watch-empty-items { font-size: 11px; margin: 6px 0 0; }
 
+/* ── 🛡 パケット監視 タブ ──────────────────────────────────────── */
+.packetmon-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; }
+.packetmon-bar label { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; }
+.packetmon-adapters { display: grid; gap: 12px; }
+.packetmon-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.packetmon-card-head {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+}
+.packetmon-card-head strong { font-size: 14px; }
+.packetmon-ip-pill {
+  background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 2px 10px; font-size: 11px; font-family: monospace;
+}
+.packetmon-counts {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  font-size: 12px; color: var(--text);
+  padding: 4px 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.packetmon-counts b { color: var(--accent); }
+.packetmon-section { margin-top: 4px; }
+.packetmon-section h4 {
+  margin: 0 0 4px;
+  font-size: 12px; color: var(--muted);
+  text-transform: none; letter-spacing: 0;
+}
+.packetmon-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 12px; table-layout: fixed;
+}
+.packetmon-table th {
+  text-align: left; padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600; color: var(--muted);
+}
+.packetmon-table td {
+  padding: 2px 6px; vertical-align: top;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.packetmon-table tr:nth-child(2n) { background: var(--bg); }
+.packetmon-count { width: 50px; font-family: monospace; color: var(--muted); }
+.packetmon-proto { width: 70px; font-family: monospace; }
+.packetmon-dst, .packetmon-src { font-family: monospace; }
+.packetmon-hint { color: var(--accent); }
+.packetmon-ptr { color: var(--accent); }
+.packetmon-hints {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 12px;
+}
+.packetmon-hints li { display: flex; gap: 8px; align-items: baseline; }
+
 /* ── 「開く」 トグル + 直近の作業 サマリ ────────────────────────── */
 .repo-toggle-btn {
   padding: 0 6px;
