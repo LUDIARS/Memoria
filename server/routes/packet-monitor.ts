@@ -434,13 +434,18 @@ function splitN(s: string, sep: string, n: number): string[] {
   return out;
 }
 
-async function lookupPtr(ip: string, cache: Map<string, string>): Promise<string> {
-  if (cache.has(ip)) return cache.get(ip) || '';
-  // 短い timeout で best-effort (= UI 応答性を優先)
+async function lookupPtr(
+  ip: string,
+  cache: Map<string, string>,
+  opts: { force?: boolean; timeoutMs?: number } = {},
+): Promise<string> {
+  if (!opts.force && cache.has(ip)) return cache.get(ip) || '';
+  const timeoutMs = opts.timeoutMs ?? 350;
+  // 短い timeout で best-effort (= UI 応答性を優先)。 force 時は長め (= 手動 retry)
   try {
     const r = await Promise.race([
       dns.reverse(ip),
-      new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error('ptr-timeout')), 350)),
+      new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error('ptr-timeout')), timeoutMs)),
     ]);
     const name = Array.isArray(r) && r.length > 0 ? r[0] : '';
     cache.set(ip, name);
@@ -635,6 +640,27 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
     const key = decodeURIComponent(c.req.param('key') ?? '');
     const ok = registered.remove(key);
     return c.json({ ok });
+  });
+
+  // ── PTR 逆引き 再試行 (= 「? 不明」 を クリックされたとき) ─────────────
+  //   body: { ips: string[], force?: boolean, timeout_ms?: number }
+  //   返り値: { results: { ip: string, name: string }[] }
+  // 通常 summary 時の逆引きは 350ms タイムアウトで「best-effort」 だが、
+  // ここはユーザの明示的アクション なので 3 秒まで待つ + force=true で
+  // cache を bypass する。
+  r.post('/api/packet-monitor/lookup-ptr', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as
+      { ips?: unknown; force?: unknown; timeout_ms?: unknown } | null;
+    const ips = Array.isArray(body?.ips) ? body!.ips.filter((x): x is string => typeof x === 'string').slice(0, 20) : [];
+    const force = body?.force === true;
+    const timeoutMs = Math.max(100, Math.min(5000, Number(body?.timeout_ms) || 3000));
+    if (ips.length === 0) return c.json({ error: 'ips[] is required' }, 400);
+
+    const results = await Promise.all(ips.map(async (ip) => {
+      const name = await lookupPtr(ip, ptrCache, { force, timeoutMs });
+      return { ip, name };
+    }));
+    return c.json({ results });
   });
 
   // ── 中身確認 (on-demand tshark) ────────────────────────────────────

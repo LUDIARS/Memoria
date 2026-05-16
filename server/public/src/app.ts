@@ -11595,6 +11595,8 @@ const packetmonExpanded: Set<string> = new Set();
 // key = `${adapter_index}|${target}`
 const packetmonInspectShown: Set<string> = new Set();
 const packetmonInspectCache: Map<string, PacketMonInspectResult> = new Map();
+// 「? 不明」 を押して PTR 再試行中の group (= UI 上で ⏳ にする)。
+const packetmonPtrPending: Set<string> = new Set();
 // 最後に fetch した summary。 inspect のトグル / 結果反映で UI を再描画する
 // 際に再 fetch せず使い回す。 60s auto refresh / 手動更新で上書き。
 let _lastPacketmonSummary: PacketMonSummary | null = null;
@@ -11654,6 +11656,62 @@ async function registerPacketmonDomain(key: string) {
     void loadPacketMonitor({ silent: true });
   } catch (e) {
     flashToast(`⚠ 登録失敗: ${(e as Error).message}`);
+  }
+}
+
+async function retryPtrForGroup(expKey: string, groupKey: string, direction: 'out' | 'in', adapter: string, ips: string[]) {
+  if (!ips || ips.length === 0) {
+    flashToast('対象 IP が空です');
+    return;
+  }
+  if (packetmonPtrPending.has(expKey)) return;
+  packetmonPtrPending.add(expKey);
+  rerenderPacketMonitor();
+  try {
+    const r = await api('/api/packet-monitor/lookup-ptr', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ips, force: true, timeout_ms: 3000 }),
+    }) as { results: Array<{ ip: string; name: string }> };
+    // どれか 1 つでも名前が取れたら 「最多の name」 を group に被せる。
+    const nameCount = new Map<string, number>();
+    for (const it of r.results) {
+      if (it.name) nameCount.set(it.name, (nameCount.get(it.name) || 0) + 1);
+    }
+    let resolved = '';
+    let best = 0;
+    for (const [n, c] of nameCount) { if (c > best) { resolved = n; best = c; } }
+
+    if (!resolved) {
+      flashToast(`逆引き失敗: ${ips.join(', ')}`);
+    } else {
+      // _lastPacketmonSummary を直接書き換えて再描画 (= 次の 60s 自動更新まで持つ)
+      patchLastSummaryGroupKey(adapter, direction, groupKey, resolved);
+      flashToast(`✓ 逆引き成立: ${resolved}`);
+    }
+  } catch (e) {
+    flashToast(`⚠ 逆引き失敗: ${(e as Error).message}`);
+  } finally {
+    packetmonPtrPending.delete(expKey);
+    rerenderPacketMonitor();
+  }
+}
+
+/** _lastPacketmonSummary の中で「アダプタ+方向+元の group key」 を新しいキーへ差し替える。 */
+function patchLastSummaryGroupKey(adapter: string, direction: 'out' | 'in', oldKey: string, newKey: string): void {
+  const s = _lastPacketmonSummary;
+  if (!s) return;
+  const a = s.adapters.find((x) => x.adapter === adapter);
+  if (!a) return;
+  const list = direction === 'out' ? a.outbound : a.inbound;
+  const g = list.find((x) => x.key === oldKey);
+  if (!g) return;
+  g.key = newKey;
+  g.is_domain = true;
+  if (direction === 'out') {
+    (g as PacketMonOutboundGroup).derived_from_ptr = true;
+  } else {
+    (g as PacketMonInboundGroup).remote_name = newKey;
   }
 }
 
@@ -11730,7 +11788,7 @@ function renderPacketMonitor(data: PacketMonSummary) {
     }
 
     // group の右側に出すアクション (登録 / 中身) ボタン。 localhost / 登録済は出さない。
-    function groupActions(g: { key: string; is_domain: boolean; registered: boolean; is_localhost: boolean }, direction: 'out' | 'in'): string {
+    function groupActions(g: { key: string; is_domain: boolean; registered: boolean; is_localhost: boolean; remotes: PacketMonFlowRemote[] }, direction: 'out' | 'in'): string {
       if (g.is_localhost) return ''; // localhost は対象外
       const parts: string[] = [];
       if (g.is_domain && !g.registered) {
@@ -11738,7 +11796,13 @@ function renderPacketMonitor(data: PacketMonSummary) {
       } else if (g.registered) {
         parts.push(`<span class="packetmon-badge packetmon-badge-ok" title="登録済">✓ 登録済</span>`);
       } else {
-        parts.push(`<span class="packetmon-badge packetmon-badge-unknown" title="ドメイン未取得">? 不明</span>`);
+        // 不明バッジは「クリックで PTR 再試行」 (= force=true、 cache bypass)。
+        const ips = g.remotes.map((r) => r.remote_ip).filter(Boolean).slice(0, 5);
+        const ipsAttr = escapeHtml(ips.join(','));
+        const expKey = `${direction}|${a.adapter}|${g.key}`;
+        const pending = packetmonPtrPending.has(expKey);
+        const label = pending ? '⏳ 解決中…' : '? 不明';
+        parts.push(`<button type="button" class="packetmon-badge packetmon-badge-unknown packetmon-ptr-retry-btn" data-ips="${ipsAttr}" data-expkey="${escapeHtml(expKey)}" data-group-key="${escapeHtml(g.key)}" data-direction="${direction}" data-adapter="${escapeHtml(a.adapter)}" title="クリックで逆引き (PTR) を再試行 (cache bypass / 3 秒待ち)" ${pending ? 'disabled' : ''}>${label}</button>`);
       }
       if (!g.registered) {
         parts.push(`<button type="button" class="ghost packetmon-inspect-btn" data-target="${escapeHtml(g.key)}" data-adapter-index="${a.adapter_index}" data-direction="${direction}" title="この宛先のパケットを on-demand で 5 秒キャプチャして中身を見る">🔍 中身</button>`);
@@ -11884,7 +11948,7 @@ function renderPacketMonitor(data: PacketMonSummary) {
   }).join('');
 }
 
-// グループ行のトグル + 登録ボタン + 中身ボタン。
+// グループ行のトグル + 登録ボタン + 中身ボタン + 不明 → PTR 再試行。
 document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => {
   const t = ev.target as HTMLElement;
   const regBtn = t.closest('.packetmon-register-btn') as HTMLElement | null;
@@ -11899,6 +11963,17 @@ document.getElementById('packetmonAdapters')?.addEventListener('click', (ev) => 
     const target = inspBtn.dataset.target || '';
     const ai = Number(inspBtn.dataset.adapterIndex) || 1;
     void inspectPacketmonTarget(target, ai);
+    return;
+  }
+  const ptrBtn = t.closest('.packetmon-ptr-retry-btn') as HTMLElement | null;
+  if (ptrBtn) {
+    ev.stopPropagation();
+    const ips = (ptrBtn.dataset.ips || '').split(',').filter(Boolean);
+    const expKey = ptrBtn.dataset.expkey || '';
+    const groupKey = ptrBtn.dataset.groupKey || '';
+    const direction = (ptrBtn.dataset.direction === 'in' ? 'in' : 'out') as 'in' | 'out';
+    const adapter = ptrBtn.dataset.adapter || '';
+    void retryPtrForGroup(expKey, groupKey, direction, adapter, ips);
     return;
   }
   const head = t.closest('.packetmon-group-head') as HTMLElement | null;

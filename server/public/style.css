@@ -6906,6 +6906,11 @@ dialog.loc-edit-modal[open] {
 }
 .packetmon-badge-ok { background: #e7f6e7; color: #1f7a1f; border-color: #b8e0b8; }
 .packetmon-badge-unknown { background: var(--bg); color: var(--muted); }
+button.packetmon-badge-unknown { cursor: pointer; }
+button.packetmon-badge-unknown:hover:not(:disabled) {
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent);
+}
+button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
 /* 逆引き PTR から推定したドメインに付ける小さなマーク */
 .packetmon-ptr-badge {
   display: inline-block; padding: 0 5px; border-radius: 3px;
