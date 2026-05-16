@@ -19,7 +19,7 @@ import {
   updateRepoWatchStats, replaceRepoWatchItems, listRepoWatchItems,
   getDiarySettings, type RepoWatchRow, type RepoWatchItemRow,
 } from '../db.js';
-import { parseRepoInput, fetchRepoStats, REPO_PROVIDERS } from '../lib/repo-watch.js';
+import { parseRepoInput, fetchRepoStats, fetchRepoRecentCommits, REPO_PROVIDERS } from '../lib/repo-watch.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -81,6 +81,18 @@ export function makeRepoRouter(deps: RepoRouterDeps): Hono {
     const limit = Math.min(50, Math.max(1, Number(c.req.query('limit')) || 50));
     const items: RepoWatchItemRow[] = listRepoWatchItems(db, id, limit);
     return c.json({ items });
+  });
+
+  // ── 1 リポの直近コミット (= カードを 「開いた」 時に出す「直近の作業」 サマリ) ─
+  // キャッシュ列を増やさず lazy fetch のみ。 失敗時は items=[] + error を返す。
+  r.get('/api/repos/:id/commits', async (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
+    const row = getRepoWatch(db, id);
+    if (!row) return c.json({ error: 'not_found' }, 404);
+    const limit = Math.min(30, Math.max(1, Number(c.req.query('limit')) || 10));
+    const r2 = await fetchRepoRecentCommits(row, githubToken(db), limit);
+    return c.json(r2);
   });
 
   // ── 追加 ────────────────────────────────────────────────────────────────

@@ -59,6 +59,27 @@ export interface RepoStats {
   fetch_error: string | null;
 }
 
+/** 「直近の作業 サマリ」 用の最小コミット情報。 fetchRepoRecentCommits の戻り値。 */
+export interface RepoCommit {
+  sha: string;
+  message: string;        // 1 行目だけ
+  html_url: string;
+  author: string | null;  // login 優先、 commit.author.name fallback
+  when: string | null;    // ISO 8601
+}
+
+/** プロバイダ非依存: 直近 N コミットを取る。 失敗時は { items: [], error } を返す。 */
+export async function fetchRepoRecentCommits(
+  repo: { provider: string; owner: string; name: string; default_branch?: string | null },
+  token: string | null,
+  limit: number,
+): Promise<{ items: RepoCommit[]; error: string | null }> {
+  if (repo.provider === 'github') {
+    return fetchGithubRecentCommits(repo.owner, repo.name, repo.default_branch ?? null, token, limit);
+  }
+  return { items: [], error: `未対応の provider: ${repo.provider}` };
+}
+
 /**
  * ユーザ入力を正規化する。 受け付ける形:
  *   - https://github.com/owner/name             (.git / 末尾スラッシュ / 余分なパスは無視)
@@ -326,5 +347,61 @@ async function fetchGithubRepoStats(
     items,
     ci,
     fetch_error: errors.length > 0 ? errors.join(' / ') : null,
+  };
+}
+
+/**
+ * GitHub REST v3 — デフォルトブランチの最新 N コミットだけ取る軽量版。
+ * カード「開いた」 時の lazy fetch 用 (= ユーザがそのリポを見たいと表明
+ * したタイミングだけ追加で API を叩く)。
+ *   - GET /repos/{o}/{n}/commits?sha=&per_page=N
+ * default_branch 未取得時は GitHub に決めさせる (sha 省略 = default を使う)。
+ */
+async function fetchGithubRecentCommits(
+  owner: string,
+  name: string,
+  defaultBranch: string | null,
+  token: string | null,
+  limit: number,
+): Promise<{ items: RepoCommit[]; error: string | null }> {
+  const headers: Record<string, string> = {
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'Memoria-repo-watch',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const per = Math.min(50, Math.max(1, limit));
+  const slug = `${owner}/${name}`;
+  const url = defaultBranch
+    ? `https://api.github.com/repos/${slug}/commits?sha=${encodeURIComponent(defaultBranch)}&per_page=${per}`
+    : `https://api.github.com/repos/${slug}/commits?per_page=${per}`;
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { items: [], error: `GitHub API ${res.status}: ${body.slice(0, 200)}` };
+    }
+    const data = await res.json() as GithubCommitResponseFull[];
+    const items: RepoCommit[] = data.map((c) => ({
+      sha: c.sha ?? '',
+      message: (c.commit?.message ?? '').split('\n')[0] || '',
+      html_url: c.html_url ?? (c.sha ? `https://github.com/${slug}/commit/${c.sha}` : ''),
+      author: c.author?.login ?? c.commit?.author?.name ?? null,
+      when: c.commit?.committer?.date ?? c.commit?.author?.date ?? null,
+    })).filter((c) => c.sha && c.html_url);
+    return { items, error: null };
+  } catch (e) {
+    return { items: [], error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+interface GithubCommitResponseFull {
+  sha?: string;
+  html_url?: string;
+  author?: { login?: string } | null;       // GitHub user (login あり)、 anon commit では null
+  commit?: {
+    message?: string;
+    author?: { name?: string; date?: string };
+    committer?: { date?: string };
   };
 }
