@@ -131,6 +131,31 @@ export const PAGE_HELP: Record<string, PageHelpEntry> = {
       <p>設定 → 📝 日記の常設メモ に「自分はこういう人」 を書いておくと、 日記に毎回反映されます。</p>
     `,
   },
+  packetmon: {
+    title: '🛡 パケット監視',
+    bodyHtml: `
+      <h4>このタブで何ができるか</h4>
+      <p>ローカル PC のネットワーク アダプタを通る パケットを <b>tshark</b> で
+        観測し、 アダプタごとに「どこへ・何を渡しているか」 (outbound) と
+        「どこから来ているか」 (inbound) のサマリを表示します。
+        capture 自体は外部ツール <code>tools/PacketMonitor</code> が走らせ、
+        Memoria は raw.tsv を読むだけです (= 個人データ非保管、 サーバ DB
+        には書きません)。</p>
+      <h4>見方</h4>
+      <ul>
+        <li>OUTBOUND: 自分のアプリが叩いた接続先 IP/port と、
+          そこに渡している <b>TLS SNI</b> / <b>HTTP Host</b> / <b>DNS query 名</b></li>
+        <li>渡しているホスト名: SNI/HTTP host/DNS query を統合した上位ホスト名一覧。
+          「このアダプタからどんなドメインに行っているか」 を一目で見るのに便利</li>
+        <li>INBOUND: 受け取った接続元 IP/port と、 サーバ側で逆引きした PTR
+          (取れた場合のみ)</li>
+      </ul>
+      <h4>動かない場合</h4>
+      <p>「PacketMonitor logs ディレクトリが見つかりません」 と出るときは、
+        外部 tshark スクリプトを先に起動してください。 手順は
+        <b>⚙ 設定 → 📚 セットアップ手順 → 🛡 パケット監視</b> に記載しています。</p>
+    `,
+  },
   meals: {
     title: '🍽 食事',
     bodyHtml: `

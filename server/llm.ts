@@ -10,7 +10,8 @@ export type LlmTaskName =
   | 'diary_work' | 'diary_highlights' | 'diary_weekly'
   | 'meal_vision' | 'meal_calorie'
   | 'app_classify'
-  | 'recommendation_agent' | 'recommendation_synthesize';
+  | 'recommendation_agent' | 'recommendation_synthesize'
+  | 'endpoint_identify';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -19,6 +20,7 @@ export const TASKS: LlmTaskName[] = [
   'meal_vision', 'meal_calorie',
   'app_classify',
   'recommendation_agent', 'recommendation_synthesize',
+  'endpoint_identify',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
@@ -32,6 +34,7 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   app_classify: 'sonnet',
   recommendation_agent: 'sonnet',
   recommendation_synthesize: 'claude-opus-4-7[1m]',
+  endpoint_identify: 'sonnet',
 };
 
 export type LlmProviderKey = 'algorithm' | 'claude' | 'codex' | 'gemini' | 'openai';

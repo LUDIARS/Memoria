@@ -132,6 +132,10 @@ export interface QueueBundle {
   diaryQueue: FifoQueue;
   weeklyQueue: FifoQueue;
   applicationCatalogQueue: FifoQueue;
+  /** AI 分析系の一般 queue (= packet-monitor の identify-with-ai /
+   *  identify-process 等、 ユーザ操作で即時走らせる LLM 呼出を見える化)。
+   *  concurrency 1 で他の queue と公平に並ぶ。 */
+  aiAnalysisQueue: FifoQueue;
   // タスク投入ヘルパ
   enqueueSummary: (id: number) => void;
   enqueueCloud: (id: number, args: { docs: string; label: string }) => void;
@@ -160,6 +164,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
   const applicationCatalogQueue = new FifoQueue();
   const diaryQueue = new FifoQueue();
   const weeklyQueue = new FifoQueue();
+  const aiAnalysisQueue = new FifoQueue();
 
   const bookmarkPusher = makeBookmarkPusher(db);
 
@@ -709,6 +714,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
     diaryQueue,
     weeklyQueue,
     applicationCatalogQueue,
+    aiAnalysisQueue,
     enqueueSummary,
     enqueueCloud,
     enqueueDig,
