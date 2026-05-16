@@ -52,6 +52,13 @@ services:
       MEMORIA_HUB_ALLOWED_ORIGINS: ${MEMORIA_HUB_ALLOWED_ORIGINS}
     ports:
       - "${MEMORIA_HUB_HOST_PORT:-5280}:5280"
+    # ── creds 配布の推奨フロー ─────────────────────────────────────────
+    # docker 経由で動かす場合、 host 側で先に env-cli setup を実行する:
+    #   npm run env:setup        # .env.secrets を host に書く
+    #   docker compose up -d --build   # build が .env.secrets を image に焼き込む
+    # 起動後に GET / の setup フォームで更新した creds は container 内のみで
+    # 永続化される (image rebuild で吹き飛ぶ)。 永続更新したいなら env-cli で
+    # host 側の .env.secrets を書き換えてから rebuild する。
 
 volumes:
   memoria-hub-pg:

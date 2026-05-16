@@ -14,7 +14,7 @@ import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -226,10 +226,38 @@ app.post('/api/setup/infisical', async (c) => {
     'infisical.client_id': creds.clientId,
     'infisical.client_secret': creds.clientSecret,
   });
+  // env-cli (Cernere/Actio 互換) の .env.secrets にも書き出す。 これで
+  // `npm run env:setup` を実行したときに既存値がプロンプトのデフォルトに出る、
+  // `npm run env:gen` で Infisical から secret を fetch できる、 等の env-cli
+  // 経路が UI 入力と双方向に同期する。 失敗しても致命的ではない (= warn のみ)。
+  try {
+    writeEnvSecrets(creds);
+  } catch (e: unknown) {
+    console.warn(`[infisical] .env.secrets 書き出し失敗 (env-cli 経路は使えない): ${(e as Error).message}`);
+  }
   infisicalConfigured = true;
   console.log(`[infisical] 接続成功 — ${injected} secrets inject`);
   return c.json({ ok: true, injected });
 });
+
+/** env-cli の saveBootstrap と同じ形式で server/.env.secrets を書く。 */
+function writeEnvSecrets(creds: InfisicalCreds): void {
+  const path = resolve(__dirname, '.env.secrets');
+  const content = [
+    '# ─── Infisical Bootstrap Credentials ─────────────────────────',
+    '# Memoria local setup UI または env-cli setup で自動生成。',
+    '# このファイルは .gitignore に含めること。',
+    '# ─────────────────────────────────────────────────────────────',
+    '',
+    `INFISICAL_SITE_URL=${creds.siteUrl}`,
+    `INFISICAL_PROJECT_ID=${creds.projectId}`,
+    `INFISICAL_ENVIRONMENT=${creds.environment}`,
+    `INFISICAL_CLIENT_ID=${creds.clientId}`,
+    `INFISICAL_CLIENT_SECRET=${creds.clientSecret}`,
+    '',
+  ].join('\n');
+  writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
+}
 
 // ── Multi モード proxy 層 ─────────────────────────────────────────────────
 //
