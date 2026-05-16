@@ -25,6 +25,7 @@ import { shouldSkipDomain } from '../domain-catalog.js';
 import { featureEnabled } from '../lib/privacy.js';
 import {
   runAiRecommendations, isAiRecommendationsAvailable, isRecommendationsRunning,
+  cancelAiRecommendations,
   type RecResultItem, type RecAgentLogBundle,
 } from '../recommendations-ai.js';
 import { fetchGithubRange } from '../diary.js';
@@ -202,15 +203,30 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     });
   });
 
-  r.post('/api/recommendations/run', (c: Context) => {
+  r.post('/api/recommendations/run', async (c: Context) => {
     const avail = isAiRecommendationsAvailable();
     if (!avail.available) return c.json({ error: avail.reason }, 400);
-    if (isRecommendationsRunning(db)) return c.json({ error: 'already_running' }, 409);
+    // body.force=true で既存のキューを cancel して新規実行を開始する。
+    // (= キューが詰まって動かなくなった時に再実行で上書きするための逃げ道)
+    let force = false;
+    try {
+      const body = await c.req.json().catch(() => null);
+      force = !!(body && (body.force === true || body.force === 'true' || body.force === 1));
+    } catch { /* 空 body は OK */ }
+    if (!force && isRecommendationsRunning(db)) return c.json({ error: 'already_running' }, 409);
     // Fire-and-forget。 ユーザは status を polling する。
-    void runAiRecommendations(db).catch(err => {
+    void runAiRecommendations(db, { force }).catch(err => {
       console.error('[recommendations] run failed:', err instanceof Error ? err.message : err);
     });
-    return c.json({ ok: true, started: true });
+    return c.json({ ok: true, started: true, forced: force });
+  });
+
+  // 詰まったキューを掃除する明示的なエンドポイント。
+  // - in-memory inFlight ハンドルをクリア
+  // - DB の 'running' 行を 'cancelled' に更新
+  r.post('/api/recommendations/cancel', (c: Context) => {
+    const r2 = cancelAiRecommendations(db, 'user_cancelled');
+    return c.json({ ok: true, ...r2 });
   });
 
   r.get('/api/recommendations/runs', (c: Context) => {

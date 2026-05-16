@@ -7,10 +7,18 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env --env-file-if-exists=../../.env bootstrap.js",
     "dev": "node --watch --env-file-if-exists=.env --env-file-if-exists=../../.env bootstrap.js",
-    "migrate": "node migrate.js"
+    "migrate": "node migrate.js",
+    "env:setup": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts setup",
+    "env:test": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts test",
+    "env:gen": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts env",
+    "env:list": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts list",
+    "env:get": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts get",
+    "env:set": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts set",
+    "env:initialize": "npx tsx ../../../Cernere/packages/env-cli/src/cli.ts initialize"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@ludiars/cernere-composite": "file:../../../Cernere/packages/composite",
     "@ludiars/cernere-id-cache": "file:../../../Cernere/packages/id-cache",
     "@ludiars/cernere-service-adapter": "file:../../../Cernere/packages/service-adapter",
     "hono": "^4.6.10",

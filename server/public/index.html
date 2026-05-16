@@ -364,8 +364,8 @@
           <span>保存・閲覧傾向のサマリ。期間を変えると全カードが更新されます。</span>
           <span class="grow"></span>
           <select id="trendsRange">
-            <option value="7">過去 7 日</option>
-            <option value="30" selected>過去 30 日</option>
+            <option value="7" selected>過去 7 日</option>
+            <option value="30">過去 30 日</option>
             <option value="90">過去 90 日</option>
             <option value="365">過去 1 年</option>
           </select>
@@ -384,15 +384,15 @@
           </section>
 
           <section class="trend-card">
-            <h3>1 日の歩いた距離</h3>
-            <p class="trend-help">「軌跡」(OwnTracks GPS) から算出した日別の概算移動距離。accuracy 200m 超は除外。</p>
-            <div id="trendWalkDistance" class="chart"></div>
+            <h3>1 日の消費カロリー (徒歩)</h3>
+            <p class="trend-help">徒歩 3.5 MET × 体重 × 歩行時間 で算出。 歩行時間は速度 1.8〜12.6 km/h の区間 (= vehicle 移動を除く)。 体重は 設定 → ユーザープロファイル で登録した値を使用 (未設定なら 60kg)。</p>
+            <div id="trendWalkCalories" class="chart"></div>
           </section>
 
           <section class="trend-card">
-            <h3>1 日の歩いた時間</h3>
-            <p class="trend-help">徒歩速度帯 (1.8〜12.6 km/h) の区間を合計した分数。乗り物移動は別途ツールチップに「移動時間」として表示。</p>
-            <div id="trendWalkMinutes" class="chart"></div>
+            <h3>1 日の自宅以外にいた時間</h3>
+            <p class="trend-help">GPS から、 自宅 (登録済 work_locations.is_home=1) 以外で過ごした時間を 「移動 / 場所 (登録済) / 不明 (登録外の停止)」 の面積棒グラフで表示。 場所が登録されていない場合は「不明」 にまとまります。</p>
+            <div id="trendAwayStacked" class="chart"></div>
           </section>
 
           <section class="trend-card">
@@ -501,6 +501,7 @@
         </div>
         <div id="recRunning" class="rec-running hidden">
           <p>AI 分析中… (6 並列 Sonnet → Opus 統合、 通常 5–30 分)</p>
+          <p class="muted" style="font-size:12px;margin:4px 0 0">詰まったら 「↻ 再実行 (キュー上書き)」 で前のキューを cancel して新規実行できます。</p>
         </div>
         <div id="recList" class="rec-list"></div>
         <div id="recEmpty" class="queue-empty hidden">まだ AI による分析結果がありません。 「いま生成」 を押して最初の run を開始してください。</div>
@@ -1302,50 +1303,28 @@
       </dialog>
 
       <div id="multiView" class="hidden">
-        <!-- Infisical setup — Multi Mode (Hub 連携) は Cernere 認証が要り、
-             その CERNERE_BASE_URL 等を Infisical から取る。 未設定のときだけ表示。
-             Local Mode では Infisical は一切使わない。 -->
-        <section id="multiInfisicalSetup" class="multi-infisical-setup foundation-form hidden">
-          <h3 style="margin:0 0 4px">🔑 Infisical セットアップ</h3>
-          <p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6">
-            Memoria の一部設定値 (Google Maps API キー等) を Infisical から取得します。
-            この PC の machine identity を入力してください。 値は SQLite
-            (<code>app_settings</code>) に保存され、 次回からは自動接続します。
-            Excubitor 経由で起動する場合はこの画面は出ません。
-          </p>
-          <label class="simple-field"><span>Site URL</span>
-            <input id="infiSiteUrl" type="url" value="https://infisical.vtn-game.com" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Project ID</span>
-            <input id="infiProjectId" type="text" placeholder="xxxxxxxx-xxxx-..." /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Environment</span>
-            <input id="infiEnvironment" type="text" value="dev" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Machine Identity — Client ID</span>
-            <input id="infiClientId" type="text" placeholder="Universal Auth client id" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>Machine Identity — Client Secret</span>
-            <input id="infiClientSecret" type="password" placeholder="Universal Auth client secret" /></label>
-          <div class="simple-actions" style="margin-top:14px">
-            <button id="infiSetupSubmit" type="button">接続して保存</button>
-          </div>
-          <div id="infiSetupMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
-        </section>
+        <!-- Local Memoria は Infisical を知らない (= 全機能ローカル完結) — 旧
+             multiInfisicalSetup ブロックは撤去された。 Hub の Infisical 設定は
+             Hub 側 (server/multi/) の env-cli で完結する。 -->
 
-        <!-- Hub ログイン — ログの下のスイッチャで未ログイン Hub を選んだとき表示。
-             ローカルは Cernere を直接知らず、 Hub に email/password を渡すだけ。
-             Hub が内部で Cernere に代理ログインして session token を返す。 -->
+        <!-- Hub ログイン — スイッチャで未ログイン Hub を選んだとき表示。
+             Local は email/password を持たない (= Cernere Composite SSO)。
+             Hub から Cernere の login URL を取得 → popup で開く → postMessage で
+             auth_code を受け取り Hub に exchange する。 -->
         <section id="multiCernereLogin" class="multi-infisical-setup foundation-form hidden">
           <h3 style="margin:0 0 4px">🔐 Hub ログイン</h3>
-          <p class="muted" style="font-size:12px;margin:0 0 12px;line-height:1.6">
-            Memoria Hub への接続にはアカウントが必要です。 email / password を
-            Hub に渡すと、 Hub が内部で Cernere に代理ログインして接続します。
+          <p class="muted" style="font-size:12px;margin:0 0 8px;line-height:1.6">
+            Cernere の Composite SSO で接続します。 「ログイン」 を押すと Cernere の
+            ログイン画面が popup で開き、 Face ID / Touch ID / Windows Hello /
+            Password / Google / GitHub のいずれかで認証できます。
+            Memoria 側で password を入力する必要はありません。
           </p>
-          <label class="simple-field"><span>Hub URL</span>
-            <input id="multiLoginUrl" type="url" placeholder="https://memoria-hub.vtn-game.com" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>メールアドレス</span>
-            <input id="multiLoginEmail" type="email" placeholder="you@example.com" /></label>
-          <label class="simple-field" style="margin-top:8px"><span>パスワード</span>
-            <input id="multiLoginPassword" type="password" /></label>
+          <p class="muted" style="font-size:12px;margin:0 0 12px">
+            接続先: <code id="multiLoginUrlDisplay" style="font-size:12px">—</code>
+          </p>
+          <input id="multiLoginUrl" type="hidden" />
           <div class="simple-actions" style="margin-top:14px">
-            <button id="multiLoginSubmit" type="button">ログイン</button>
+            <button id="multiLoginSubmit" type="button">🔐 Cernere でログイン</button>
           </div>
           <div id="multiLoginMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
         </section>
@@ -1792,6 +1771,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260513j"></script>
+  <script src="app.js?v=20260516g"></script>
 </body>
 </html>

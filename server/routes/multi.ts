@@ -13,7 +13,7 @@ import {
   readMultiState, isConnected,
   readMultiServers, persistServers, upsertServer, removeServer, findServerByUrl,
   saveServerSession, clearServerSession, setActive,
-  readMode, setMode, hubFetch, hubLogin,
+  readMode, setMode, hubFetch,
 } from '../local/multi-client.js';
 import { resolveUnresolvedBatch, getResolverDebug } from '../lib/place-resolver.js';
 import { featureEnabled } from '../lib/privacy.js';
@@ -87,20 +87,43 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
 
   // ── 二層設計: Hub に対するログイン ────────────────────────────────────
   //
-  // 旧: ローカルが Cernere に直ログイン (CERNERE_BASE_URL を 1 つしか持てず、
-  //     複数拠点 Hub に対応できなかった)。
-  // 新: ローカルは Cernere を一切知らない。 Hub の /api/auth/login に
-  //     email/password を渡すだけ。 Hub が自分の Infisical 由来の
-  //     CERNERE_BASE_URL で Cernere に代理ログインし、 session token を返す。
-  //     ローカルはその session token を per-hub に保存する。
-  r.post('/api/multi/login', async (c: Context) => {
+  // Cernere Composite SSO flow:
+  //   1) フロントが GET /api/multi/login-url?url=<hub> で Cernere popup URL を取得
+  //   2) フロントが popup を開く → ユーザが Cernere の native UI (Passkey / Password /
+  //      OAuth / MFA) でログイン → popup が postMessage({ authCode }) を投げる
+  //   3) フロントが POST /api/multi/exchange { url, authCode } → Local server 経由で
+  //      Hub /api/auth/exchange に code を渡す → service_token を取得して per-hub に保存
+  //
+  // Local は Cernere も email/password も触らない (= 「ログイン処理の独自実装ゼロ」)。
+
+  r.get('/api/multi/login-url', async (c: Context) => {
+    const hubUrl = (c.req.query('url') || '').trim().replace(/\/$/, '');
+    if (!hubUrl) return c.json({ error: 'url required' }, 400);
+    // popup の postMessage 戻り先は Local Memoria の origin (= ブラウザの window.location.origin)。
+    // Local server 側からは知れないので、 フロントが追加 query で渡してもらう。
+    const origin = (c.req.query('origin') || '').trim();
+    try {
+      const qs = origin ? `?origin=${encodeURIComponent(origin)}` : '';
+      const res = await fetch(`${hubUrl}/api/auth/login-url${qs}`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        return c.json({ error: `Hub login-url 取得失敗: ${res.status}`, detail: body.slice(0, 200) }, 502);
+      }
+      const data = await res.json() as { url?: string };
+      if (!data.url) return c.json({ error: 'Hub が login url を返しませんでした' }, 502);
+      return c.json({ url: data.url });
+    } catch (e: unknown) {
+      return c.json({ error: `Hub に到達できません: ${(e as Error).message}` }, 502);
+    }
+  });
+
+  r.post('/api/multi/exchange', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as
-      { url?: unknown; email?: unknown; password?: unknown; label?: unknown } | null;
+      { url?: unknown; authCode?: unknown; label?: unknown } | null;
     const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
-    const email = typeof body?.email === 'string' ? body.email.trim() : '';
-    const password = typeof body?.password === 'string' ? body.password : '';
+    const authCode = typeof body?.authCode === 'string' ? body.authCode.trim() : '';
     if (!url) return c.json({ error: 'url required' }, 400);
-    if (!email || !password) return c.json({ error: 'email / password required' }, 400);
+    if (!authCode) return c.json({ error: 'authCode required' }, 400);
 
     // 1. server を登録 (未登録なら)
     const { servers, active } = readMultiServers(db);
@@ -108,14 +131,32 @@ export function makeMultiRouter(deps: MultiRouterDeps): Hono {
       ? body.label : (findServerByUrl(servers, url)?.label || url);
     persistServers(db, upsertServer(servers, { url, label }), active);
 
-    // 2. Hub の /api/auth/login に代理ログインを依頼
+    // 2. Hub に authCode を渡して service_token を取得
     let result;
     try {
-      result = await hubLogin(url, email, password);
+      const res = await fetch(`${url}/api/auth/exchange`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authCode }),
+      });
+      const data = await res.json().catch(() => ({})) as {
+        sessionToken?: string;
+        user?: { userId?: string | null; displayName?: string; role?: string };
+        error?: string;
+      };
+      if (!res.ok || !data.sessionToken) {
+        return c.json({ error: data.error || `Hub exchange 失敗: HTTP ${res.status}` }, res.status as 401);
+      }
+      result = {
+        sessionToken: data.sessionToken,
+        user: {
+          userId: data.user?.userId ?? null,
+          displayName: data.user?.displayName || '(unknown)',
+          role: data.user?.role || 'general',
+        },
+      };
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const status = (e as { status?: number })?.status ?? 502;
-      return c.json({ error: `Hub ログイン失敗: ${msg}` }, status as 401);
+      return c.json({ error: `Hub に到達できません: ${(e as Error).message}` }, 502);
     }
 
     // 3. session token を per-hub に保存
