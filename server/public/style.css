@@ -6810,3 +6810,66 @@ dialog.loc-edit-modal[open] {
 .repo-watch-more-row { margin-top: 4px; }
 .repo-watch-more-btn { font-size: 11px; padding: 2px 8px; }
 .repo-watch-empty-items { font-size: 11px; margin: 6px 0 0; }
+
+/* ── 「開く」 トグル + 直近の作業 サマリ ────────────────────────── */
+.repo-toggle-btn {
+  padding: 0 6px;
+  min-width: 22px;
+  font-size: 12px;
+  line-height: 1.2;
+  border-radius: 4px;
+  color: var(--muted);
+}
+.repo-toggle-btn[aria-expanded="true"] { color: var(--accent); }
+.repo-watch-commits {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.repo-watch-commits-head {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.repo-watch-commits-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.repo-watch-commit {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+.repo-watch-commit-link {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  text-decoration: none;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-watch-commit-link:hover { color: var(--accent); }
+.repo-watch-commit-sha {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.repo-watch-commit-text { overflow: hidden; text-overflow: ellipsis; }

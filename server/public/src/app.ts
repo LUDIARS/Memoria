@@ -10868,9 +10868,32 @@ interface RepoWatchItem {
   fetch_error: string | null;
   items?: RepoListItem[];
 }
+interface RepoCommit {
+  sha: string;
+  message: string;
+  html_url: string;
+  author: string | null;
+  when: string | null;
+}
 // expandedRepos: 「more」 で 50 件展開済みの repo id 集合。 一覧 refresh しても保持。
-const repoWatchState: { items: RepoWatchItem[]; tokenSet: boolean; expandedRepos: Set<number> } =
-  { items: [], tokenSet: false, expandedRepos: new Set() };
+// openedRepos: カード「開閉」 状態。 開いた repo は header クリックで閉じる。
+// commitsByRepo: 直近コミット の lazy fetch キャッシュ (open する度に再 fetch しない)。
+// commitsLoading: いま fetch 中の repo id (= スピナー表示用)。
+const repoWatchState: {
+  items: RepoWatchItem[];
+  tokenSet: boolean;
+  expandedRepos: Set<number>;
+  openedRepos: Set<number>;
+  commitsByRepo: Map<number, { items: RepoCommit[]; error: string | null }>;
+  commitsLoading: Set<number>;
+} = {
+  items: [],
+  tokenSet: false,
+  expandedRepos: new Set(),
+  openedRepos: new Set(),
+  commitsByRepo: new Map(),
+  commitsLoading: new Set(),
+};
 
 /** ざっくり相対時刻 ("3時間前" 等)。 不正値や未来は fmtDate にフォールバック。 */
 function repoFmtAgo(s: string | null): string {
@@ -10974,6 +10997,9 @@ function renderRepoWatch() {
       : '';
     const ciBadge = repoCiBadge(it);
 
+    // 開閉ステート: 開いていれば PR/Issue + 直近の作業 サマリを表示、 閉じていれば
+    // ヘッダ + stats + 最終コミット の 1 行だけにまとめる。 既定は閉。
+    const isOpened = repoWatchState.openedRepos.has(it.id);
     // PR / Issue items: 既定 5 件、 expanded なら最大 50 件 (loadRepoItemsMore で差し替え済)。
     const isExpanded = repoWatchState.expandedRepos.has(it.id);
     const totalCount = (it.open_pr_count ?? 0) + (it.open_issue_count ?? 0);
@@ -10994,9 +11020,55 @@ function renderRepoWatch() {
       itemsBlock = `<p class="muted repo-watch-empty-items">open な PR / Issue はありません</p>`;
     }
 
+    // 「直近の作業」 サマリ (= 開いた時だけ表示)。 lazy fetch のキャッシュを使う。
+    let commitsBlock = '';
+    if (isOpened) {
+      if (repoWatchState.commitsLoading.has(it.id)) {
+        commitsBlock = `<div class="repo-watch-commits">
+          <div class="repo-watch-commits-head">📝 直近の作業</div>
+          <p class="muted" style="font-size:12px">読み込み中…</p>
+        </div>`;
+      } else {
+        const cached = repoWatchState.commitsByRepo.get(it.id);
+        if (cached) {
+          if (cached.items.length === 0) {
+            const errMsg = cached.error
+              ? `<p class="muted" style="font-size:11px;color:#c0392b">⚠ ${escapeHtml(cached.error.slice(0, 200))}</p>`
+              : `<p class="muted" style="font-size:12px">直近のコミットはありません</p>`;
+            commitsBlock = `<div class="repo-watch-commits">
+              <div class="repo-watch-commits-head">📝 直近の作業</div>
+              ${errMsg}
+            </div>`;
+          } else {
+            const rows = cached.items.map((cm) => {
+              const short = (cm.sha || '').slice(0, 7);
+              const who = cm.author ? `<span class="muted">${escapeHtml(cm.author)}</span>` : '';
+              const when = cm.when
+                ? `<span class="muted" title="${escapeHtml(fmtDate(cm.when))}">${escapeHtml(repoFmtAgo(cm.when))}</span>`
+                : '';
+              return `<li class="repo-watch-commit">
+                <a class="repo-watch-commit-link" href="${escapeHtml(cm.html_url)}" target="_blank" rel="noopener" title="${escapeHtml(cm.message)}">
+                  <code class="repo-watch-commit-sha">${escapeHtml(short)}</code>
+                  <span class="repo-watch-commit-text">${escapeHtml(cm.message)}</span>
+                </a>
+                ${who}${when}
+              </li>`;
+            }).join('');
+            commitsBlock = `<div class="repo-watch-commits">
+              <div class="repo-watch-commits-head">📝 直近の作業 (${cached.items.length})</div>
+              <ul class="repo-watch-commits-list">${rows}</ul>
+            </div>`;
+          }
+        }
+      }
+    }
+
+    const toggleIcon = isOpened ? '▾' : '▸';
+    const toggleTitle = isOpened ? '閉じる' : '開いて直近の作業 + PR/Issue を表示';
     return `
-      <article class="card repo-watch-card" data-repo-id="${it.id}">
+      <article class="card repo-watch-card ${isOpened ? 'is-opened' : 'is-closed'}" data-repo-id="${it.id}">
         <header class="repo-watch-head">
+          <button class="ghost repo-toggle-btn" type="button" data-repo-id="${it.id}" title="${escapeHtml(toggleTitle)}" aria-expanded="${isOpened}">${toggleIcon}</button>
           <a class="repo-watch-slug" href="${escapeHtml(it.html_url)}" target="_blank" rel="noopener">
             <strong>${escapeHtml(slug)}</strong>
           </a>
@@ -11015,7 +11087,8 @@ function renderRepoWatch() {
             <span class="repo-watch-stat-label">Open Issue</span>
           </a>
         </div>
-        ${itemsBlock}
+        ${isOpened ? itemsBlock : ''}
+        ${commitsBlock}
         <div class="repo-watch-branch">
           <a href="${escapeHtml(branchLink)}" target="_blank" rel="noopener" title="デフォルトブランチのコミット一覧"><code>${escapeHtml(branch)}</code></a>
           <span class="repo-watch-commit-msg">${commitMsg}</span>
@@ -11025,6 +11098,40 @@ function renderRepoWatch() {
         ${err}
       </article>`;
   }).join('');
+}
+
+/** 「開く」 アクション: opened フラグを立て、 commits を lazy fetch (初回のみ)。 */
+async function openRepoWatchCard(id: number) {
+  if (repoWatchState.openedRepos.has(id)) return;
+  repoWatchState.openedRepos.add(id);
+  // すでにキャッシュ済みなら即 render、 なければ loading 状態で render → fetch。
+  const cached = repoWatchState.commitsByRepo.get(id);
+  if (cached) {
+    renderRepoWatch();
+    return;
+  }
+  repoWatchState.commitsLoading.add(id);
+  renderRepoWatch();
+  try {
+    const r = await api(`/api/repos/${id}/commits?limit=10`) as { items?: RepoCommit[]; error?: string | null };
+    repoWatchState.commitsByRepo.set(id, { items: r.items || [], error: r.error || null });
+  } catch (e) {
+    repoWatchState.commitsByRepo.set(id, { items: [], error: (e as Error).message });
+  } finally {
+    repoWatchState.commitsLoading.delete(id);
+    renderRepoWatch();
+  }
+}
+
+function closeRepoWatchCard(id: number) {
+  if (!repoWatchState.openedRepos.has(id)) return;
+  repoWatchState.openedRepos.delete(id);
+  renderRepoWatch();
+}
+
+function toggleRepoWatchCard(id: number) {
+  if (repoWatchState.openedRepos.has(id)) closeRepoWatchCard(id);
+  else void openRepoWatchCard(id);
 }
 
 async function loadRepoItemsMore(id: number) {
@@ -11085,7 +11192,24 @@ async function refreshRepoWatch(id: number) {
     const { item } = await res.json() as { item: RepoWatchItem };
     const idx = repoWatchState.items.findIndex((r) => r.id === id);
     if (idx >= 0) repoWatchState.items[idx] = item;
-    renderRepoWatch();
+    // 直近コミット キャッシュも破棄 (= refresh 後に開いた時は再取得)。
+    // 開いたままなら即座に再 fetch して画面を更新する。
+    repoWatchState.commitsByRepo.delete(id);
+    if (repoWatchState.openedRepos.has(id)) {
+      repoWatchState.commitsLoading.add(id);
+      renderRepoWatch();
+      try {
+        const r2 = await api(`/api/repos/${id}/commits?limit=10`) as { items?: RepoCommit[]; error?: string | null };
+        repoWatchState.commitsByRepo.set(id, { items: r2.items || [], error: r2.error || null });
+      } catch (e) {
+        repoWatchState.commitsByRepo.set(id, { items: [], error: (e as Error).message });
+      } finally {
+        repoWatchState.commitsLoading.delete(id);
+        renderRepoWatch();
+      }
+    } else {
+      renderRepoWatch();
+    }
   } catch (e) {
     flashToast(`更新失敗: ${(e as Error).message}`);
   }
@@ -11142,6 +11266,11 @@ document.getElementById('repoList')?.addEventListener('click', (ev) => {
   const deleteBtn = target.closest('.repo-delete-btn') as HTMLElement | null;
   if (deleteBtn) {
     void deleteRepoWatch(Number(deleteBtn.dataset.repoId));
+    return;
+  }
+  const toggleBtn = target.closest('.repo-toggle-btn') as HTMLElement | null;
+  if (toggleBtn) {
+    toggleRepoWatchCard(Number(toggleBtn.dataset.repoId));
     return;
   }
   const moreBtn = target.closest('.repo-watch-more-btn') as HTMLElement | null;
