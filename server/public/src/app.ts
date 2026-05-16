@@ -11767,7 +11767,9 @@ async function identifyEndpointWithAi(aiKey: string, target: string, adapter: st
 
 // 直近のプロセス一覧 (`loadPacketmonProcesses` の結果) を保持しておいて、
 // AI 識別の補助情報として「この remote へ繋いでいるプロセス」 を抽出する。
+// _lastPacketmonProcResponse は AI 解析 後の即時再描画 (= fetch せず) で使う。
 let _lastPacketmonProcesses: PacketMonProcSummary[] = [];
+let _lastPacketmonProcResponse: PacketMonProcResponse | null = null;
 function collectProcessesForGroup(remotes: PacketMonFlowRemote[]): string[] {
   if (!_lastPacketmonProcesses.length) return [];
   const wanted = new Set(remotes.map((r) => `${r.remote_ip}:${r.remote_port}`));
@@ -12129,6 +12131,14 @@ interface PacketMonProcResponse {
 
 // 折り畳み: 「あるプロセスの out/in リスト」 を展開中 set。
 const packetmonProcExpanded: Set<string> = new Set();
+// 🤖 AI 解析 (= 「このプロセスが何の exe か」) の進行中 set + 結果キャッシュ
+const packetmonProcAiPending: Set<string> = new Set();
+interface PacketmonProcAiResult {
+  vendor: string; product: string; category: string;
+  description: string; expected_behavior: string;
+  confidence: number;
+}
+const packetmonProcAiResults: Map<string, PacketmonProcAiResult> = new Map();
 
 async function loadPacketmonProcesses(opts: { silent?: boolean } = {}) {
   const sinceSel = document.getElementById('packetmonSince') as HTMLSelectElement | null;
@@ -12149,6 +12159,7 @@ async function loadPacketmonProcesses(opts: { silent?: boolean } = {}) {
 
 function renderPacketmonProcesses(r: PacketMonProcResponse) {
   _lastPacketmonProcesses = r.processes || [];
+  _lastPacketmonProcResponse = r;
   const listEl = document.getElementById('packetmonProcList');
   const statusEl = document.getElementById('packetmonProcStatus');
   if (!listEl) return;
@@ -12185,18 +12196,26 @@ function renderPacketmonProcesses(r: PacketMonProcResponse) {
     const pathsDetail = paths.length > 1
       ? `<div class="packetmon-proc-paths"><h5>📂 exe パス (${paths.length})</h5><ul>${paths.map((pp) => `<li><code>${escapeHtml(pp)}</code></li>`).join('')}</ul></div>`
       : '';
+    // 🤖 AI 解析 ボタン状態 (= 「このプロセスが何の exe か」)
+    const aiPending = packetmonProcAiPending.has(p.process);
+    const aiResult = packetmonProcAiResults.get(p.process);
+    const aiLabel = aiPending ? '⏳ AI 解析中…' : (aiResult ? '🤖 AI 再解析' : '🤖 AI 解析');
     return `<div class="packetmon-proc-item ${expanded ? 'is-expanded' : ''}" data-proc="${escapeHtml(p.process)}">
-      <button type="button" class="packetmon-proc-head" data-proc="${escapeHtml(p.process)}">
-        <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
-        <span class="packetmon-proc-name"><b>${escapeHtml(p.process)}</b></span>
-        ${pidsLabel}
-        ${pathLabel}
-        <span class="grow"></span>
-        <span class="packetmon-proc-counts">
-          <span title="outbound">📤 ${outCount}</span>
-          <span title="inbound">📥 ${inCount}</span>
-        </span>
-      </button>
+      <div class="packetmon-proc-row">
+        <button type="button" class="packetmon-proc-head" data-proc="${escapeHtml(p.process)}">
+          <span class="packetmon-arrow">${expanded ? '▾' : '▸'}</span>
+          <span class="packetmon-proc-name"><b>${escapeHtml(p.process)}</b></span>
+          ${pidsLabel}
+          ${pathLabel}
+          <span class="grow"></span>
+          <span class="packetmon-proc-counts">
+            <span title="outbound">📤 ${outCount}</span>
+            <span title="inbound">📥 ${inCount}</span>
+          </span>
+        </button>
+        <button type="button" class="ghost packetmon-proc-ai-btn" data-proc="${escapeHtml(p.process)}" title="LLM にプロセス情報と通信パターンを渡して何の exe か推定" ${aiPending ? 'disabled' : ''}>${aiLabel}</button>
+      </div>
+      ${aiResult ? procAiPanelHtml(aiResult) : ''}
       ${expanded ? `<div class="packetmon-proc-detail">
         ${pathsDetail}
         <div class="packetmon-proc-col">
@@ -12212,9 +12231,31 @@ function renderPacketmonProcesses(r: PacketMonProcResponse) {
   }).join('');
 }
 
-// プロセス行のトグル
+function procAiPanelHtml(r: PacketmonProcAiResult): string {
+  const pct = Math.round((r.confidence || 0) * 100);
+  const cls = r.confidence >= 0.7 ? 'high' : r.confidence >= 0.3 ? 'mid' : 'low';
+  const catLabel = r.category ? `<span class="packetmon-proc-ai-cat">${escapeHtml(r.category)}</span>` : '';
+  const vendor = r.vendor ? `<span class="muted">${escapeHtml(r.vendor)} ·</span> ` : '';
+  return `<div class="packetmon-proc-ai-panel packetmon-ai-${cls}">
+    <div class="packetmon-proc-ai-head">
+      🤖 ${vendor}<b>${escapeHtml(r.product)}</b> ${catLabel}
+      <span class="packetmon-ai-conf">確信度 ${pct}%</span>
+    </div>
+    ${r.description ? `<div class="packetmon-proc-ai-desc">${escapeHtml(r.description)}</div>` : ''}
+    ${r.expected_behavior ? `<div class="packetmon-proc-ai-behavior muted">想定挙動: ${escapeHtml(r.expected_behavior)}</div>` : ''}
+  </div>`;
+}
+
+// プロセス行のトグル + AI 解析 ボタン
 document.getElementById('packetmonProcList')?.addEventListener('click', (ev) => {
-  const head = (ev.target as HTMLElement).closest('.packetmon-proc-head') as HTMLElement | null;
+  const t = ev.target as HTMLElement;
+  const aiBtn = t.closest('.packetmon-proc-ai-btn') as HTMLElement | null;
+  if (aiBtn) {
+    ev.stopPropagation();
+    void identifyProcessWithAi(aiBtn.dataset.proc || '');
+    return;
+  }
+  const head = t.closest('.packetmon-proc-head') as HTMLElement | null;
   if (!head) return;
   const proc = head.dataset.proc || '';
   if (!proc) return;
@@ -12223,6 +12264,44 @@ document.getElementById('packetmonProcList')?.addEventListener('click', (ev) => 
   // 直接再 fetch せず、 最後の結果から再描画したいので fetch を silent で実行
   void loadPacketmonProcesses({ silent: true });
 });
+
+async function identifyProcessWithAi(procName: string) {
+  if (!procName) return;
+  if (packetmonProcAiPending.has(procName)) return;
+  // 該当プロセスを _lastPacketmonProcesses から探す
+  const p = _lastPacketmonProcesses.find((x) => x.process === procName);
+  if (!p) {
+    flashToast(`プロセス情報が見つかりません: ${procName}`);
+    return;
+  }
+  packetmonProcAiPending.add(procName);
+  // proc セクションを即時 re-render (= ⏳ 表示にするため fetch を bypass)
+  if (_lastPacketmonProcResponse) renderPacketmonProcesses(_lastPacketmonProcResponse);
+  try {
+    const r = await api('/api/packet-monitor/identify-process', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        process: p.process,
+        pids: p.pids,
+        paths: p.paths,
+        outbound: p.outbound.slice(0, 8),
+        inbound: p.inbound.slice(0, 8),
+      }),
+    }) as PacketmonProcAiResult;
+    packetmonProcAiResults.set(procName, r);
+    flashToast(`🤖 ${procName}: ${r.product} (${Math.round((r.confidence || 0) * 100)}%)`);
+  } catch (e) {
+    packetmonProcAiResults.set(procName, {
+      vendor: '', product: 'エラー', category: 'other',
+      description: (e as Error).message, expected_behavior: '', confidence: 0,
+    });
+    flashToast(`⚠ AI 解析失敗: ${(e as Error).message}`);
+  } finally {
+    packetmonProcAiPending.delete(procName);
+    if (_lastPacketmonProcResponse) renderPacketmonProcesses(_lastPacketmonProcResponse);
+  }
+}
 
 // ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────
 //

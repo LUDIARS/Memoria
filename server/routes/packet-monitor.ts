@@ -827,6 +827,98 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
     return c.json({ name, confidence, reasoning, raw: rawText.length > 1000 ? rawText.slice(0, 1000) + '…' : rawText });
   });
 
+  // ── プロセス AI 解析 (= 「このプロセスが何の exe か」 を LLM に問う) ─
+  //   body: {
+  //     process: string,              // 例: "svchost.exe"
+  //     pids?: number[],
+  //     paths?: string[],              // 観測した exe フルパス (= 一番ヒント力大)
+  //     outbound?: [{proto, ip, port, count}],  // top N の接続先
+  //     inbound?:  [{proto, ip, port, count}],
+  //   }
+  //   → { vendor, product, category, description, expected_behavior, confidence, raw }
+  r.post('/api/packet-monitor/identify-process', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as {
+      process?: unknown; pids?: unknown; paths?: unknown;
+      outbound?: unknown; inbound?: unknown;
+    } | null;
+    const procName = typeof body?.process === 'string' ? body.process.trim() : '';
+    if (!procName) return c.json({ error: 'process is required' }, 400);
+    const paths = Array.isArray(body?.paths)
+      ? (body!.paths as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 5)
+      : [];
+    const pids = Array.isArray(body?.pids)
+      ? (body!.pids as unknown[]).filter((x): x is number => typeof x === 'number').slice(0, 10)
+      : [];
+
+    function summarizeFlows(arr: unknown): string {
+      if (!Array.isArray(arr)) return '(なし)';
+      const top = (arr as Array<Record<string, unknown>>).slice(0, 8).map((f) => {
+        const proto = String(f?.proto ?? '');
+        const ip = String(f?.remote_ip ?? '');
+        const port = String(f?.remote_port ?? '');
+        const count = Number(f?.count) || 0;
+        return `  - ${proto} ${ip}:${port} (count: ${count})`;
+      });
+      return top.length === 0 ? '(なし)' : top.join('\n');
+    }
+
+    const prompt = [
+      'あなたは Windows プロセス と そこから観測される通信パターンから「これは何の exe か」 を判定する専門家です。',
+      '以下のプロセス情報から、 そのプロセスがどんなアプリ / サービスなのか推定してください。',
+      '',
+      `プロセス名: ${procName}`,
+      pids.length > 0 ? `観測 PID: ${pids.join(', ')}` : '観測 PID: (なし)',
+      paths.length > 0
+        ? `観測した exe パス:\n${paths.map((p) => `  - ${p}`).join('\n')}`
+        : '観測した exe パス: (取得失敗 = SYSTEM 権限 / サービスの可能性)',
+      '',
+      'OUTBOUND 通信 (上位):',
+      summarizeFlows(body?.outbound),
+      '',
+      'INBOUND 通信 (上位):',
+      summarizeFlows(body?.inbound),
+      '',
+      '返答は **JSON のみ** で、 以下のキーを持ってください:',
+      '  vendor (例: "Microsoft", "Anthropic", "Apple", "Tailscale Inc.", "Acronis")',
+      '  product (例: "Windows Service Host", "Claude Desktop", "Bonjour", "Tailscale daemon")',
+      '  category (system / browser / messaging / vpn / antivirus / dev-tool / sync / ai / gaming / other のいずれか)',
+      '  description (1〜2 文の説明)',
+      '  expected_behavior (典型的なネットワーク挙動 1 文。 例: 「自社 update サーバへ定期 HTTPS で接続」)',
+      '  confidence (0.0 〜 1.0)',
+      '',
+      '確信が持てない (confidence < 0.3) 時は product="Unknown" を返してください。',
+      '余分な ``` fence は不要。 JSON だけ。',
+    ].join('\n');
+
+    let rawText = '';
+    try {
+      rawText = await runLlm({ task: 'endpoint_identify', prompt, timeoutMs: 90_000 });
+    } catch (e) {
+      return c.json({ error: `LLM 呼び出し失敗: ${(e as Error).message}` }, 502);
+    }
+
+    // JSON 抽出
+    let parsed: Record<string, unknown> | null = null;
+    const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    const jsonCandidate = (fenceMatch ? fenceMatch[1] : rawText).trim();
+    const braceMatch = jsonCandidate.match(/\{[\s\S]*\}/);
+    if (braceMatch) {
+      try { parsed = JSON.parse(braceMatch[0]) as Record<string, unknown>; } catch { /* ignore */ }
+    }
+    const safeStr = (k: string) => typeof parsed?.[k] === 'string' ? (parsed[k] as string).trim() : '';
+    const out = {
+      vendor:            safeStr('vendor'),
+      product:           safeStr('product') || 'Unknown',
+      category:          safeStr('category') || 'other',
+      description:       safeStr('description'),
+      expected_behavior: safeStr('expected_behavior'),
+      confidence:        typeof parsed?.confidence === 'number'
+                           ? Math.max(0, Math.min(1, parsed.confidence)) : 0,
+      raw: rawText.length > 1000 ? rawText.slice(0, 1000) + '…' : rawText,
+    };
+    return c.json(out);
+  });
+
   // ── 中身確認 (on-demand tshark) ────────────────────────────────────
   r.post('/api/packet-monitor/inspect', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as {

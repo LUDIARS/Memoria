@@ -6925,6 +6925,31 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   font-size: 11px; font-weight: 600; vertical-align: middle;
 }
 
+/* プロセス行は head (展開トグル) + 右側 AI 解析 ボタン の flex */
+.packetmon-proc-row { display: flex; align-items: stretch; }
+.packetmon-proc-row .packetmon-proc-head { flex: 1; min-width: 0; }
+.packetmon-proc-ai-btn { padding: 2px 8px; font-size: 11px; align-self: center; margin-right: 4px; }
+
+/* AI 解析 結果 (= 「このプロセスは何の exe か」) パネル */
+.packetmon-proc-ai-panel {
+  margin: 4px 6px 4px 24px;
+  padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); font-size: 12px;
+}
+.packetmon-proc-ai-panel.packetmon-ai-high { border-color: #1f7a1f; background: #e7f6e7; }
+.packetmon-proc-ai-panel.packetmon-ai-mid  { border-color: #b58a00; background: #fff8e1; }
+.packetmon-proc-ai-panel.packetmon-ai-low  { border-color: #c0392b; background: #fde7e7; }
+.packetmon-proc-ai-head {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 12px;
+}
+.packetmon-proc-ai-cat {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  background: var(--accent); color: #fff; font-size: 10px;
+}
+.packetmon-proc-ai-desc { margin-top: 4px; line-height: 1.45; }
+.packetmon-proc-ai-behavior { margin-top: 2px; font-size: 11px; line-height: 1.4; }
+
 /* OUTBOUND 通信経路に inline で出すプロセス名 chip */
 .packetmon-proc-chip {
   display: inline-block; padding: 1px 7px; border-radius: 10px;
