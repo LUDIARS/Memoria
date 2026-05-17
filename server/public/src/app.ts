@@ -302,12 +302,23 @@ const state: State = {
   domainSearch: '',
   // 二層設計: データソース (Local / 特定 Hub)。 ログ下のスイッチャで排他切替。
   dataSource: { mode: 'local', hubUrl: null },
+  // Multi モードで Local + Hub データを mix 表示する時の絞り込み:
+  //   'all'        — 全件表示
+  //   'unshared'   — Local item で shared_at が null
+  //   'user:<uid>' — その owner_user_id の item のみ
+  multiFilter: 'all' as string,
 };
 
 // Multi モードで触れないタブ (= 個人ログ系。 [個人データ保管禁止])。
-// Multi 対応は database (bookmark/dict/domain/impl) / dig / notes / worklog のみ。
+// Multi 対応は database (bookmark/dict/domain/impl) / dig / notes のみ。
+// 以下は Hub に対応データ source が無いため Multi モードで非活性:
+//   worklog   📝 ログ (アクティビティ / アプリ / GPS 等の個人ログ)
+//   worklist  📋 作業一覧 (タスク + repo 監視ダッシュボード)
+//   packetmon 🛡 パケット監視 (ローカル NIC のキャプチャ)
+//   queue     ⚙ キュー (ローカル AI / 取り込みジョブの待ち行列)
 const LOCAL_ONLY_TABS = new Set([
   'diary', 'meals', 'recommend', 'review', 'transit', 'trends',
+  'worklog', 'worklist', 'packetmon', 'queue',
 ]);
 
 // `$()` は永らく document.getElementById のショートハンド。
@@ -604,7 +615,10 @@ function renderCards() {
   const empty = $('empty');
   // Search filtering now happens server-side (?q=...). The full page is
   // already what we want to render — no local re-filtering.
-  const items = state.bookmarks;
+  const rawItems = state.bookmarks as Loose[];
+  // Multi モード時のフィルタ chip を描画し、 predicate を取得して絞り込む。
+  const filter = renderMultiFilterChips($('bookmarksMultiFilter'), rawItems);
+  const items = rawItems.filter(filter);
   renderBookmarksMore();
   if (items.length === 0) {
     wrap.innerHTML = '';
@@ -617,6 +631,7 @@ function renderCards() {
     const isSel = state.selected.has(b.id);
     const statusBadge = b.status === 'pending' ? '<span class="status-pending">要約中</span>'
       : b.status === 'error' ? '<span class="status-error">要約失敗</span>' : '';
+    const origin = multiOriginBadge(b);
     return `
       <div class="card ${isSel ? 'selected' : ''}" data-id="${b.id}">
         <input type="checkbox" class="check" data-id="${b.id}" ${isSel ? 'checked' : ''} />
@@ -630,7 +645,7 @@ function renderCards() {
         </div>
         <div class="footer">
           <span>最終: ${fmtDate(b.last_accessed_at)}</span>
-          <span>${statusBadge}</span>
+          <span>${statusBadge}${origin}</span>
         </div>
       </div>`;
   }).join('');
@@ -4784,6 +4799,19 @@ setupCategoriesDrawer();
 setupExtensionBadge();
 setupHowToBookmark();
 
+// Multi モードの filter chip が変わったら、 該当タブの list を再描画する。
+// 各 list の renderer は state.multiFilter を読んで絞り込むので、 ここでは
+// 「現在表示中のタブの再描画関数」 を呼べば良い。 起点は最小限 bookmark のみ
+// 接続。 他 6 型 (notes/dig/dict/impl/work-locations/domain-catalog) も同じ
+// パターンで wire 可能 (TODO)。
+window.addEventListener('multi-filter-changed', () => {
+  const tab = state.tab as string;
+  if (tab === 'database') {
+    // 現在の sub-view に応じて renderer を切替
+    renderCards();
+  }
+});
+
 // 💡 やり方 (スマホでブックマークする方法) — 旧 topbar の howToBookmarkBtn は
 // 廃止し、 設定 → 🔔 通知 / 端末 内の howToBookmarkBtnInSettings に移動。
 // モバイル幅でしか出さない自動表示も止め、 設定からいつでも開ける形に。
@@ -5389,16 +5417,88 @@ async function selectDataSource(url) {
   }
 }
 
-// Multi モード時、 個人ログ系タブに mode-locked クラスを付けてグレーアウト。
+// Multi モードで Local + Hub データを mix 表示している list 用の フィルタ chip。
+// 呼び出し側 (list renderer) は:
+//   1. fetch 後の items を渡して `renderMultiFilterChips(container, items)` を呼ぶ
+//   2. 返り値の predicate で items を filter して描画
+//   3. chip クリック時に 'multi-filter-changed' event が発火するので、 そこで再描画
+// Multi モードでない時は何もせず、 全件を通す predicate を返す。
+function renderMultiFilterChips(container: HTMLElement | null, items: Loose[]): (it: Loose) => boolean {
+  if (!container) return () => true;
+  const multi = document.body.dataset.multiMode === 'on';
+  if (!multi) {
+    container.innerHTML = '';
+    return () => true;
+  }
+  // owner_user_id → 表示名 を集計。 unshared (= local + shared_at なし) も判別。
+  const owners = new Map<string, string>();
+  let hasUnshared = false;
+  let hasMine = false;
+  for (const it of items || []) {
+    const uid = it.owner_user_id != null ? String(it.owner_user_id) : null;
+    if (uid) {
+      owners.set(uid, String(it.owner_user_name || uid));
+    } else if (it._origin === 'local') {
+      hasMine = true;
+      if (!it.shared_at) hasUnshared = true;
+    }
+  }
+  const cur = String(state.multiFilter || 'all');
+  const chip = (key: string, label: string): string =>
+    `<button class="mf-chip ${cur === key ? 'active' : ''}" data-mf="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
+  const chips: string[] = [chip('all', 'すべて')];
+  if (hasMine) chips.push(chip('mine', '自分のローカル'));
+  if (hasUnshared) chips.push(chip('unshared', '未シェア'));
+  for (const [uid, name] of owners) chips.push(chip(`user:${uid}`, name));
+
+  container.innerHTML = `<div class="multi-filter-bar"><span class="muted" style="font-size:12px;margin-right:6px">表示:</span>${chips.join('')}</div>`;
+  container.querySelectorAll('.mf-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.multiFilter = (btn as HTMLElement).dataset.mf || 'all';
+      window.dispatchEvent(new CustomEvent('multi-filter-changed', { detail: state.multiFilter }));
+    });
+  });
+
+  // predicate
+  return (it: Loose) => {
+    if (cur === 'all') return true;
+    if (cur === 'mine') return it._origin === 'local';
+    if (cur === 'unshared') return it._origin === 'local' && !it.shared_at;
+    if (cur.startsWith('user:')) return String(it.owner_user_id ?? '') === cur.slice(5);
+    return true;
+  };
+}
+
+// item の 由来 (= ローカル / Hub ユーザ) を表す小バッジ HTML を返す。
+// Multi モードでなければ空文字。
+function multiOriginBadge(it: Loose): string {
+  if (document.body.dataset.multiMode !== 'on') return '';
+  if (it._origin === 'hub') {
+    const name = String(it.owner_user_name || it.owner_user_id || '他ユーザ');
+    return `<span class="mo-badge mo-hub" title="Hub 共有 — ${escapeHtml(name)}">👥 ${escapeHtml(name)}</span>`;
+  }
+  if (it._origin === 'local') {
+    if (it.shared_at) return '<span class="mo-badge mo-shared" title="Local (Hub にシェア済)">🏠 自分</span>';
+    return '<span class="mo-badge mo-local" title="Local (未シェア)">🏠 未シェア</span>';
+  }
+  return '';
+}
+
+// Multi モード時、 個人ログ系タブは非表示にする (旧仕様の gray-out から変更)。
+// 同時に share 系 control (= Hub に publish するチェックボックス) も、 Multi
+// モードでなければ意味が無いので非表示にする。
 function applyModeGating() {
   const multi = (state.dataSource as { mode?: string })?.mode === 'multi';
+  document.body.dataset.multiMode = multi ? 'on' : 'off';
   document.querySelectorAll('.tab[data-tab]').forEach(t => {
     const el = t as HTMLElement;
-    const locked = multi && LOCAL_ONLY_TABS.has(el.dataset.tab || '');
-    el.classList.toggle('mode-locked', locked);
-    if (locked) el.title = 'Local モード専用 (Multi モードでは利用不可)';
-    else if (el.title === 'Local モード専用 (Multi モードでは利用不可)') el.title = '';
+    const hide = multi && LOCAL_ONLY_TABS.has(el.dataset.tab || '');
+    el.hidden = hide;
+    // 旧 mode-locked クラスは下位互換のため残す (CSS が opacity 等で参照)
+    el.classList.toggle('mode-locked', hide);
   });
+  // share checkbox は親 label / row 単位で hide。 CSS で
+  // body[data-multi-mode="off"] .multi-only-control { display: none; } 経由。
 }
 
 // 現在のモードを backend から読んで state に反映。 起動時 + status 更新時に呼ぶ。
@@ -5836,7 +5936,7 @@ let ensureMemoriaFeatureViews = function () {
           <input id="implTitle" type="text" placeholder="短いタイトル" />
           <textarea id="implGood" rows="4" placeholder="良かった点"></textarea>
           <textarea id="implBad" rows="3" placeholder="悪かった点 / トレードオフ"></textarea>
-          <label class="check-inline"><input id="implShareable" type="checkbox" /> シェア可能にする</label>
+          <label class="check-inline multi-only-control"><input id="implShareable" type="checkbox" /> シェア可能にする</label>
           <div class="simple-actions">
             <button id="implAddBtn">追加</button>
             <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
@@ -5920,7 +6020,7 @@ let ensureMemoriaFeatureViews = function () {
             <input id="workplaceEditorRadius" type="number" min="1" max="50000" step="1" placeholder="50 (空欄: 設定の既定値を使う)" />
             <small class="muted">場所の物理的な大きさに応じて個別に設定。 例: 自宅 = 30m / 駅前広場 = 200m / 大学キャンパス = 500m。 0 や空欄なら全体設定の値 (設定 → プライバシー → 場所判定の半径) を使う。</small>
           </label>
-          <label class="simple-check-row">
+          <label class="simple-check-row multi-only-control">
             <input id="workplaceEditorShareable" type="checkbox" />
             <span>シェア可能にする</span>
           </label>
@@ -6134,7 +6234,7 @@ upgradeImplementationFormMarkup = function () {
       <span>悪かった点 / トレードオフ</span>
       <textarea id="implBad" rows="4" placeholder="悪かった点、迷った点、次に直したい点"></textarea>
     </label>
-    <label class="simple-check-row">
+    <label class="simple-check-row multi-only-control">
       <input id="implShareable" type="checkbox" tabindex="-1" />
       <span>シェア可能にする</span>
     </label>
@@ -6489,7 +6589,7 @@ upgradeImplementationFormMarkup = function () {
       <span>添付内容</span>
       <textarea id="implAttachmentValue" rows="4" placeholder="URL、画像や動画のパス、コードなどを 1 つだけ記入"></textarea>
     </label>
-    <label class="simple-check-row">
+    <label class="simple-check-row multi-only-control">
       <input id="implShareable" type="checkbox" tabindex="-1" />
       <span>シェア可能にする</span>
     </label>

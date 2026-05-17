@@ -355,9 +355,32 @@ button:hover { background: #1f56c0; border-color: #1f56c0; }
 }
 .tab:hover { background: #f0f2f7; color: var(--text); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-/* Multi モード時、 Local 専用タブはグレーアウト (= switchTab が切替を弾く)。 */
+/* Multi モード時、 Local 専用タブは hidden 属性で完全非表示。 mode-locked
+   class は frontend が同時に付けるが、 hidden=true で勝つ。 旧表示用の
+   gray-out は残しておく (= 一時的に hidden を外したとき用) */
 .tab.mode-locked { opacity: 0.38; cursor: not-allowed; }
 .tab.mode-locked:hover { background: transparent; color: var(--muted); }
+/* Multi モードのときだけ表示する控えコントロール (= シェア可能チェック等)。
+   body[data-multi-mode="on"] の時のみ可視。 初期 (= 属性未設定 or "off") は非表示。 */
+body:not([data-multi-mode="on"]) .multi-only-control { display: none !important; }
+
+/* Multi モード時、 list 上の 「自分のローカル / 未シェア / ユーザ別」 chip フィルタ */
+.multi-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 8px 10px; margin: 0 0 8px; background: rgba(0,0,0,0.03);
+  border-radius: 6px; border: 1px solid var(--border); }
+.mf-chip { font-size: 12px; padding: 4px 10px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+  cursor: pointer; transition: background 0.12s; }
+.mf-chip:hover { background: var(--panel-hover, rgba(0,0,0,0.06)); }
+.mf-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.multi-filter-slot:empty { display: none; }
+
+/* item の由来 (= local / Hub) を示す小バッジ。 footer など末尾に追加。 */
+.mo-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; font-size: 11px;
+  border-radius: 3px; border: 1px solid var(--border); background: rgba(0,0,0,0.04); color: var(--muted); }
+.mo-hub    { color: #1c6cba; border-color: #b9d6f2; background: #eaf3fc; }
+.mo-shared { color: #6a4c0a; border-color: #ead7a0; background: #fbf3d8; }
+.mo-local  { color: var(--muted); }
 .tab-count {
   background: #fff5e1;
   color: #8a5a00;
