@@ -3,6 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "description": "Memoria desktop wrapper — Electron shell that runs the Memoria Node server as a child process and shows its UI in a Chromium window.",
+  "homepage": "https://github.com/LUDIARS/Memoria",
+  "author": {
+    "name": "LUDIARS",
+    "email": "ludiars@users.noreply.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LUDIARS/Memoria.git"
+  },
   "main": "out/main.js",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
@@ -69,7 +78,8 @@
       "target": ["AppImage", "deb"],
       "icon": "icons/icon.png",
       "category": "Office",
-      "synopsis": "Web bookmarking + research + diary"
+      "synopsis": "Web bookmarking + research + diary",
+      "maintainer": "LUDIARS <ludiars@users.noreply.github.com>"
     }
   }
 }
