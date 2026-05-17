@@ -1,6 +1,6 @@
 {
   "name": "memoria-desktop",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Memoria desktop wrapper — Electron shell that runs the Memoria Node server as a child process and shows its UI in a Chromium window.",
   "main": "out/main.js",
