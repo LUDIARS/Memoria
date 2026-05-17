@@ -5487,21 +5487,6 @@ function renderMultiFilterChips(container: HTMLElement | null, items: Loose[]): 
   };
 }
 
-// item の 由来 (= ローカル / Hub ユーザ) を表す小バッジ HTML を返す。
-// Multi モードでなければ空文字。
-function multiOriginBadge(it: Loose): string {
-  if (document.body.dataset.multiMode !== 'on') return '';
-  if (it._origin === 'hub') {
-    const name = String(it.owner_user_name || it.owner_user_id || '他ユーザ');
-    return `<span class="mo-badge mo-hub" title="Hub 共有 — ${escapeHtml(name)}">👥 ${escapeHtml(name)}</span>`;
-  }
-  if (it._origin === 'local') {
-    if (it.shared_at) return '<span class="mo-badge mo-shared" title="Local (Hub にシェア済)">🏠 自分</span>';
-    return '<span class="mo-badge mo-local" title="Local (未シェア)">🏠 未シェア</span>';
-  }
-  return '';
-}
-
 // Hub mode のとき、 各エントリの 「頭」 に出す関係ユーザ chip 列。
 // 「誰が書いた / 登録した / コメントしたか」 を 1 行に並べる。
 //
