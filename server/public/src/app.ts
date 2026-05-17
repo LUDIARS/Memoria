@@ -631,10 +631,11 @@ function renderCards() {
     const isSel = state.selected.has(b.id);
     const statusBadge = b.status === 'pending' ? '<span class="status-pending">要約中</span>'
       : b.status === 'error' ? '<span class="status-error">要約失敗</span>' : '';
-    const origin = multiOriginBadge(b);
+    const usersHeader = multiUsersHeader(b);
     return `
       <div class="card ${isSel ? 'selected' : ''}" data-id="${b.id}">
         <input type="checkbox" class="check" data-id="${b.id}" ${isSel ? 'checked' : ''} />
+        ${usersHeader}
         <div class="title">${escapeHtml(b.title)}</div>
         <div class="url">${escapeHtml(b.url)}</div>
         <div class="summary">${escapeHtml(b.summary || '')}</div>
@@ -645,7 +646,7 @@ function renderCards() {
         </div>
         <div class="footer">
           <span>最終: ${fmtDate(b.last_accessed_at)}</span>
-          <span>${statusBadge}${origin}</span>
+          <span>${statusBadge}</span>
         </div>
       </div>`;
   }).join('');
@@ -1253,6 +1254,8 @@ function tabsInUsageOrder() {
 // Mobile tab nav is "top 4 most-used + ⋯ More". active は必ず strip に
 // 表示される。 More から選択したタブは promote されて leftmost に来る
 // (= 旧 4 位を More に押し出す)。
+// 活性タブが 4 個以下なら全部 strip に出して More ボタンは出さない
+// (= 「5 個以上で 4-rule」のルール)。
 const TABS_VISIBLE_ON_MOBILE = 4;
 
 /// More メニューから選ばれたタブを strip の 1 番左に持ってくる。
@@ -1329,22 +1332,35 @@ function reflowTabsForViewport() {
   // 上位 N 件 (使用回数 + default priority) を strip に残す。 active は必ず
   // 含めるが、 圏外なら N 件目を 1 件抜いて active と入れ替える。
   // → strip 内のタブは常に最大 N 件で、 「More」 を押せば残りが見える。
+  //
+  // hidden なタブ (Multi モードで非活性化された LOCAL_ONLY_TABS 等) は
+  // ordered からも全 loop からも除外して strip / More メニューどちらにも
+  // 出さない。 活性タブが 4 個以下なら More ボタンも出さない。
   const active = state.tab;
   const ordered = tabsInUsageOrder()
     .filter(t => !t.hidden);          // skip hidden tabs (e.g. multi)
-  const top = ordered.slice(0, TABS_VISIBLE_ON_MOBILE);
-  const visible = new Set(top.map(t => t.dataset.tab));
-  if (active && !visible.has(active)) {
-    if (top.length >= TABS_VISIBLE_ON_MOBILE) {
-      visible.delete(top[top.length - 1].dataset.tab);
+  const activeTabs = allTabs.filter(t => !t.hidden);
+  const useFourRule = ordered.length >= TABS_VISIBLE_ON_MOBILE + 1;  // 5 個以上で 4-rule
+  const visible = new Set<string>();
+  if (useFourRule) {
+    const top = ordered.slice(0, TABS_VISIBLE_ON_MOBILE);
+    for (const t of top) visible.add(t.dataset.tab);
+    if (active && !visible.has(active)) {
+      if (top.length >= TABS_VISIBLE_ON_MOBILE) {
+        visible.delete(top[top.length - 1].dataset.tab);
+      }
+      visible.add(active);
     }
-    visible.add(active);
+  } else {
+    // 活性が 4 個以下: 全部 strip に出す。
+    for (const t of activeTabs) visible.add(t.dataset.tab);
   }
 
   let overflowCount = 0;
   for (const t of allTabs) {
     if (t.hidden) {
-      // tab-multi-only stays out of both strip and menu when not connected.
+      // 非活性タブは strip からも More メニューからも完全除外。
+      // CSS の `[hidden]` で display:none になっているのでそのまま。
       continue;
     }
     if (visible.has(t.dataset.tab)) {
@@ -2638,6 +2654,7 @@ function renderDictionaryList() {
   }
   ul.innerHTML = state.dictEntries.map(e => `
     <li class="dict-item ${state.dictDetail?.id === e.id ? 'selected' : ''}" data-id="${e.id}">
+      ${multiUsersHeader(e as Loose)}
       <div class="dict-term">${escapeHtml(e.term)}</div>
       <div class="dict-snippet">${escapeHtml((e.definition || e.notes || '').slice(0, 320))}</div>
       <div class="dict-meta">
@@ -2809,6 +2826,7 @@ let renderDomainList = function () {
     const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
     return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      ${multiUsersHeader(e as Loose)}
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
       <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">
@@ -5469,19 +5487,83 @@ function renderMultiFilterChips(container: HTMLElement | null, items: Loose[]): 
   };
 }
 
-// item の 由来 (= ローカル / Hub ユーザ) を表す小バッジ HTML を返す。
-// Multi モードでなければ空文字。
-function multiOriginBadge(it: Loose): string {
-  if (document.body.dataset.multiMode !== 'on') return '';
+// Hub mode のとき、 各エントリの 「頭」 に出す関係ユーザ chip 列。
+// 「誰が書いた / 登録した / コメントしたか」 を 1 行に並べる。
+//
+// 入力フィールド:
+//   it.owner_user_id / it.owner_user_name           ─ 単一所有者 (作成・登録者)
+//   it._origin: 'hub' | 'local'                     ─ Hub から来たか自分のローカルか
+//   it.shared_at                                     ─ ローカル item が Hub に publish 済か
+//   it.contributors: Array<{                         ─ 将来の複数ユーザデータ用
+//     user_id, user_name, role: 'author'|'registrar'|'editor'|'commenter'
+//   }>
+//
+// 単一所有者しか無いデータでも chip は 1 個出る。 contributors が増えれば
+// dedup した上で並べる。 Hub mode 以外では空文字。
+type HubUserRole = 'author' | 'registrar' | 'editor' | 'commenter';
+interface HubUserChip { id: string; name: string; role: HubUserRole; self: boolean; }
+
+function collectHubUsers(it: Loose): HubUserChip[] {
+  const out: HubUserChip[] = [];
+  const seen = new Set<string>();
+
+  const push = (chip: HubUserChip) => {
+    const key = `${chip.role}:${chip.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(chip);
+  };
+
   if (it._origin === 'hub') {
-    const name = String(it.owner_user_name || it.owner_user_id || '他ユーザ');
-    return `<span class="mo-badge mo-hub" title="Hub 共有 — ${escapeHtml(name)}">👥 ${escapeHtml(name)}</span>`;
+    const id = it.owner_user_id != null ? String(it.owner_user_id) : '';
+    const name = String(it.owner_user_name || id || '他ユーザ');
+    push({ id: id || name, name, role: 'author', self: false });
+  } else if (it._origin === 'local') {
+    const shared = !!it.shared_at;
+    push({
+      id: 'self',
+      name: shared ? '自分' : '自分 (未シェア)',
+      role: 'author',
+      self: true,
+    });
   }
-  if (it._origin === 'local') {
-    if (it.shared_at) return '<span class="mo-badge mo-shared" title="Local (Hub にシェア済)">🏠 自分</span>';
-    return '<span class="mo-badge mo-local" title="Local (未シェア)">🏠 未シェア</span>';
+
+  // Future-ready: 別ユーザの編集・コメント・登録履歴。 現状は backend が
+  // 出さないが、 array で来るなら全部 chip 化する (重複は role+id で排除)。
+  const extras = Array.isArray(it.contributors) ? it.contributors as Array<Record<string, unknown>> : [];
+  for (const c of extras) {
+    const id = c.user_id != null ? String(c.user_id) : '';
+    const name = String(c.user_name || id || '他ユーザ');
+    const roleRaw = String(c.role || 'editor');
+    const role: HubUserRole = (['author', 'registrar', 'editor', 'commenter'].includes(roleRaw)
+      ? roleRaw
+      : 'editor') as HubUserRole;
+    push({ id: id || name, name, role, self: false });
   }
-  return '';
+
+  return out;
+}
+
+function multiUsersHeader(it: Loose): string {
+  if (document.body.dataset.multiMode !== 'on') return '';
+  const users = collectHubUsers(it);
+  if (users.length === 0) return '';
+  const chips = users.map(u => {
+    const icon = u.role === 'commenter' ? '💬'
+      : u.role === 'editor'    ? '✎'
+      : u.role === 'registrar' ? '📌'
+      : '👤';
+    const tip = u.role === 'commenter' ? 'コメント'
+      : u.role === 'editor'    ? '編集'
+      : u.role === 'registrar' ? '登録'
+      : '作成・登録';
+    const cls = `mu-chip mu-chip-${u.role}${u.self ? ' mu-chip-self' : ''}`;
+    return `<span class="${cls}" title="${escapeHtml(tip)}: ${escapeHtml(u.name)}">`
+      + `<span class="mu-chip-icon">${icon}</span>`
+      + `<span class="mu-chip-name">${escapeHtml(u.name)}</span>`
+      + `</span>`;
+  }).join('');
+  return `<div class="mu-header" role="group" aria-label="関係ユーザ">${chips}</div>`;
 }
 
 // Multi モード時、 個人ログ系タブは非表示にする (旧仕様の gray-out から変更)。
@@ -5497,6 +5579,10 @@ function applyModeGating() {
     // 旧 mode-locked クラスは下位互換のため残す (CSS が opacity 等で参照)
     el.classList.toggle('mode-locked', hide);
   });
+  // モバイル strip / More メニューはタブの活性化集合に依存するので、 mode が
+  // 切り替わったタイミングで再計算する。 でないと Hub に切り替えても古い
+  // More メニューが非活性タブを抱え続けるし、 4-rule の境界も古いまま。
+  reflowTabsForViewport();
   // share checkbox は親 label / row 単位で hide。 CSS で
   // body[data-multi-mode="off"] .multi-only-control { display: none; } 経由。
 }
@@ -6650,6 +6736,7 @@ loadImplementationNotes = async function () {
   }
   list.innerHTML = items.map(n => `
     <div class="simple-item" data-id="${n.id}" data-impl-open="${n.id}">
+      ${multiUsersHeader(n as Loose)}
       <div class="simple-item-head"><strong>${escapeHtml(n.title)}</strong></div>
       <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
       <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
@@ -6735,6 +6822,7 @@ renderDomainList = function () {
     const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
     return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      ${multiUsersHeader(e as Loose)}
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
       <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">

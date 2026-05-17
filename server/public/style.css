@@ -381,6 +381,46 @@ body:not([data-multi-mode="on"]) .multi-only-control { display: none !important;
 .mo-hub    { color: #1c6cba; border-color: #b9d6f2; background: #eaf3fc; }
 .mo-shared { color: #6a4c0a; border-color: #ead7a0; background: #fbf3d8; }
 .mo-local  { color: var(--muted); }
+
+/* Hub mode の各エントリ「頭」に出す関係ユーザ chip 列。
+   作成/登録/編集/コメント を icon で分け、 複数ユーザを横並び chip にする。
+   Hub mode 以外では multiUsersHeader が空文字を返すので、 ここは出ない。 */
+.mu-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin: 0 0 4px;
+  padding: 0;
+  /* checkbox (.card > .check) と被らないよう右側に余白 */
+  padding-right: 28px;
+}
+.mu-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px 1px 5px;
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.03);
+  color: var(--muted);
+  max-width: 14em;
+  overflow: hidden;
+}
+.mu-chip-icon { font-size: 11px; line-height: 1; }
+.mu-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mu-chip-author    { color: #1c6cba; border-color: #b9d6f2; background: #eaf3fc; }
+.mu-chip-registrar { color: #1c6cba; border-color: #b9d6f2; background: #eaf3fc; }
+.mu-chip-editor    { color: #5a4a8a; border-color: #d4cae6; background: #f1ecf9; }
+.mu-chip-commenter { color: #6a4c0a; border-color: #ead7a0; background: #fbf3d8; }
+.mu-chip-self      { color: #2c6e2c; border-color: #b6dab6; background: #ecf6ec; }
+/* モバイル: もう一段コンパクトに */
+@media (max-width: 760px) {
+  .mu-header { gap: 3px; margin-bottom: 3px; padding-right: 24px; }
+  .mu-chip { padding: 0 6px 0 4px; font-size: 10px; max-width: 10em; }
+}
 .tab-count {
   background: #fff5e1;
   color: #8a5a00;
