@@ -29,6 +29,7 @@
 //                          OS login auto-start integration.
 
 import { app, BrowserWindow, shell, Menu, Tray, nativeImage, ipcMain } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { spawn, type ChildProcess, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as path from 'node:path';
@@ -53,6 +54,7 @@ let tray: Tray | null = null;
 let serverChild: ChildProcess | null = null;
 let isQuitting = false;
 let serverPort = Number(process.env.MEMORIA_PORT) || 5180;
+let pendingUpdateVersion: string | null = null;
 
 type NodeSubdir =
   | 'win-x64'
@@ -333,6 +335,19 @@ function buildTrayMenu(): Menu {
       click: (item) => setAutoLaunch(item.checked),
     },
     { type: 'separator' },
+    pendingUpdateVersion
+      ? {
+          label: `更新 v${pendingUpdateVersion} を適用して再起動`,
+          click: () => {
+            isQuitting = true;
+            autoUpdater.quitAndInstall();
+          },
+        }
+      : {
+          label: '更新を確認',
+          click: () => { void checkForUpdatesManually(); },
+        },
+    { type: 'separator' },
     {
       label: 'Memoria を終了',
       click: () => {
@@ -361,6 +376,63 @@ function createTray(): void {
 
 function refreshTrayMenu(): void {
   tray?.setContextMenu(buildTrayMenu());
+}
+
+// ── auto-update (electron-updater + GitHub Releases) ──────────────────────
+// build.publish に { provider: 'github', owner: LUDIARS, repo: Memoria } を
+// 指定してあるので、 autoUpdater は https://github.com/LUDIARS/Memoria の
+// 最新 Release に置いてある latest.yml / latest-mac.yml / latest-linux.yml を
+// 読みに行く。 これらは electron-builder の --publish=always が自動で生成して
+// Release に upload する。 起動から数秒後に silent check し、 6 時間ごとに
+// 再チェック。 更新が降ってきたら background download → quit 時に install。
+// Tray menu からは手動チェック + 「適用して再起動」 が出来る。
+
+function setupAutoUpdater(): void {
+  if (!app.isPackaged) {
+    console.log('[updater] disabled in dev mode (app not packaged)');
+    return;
+  }
+  autoUpdater.logger = console;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[updater] checking…');
+  });
+  autoUpdater.on('update-available', (info) => {
+    console.log('[updater] update available:', info.version);
+  });
+  autoUpdater.on('update-not-available', (info) => {
+    console.log('[updater] up-to-date:', info.version);
+  });
+  autoUpdater.on('error', (err) => {
+    console.warn('[updater] error:', err instanceof Error ? err.message : String(err));
+  });
+  autoUpdater.on('download-progress', (p) => {
+    console.log(`[updater] downloading… ${Math.round(p.percent)}%`);
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[updater] downloaded:', info.version, '— ready to install');
+    pendingUpdateVersion = info.version;
+    refreshTrayMenu();
+  });
+
+  // UI 起動と被らないよう 5 秒遅延、 以降 6h 毎
+  setTimeout(() => { void autoUpdater.checkForUpdatesAndNotify(); }, 5_000);
+  setInterval(() => { void autoUpdater.checkForUpdatesAndNotify(); }, 6 * 60 * 60 * 1000);
+}
+
+async function checkForUpdatesManually(): Promise<void> {
+  if (!app.isPackaged) {
+    console.log('[updater] manual check skipped (dev mode)');
+    return;
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    console.log('[updater] manual check →', result?.updateInfo?.version ?? '(no info)');
+  } catch (e) {
+    console.warn('[updater] manual check failed:', e instanceof Error ? e.message : String(e));
+  }
 }
 
 // ── auto-launch ────────────────────────────────────────────────────────────
@@ -533,6 +605,7 @@ void app.whenReady().then(async () => {
   } else {
     console.log('[memoria-desktop] --hidden flag set — staying in the tray (no window)');
   }
+  setupAutoUpdater();
 });
 
 app.on('window-all-closed', () => {
