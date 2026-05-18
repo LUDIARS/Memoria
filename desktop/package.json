@@ -1,6 +1,6 @@
 {
   "name": "memoria-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Memoria desktop wrapper — Electron shell that runs the Memoria Node server as a child process and shows its UI in a Chromium window.",
   "homepage": "https://github.com/LUDIARS/Memoria",
@@ -37,6 +37,14 @@
     "appId": "com.ludiars.memoria",
     "productName": "Memoria",
     "asar": true,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "LUDIARS",
+        "repo": "Memoria",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "out/**",
       "package.json",
@@ -47,12 +55,18 @@
       {
         "from": "resources/server",
         "to": "server",
-        "filter": ["**/*", "!.gitkeep"]
+        "filter": [
+          "**/*",
+          "!.gitkeep"
+        ]
       },
       {
         "from": "resources/node",
         "to": "node",
-        "filter": ["**/*", "!.gitkeep"]
+        "filter": [
+          "**/*",
+          "!.gitkeep"
+        ]
       }
     ],
     "directories": {
@@ -60,7 +74,9 @@
       "buildResources": "icons"
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "icons/icon.ico"
     },
     "nsis": {
@@ -70,16 +86,24 @@
       "shortcutName": "Memoria"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "icons/icon.icns",
       "category": "public.app-category.productivity"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "icons/icon.png",
       "category": "Office",
       "synopsis": "Web bookmarking + research + diary",
       "maintainer": "LUDIARS <ludiars@users.noreply.github.com>"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
