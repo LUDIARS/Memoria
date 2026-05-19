@@ -652,8 +652,8 @@ export function openDb(dbPath: string): Db {
       ON tasks(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(due_at);
-    CREATE INDEX IF NOT EXISTS idx_tasks_kind
-      ON tasks(kind);
+    -- idx_tasks_kind は ALTER で kind カラムを足した後にしか作れないので、
+    -- migration block の末尾で作成する (下記 ALTER 群の直後を参照)。
 
     CREATE TABLE IF NOT EXISTS agent_projects (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -912,9 +912,9 @@ export function openDb(dbPath: string): Db {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
     }
   }
-  if (taskCols.length > 0 && !taskCols.includes('kind')) {
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind)`);
-  }
+  // kind カラムは ALTER で足したばかり (or 元から存在) — どちらにせよ
+  // index を作る。 IF NOT EXISTS で冪等。
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind)`);
   // agent_runs.model — add if missing on existing DBs.
   const arCols = (db.prepare(`PRAGMA table_info(agent_runs)`).all() as { name: string }[]).map(c => c.name);
   if (arCols.length > 0 && !arCols.includes('model')) {
