@@ -1,0 +1,80 @@
+{
+  "$schema": "../../../spec/schema/ludiars-app-manifest.schema.json",
+  "_comment": "Example Hub Shell app registry. Phase 0 placeholder — not consumed by any code yet. The real format is a JSON array of LUDIARS App Manifests; each app may also self-publish at /.well-known/ludiars-app.json (Phase 1 decision). 'description' shows in the tab nav under the app name (see hub-shell.md §4.2). 'dataChannels' declares cross-app data interop (see §8).",
+  "apps": [
+    {
+      "id": "memoria",
+      "displayName": "Memoria",
+      "description": "ナレッジ管理",
+      "shortCode": "Mm",
+      "icon": "📓",
+      "version": "0.0.0-placeholder",
+      "entry": {
+        "type": "web-component",
+        "tag": "memoria-app",
+        "url": "https://memoria.example/dist/element.js"
+      },
+      "capabilities": ["cernere-session", "design-tokens"],
+      "dataChannels": [
+        { "name": "task", "role": "consumer" }
+      ],
+      "routes": [
+        { "path": "/apps/memoria", "default": true }
+      ]
+    },
+    {
+      "id": "actio",
+      "displayName": "Actio",
+      "description": "予定・タスク管理",
+      "shortCode": "A",
+      "icon": "📅",
+      "version": "0.0.0-placeholder",
+      "entry": {
+        "type": "web-component",
+        "tag": "actio-app",
+        "url": "https://actio.example/dist/element.js"
+      },
+      "capabilities": ["cernere-session", "design-tokens"],
+      "dataChannels": [
+        { "name": "task", "role": "provider" }
+      ],
+      "routes": [
+        { "path": "/apps/actio", "default": true }
+      ]
+    },
+    {
+      "id": "bibliotheca",
+      "displayName": "Bibliotheca",
+      "description": "蔵書・機材の貸出台帳",
+      "shortCode": "Bb",
+      "icon": "📚",
+      "version": "0.0.0-placeholder",
+      "entry": {
+        "type": "web-component",
+        "tag": "bibliotheca-app",
+        "url": "https://bibliotheca.example/dist/element.js"
+      },
+      "capabilities": ["cernere-session", "design-tokens"],
+      "routes": [
+        { "path": "/apps/bibliotheca", "default": true }
+      ]
+    },
+    {
+      "id": "calicula",
+      "displayName": "Calicula",
+      "description": "カリキュラム計画",
+      "shortCode": "Ca",
+      "icon": "📐",
+      "version": "0.0.0-placeholder",
+      "entry": {
+        "type": "web-component",
+        "tag": "calicula-app",
+        "url": "https://calicula.example/dist/element.js"
+      },
+      "capabilities": ["cernere-session", "design-tokens"],
+      "routes": [
+        { "path": "/apps/calicula", "default": true }
+      ]
+    }
+  ]
+}

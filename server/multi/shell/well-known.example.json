@@ -1,0 +1,22 @@
+{
+  "$schema": "../../../spec/schema/ludiars-app-manifest.schema.json",
+  "_comment": "Example response of GET /.well-known/ludiars-app.json an app exposes for Hub Shell self-registration. See spec/feature/hub-shell.md §9.1. The response is a SINGLE manifest (this app), not an array — apps.example.json shows multiple, but each well-known is one. Strip the '_comment' line in real responses; it isn't part of the schema.",
+  "id": "memoria",
+  "displayName": "Memoria",
+  "description": "ナレッジ管理",
+  "shortCode": "Mm",
+  "icon": "📓",
+  "version": "0.0.0-placeholder",
+  "entry": {
+    "type": "web-component",
+    "tag": "memoria-app",
+    "url": "https://memoria.example/dist/element.js"
+  },
+  "capabilities": ["cernere-session", "design-tokens"],
+  "dataChannels": [
+    { "name": "task", "role": "consumer" }
+  ],
+  "routes": [
+    { "path": "/apps/memoria", "default": true }
+  ]
+}
