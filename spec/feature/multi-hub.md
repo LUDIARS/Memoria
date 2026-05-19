@@ -20,6 +20,12 @@ share/download する」 モデルだった。 これだと:
   データアクセス先が Hub の JSON API になる。
 - 拠点ごとに Hub を立てられる (= 各 Hub が独立した Cernere + データストア)。
 
+> **関連**: 本書は Hub の **データハブ役** (Memoria 共有 7 型の JSON CRUD) の
+> 設計。 Hub にはこれと別に **frontend shell 役** (複数 LUDIARS アプリの集約
+> レンダリング) を将来載せる方向で準備中。 そちらは
+> [`hub-shell.md`](./hub-shell.md) を参照。 2 役は Hub 内で同居するが
+> 互いに依存しない。
+
 ## 2. アーキテクチャ
 
 ```
