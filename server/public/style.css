@@ -4490,6 +4490,39 @@ dialog.meal-modal[open] {
   border: 1px solid var(--border);
   color: var(--muted);
 }
+/* 「目標」 = 中長期で達成したいこと。 タスクと並べた時に視覚的に区別する。 */
+.tasks-goals-pane {
+  margin: 0 0 12px;
+  padding: 10px 12px 12px;
+  border: 1px solid #d8c98a;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fffcec 0%, #fff9d8 100%);
+}
+.tasks-goals-pane.hidden { display: none; }
+.tasks-goals-pane h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #8a6d00;
+  letter-spacing: 0.04em;
+}
+.task-card--goal {
+  border-left: 4px solid #d8a900;
+}
+.task-kind {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.task-kind.goal {
+  border-color: #d8a900;
+  color: #6b5300;
+  background: #fff3c4;
+}
 .task-origin.ai {
   border-color: #c37a00;
   color: #9a6000;

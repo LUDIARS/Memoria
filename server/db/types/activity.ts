@@ -8,7 +8,10 @@ export type ActivityKind =
   | 'codex_prompt'
   | 'task_created'
   | 'task_done'
-  | 'task_updated';
+  | 'task_updated'
+  | 'goal_created'
+  | 'goal_done'
+  | 'goal_updated';
 
 export interface ActivityEventRow {
   id: number;

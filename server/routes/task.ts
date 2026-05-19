@@ -8,6 +8,7 @@ import {
   getTask, insertTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
   getDiary, upsertDiary, recordActivityEvent,
+  listRepoWatch,
 } from '../db.js';
 import { formatLocalDate } from '../diary.js';
 import { privacySettings } from '../lib/privacy.js';
@@ -61,11 +62,21 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     const status = statusQ && (validStatuses as readonly string[]).includes(statusQ)
       ? statusQ as typeof validStatuses[number]
       : null;
-    return c.json({ items: listTasks(db, { status, limit, offset }) });
+    // kind: 'task' (default) | 'goal' | 'all'。 互換性のため未指定なら通常タスクのみ。
+    const kindQ = c.req.query('kind');
+    const validKinds = ['task', 'goal', 'all'] as const;
+    const kind = kindQ && (validKinds as readonly string[]).includes(kindQ)
+      ? kindQ as typeof validKinds[number]
+      : null;
+    return c.json({ items: listTasks(db, { status, kind, limit, offset }) });
   });
 
   r.get('/api/tasks/categories', (c: Context) => {
-    return c.json({ items: listTaskCategories(db) });
+    const items = listTaskCategories(db);
+    // サジェスト用に登録済リポを `owner/name` 形式で返す。 登録済カテゴリと
+    // 被ったものは items 側にも残り、 datalist 側で union 表示すれば良い。
+    const repos = listRepoWatch(db).map((r) => `${r.owner}/${r.name}`);
+    return c.json({ items, suggestions: { repos } });
   });
 
   r.post('/api/tasks/categories', async (c: Context) => {
@@ -84,17 +95,19 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
 
   r.post('/api/tasks', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as
-      { title?: unknown; details?: unknown; status?: unknown; creator_type?: unknown;
+      { title?: unknown; details?: unknown; status?: unknown; kind?: unknown; creator_type?: unknown;
         due_at?: unknown; share_actio?: unknown; category?: unknown };
     const title = String(body.title ?? '').trim();
     if (!title) return c.json({ error: 'title required' }, 400);
     const status: 'todo' | 'doing' | 'done' = (['todo', 'doing', 'done'] as const).includes(body.status as 'todo' | 'doing' | 'done')
       ? body.status as 'todo' | 'doing' | 'done'
       : 'todo';
+    const kind: 'task' | 'goal' = body.kind === 'goal' ? 'goal' : 'task';
     const id = insertTask(db, {
       title,
       details: String(body.details ?? '').trim(),
       status,
+      kind,
       creator_type: body.creator_type === 'ai' ? 'ai' : 'human',
       due_at: typeof body.due_at === 'string' ? body.due_at : null,
       share_actio: !!body.share_actio,
@@ -102,9 +115,10 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     });
     const created = getTask(db, id);
     if (!created) return c.json({ error: 'failed to read inserted task' }, 500);
-    appendTaskDiaryLog(`タスク発行: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
+    const label = kind === 'goal' ? '目標発行' : 'タスク発行';
+    appendTaskDiaryLog(`${label}: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
     recordActivityEvent(db, {
-      kind: 'task_created',
+      kind: kind === 'goal' ? 'goal_created' : 'task_created',
       content: created.title,
       metadata: created.due_at ? { due_at: created.due_at } : undefined,
     });
@@ -116,12 +130,13 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     const before = getTask(db, id);
     if (!before) return c.json({ error: 'not found' }, 404);
     const body = await c.req.json().catch(() => ({})) as
-      { title?: unknown; details?: unknown; status?: unknown; due_at?: unknown;
+      { title?: unknown; details?: unknown; status?: unknown; kind?: unknown; due_at?: unknown;
         share_actio?: unknown; category?: unknown };
     const patch: Record<string, unknown> = {};
     if (typeof body.title === 'string') patch.title = body.title.trim();
     if (typeof body.details === 'string') patch.details = body.details.trim();
     if ((['todo', 'doing', 'done'] as const).includes(body.status as 'todo' | 'doing' | 'done')) patch.status = body.status;
+    if (body.kind === 'task' || body.kind === 'goal') patch.kind = body.kind;
     if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
     if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
     if (typeof body.category === 'string' || body.category === null) patch.category = body.category;
@@ -131,17 +146,19 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     updateTask(db, id, patch);
     const after = getTask(db, id);
     if (!after) return c.json({ error: 'task disappeared' }, 500);
+    const isGoal = after.kind === 'goal';
+    const noun = isGoal ? '目標' : 'タスク';
     const completedNow = before.status !== 'done' && after.status === 'done';
     if (completedNow) {
-      appendTaskDiaryLog(`タスク完了: ${after.title}`);
-      recordActivityEvent(db, { kind: 'task_done', content: after.title });
+      appendTaskDiaryLog(`${noun}完了: ${after.title}`);
+      recordActivityEvent(db, { kind: isGoal ? 'goal_done' : 'task_done', content: after.title });
     } else {
-      const changed = ['title', 'details', 'status', 'due_at', 'share_actio'].some((k) => Object.hasOwn(patch, k));
+      const changed = ['title', 'details', 'status', 'due_at', 'share_actio', 'kind'].some((k) => Object.hasOwn(patch, k));
       const isHumanChange = before.creator_type === 'human' || (before.creator_type === 'ai' && after.creator_type === 'human');
       if (changed && isHumanChange) {
-        appendTaskDiaryLog(`タスク更新: ${after.title}${after.due_at ? ` (期日: ${after.due_at})` : ''}`);
+        appendTaskDiaryLog(`${noun}更新: ${after.title}${after.due_at ? ` (期日: ${after.due_at})` : ''}`);
         recordActivityEvent(db, {
-          kind: 'task_updated',
+          kind: isGoal ? 'goal_updated' : 'task_updated',
           content: after.title,
           metadata: patch.status ? { status: after.status } : undefined,
         });
