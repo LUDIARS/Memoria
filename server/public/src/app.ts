@@ -6911,16 +6911,18 @@ function parseTaskCategories(s) {
 
 function taskCardHtml(t) {
   const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
+  const isGoal = t.kind === 'goal';
+  const kindBadge = isGoal ? '<span class="task-kind goal">🎯 目標</span>' : '';
   const cats = parseTaskCategories(t.category);
   const catBadges = cats.map(c => `<span class="task-category">${escapeHtml(c)}</span>`).join('');
   const doneBtn = t.status === 'done'
     ? '<button class="ghost" disabled>Done</button>'
     : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
   return `
-    <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
+    <article class="task-card${isGoal ? ' task-card--goal' : ''}" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
         <strong>${escapeHtml(t.title)}</strong>
-        ${aiBadge}${catBadges}
+        ${kindBadge}${aiBadge}${catBadges}
       </div>
       <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
       <p>${escapeHtml(t.details || '')}</p>
@@ -7566,7 +7568,10 @@ async function saveWorkLocationFromForm() {
 function openTaskEditor(task = null) {
   const isEdit = !!task;
   if (!$('taskEditorModal')) return;
-  $('taskEditorHeading').textContent = isEdit ? 'タスクを変更' : 'タスクを追加';
+  const kind = task?.kind === 'goal' ? 'goal' : 'task';
+  const noun = kind === 'goal' ? '目標' : 'タスク';
+  $('taskEditorHeading').textContent = isEdit ? `${noun}を変更` : `${noun}を追加`;
+  if ($('taskEditorKind')) $('taskEditorKind').value = kind;
   $('taskEditorTitle').value = task?.title || '';
   $('taskEditorDue').value = task?.due_at ? String(task.due_at).slice(0, 16) : '';
   $('taskEditorStatus').value = task?.status || 'todo';
@@ -7574,11 +7579,32 @@ function openTaskEditor(task = null) {
   $('taskEditorShareActio').checked = !!task?.share_actio;
   $('taskEditorCategory').value = task?.category || '';
   $('taskEditorTaskId').value = task?.id ? String(task.id) : '';
-  // populate category autocomplete
+  // populate category autocomplete (登録済カテゴリ + 登録済リポジトリのサジェスト)
   api('/api/tasks/categories').then(r => {
     const dl = $('taskCategoryOptions');
-    if (dl) dl.innerHTML = (r.items || []).map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+    if (!dl) return;
+    const items = (r.items || []).map(c => ({ value: c }));
+    const repos = ((r.suggestions && r.suggestions.repos) || []).map(c => ({ value: c, hint: 'リポジトリ' }));
+    // dedup
+    const seen = new Set();
+    const merged = [];
+    for (const o of [...items, ...repos]) {
+      if (!o.value || seen.has(o.value)) continue;
+      seen.add(o.value);
+      merged.push(o);
+    }
+    dl.innerHTML = merged
+      .map(o => `<option value="${escapeHtml(o.value)}"${o.hint ? ` label="${escapeHtml(o.hint)}"` : ''}></option>`)
+      .join('');
   }).catch(() => {});
+  // kind 切替で見出しも追従させる
+  const kindEl = $('taskEditorKind');
+  if (kindEl) {
+    kindEl.onchange = () => {
+      const k = kindEl.value === 'goal' ? '目標' : 'タスク';
+      $('taskEditorHeading').textContent = isEdit ? `${k}を変更` : `${k}を追加`;
+    };
+  }
   showModal('taskEditorModal');
   $('taskEditorTitle').focus();
 }
@@ -7801,14 +7827,31 @@ function renderTaskBoard() {
     btn.classList.toggle('active', btn.dataset.taskMenu === state.taskMenu);
   });
   renderTaskCategoryMenu();
+  const filterByCat = (arr) => state.taskCategoryFilter == null
+    ? arr
+    : (state.taskCategoryFilter === '__none__'
+        ? arr.filter((t) => parseTaskCategories(t.category).length === 0)
+        : arr.filter((t) => parseTaskCategories(t.category).includes(state.taskCategoryFilter)));
+  const goals = state.goalItems || [];
+  const goalStatusFiltered = state.taskMenu === 'done'
+    ? goals.filter((g) => g.status === 'done')
+    : goals.filter((g) => g.status !== 'done');
+  const goalView = filterByCat(goalStatusFiltered);
+  const goalsPane = $('tasksGoalsPane');
+  const goalsList = $('tasksGoalsList');
+  if (goalsPane && goalsList) {
+    if (goalView.length === 0) {
+      goalsPane.classList.add('hidden');
+      goalsList.innerHTML = '';
+    } else {
+      goalsPane.classList.remove('hidden');
+      goalsList.innerHTML = goalView.map(taskCardHtml).join('');
+    }
+  }
   const statusFiltered = state.taskMenu === 'done'
     ? state.taskItems.filter((t) => t.status === 'done')
     : state.taskItems.filter((t) => t.status !== 'done');
-  const base = state.taskCategoryFilter == null
-    ? statusFiltered
-    : (state.taskCategoryFilter === '__none__'
-        ? statusFiltered.filter((t) => parseTaskCategories(t.category).length === 0)
-        : statusFiltered.filter((t) => parseTaskCategories(t.category).includes(state.taskCategoryFilter)));
+  const base = filterByCat(statusFiltered);
   const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
   const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
   middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
@@ -7936,6 +7979,10 @@ ensureMemoriaFeatureViews = function () {
           <button id="taskNewBtn" type="button">+ 追加</button>
         </div>
         <div id="taskForm" class="simple-form hidden"></div>
+        <section id="tasksGoalsPane" class="tasks-goals-pane hidden">
+          <h3>🎯 目標</h3>
+          <div id="tasksGoalsList" class="simple-list"></div>
+        </section>
         <div class="tasks-three-pane">
           <aside id="tasksMenu" class="tasks-menu">
             <div class="tasks-menu-section">
@@ -7967,6 +8014,13 @@ ensureMemoriaFeatureViews = function () {
           <button type="button" class="modal-close" id="taskEditorClose" aria-label="close">×</button>
           <h3 id="taskEditorHeading">タスクを追加</h3>
           <input type="hidden" id="taskEditorTaskId" />
+          <label class="simple-field">
+            <span>種別</span>
+            <select id="taskEditorKind">
+              <option value="task">📝 タスク (短期の作業)</option>
+              <option value="goal">🎯 目標 (中長期で達成したいこと)</option>
+            </select>
+          </label>
           <label class="simple-field">
             <span>タスク内容</span>
             <input id="taskEditorTitle" type="text" />
@@ -8110,12 +8164,16 @@ ensureMemoriaFeatureViews = function () {
 loadTasks = async function () {
   ensureMemoriaFeatureViews();
   const [r] = await Promise.all([
-    api('/api/tasks'),
+    api('/api/tasks?kind=all'),
     reloadTaskCategoriesCache(),
   ]);
-  state.taskItems = r.items || [];
+  const items = r.items || [];
+  // 既存コードは state.taskItems 一本 (tasks のみ) を仮定するので、 互換のため
+  // kind='task' のみを taskItems、 'goal' は別配列で保持。
+  state.taskItems = items.filter((t) => t.kind !== 'goal');
+  state.goalItems = items.filter((t) => t.kind === 'goal');
   if (state.taskDetail?.id) {
-    state.taskDetail = state.taskItems.find((t) => t.id === state.taskDetail.id) || null;
+    state.taskDetail = items.find((t) => t.id === state.taskDetail.id) || null;
   }
   renderTaskBoard();
   renderTaskDetail();
@@ -8126,6 +8184,7 @@ addTaskFromForm = async function () {
   if (!title) return;
   const editId = Number($('taskEditorTaskId')?.value || 0);
   const category = $('taskEditorCategory')?.value.trim() || null;
+  const kind = $('taskEditorKind')?.value === 'goal' ? 'goal' : 'task';
   if (editId) {
     await api(`/api/tasks/${editId}`, {
       method: 'PATCH',
@@ -8135,6 +8194,7 @@ addTaskFromForm = async function () {
         details: $('taskEditorDetails')?.value.trim() || '',
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
+        kind,
         share_actio: !!$('taskEditorShareActio')?.checked,
         category,
       }),
@@ -8148,6 +8208,7 @@ addTaskFromForm = async function () {
         details: $('taskEditorDetails')?.value.trim() || '',
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
+        kind,
         share_actio: !!$('taskEditorShareActio')?.checked,
         category,
         creator_type: 'human',

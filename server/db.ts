@@ -638,6 +638,7 @@ export function openDb(dbPath: string): Db {
       title         TEXT NOT NULL,
       details       TEXT,
       status        TEXT NOT NULL DEFAULT 'todo',
+      kind          TEXT NOT NULL DEFAULT 'task',
       creator_type  TEXT NOT NULL DEFAULT 'human',
       due_at        TEXT,
       share_actio   INTEGER NOT NULL DEFAULT 0,
@@ -651,6 +652,8 @@ export function openDb(dbPath: string): Db {
       ON tasks(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(due_at);
+    -- idx_tasks_kind は ALTER で kind カラムを足した後にしか作れないので、
+    -- migration block の末尾で作成する (下記 ALTER 群の直後を参照)。
 
     CREATE TABLE IF NOT EXISTS agent_projects (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -902,12 +905,16 @@ export function openDb(dbPath: string): Db {
     ['shared_at', 'TEXT'],
     ['shared_origin', 'TEXT'],
     ['category', 'TEXT'],
+    ['kind', `TEXT NOT NULL DEFAULT 'task'`],
   ];
   for (const [col, ddl] of taskAlters) {
     if (taskCols.length > 0 && !taskCols.includes(col)) {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
     }
   }
+  // kind カラムは ALTER で足したばかり (or 元から存在) — どちらにせよ
+  // index を作る。 IF NOT EXISTS で冪等。
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind)`);
   // agent_runs.model — add if missing on existing DBs.
   const arCols = (db.prepare(`PRAGMA table_info(agent_runs)`).all() as { name: string }[]).map(c => c.name);
   if (arCols.length > 0 && !arCols.includes('model')) {
@@ -2458,6 +2465,9 @@ const ACTIVITY_KINDS = new Set<ActivityKind>([
   'task_created',
   'task_done',
   'task_updated',
+  'goal_created',
+  'goal_done',
+  'goal_updated',
 ]);
 
 export interface RecordActivityEventInput {
@@ -4710,16 +4720,28 @@ export function setWorkLocationOwner(db: Db, id: number, { ownerUserId, ownerUse
 
 export interface ListTasksOptions {
   status?: TaskRow['status'] | null;
+  /**
+   * - 'task' | 'goal' : その kind だけ返す
+   * - 'all'           : 両方
+   * - null (既定)      : 'task' (= 通常タスク一覧、 目標は別 query で取る前提)
+   */
+  kind?: TaskRow['kind'] | 'all' | null;
   limit?: number;
   offset?: number;
 }
 
-export function listTasks(db: Db, { status = null, limit = 100, offset = 0 }: ListTasksOptions = {}): TaskRow[] {
+export function listTasks(db: Db, { status = null, kind = null, limit = 100, offset = 0 }: ListTasksOptions = {}): TaskRow[] {
   const where: string[] = [];
   const args: unknown[] = [];
   if (status) {
     where.push('status = ?');
     args.push(status);
+  }
+  if (kind === null) {
+    where.push(`kind = 'task'`);
+  } else if (kind !== 'all') {
+    where.push('kind = ?');
+    args.push(kind);
   }
   args.push(limit, offset);
   return db.prepare(`
@@ -4741,6 +4763,7 @@ export interface InsertTaskInput {
   title: string;
   details?: string | null;
   status?: TaskRow['status'];
+  kind?: TaskRow['kind'];
   creator_type?: TaskRow['creator_type'];
   due_at?: string | null;
   share_actio?: boolean | 0 | 1;
@@ -4749,12 +4772,13 @@ export interface InsertTaskInput {
 
 export function insertTask(db: Db, task: InsertTaskInput): number {
   const info = db.prepare(`
-    INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio, category)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (title, details, status, kind, creator_type, due_at, share_actio, category)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.title,
     task.details ?? null,
     task.status || 'todo',
+    task.kind === 'goal' ? 'goal' : 'task',
     task.creator_type === 'ai' ? 'ai' : 'human',
     task.due_at ?? null,
     task.share_actio ? 1 : 0,
@@ -4831,7 +4855,7 @@ export function unregisterTaskCategory(db: Db, name: string): void {
 }
 
 export function updateTask(db: Db, id: number, patch: Record<string, unknown>): void {
-  const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin', 'category']);
+  const allowed = new Set(['title', 'details', 'status', 'kind', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin', 'category']);
   const cols: string[] = [];
   const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
