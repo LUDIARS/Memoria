@@ -11,6 +11,7 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { secureHeaders } from 'hono/secure-headers';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
@@ -150,6 +151,17 @@ setTimeout(() => {
 
 // ── App ──────────────────────────────────────────────────────────────────
 const app = new Hono();
+// セキュリティヘッダ (HSTS / X-Content-Type-Options / X-Frame-Options / Referrer-Policy 等)。
+// クロスオリジン分離系 (COOP / COEP / CORP) は Cernere SSO ポップアップや Hub 連携を
+// 壊しうるため無効化し、 副作用のない古典的なヘッダのみを付与する。
+app.use(
+  '*',
+  secureHeaders({
+    crossOriginOpenerPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false,
+  }),
+);
 app.use('/api/*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] }));
 
 // 構造化 access ログ
