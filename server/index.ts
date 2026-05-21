@@ -259,6 +259,35 @@ app.route('/', makeWeatherRouter({ db }));
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
 
+// ---- Corpus hub マニフェスト (VantanHub-DESIGN.md D6) ----------------------
+// Memoria は横断 hub サービス Corpus から参照される leaf。 knowledge (ブクマ /
+// 辞書 / ディグ / ドメイン) は scope:multi で共有可、 lifelog (日記 / 週次 /
+// 食事 / 軌跡 / 活動) は scope:local で端末内に留める。 scope が「シェア可能 /
+// 不可」 の境界そのもの。 panels[] は declarative rendering 確定後に追加する。
+// 認証不要 (local Memoria は loopback 信頼で local Corpus が読む)。
+app.get('/.well-known/corpus-service.json', (c) =>
+  c.json({
+    service: 'memoria',
+    displayName: 'Memoria',
+    version: '0.1.0',
+    corpusApi: 1,
+    health: '/api/server/info',
+    data: [
+      { id: 'bookmarks', title: 'ブックマーク', path: '/api/bookmarks', scope: 'multi' },
+      { id: 'dictionary', title: '辞書', path: '/api/dictionary', scope: 'multi' },
+      { id: 'dig', title: 'ディグ', path: '/api/dig', scope: 'multi' },
+      { id: 'domains', title: 'ドメイン辞書', path: '/api/domains', scope: 'multi' },
+      { id: 'diary', title: '日記', path: '/api/diary', scope: 'local' },
+      { id: 'weekly', title: '週次レポート', path: '/api/weekly', scope: 'local' },
+      { id: 'meals', title: '食事記録', path: '/api/meals', scope: 'local' },
+      { id: 'locations', title: 'GPS 軌跡', path: '/api/locations', scope: 'local' },
+      { id: 'activity', title: '開発活動', path: '/api/activity/work-time', scope: 'local' },
+    ],
+    panels: [],
+    auth: 'none',
+  }),
+);
+
 // ---- static UI ------------------------------------------------------------
 
 // SPA assets: ブラウザの aggressive cache を無効化 (古い app.js が掴まれて
