@@ -6,6 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
+import { forwardToConcordia } from './concordia-forward.js';
 import {
   insertAgentRun, updateAgentRun, recordActivityEvent,
 } from './db.js';
@@ -182,6 +183,15 @@ export function startAgentRun(
     metadata: { agent_run_id: runId, agent: a, model: effectiveModel || null, project: project.name },
   });
 
+  const dispatchStartedAt = Date.now();
+  forwardToConcordia({
+    kind: 'llm-request',
+    task: `agent-dispatch:${task.title}`,
+    provider: a,
+    model: effectiveModel || undefined,
+    text: prompt,
+  });
+
   const timer = setTimeout(() => {
     try { child.kill('SIGKILL'); } catch { /* ignore */ }
   }, timeoutMs);
@@ -219,6 +229,14 @@ export function startAgentRun(
       ref_id: undefined,
       content: `[AI実装${code === 0 ? '完了' : '失敗'}] ${task.title}`,
       metadata: { agent_run_id: runId, exit_code: code },
+    });
+    forwardToConcordia({
+      kind: code === 0 ? 'llm-response' : 'llm-error',
+      task: `agent-dispatch:${task.title}`,
+      provider: a,
+      model: effectiveModel || undefined,
+      text: code === 0 ? (summary || `exit=${code}`) : `exit=${code} ${summary}`,
+      durationMs: Date.now() - dispatchStartedAt,
     });
   });
 
