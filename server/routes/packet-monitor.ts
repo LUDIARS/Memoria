@@ -24,6 +24,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as dns from 'node:dns/promises';
+import * as net from 'node:net';
 import { spawn } from 'node:child_process';
 import { WELL_KNOWN_RULES, lookupFriendlyName } from '../lib/packet-known-endpoints.js';
 import { getProcessAttribution } from '../lib/packet-process-attribution.js';
@@ -508,24 +509,67 @@ function findTsharkPath(): string {
   return 'tshark';
 }
 
-/** capture filter (BPF) を target IP/domain から組み立てる。 */
-function makeBpfFilter(target: string): string {
-  if (/^[0-9a-fA-F.:]+$/.test(target)) {
-    // IP らしい
-    return `host ${target}`;
+// ── input validation ────────────────────────────────────────────────────────
+//
+// 2026-05-24 Memoria-1 (High): server/routes/packet-monitor.ts:27 で
+// `spawn('tshark', [...])` に渡る `target` / `adapter_index` がユーザ入力で、
+// 旧 sanitize は「 [^A-Za-z0-9.\-_] を削除」 だけだった。 spawn は array 渡しで
+// shell を経由しないため classic command injection は通らないが、 (a) tshark
+// BPF expression に任意 host を仕込まれての SSRF / 内部 host capture や、
+// (b) ヘンな多バイト・空白・改行で tshark 内部 parser が予期せぬ挙動になる
+// リスクが残る。 そのため target は **完全な allowlist 形式** (IPv4 / IPv6 /
+// RFC 1035 hostname のいずれか) を必須にし、 マッチしないものは 400 で拒否。
+
+const HOSTNAME_LABEL_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+
+export function isValidIPv4(s: string): boolean {
+  return net.isIPv4(s);
+}
+export function isValidIPv6(s: string): boolean {
+  // link-local zone id (`%eth0` 等) は BPF expression に渡せないので拒否
+  if (s.includes('%')) return false;
+  return net.isIPv6(s);
+}
+export function isValidHostname(s: string): boolean {
+  if (s.length === 0 || s.length > 253) return false;
+  if (s.endsWith('.')) s = s.slice(0, -1);
+  const labels = s.split('.');
+  if (labels.length < 1) return false;
+  for (const label of labels) {
+    if (!HOSTNAME_LABEL_RE.test(label)) return false;
   }
-  // domain として扱い、 解決した IP を or で並べる関数は重いので、 BPF は
-  // ホスト名指定にする (libpcap が getaddrinfo してくれる)。
-  // 入力にメタ文字が混ざる可能性に備えて簡易サニタイズ。
-  const safe = target.replace(/[^A-Za-z0-9.\-_]/g, '');
-  return `host ${safe}`;
+  // TLD: 最後のラベルが数字オンリーは弾く (= IPv4 の誤判定を回避)
+  const tld = labels[labels.length - 1];
+  if (/^\d+$/.test(tld)) return false;
+  return true;
 }
 
-/** display filter (Wireshark filter) を組み立てる (SNI/HTTP host で当てる)。 */
+/** target が IP/hostname の allowlist 形式に一致するか。 */
+export function isValidPacketMonitorTarget(s: string): boolean {
+  if (typeof s !== 'string') return false;
+  if (s.length === 0 || s.length > 253) return false;
+  // 制御文字 / 空白を含むものは即拒否
+  if (/[\s\x00-\x1f\x7f]/.test(s)) return false;
+  return isValidIPv4(s) || isValidIPv6(s) || isValidHostname(s);
+}
+
+/** target が IP リテラルか (= BPF/display filter の組み立て分岐)。 */
+function isIpLiteral(target: string): boolean {
+  return isValidIPv4(target) || isValidIPv6(target);
+}
+
+/** capture filter (BPF) を target IP/domain から組み立てる。
+ *  事前条件: `isValidPacketMonitorTarget(target) === true`。 */
+function makeBpfFilter(target: string): string {
+  return `host ${target}`;
+}
+
+/** display filter (Wireshark filter) を組み立てる (SNI/HTTP host で当てる)。
+ *  事前条件: `isValidPacketMonitorTarget(target) === true`。 */
 function makeDisplayFilter(target: string): string {
-  if (/^[0-9a-fA-F.:]+$/.test(target)) return `ip.addr == ${target}`;
-  const safe = target.replace(/"/g, '');
-  return `tls.handshake.extensions_server_name == "${safe}" or http.host == "${safe}" or dns.qry.name == "${safe}"`;
+  if (isIpLiteral(target)) return `ip.addr == ${target}`;
+  // hostname は allowlist 通過済なので "" を含まないことが保証される
+  return `tls.handshake.extensions_server_name == "${target}" or http.host == "${target}" or dns.qry.name == "${target}"`;
 }
 
 /** on-demand に tshark を回して中身を取る。 max_packets / max_seconds で打ち切り。 */
@@ -952,7 +996,19 @@ export function makePacketMonitorRouter(deps: PacketMonitorRouterDeps = {}): Hon
     } | null;
     const target = typeof body?.target === 'string' ? body.target.trim() : '';
     if (!target) return c.json({ error: 'target is required' }, 400);
-    const adapterIndex = Math.max(1, Math.min(99, Number(body?.adapter_index) || 1));
+    // 2026-05-24 Memoria-1: target は IPv4 / IPv6 / hostname のいずれかに限定
+    // (任意 host capture / 内部 SSRF / tshark BPF 異常終了 を防ぐ)
+    if (!isValidPacketMonitorTarget(target)) {
+      return c.json({
+        error: 'target must be a valid IPv4 / IPv6 address or RFC 1035 hostname',
+      }, 400);
+    }
+    // adapter_index は number で 1..99 のみ (整数化 + clamp)
+    const rawIdx = Number(body?.adapter_index);
+    if (!Number.isFinite(rawIdx)) {
+      return c.json({ error: 'adapter_index must be a number' }, 400);
+    }
+    const adapterIndex = Math.max(1, Math.min(99, Math.trunc(rawIdx) || 1));
     const maxPackets = Math.max(1, Math.min(200, Number(body?.max_packets) || 30));
     const maxSeconds = Math.max(1, Math.min(15, Number(body?.max_seconds) || 5));
 
