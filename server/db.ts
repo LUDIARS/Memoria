@@ -678,7 +678,9 @@ export function openDb(dbPath: string): Db {
       pid            INTEGER,
       summary        TEXT,
       started_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      finished_at    TEXT
+      finished_at    TEXT,
+      mode           TEXT NOT NULL DEFAULT 'local',
+      concordia_session_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task
       ON agent_runs(task_id, started_at DESC);
@@ -915,10 +917,17 @@ export function openDb(dbPath: string): Db {
   // kind カラムは ALTER で足したばかり (or 元から存在) — どちらにせよ
   // index を作る。 IF NOT EXISTS で冪等。
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind)`);
-  // agent_runs.model — add if missing on existing DBs.
+  // agent_runs.model / .mode / .concordia_session_id — add if missing on existing DBs.
+  // CREATE INDEX は ALTER の後で発行する (memory: sqlite-create-index-after-alter).
   const arCols = (db.prepare(`PRAGMA table_info(agent_runs)`).all() as { name: string }[]).map(c => c.name);
   if (arCols.length > 0 && !arCols.includes('model')) {
     db.exec(`ALTER TABLE agent_runs ADD COLUMN model TEXT`);
+  }
+  if (arCols.length > 0 && !arCols.includes('mode')) {
+    db.exec(`ALTER TABLE agent_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'local'`);
+  }
+  if (arCols.length > 0 && !arCols.includes('concordia_session_id')) {
+    db.exec(`ALTER TABLE agent_runs ADD COLUMN concordia_session_id TEXT`);
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
@@ -4589,12 +4598,13 @@ export interface InsertAgentRunInput {
   prompt?: string | null;
   status?: AgentRunRow['status'];
   log_path?: string | null;
+  mode?: AgentRunRow['mode'];
 }
 
 export function insertAgentRun(db: Db, r: InsertAgentRunInput): number {
   const info = db.prepare(`
-    INSERT INTO agent_runs (task_id, project_id, agent, model, prompt, status, log_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO agent_runs (task_id, project_id, agent, model, prompt, status, log_path, mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     r.task_id ?? null,
     r.project_id ?? null,
@@ -4603,12 +4613,13 @@ export function insertAgentRun(db: Db, r: InsertAgentRunInput): number {
     r.prompt ?? null,
     r.status || 'pending',
     r.log_path ?? null,
+    r.mode ?? 'local',
   );
   return Number(info.lastInsertRowid);
 }
 
 export function updateAgentRun(db: Db, id: number, patch: Record<string, unknown>): void {
-  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at', 'model']);
+  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at', 'model', 'concordia_session_id']);
   const cols: string[] = [];
   const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
