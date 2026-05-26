@@ -22,6 +22,7 @@
 | ドメイン辞書 | [domain-catalog.md](domain-catalog.md) | 🏠 | ブラウジング履歴の蒸留 |
 | タスク管理 | [task.md](task.md) | ✓ | Hub ではなく **Actio** に共有 (`/api/tasks/:id/share/actio`) |
 | エージェント実行 | [agent.md](agent.md) | 🏠 | 絶対パス + プロンプト + コードログを含む |
+| エージェント実行 (Concordia) | [concordia-runner.md](concordia-runner.md) | 🏠 | agent.md の代替経路: wt タブ + Lictor inject。 `llm.task_runner=concordia` で有効 |
 | 作業場所 + presence | [workplace.md](workplace.md) | ✓ | カタログ (lat/lng + 名前 + tags) と presence (enter/leave) の 2 系統 |
 | 実装自慢ノート | [implementation-notes.md](implementation-notes.md) | ✓ | `shareable=1` フラグ必須の二段階フロー |
 | 食事写真 + 栄養推定 | [meal.md](meal.md) | 🏠 | 健康情報の機微度を考慮した意図的 local-only |
