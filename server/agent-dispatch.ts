@@ -1,6 +1,10 @@
 // agent-dispatch.ts — Memoria task → AI agent (Claude Code / Codex / Gemini) を
 // プロジェクトディレクトリで non-interactive に走らせ、stdout/stderr を log
 // ファイルにストリーム保存しながら DB の `agent_runs` 行を更新する。
+//
+// 設定 `llm.task_runner` で動作モードを切り替える (spec/feature/concordia-runner.md):
+//   - 'local'    (default): child_process.spawn で CLI を non-interactive 起動
+//   - 'concordia':         Concordia /v1/spawn 経由で wt タブ起動 + inject
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
@@ -12,6 +16,7 @@ import {
 import type { AgentKind, AgentRunRow } from './db/types/agent.js';
 import type { TaskRow } from './db/types/task.js';
 import type { AgentProjectRow } from './db/types/agent.js';
+import { ConcordiaSpawnClient, type ConcordiaProvider } from './concordia-spawn-client.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -108,6 +113,10 @@ export interface StartAgentRunArgs {
 /**
  * Start an agent run. Returns the new run id immediately. The child process
  * runs in the background and updates the DB row when it exits.
+ *
+ * Dispatches by `settings['llm.task_runner']` (spec/feature/concordia-runner.md):
+ *   - 'local' or unset → local spawn (this function continues below)
+ *   - 'concordia'      → delegate to startConcordiaRun (wt tab + Lictor inject)
  */
 export function startAgentRun(
   db: Db,
@@ -123,6 +132,14 @@ export function startAgentRun(
   if (!existsSync(project.path)) {
     throw new Error(`project.path does not exist: ${project.path}`);
   }
+  const settingsObj = settings || {};
+  const runner = (settingsObj['llm.task_runner'] || 'local').trim().toLowerCase();
+  if (runner === 'concordia') {
+    return startConcordiaRun(db, { dataDir, settings: settingsObj, task, project, agent: a, model });
+  }
+  if (runner !== 'local' && runner !== '') {
+    throw new Error(`unknown llm.task_runner: ${runner} (expected 'local' or 'concordia')`);
+  }
   const logDir = ensureLogDir(dataDir);
   const logFile = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.log`;
   const logPath = join(logDir, logFile);
@@ -137,11 +154,11 @@ export function startAgentRun(
     prompt,
     status: 'pending',
     log_path: logFile,
+    mode: 'local',
   });
 
   // Spawn after row exists so we always have a record even if spawn fails.
   let child: ChildProcessWithoutNullStreams;
-  const settingsObj = settings || {};
   const bin = binaryFor(a, settingsObj);
   const args = buildArgs(a, effectiveModel);
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -226,9 +243,180 @@ export function startAgentRun(
   return runId;
 }
 
+/**
+ * Concordia /v1/spawn 経路で AI 委託する。 spec/feature/concordia-runner.md。
+ *
+ * 流れ (失敗時は agent_runs.status=failed + summary に原因、 local fallback はしない):
+ *   1. agent_runs を mode='concordia' / status='pending' で insert
+ *   2. Concordia /v1/spawn/info → token → /v1/spawn でwtタブ起動
+ *   3. /v1/sessions?status=active を poll して session_id を発見
+ *   4. /v1/sessions/:id/inject で prompt を流し込む
+ *   5. status='running' + concordia_session_id をセット
+ *
+ * non-blocking: spawn → poll → inject は async で進めつつ run id は即返す。
+ */
+export function startConcordiaRun(
+  db: Db,
+  { dataDir, settings, task, project, agent, model }: {
+    dataDir: string;
+    settings: Record<string, string | null | undefined>;
+    task: TaskRow;
+    project: AgentProjectRow;
+    agent: AgentKind;
+    model?: string | null;
+  },
+): number {
+  const logDir = ensureLogDir(dataDir);
+  const logFile = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.log`;
+  const logPath = join(logDir, logFile);
+  const prompt = buildPrompt({ task, project });
+  const effectiveModel = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[agent] || '';
+  const concordiaUrl = (settings['llm.concordia.url'] || 'http://127.0.0.1:17330').trim();
+
+  const runId = insertAgentRun(db, {
+    task_id: task.id,
+    project_id: project.id,
+    agent,
+    model: effectiveModel || null,
+    prompt,
+    status: 'pending',
+    log_path: logFile,
+    mode: 'concordia',
+  });
+
+  const stream = createWriteStream(logPath, { flags: 'a' });
+  stream.write(
+    `# mode: concordia\n# agent: ${agent}\n# model: ${effectiveModel || '(default)'}\n` +
+    `# concordia: ${concordiaUrl}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n` +
+    `# task: ${task.title}\n\n----- prompt (will be injected) -----\n${prompt}\n----- events -----\n`,
+  );
+
+  recordActivityEvent(db, {
+    kind: 'task_updated',
+    occurred_at: undefined,
+    source: undefined,
+    ref_id: undefined,
+    content: `[AI実装開始/Concordia] ${task.title} (${agent}${effectiveModel ? `:${effectiveModel}` : ''})`,
+    metadata: { agent_run_id: runId, agent, model: effectiveModel || null, project: project.name, mode: 'concordia' },
+  });
+
+  // fire-and-forget. errors land in the log + agent_runs row.
+  void runConcordiaFlow({ runId, agent, project, prompt, concordiaUrl, stream, task })
+    .catch((err: Error) => {
+      stream.write(`\n----- unhandled error -----\n${err.message}\n${err.stack ?? ''}\n`);
+      stream.end();
+      updateAgentRun(db, runId, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        summary: `concordia flow crashed: ${err.message}`.slice(0, 600),
+      });
+    });
+
+  async function runConcordiaFlow(input: {
+    runId: number;
+    agent: AgentKind;
+    project: AgentProjectRow;
+    prompt: string;
+    concordiaUrl: string;
+    stream: ReturnType<typeof createWriteStream>;
+    task: TaskRow;
+  }): Promise<void> {
+    const { runId, agent, project, prompt, concordiaUrl, stream, task } = input;
+    const client = new ConcordiaSpawnClient({ url: concordiaUrl });
+    const concordiaProvider = agentKindToConcordiaProvider(agent);
+    const spawnStartedAtSec = Math.floor(Date.now() / 1000) - 2; // -2s grace for clock skew
+
+    // 2. spawn
+    stream.write(`[${new Date().toISOString()}] spawn → ${client.baseUrl}/v1/spawn\n`);
+    let spawnResult;
+    try {
+      spawnResult = await client.spawn({
+        provider: concordiaProvider,
+        cwd: project.path,
+        mode: 'tab',
+        title: `Memoria/${project.name}/${task.title.slice(0, 40)}`,
+      });
+    } catch (e) {
+      const msg = (e as Error).message;
+      stream.write(`[spawn error] ${msg}\n`);
+      stream.end();
+      updateAgentRun(db, runId, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        summary: `spawn failed: ${msg}`.slice(0, 600),
+      });
+      return;
+    }
+    stream.write(`[spawn ok] id=${spawnResult.id} pid=${spawnResult.pid}\n`);
+    updateAgentRun(db, runId, { pid: spawnResult.pid });
+
+    // 3. session_id discovery
+    const sessionId = await client.waitForSession({
+      provider: concordiaProvider,
+      repoPath: project.path,
+      minStartedAtSec: spawnStartedAtSec,
+    });
+    if (!sessionId) {
+      stream.write(`[session not detected within 30s]\n`);
+      stream.end();
+      updateAgentRun(db, runId, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        summary: 'concordia session not detected within 30s',
+      });
+      return;
+    }
+    stream.write(`[${new Date().toISOString()}] session detected: ${sessionId}\n`);
+    updateAgentRun(db, runId, { concordia_session_id: sessionId });
+
+    // 4. inject
+    try {
+      await client.inject({ sessionId, text: prompt, source: 'memoria-task' });
+    } catch (e) {
+      const msg = (e as Error).message;
+      stream.write(`[inject error] ${msg}\n`);
+      stream.end();
+      updateAgentRun(db, runId, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        summary: `inject failed: ${msg}`.slice(0, 600),
+      });
+      return;
+    }
+    stream.write(`[${new Date().toISOString()}] inject ok — prompt delivered to ${sessionId}\n`);
+    stream.write(`# wt タブで進行を確認してください。 Memoria はここで監視を打ち切り、 status='running' を残します。\n`);
+    stream.end();
+
+    // 5. We don't track exit here — the wt session is long-lived and may
+    // outlive the task. Mark as 'running' and let the user observe in wt.
+    updateAgentRun(db, runId, {
+      status: 'running',
+      summary: `concordia session ${sessionId} は wt タブで進行中`,
+    });
+  }
+
+  return runId;
+}
+
+/**
+ * Memoria の AgentKind → Concordia /v1/spawn の provider 短縮形 (Lictor の
+ * binary 名に対応)。 Concordia 側の `provider` フィルタ値 (`claude-code`/
+ * `codex-cli`/`gemini-cli`) は spawn-client の providerToConcordia で別途
+ * 変換される。
+ */
+function agentKindToConcordiaProvider(a: AgentKind): ConcordiaProvider {
+  if (a === 'codex') return 'codex';
+  if (a === 'gemini') return 'gemini';
+  return 'claude';
+}
+
 export function cancelAgentRun(db: Db, runId: number): { ok: true } | { ok: false; error: string } {
   const child = _running.get(runId);
-  if (!child) return { ok: false, error: 'not_running' };
+  if (!child) {
+    // 'concordia' モードは _running を持たない (wt タブで進行中) ので、 ここで
+    // 区別する。 強制 cancel は wt タブ側で /exit してもらう運用とする。
+    return { ok: false, error: 'not_running (concordia mode は wt タブで /exit してください)' };
+  }
   try {
     child.kill('SIGKILL');
   } catch (e: unknown) {
