@@ -557,8 +557,8 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
   r.get('/api/activity/events', (c: Context) => {
     const date = c.req.query('date');
     const kindQ = c.req.query('kind');
-    const allowedKinds = new Set<string>(['git_commit', 'claude_code_prompt', 'gemini_prompt', 'codex_prompt', 'task_created', 'task_done', 'task_updated']);
-    type ActivityKindLocal = 'git_commit' | 'claude_code_prompt' | 'gemini_prompt' | 'codex_prompt' | 'task_created' | 'task_done' | 'task_updated';
+    const allowedKinds = new Set<string>(['git_commit', 'claude_code_prompt', 'gemini_prompt', 'codex_prompt', 'task_created', 'task_done', 'task_updated', 'discord_message', 'discord_presence', 'discord_voice', 'discord_reaction']);
+    type ActivityKindLocal = 'git_commit' | 'claude_code_prompt' | 'gemini_prompt' | 'codex_prompt' | 'task_created' | 'task_done' | 'task_updated' | 'discord_message' | 'discord_presence' | 'discord_voice' | 'discord_reaction';
     const kind: ActivityKindLocal | null = kindQ && allowedKinds.has(kindQ) ? kindQ as ActivityKindLocal : null;
     if (date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);

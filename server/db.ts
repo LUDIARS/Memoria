@@ -2477,6 +2477,10 @@ const ACTIVITY_KINDS = new Set<ActivityKind>([
   'goal_created',
   'goal_done',
   'goal_updated',
+  'discord_message',
+  'discord_presence',
+  'discord_voice',
+  'discord_reaction',
 ]);
 
 export interface RecordActivityEventInput {
