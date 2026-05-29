@@ -3,6 +3,7 @@
 // per task: Claude CLI, Gemini CLI, Codex CLI, or the OpenAI Chat API.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { forwardToConcordia } from './concordia-forward.js';
 
 export type LlmTaskName =
   | 'summarize' | 'dig' | 'dig_preview' | 'cloud_extract' | 'cloud_validate'
@@ -176,36 +177,71 @@ export interface RunLlmArgs {
 /**
  * Run an LLM call for a named task. Falls back to Claude CLI if the configured
  * provider isn't usable (e.g. OpenAI selected but no API key set).
+ *
+ * Concordia forwarding: 開始 / 終了 / エラー で `forwardToConcordia` を呼ぶ.
+ * fire-and-forget なので Memoria の本処理時間には影響しない.
  */
 export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }: RunLlmArgs): Promise<string> {
+  const start = Date.now();
   const taskCfg = cfg.tasks[task] || { provider: 'claude' as LlmProviderKey };
   let provider: LlmProviderKey = taskCfg.provider || 'claude';
   if (provider === 'openai' && !cfg.openai_api_key) provider = 'claude';
   const p = PROVIDERS[provider];
   if (!p) throw new Error(`unknown provider: ${provider}`);
   if (p.kind === 'none') return '';
-  if (p.kind === 'api') {
-    return runOpenAi({
-      apiKey: cfg.openai_api_key,
-      model: taskCfg.model || cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai || 'gpt-4o-mini',
-      prompt, timeoutMs,
+
+  const modelToUse: string =
+    taskCfg.model ||
+    (p.kind === 'api'
+      ? (cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai || 'gpt-4o-mini')
+      : (TASK_DEFAULT_MODELS[task] || PROVIDER_DEFAULT_MODEL[provider] || ''));
+
+  forwardToConcordia({ kind: 'llm-request', task, provider, model: modelToUse, text: prompt });
+
+  try {
+    let result: string;
+    if (p.kind === 'api') {
+      result = await runOpenAi({
+        apiKey: cfg.openai_api_key,
+        model: modelToUse,
+        prompt, timeoutMs,
+      });
+    } else {
+      // CLI providers
+      const bin = (cfg.bins as Record<string, string>)[provider] || p.defaultBin || provider;
+      const args = buildCliArgs({
+        provider,
+        model: modelToUse,
+        tools,
+        supportsModel: p.supportsModel,
+        supportsTools: p.supportsTools,
+      });
+      const env = { ...process.env };
+      if (provider === 'claude' && cfg.git_bash_path) {
+        env.CLAUDE_CODE_GIT_BASH_PATH = cfg.git_bash_path;
+      }
+      result = await runCli({ bin, args, prompt, timeoutMs, env, label: provider, jsonOutput: !!p.jsonOutput });
+    }
+    forwardToConcordia({
+      kind: 'llm-response',
+      task,
+      provider,
+      model: modelToUse,
+      text: result,
+      durationMs: Date.now() - start,
     });
+    return result;
+  } catch (err) {
+    forwardToConcordia({
+      kind: 'llm-error',
+      task,
+      provider,
+      model: modelToUse,
+      text: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - start,
+    });
+    throw err;
   }
-  // CLI providers
-  const bin = (cfg.bins as Record<string, string>)[provider] || p.defaultBin || provider;
-  const modelToUse = taskCfg.model || TASK_DEFAULT_MODELS[task] || PROVIDER_DEFAULT_MODEL[provider] || '';
-  const args = buildCliArgs({
-    provider,
-    model: modelToUse,
-    tools,
-    supportsModel: p.supportsModel,
-    supportsTools: p.supportsTools,
-  });
-  const env = { ...process.env };
-  if (provider === 'claude' && cfg.git_bash_path) {
-    env.CLAUDE_CODE_GIT_BASH_PATH = cfg.git_bash_path;
-  }
-  return runCli({ bin, args, prompt, timeoutMs, env, label: provider, jsonOutput: !!p.jsonOutput });
 }
 
 function buildCliArgs({
