@@ -84,7 +84,7 @@ export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
 
   // 1 トリガーを即時発火 (動作確認)。 該当 0 件でも送る。
   r.post('/api/discord/notify-triggers/:id/test', async (c: Context) => {
-    const id = c.req.param('id');
+    const id = c.req.param('id') || '';
     const res = await fireNotifyTriggerById(db, id);
     if (!res.ok) return c.json({ ok: false, reason: res.reason }, res.reason === 'not_found' ? 404 : 409);
     return c.json({ ok: true, count: res.count ?? 0 });
