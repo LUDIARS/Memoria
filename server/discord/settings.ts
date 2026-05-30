@@ -29,6 +29,8 @@ export interface DiscordSettings {
   autoBookmark: boolean;
   autoMeal: boolean;
   autoRecommend: boolean;
+  // 状態カード (既定 true)
+  monitor: boolean;
 }
 
 /**
@@ -63,6 +65,7 @@ export function discordSettings(db: Db): DiscordSettings {
     autoBookmark: settingBool(s, 'features.discord.autoproc.bookmark', true),
     autoMeal: settingBool(s, 'features.discord.autoproc.meal', true),
     autoRecommend: settingBool(s, 'features.discord.autoproc.recommend', true),
+    monitor: settingBool(s, 'features.discord.monitor', true),
   };
 }
 

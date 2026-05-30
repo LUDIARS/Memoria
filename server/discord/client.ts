@@ -10,6 +10,7 @@ import { registerRouter } from './message-router.js';
 import { registerInteractions, registerSlashCommands } from './slash-commands.js';
 import { ensureDiscordLayout } from './layout.js';
 import { startNotifyScheduler } from './notify/scheduler.js';
+import { startMonitor } from './monitor.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -32,6 +33,8 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
       });
     // タスク通知エンジン (時刻 / GPS / ランダム トリガー) を起動。
     startNotifyScheduler(c, db);
+    // monitor 状態カード (状態 / 今日の締切 / 次の通知) を起動。
+    startMonitor(c, db);
   });
 
   client.on(Events.Error, (e) => {
