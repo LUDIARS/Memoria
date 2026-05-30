@@ -21,6 +21,7 @@ function desiredChannels(cfg: ReturnType<typeof discordSettings>): string[] {
   if (cfg.autoMeal) out.push('meal');
   if (cfg.autoRecommend) out.push('recommend');
   if (cfg.announce) out.push('announce');
+  if (cfg.monitor) out.push('monitor'); // 状態カード (状態/締切/次通知)
   return out;
 }
 
