@@ -3,9 +3,11 @@
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
-import { setAppSettings } from '../db.js';
+import { getAppSettings, setAppSettings } from '../db.js';
 import { discordSettings, discordReady, discordBotToken } from '../discord/settings.js';
-import { announceToDiscord } from '../discord/index.js';
+import { announceToDiscord, fireNotifyTriggerById } from '../discord/index.js';
+import { loadTriggers, saveTriggers, normalizeTriggers } from '../discord/notify/config.js';
+import { NOTIFY_CHANNEL_KINDS } from '../discord/notify/types.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -59,6 +61,33 @@ export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
     }
     if (Object.keys(patch).length > 0) setAppSettings(db, patch);
     return c.json({ ok: true, config: discordSettings(db), token_set: !!discordBotToken(db) });
+  });
+
+  // 通知トリガー一覧 + UI 用の選択肢 (登録カテゴリ / channel kind)。
+  r.get('/api/discord/notify-triggers', (c: Context) => {
+    let categories: string[] = [];
+    try {
+      const raw = getAppSettings(db)['task.categories.registered'];
+      if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) categories = a.filter((x): x is string => typeof x === 'string'); }
+    } catch { /* ignore */ }
+    return c.json({ triggers: loadTriggers(db), categories, channels: NOTIFY_CHANNEL_KINDS });
+  });
+
+  // トリガー配列を丸ごと保存 (UI で編集して PUT)。 normalize で型矯正。
+  r.put('/api/discord/notify-triggers', async (c: Context) => {
+    const body = await c.req.json().catch(() => ({})) as { triggers?: unknown };
+    const arr = Array.isArray(body.triggers) ? body.triggers : [];
+    const triggers = normalizeTriggers(arr);
+    saveTriggers(db, triggers);
+    return c.json({ ok: true, triggers });
+  });
+
+  // 1 トリガーを即時発火 (動作確認)。 該当 0 件でも送る。
+  r.post('/api/discord/notify-triggers/:id/test', async (c: Context) => {
+    const id = c.req.param('id');
+    const res = await fireNotifyTriggerById(db, id);
+    if (!res.ok) return c.json({ ok: false, reason: res.reason }, res.reason === 'not_found' ? 404 : 409);
+    return c.json({ ok: true, count: res.count ?? 0 });
   });
 
   // 通知を Discord #announce に流す seam (テスト / 外部トリガ用)。

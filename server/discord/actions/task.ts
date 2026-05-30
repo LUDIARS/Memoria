@@ -2,15 +2,18 @@
 // タスク = due_at 付き (= リマインダー対象)、 メモ = due_at 無し + category 'memo'。
 
 import { apiPostJson } from '../http.js';
+import { formatSingleTaskCard } from '../notify/card.js';
 
 export interface TaskInput {
   title: string;
-  details?: string;
+  details?: string | null;
   /** ISO 文字列。 指定時はリマインダー対象になる。 */
   dueAt?: string | null;
+  /** カンマ区切りカテゴリ ("買い物, 開発")。 */
+  category?: string | null;
 }
 
-/** タスク作成 (リマインダー付き)。 結果サマリ文字列を返す。 */
+/** タスク作成 (リマインダー付き)。 AI 解釈した内容を確認カードで返す。 */
 export async function createTask(input: TaskInput): Promise<string> {
   const res = await apiPostJson('/api/tasks', {
     title: input.title,
@@ -18,9 +21,15 @@ export async function createTask(input: TaskInput): Promise<string> {
     kind: 'task',
     creator_type: 'ai',
     due_at: input.dueAt ?? null,
+    category: input.category ?? null,
   });
   if (!res.ok) return `タスク作成失敗 (${res.status})`;
-  return input.dueAt ? `タスク登録: ${input.title} (期日 ${input.dueAt})` : `タスク登録: ${input.title}`;
+  return formatSingleTaskCard({
+    title: input.title,
+    category: input.category,
+    dueAt: input.dueAt,
+    details: input.details,
+  });
 }
 
 /** メモ作成 (リマインダー無し)。 */
