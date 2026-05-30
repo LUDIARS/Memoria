@@ -138,3 +138,30 @@ jobs:
           # Result should be done with the mock-supplied summary.
           curl -fsS "http://localhost:$MEMORIA_PORT/api/bookmarks/1"
           echo
+
+  desktop:
+    name: desktop typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci
+
+      # 型チェック (Electron main / preload + scripts)
+      - name: Typecheck (desktop)
+        working-directory: desktop
+        run: npm run typecheck
+
+      # TS ビルドが通ること (electron-builder によるパッケージングは
+      # desktop-publish.yml のタグ起動に任せ、ここでは TS コンパイルのみ)
+      - name: Build TS (desktop)
+        working-directory: desktop
+        run: npm run build:ts
