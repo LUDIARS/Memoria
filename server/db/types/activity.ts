@@ -11,7 +11,11 @@ export type ActivityKind =
   | 'task_updated'
   | 'goal_created'
   | 'goal_done'
-  | 'goal_updated';
+  | 'goal_updated'
+  | 'discord_message'
+  | 'discord_presence'
+  | 'discord_voice'
+  | 'discord_reaction';
 
 export interface ActivityEventRow {
   id: number;

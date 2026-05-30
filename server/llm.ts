@@ -12,7 +12,8 @@ export type LlmTaskName =
   | 'meal_vision' | 'meal_calorie'
   | 'app_classify'
   | 'recommendation_agent' | 'recommendation_synthesize'
-  | 'endpoint_identify';
+  | 'endpoint_identify'
+  | 'discord_route';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -22,6 +23,7 @@ export const TASKS: LlmTaskName[] = [
   'app_classify',
   'recommendation_agent', 'recommendation_synthesize',
   'endpoint_identify',
+  'discord_route',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
