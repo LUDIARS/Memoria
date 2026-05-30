@@ -5985,6 +5985,11 @@ async function loadDiscordSettings() {
   if (s) s.textContent = `状態: ${r.ready ? '✅ 起動可能' : '⚠ ' + (r.reason || '')} ／ token: ${r.token_set ? '設定済 (env)' : '未設定 (MEMORIA_DISCORD_BOT_TOKEN)'}`;
   const btn = $('discordSaveBtn') as HTMLButtonElement | null;
   if (btn) btn.onclick = saveDiscordSettings;
+  const addBtn = $('dcNotifyAddBtn') as HTMLButtonElement | null;
+  if (addBtn) addBtn.onclick = () => dcAddTrigger();
+  const tSaveBtn = $('dcNotifySaveBtn') as HTMLButtonElement | null;
+  if (tSaveBtn) tSaveBtn.onclick = () => { void saveNotifyTriggers(); };
+  void loadNotifyTriggers();
 }
 
 async function saveDiscordSettings() {
@@ -6005,6 +6010,149 @@ async function saveDiscordSettings() {
     flashToast('Discord 設定を保存しました');
     await loadDiscordSettings();
   } catch (e) { alert(`保存失敗: ${(e as Error).message}`); }
+}
+
+// ── Discord 通知トリガー UI ──────────────────────────────────────────────
+interface NotifyTriggerUI {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger:
+    | { type: 'time'; at: string }
+    | { type: 'random'; window: [string, string]; count: number }
+    | { type: 'gps'; event: 'arrive' | 'depart'; radius_m: number };
+  filter: { categories: string[]; deadline: 'all' | 'due_today_or_overdue' };
+  channel: string;
+}
+let dcNotifyTriggers: NotifyTriggerUI[] = [];
+let dcNotifyChannels: string[] = ['announce', 'task'];
+
+async function loadNotifyTriggers(): Promise<void> {
+  try {
+    const r = await api('/api/discord/notify-triggers') as { triggers?: NotifyTriggerUI[]; channels?: string[] };
+    dcNotifyTriggers = Array.isArray(r.triggers) ? r.triggers : [];
+    if (Array.isArray(r.channels) && r.channels.length) dcNotifyChannels = r.channels;
+  } catch { dcNotifyTriggers = []; }
+  renderNotifyTriggers();
+}
+
+function dcAddTrigger(): void {
+  dcNotifyTriggers = collectNotifyTriggers();
+  dcNotifyTriggers.push({
+    id: '', name: '通知', enabled: true,
+    trigger: { type: 'time', at: '08:00' },
+    filter: { categories: ['all'], deadline: 'due_today_or_overdue' },
+    channel: 'announce',
+  });
+  renderNotifyTriggers();
+}
+
+function renderNotifyParams(tt: NotifyTriggerUI['trigger']): string {
+  if (tt.type === 'random') {
+    return `<input class="t-rstart" type="time" value="${escapeHtml(tt.window?.[0] || '09:00')}" /> 〜 ` +
+      `<input class="t-rend" type="time" value="${escapeHtml(tt.window?.[1] || '21:00')}" /> × ` +
+      `<input class="t-rcount" type="number" min="1" max="10" value="${tt.count || 1}" style="width:70px" /> 回/日`;
+  }
+  if (tt.type === 'gps') {
+    return `<select class="t-gevent"><option value="arrive"${tt.event !== 'depart' ? ' selected' : ''}>帰宅 (自宅に到着)</option>` +
+      `<option value="depart"${tt.event === 'depart' ? ' selected' : ''}>出発 (自宅を離れる)</option></select> ` +
+      `半径 <input class="t-radius" type="number" min="50" max="5000" value="${tt.radius_m || 200}" style="width:80px" /> m`;
+  }
+  return `時刻 <input class="t-at" type="time" value="${escapeHtml(tt.at || '08:00')}" />`;
+}
+
+function renderNotifyTriggers(): void {
+  const box = $('dcNotifyTriggers'); if (!box) return;
+  if (!dcNotifyTriggers.length) { box.innerHTML = '<p class="muted">トリガーはまだありません。「＋ トリガーを追加」で作成します。</p>'; return; }
+  const chOpts = (sel: string) => dcNotifyChannels
+    .map((c) => `<option value="${escapeHtml(c)}"${c === sel ? ' selected' : ''}>#${escapeHtml(c)}</option>`).join('');
+  box.innerHTML = dcNotifyTriggers.map((t, i) => `
+    <div class="dc-trig" data-i="${i}" style="border:1px solid #8884;border-radius:10px;padding:10px;margin-bottom:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="check-inline"><input class="t-en" type="checkbox"${t.enabled ? ' checked' : ''} /> 有効</label>
+        <input class="t-name" type="text" value="${escapeHtml(t.name)}" placeholder="名前" style="flex:1;min-width:120px" />
+        <select class="t-type">
+          <option value="time"${t.trigger.type === 'time' ? ' selected' : ''}>時刻</option>
+          <option value="random"${t.trigger.type === 'random' ? ' selected' : ''}>ランダム時刻</option>
+          <option value="gps"${t.trigger.type === 'gps' ? ' selected' : ''}>GPS 帰宅/出発</option>
+        </select>
+        <button class="t-test" type="button">テスト</button>
+        <button class="t-del" type="button">削除</button>
+      </div>
+      <div class="t-params" style="margin-top:6px">${renderNotifyParams(t.trigger)}</div>
+      <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span>カテゴリ</span><input class="t-cats" type="text" value="${escapeHtml((t.filter.categories || ['all']).join(','))}" placeholder="all または 買い物,開発" style="min-width:160px" />
+        <span>期限</span><select class="t-deadline">
+          <option value="due_today_or_overdue"${t.filter.deadline !== 'all' ? ' selected' : ''}>今日締切/超過のみ</option>
+          <option value="all"${t.filter.deadline === 'all' ? ' selected' : ''}>全て</option>
+        </select>
+        <span>送信先</span><select class="t-channel">${chOpts(t.channel)}</select>
+      </div>
+    </div>`).join('');
+  box.querySelectorAll('.dc-trig').forEach((el) => {
+    const i = Number((el as HTMLElement).dataset.i);
+    (el.querySelector('.t-type') as HTMLSelectElement | null)?.addEventListener('change', () => {
+      dcNotifyTriggers = collectNotifyTriggers();
+      renderNotifyTriggers();
+    });
+    (el.querySelector('.t-del') as HTMLButtonElement | null)?.addEventListener('click', () => {
+      dcNotifyTriggers = collectNotifyTriggers();
+      dcNotifyTriggers.splice(i, 1);
+      renderNotifyTriggers();
+    });
+    (el.querySelector('.t-test') as HTMLButtonElement | null)?.addEventListener('click', () => { void testNotifyTrigger(i); });
+  });
+}
+
+function collectNotifyTriggers(): NotifyTriggerUI[] {
+  const box = $('dcNotifyTriggers'); if (!box) return dcNotifyTriggers;
+  const out: NotifyTriggerUI[] = [];
+  box.querySelectorAll('.dc-trig').forEach((el, idx) => {
+    const val = (s: string): string => (el.querySelector(s) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '';
+    const type = val('.t-type');
+    const prev = dcNotifyTriggers[idx];
+    let trigger: NotifyTriggerUI['trigger'];
+    if (type === 'random') {
+      trigger = { type: 'random', window: [val('.t-rstart') || '09:00', val('.t-rend') || '21:00'], count: Number(val('.t-rcount')) || 1 };
+    } else if (type === 'gps') {
+      trigger = { type: 'gps', event: val('.t-gevent') === 'depart' ? 'depart' : 'arrive', radius_m: Number(val('.t-radius')) || 200 };
+    } else {
+      trigger = { type: 'time', at: val('.t-at') || '08:00' };
+    }
+    const cats = (val('.t-cats') || 'all').split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    out.push({
+      id: prev?.id || '',
+      name: val('.t-name') || '通知',
+      enabled: (el.querySelector('.t-en') as HTMLInputElement | null)?.checked ?? true,
+      trigger,
+      filter: { categories: cats.length ? cats : ['all'], deadline: val('.t-deadline') === 'all' ? 'all' : 'due_today_or_overdue' },
+      channel: val('.t-channel') || 'announce',
+    });
+  });
+  return out;
+}
+
+async function saveNotifyTriggers(): Promise<void> {
+  const triggers = collectNotifyTriggers();
+  try {
+    const r = await api('/api/discord/notify-triggers', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ triggers }),
+    }) as { triggers?: NotifyTriggerUI[] };
+    dcNotifyTriggers = Array.isArray(r.triggers) ? r.triggers : triggers;
+    renderNotifyTriggers();
+    flashToast('通知トリガーを保存しました');
+  } catch (e) { alert(`保存失敗: ${(e as Error).message}`); }
+}
+
+async function testNotifyTrigger(i: number): Promise<void> {
+  await saveNotifyTriggers(); // id 確定のため常に保存してからテスト
+  const id = dcNotifyTriggers[i]?.id;
+  if (!id) { alert('保存に失敗しました'); return; }
+  try {
+    const r = await api(`/api/discord/notify-triggers/${encodeURIComponent(id)}/test`, { method: 'POST' }) as { ok?: boolean; count?: number; reason?: string };
+    if (r.ok) flashToast(`テスト送信: ${r.count ?? 0} 件`);
+    else alert(`テスト失敗: ${r.reason === 'not_ready' ? 'Bot が起動していません' : (r.reason || '')}`);
+  } catch (e) { alert(`テスト失敗: ${(e as Error).message}`); }
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
@@ -6262,6 +6410,13 @@ let ensureMemoriaFeatureViews = function () {
       <label class="check-inline"><input id="dcAutoMeal" type="checkbox" /> 食事 (画像検知)</label>
       <label class="check-inline"><input id="dcAutoRecommend" type="checkbox" /> おすすめ (/recommend)</label>
       <div style="margin-top:10px"><button id="discordSaveBtn" type="button" class="primary">保存</button></div>
+      <h4 style="margin-top:16px">通知トリガー</h4>
+      <p class="diary-settings-help">時刻 / GPS(帰宅・出発) / ランダム時刻が発火すると、 条件に合うアクティブタスクを選んだチャンネルへ通知します。GPS は ⚙設定→天気 の固定座標 (自宅) を使います。</p>
+      <div id="dcNotifyTriggers"></div>
+      <div style="margin-top:8px">
+        <button id="dcNotifyAddBtn" type="button">＋ トリガーを追加</button>
+        <button id="dcNotifySaveBtn" type="button" class="primary">トリガーを保存</button>
+      </div>
       <p class="diary-settings-help" style="margin-top:6px">設定したチャンネル/カテゴリは Bot 有効化 + 起動時に自動生成されます。反映には Memoria の再起動が必要な場合があります。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }

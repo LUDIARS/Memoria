@@ -22,22 +22,42 @@ function channelName(msg: Message): string {
   return 'name' in msg.channel && msg.channel.name ? msg.channel.name : '';
 }
 
-/** AI に意図分類させる。 出力 JSON {action,title,due_at} を期待。 失敗時 none。 */
-async function classify(text: string): Promise<{ action: Action; title?: string; dueAt?: string | null }> {
+interface Interpreted {
+  action: Action;
+  title?: string;
+  dueAt?: string | null;
+  /** カンマ区切りカテゴリ ("買い物, 開発")。 */
+  category?: string | null;
+  details?: string | null;
+}
+
+/**
+ * AI に意図分類 + タスク内容の解釈をさせる。 task のときは title/category/due/details を
+ * 構造化して「カード」 として成形する。 失敗時 none。
+ */
+async function classify(text: string): Promise<Interpreted> {
   const prompt = `あなたはライフログ Bot のルーターです。次のメッセージを task/memo/bookmark/recommend のいずれかに分類し、JSON のみで答えてください。\n` +
     `task=締切のある予定/やること, memo=締切のないメモ, recommend=おすすめ要求, bookmark=保存したいURL。\n` +
-    `形式: {"action":"task|memo|bookmark|recommend|none","title":"...","due_at":"ISO8601 or null"}\n\nメッセージ: ${text}`;
+    `task の場合は内容を解釈して title(簡潔な見出し) / category(買い物・開発 等のカンマ区切り、無ければ空) / due_at(ISO8601 か null) / details(補足、無ければ空) を埋めること。\n` +
+    `形式: {"action":"task|memo|bookmark|recommend|none","title":"...","due_at":"ISO8601 or null","category":"...","details":"..."}\n\nメッセージ: ${text}`;
   try {
     const raw = await runLlm({ task: 'discord_route', prompt, timeoutMs: 30_000 });
     const m = raw.match(/\{[\s\S]*\}/);
     if (!m) return { action: 'none' };
-    const j = JSON.parse(m[0]) as { action?: string; title?: string; due_at?: string | null };
+    const j = JSON.parse(m[0]) as {
+      action?: string; title?: string; due_at?: string | null; category?: string | null; details?: string | null;
+    };
     const allowed: string[] = ['task', 'memo', 'bookmark', 'recommend'];
     const action: Action = allowed.includes(j.action ?? '') ? (j.action as Action) : 'none';
-    return { action, title: j.title, dueAt: j.due_at ?? null };
+    return { action, title: j.title, dueAt: j.due_at ?? null, category: j.category ?? null, details: j.details ?? null };
   } catch {
     return { action: 'none' };
   }
+}
+
+/** classify 結果を createTask 入力に。 title が空なら原文で補う。 */
+function toTaskInput(text: string, r: Interpreted) {
+  return { title: r.title || text, dueAt: r.dueAt, category: r.category, details: r.details };
 }
 
 async function dispatch(db: Db, cfg: DiscordSettings, msg: Message): Promise<string | null> {
@@ -47,7 +67,11 @@ async function dispatch(db: Db, cfg: DiscordSettings, msg: Message): Promise<str
   const url = extractFirstUrl(text);
 
   // 1. チャンネル決定的ルーティング
-  if (ch === 'task' && cfg.autoTask) return createTask({ title: text });
+  // #task は AI でカード成形してから登録 (ai_process OFF なら原文をそのまま title)。
+  if (ch === 'task' && cfg.autoTask) {
+    if (!cfg.aiProcess || !text) return createTask({ title: text });
+    return createTask(toTaskInput(text, await classify(text)));
+  }
   if (ch === 'memo' && cfg.autoMemo) return createMemo(text);
   if (ch === 'bookmark' && cfg.autoBookmark && url) return createBookmark(url);
   if (ch === 'meal' && cfg.autoMeal && image) return createMeal({ url: image.url, name: image.name, contentType: image.contentType }, text);
@@ -59,7 +83,7 @@ async function dispatch(db: Db, cfg: DiscordSettings, msg: Message): Promise<str
   // 3. AI 分類
   if (!cfg.aiProcess || !text) return null;
   const r = await classify(text);
-  if (r.action === 'task' && cfg.autoTask) return createTask({ title: r.title || text, dueAt: r.dueAt });
+  if (r.action === 'task' && cfg.autoTask) return createTask(toTaskInput(text, r));
   if (r.action === 'memo' && cfg.autoMemo) return createMemo(r.title || text);
   if (r.action === 'bookmark' && cfg.autoBookmark && url) return createBookmark(url);
   if (r.action === 'recommend' && cfg.autoRecommend) return runRecommend(db);

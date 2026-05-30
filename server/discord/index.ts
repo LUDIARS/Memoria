@@ -6,6 +6,8 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
 import { postAnnouncement } from './notifier.js';
+import { findTrigger } from './notify/config.js';
+import { fireTrigger } from './notify/engine.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -37,4 +39,19 @@ export function stopDiscordBot(): void {
 export async function announceToDiscord(db: Db, text: string): Promise<void> {
   if (!current?.isReady()) return;
   await postAnnouncement(current, db, text);
+}
+
+/**
+ * 指定 id の通知トリガーを即時発火する (設定 UI の「テスト送信」 用)。
+ * Bot 未起動なら not_ready。 該当 0 件でもテストとして送る (postWhenEmpty)。
+ */
+export async function fireNotifyTriggerById(
+  db: Db,
+  id: string,
+): Promise<{ ok: boolean; reason?: string; count?: number }> {
+  if (!current?.isReady()) return { ok: false, reason: 'not_ready' };
+  const trigger = findTrigger(db, id);
+  if (!trigger) return { ok: false, reason: 'not_found' };
+  const r = await fireTrigger(current, db, trigger, { postWhenEmpty: true });
+  return { ok: true, count: r.count };
 }
