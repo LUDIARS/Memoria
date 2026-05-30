@@ -6,6 +6,8 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { DISCORD_INTENTS, DISCORD_PARTIALS } from './intents.js';
 import { discordBotToken, discordSettings } from './settings.js';
 import { registerCapture } from './activity-capture.js';
+import { registerRouter } from './message-router.js';
+import { registerInteractions, registerSlashCommands } from './slash-commands.js';
 import { ensureDiscordLayout } from './layout.js';
 
 type Db = BetterSqlite3.Database;
@@ -22,9 +24,11 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
       console.warn(`[discord] guild ${guildId} not found (Bot が招待されていない可能性)`);
       return;
     }
-    ensureDiscordLayout(guild, db).catch((e: unknown) => {
-      console.warn(`[discord] layout 生成失敗: ${e instanceof Error ? e.message : String(e)}`);
-    });
+    ensureDiscordLayout(guild, db)
+      .then(() => registerSlashCommands(guild))
+      .catch((e: unknown) => {
+        console.warn(`[discord] layout / slash 登録失敗: ${e instanceof Error ? e.message : String(e)}`);
+      });
   });
 
   client.on(Events.Error, (e) => {
@@ -32,6 +36,8 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
   });
 
   registerCapture(client, db);
+  registerRouter(client, db);
+  registerInteractions(client, db);
 
   try {
     await client.login(discordBotToken());

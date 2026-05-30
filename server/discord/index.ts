@@ -5,6 +5,7 @@ import type { Client } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
+import { postAnnouncement } from './notifier.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -26,4 +27,14 @@ export function stopDiscordBot(): void {
   if (!current) return;
   try { current.destroy(); } catch { /* swallow */ }
   current = null;
+}
+
+/**
+ * 既存の通知 (日記完了 / リマインダー等) を Discord #announce に投稿する seam。
+ * Bot 未起動 / 未接続なら何もしない (best-effort)。 Memoria の通知トリガからこれを
+ * 呼べば「アナウンスを Discord にも流す」 が実現する。
+ */
+export async function announceToDiscord(db: Db, text: string): Promise<void> {
+  if (!current?.isReady()) return;
+  await postAnnouncement(current, db, text);
 }
