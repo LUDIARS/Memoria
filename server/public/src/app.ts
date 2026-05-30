@@ -5974,6 +5974,8 @@ async function loadDiscordSettings() {
   const setVal = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.value = (v as string) || ''; };
   setChk('dcEnabled', c.enabled);
   setVal('dcSelfUserId', c.selfUserId); setVal('dcGuildId', c.guildId);
+  const tk = $('dcBotToken') as HTMLInputElement | null;
+  if (tk) { tk.value = ''; tk.placeholder = r.token_set ? '●●●●●● (設定済み・再入力で上書き)' : 'Bot Token を入力'; }
   setChk('dcCaptureMessage', c.captureMessage); setChk('dcCapturePresence', c.capturePresence);
   setChk('dcCaptureVoice', c.captureVoice); setChk('dcCaptureReaction', c.captureReaction);
   setChk('dcAiProcess', c.aiProcess); setChk('dcMentionNotify', c.mentionNotify); setChk('dcAnnounce', c.announce);
@@ -5988,8 +5990,10 @@ async function loadDiscordSettings() {
 async function saveDiscordSettings() {
   const chk = (id: string) => !!($(id) as HTMLInputElement | null)?.checked;
   const val = (id: string) => (($(id) as HTMLInputElement | null)?.value || '').trim();
-  const payload = {
+  const token = val('dcBotToken'); // 空欄なら据え置き (送らない)
+  const payload: Record<string, unknown> = {
     enabled: chk('dcEnabled'), selfUserId: val('dcSelfUserId'), guildId: val('dcGuildId'),
+    ...(token ? { botToken: token } : {}),
     captureMessage: chk('dcCaptureMessage'), capturePresence: chk('dcCapturePresence'),
     captureVoice: chk('dcCaptureVoice'), captureReaction: chk('dcCaptureReaction'),
     aiProcess: chk('dcAiProcess'), mentionNotify: chk('dcMentionNotify'), announce: chk('dcAnnounce'),
@@ -6239,6 +6243,7 @@ let ensureMemoriaFeatureViews = function () {
       <p class="diary-settings-help">行動ログ取得 + 自動処理 + 通知。Bot Token は <code>MEMORIA_DISCORD_BOT_TOKEN</code> (env) に設定してください。詳細は spec/feature/discord-bot.md。</p>
       <div id="discordStatus" class="muted" style="margin:6px 0"></div>
       <label class="check-inline"><input id="dcEnabled" type="checkbox" /> Discord Bot を有効にする (マスタ)</label>
+      <label>Bot Token: <input id="dcBotToken" type="password" placeholder="Bot Token を入力" autocomplete="off" /></label>
       <label>自分の Discord user id: <input id="dcSelfUserId" type="text" placeholder="123456789012345678" /></label>
       <label>対象サーバー (guild) id: <input id="dcGuildId" type="text" placeholder="123456789012345678" /></label>
       <h4 style="margin-top:12px">取得 (オプトアウト)</h4>

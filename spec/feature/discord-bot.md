@@ -24,8 +24,11 @@ Memoria server に discord.js Gateway Bot を同梱し、Discord を **行動ロ
   ログサービスの本分)。
 - 氏名・メール・ロール等の **識別情報は Cernere が正本**。Discord user id を join key
   にし、識別情報をミラーしない。`self_user_id` と Cernere user の対応のみ持つ。
-- Bot token は **アプリ単位のサービスシークレット** → `.env.secrets` / Infisical。DB・
-  フロント・ログに値を出さない。
+- Bot token は **Memoria の設定 UI から指定** し `app_settings`
+  (`features.discord.bot_token`) に保存する。Memoria はローカル SQLite に閉じる個人
+  アプリで OpenAI key 等も設定保存しているため同パターン。env
+  `MEMORIA_DISCORD_BOT_TOKEN` をフォールバックで見る。値は GET API / フロント /
+  ログには出さない (`token_set` の bool のみ公開)。
 
 ## 取得できる個人情報 (intent 別)
 
@@ -90,8 +93,7 @@ Memoria server に discord.js Gateway Bot を同梱し、Discord を **行動ロ
 | `features.discord.mention_notify` | true | self メンション通知 |
 | `features.discord.announce` | true | 通知の #announce 転送 |
 | `features.discord.autoproc.task` / `.memo` / `.bookmark` / `.meal` / `.recommend` | true | 各自動処理 |
-
-token は設定に置かず env: `MEMORIA_DISCORD_BOT_TOKEN`。
+| `features.discord.bot_token` | "" | Bot token (設定 UI で指定 / 値は非公開、 env フォールバック可) |
 
 ## モジュール構成 (`server/discord/`、責務別)
 

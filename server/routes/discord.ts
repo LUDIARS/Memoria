@@ -40,10 +40,11 @@ export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
   r.get('/api/discord/config', (c: Context) => {
     const cfg = discordSettings(db);
     const ready = discordReady(db);
-    return c.json({ config: cfg, token_set: !!discordBotToken(), ready: ready.ok, reason: ready.reason });
+    return c.json({ config: cfg, token_set: !!discordBotToken(db), ready: ready.ok, reason: ready.reason });
   });
 
-  // opt-out / self/guild の更新。 反映は次回 capture / Bot 再起動から。
+  // opt-out / self/guild / token の更新。 反映は次回 capture / Bot 再起動から。
+  // token は空文字なら据え置き (パスワード UX)、 非空なら上書き保存。
   r.patch('/api/discord/config', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
@@ -53,8 +54,11 @@ export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
     for (const [field, key] of Object.entries(STRING_KEYS)) {
       if (field in body && typeof body[field] === 'string') patch[key] = (body[field] as string).trim();
     }
+    if (typeof body.botToken === 'string' && body.botToken.trim()) {
+      patch['features.discord.bot_token'] = body.botToken.trim();
+    }
     if (Object.keys(patch).length > 0) setAppSettings(db, patch);
-    return c.json({ ok: true, config: discordSettings(db) });
+    return c.json({ ok: true, config: discordSettings(db), token_set: !!discordBotToken(db) });
   });
 
   // 通知を Discord #announce に流す seam (テスト / 外部トリガ用)。

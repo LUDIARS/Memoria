@@ -31,8 +31,17 @@ export interface DiscordSettings {
   autoRecommend: boolean;
 }
 
-/** Bot token は env のみ。 値は DB / フロント / ログに出さない。 */
-export function discordBotToken(): string {
+/**
+ * Bot token。 Memoria の設定 (app_settings) を優先し、 無ければ env を見る。
+ * Memoria はローカル SQLite に閉じる個人アプリで、 既に OpenAI key 等を設定保存
+ * しているため同パターン。 値は GET API / フロント / ログには決して出さない
+ * (token_set の bool のみ公開)。
+ */
+export function discordBotToken(db?: Db): string {
+  if (db) {
+    const t = getAppSettings(db)['features.discord.bot_token'];
+    if (t) return t;
+  }
   return process.env.MEMORIA_DISCORD_BOT_TOKEN ?? '';
 }
 
@@ -61,7 +70,7 @@ export function discordSettings(db: Db): DiscordSettings {
 export function discordReady(db: Db): { ok: boolean; reason: string } {
   const cfg = discordSettings(db);
   if (!cfg.enabled) return { ok: false, reason: 'disabled' };
-  if (!discordBotToken()) return { ok: false, reason: 'MEMORIA_DISCORD_BOT_TOKEN 未設定' };
+  if (!discordBotToken(db)) return { ok: false, reason: 'Bot token 未設定' };
   if (!cfg.selfUserId) return { ok: false, reason: 'self_user_id 未設定' };
   if (!cfg.guildId) return { ok: false, reason: 'guild_id 未設定' };
   return { ok: true, reason: '' };

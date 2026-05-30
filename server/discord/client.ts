@@ -40,7 +40,7 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
   registerInteractions(client, db);
 
   try {
-    await client.login(discordBotToken());
+    await client.login(discordBotToken(db));
     return client;
   } catch (e: unknown) {
     console.error(`[discord] login 失敗: ${e instanceof Error ? e.message : String(e)}`);
