@@ -45,6 +45,7 @@ import { makeDomainRouter } from './routes/domain.js';
 import { makeVisitRouter } from './routes/visit.js';
 import { makeDictRouter } from './routes/dict.js';
 import { makeMealRouter } from './routes/meal.js';
+import { makeDiscordRouter } from './routes/discord.js';
 import { makeDiaryRouter } from './routes/diary.js';
 import { makeTaskRouter } from './routes/task.js';
 import { makeAgentRouter } from './routes/agent.js';
@@ -237,6 +238,7 @@ app.route('/', makeDiaryRouter({
 app.route('/', makeTaskRouter({ db }));
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
+app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));

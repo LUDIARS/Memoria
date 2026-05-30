@@ -5800,6 +5800,7 @@ const SETTINGS_STAB_LABELS: Record<string, string> = {
   profile: '🧍 プロフィール',
   data: '📦 データ / Hub',
   privacy: '🔒 プライバシー / 表示',
+  discord: '🤖 Discord',
 };
 // 「全部」 タブで非表示にする 手順系 (= 一度しか見ない / 別 UI)。
 const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup']);
@@ -5851,6 +5852,7 @@ document.addEventListener('click', (ev) => {
   }
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
+  if (stab === 'discord') loadDiscordSettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
   // 'agent-projects' タブは廃止 (AI 実装プロジェクト機能を休止)
   panel.scrollTop = 0;
@@ -5960,6 +5962,45 @@ function renderEvents(items) {
       ${det}
     </li>`;
   }).join('');
+}
+
+// ── Discord 設定 (⚙ 設定 → 🤖 Discord タブ) ───────────────────────────────
+async function loadDiscordSettings() {
+  let r: any;
+  try { r = await api('/api/discord/config'); }
+  catch (e: any) { const s = $('discordStatus'); if (s) s.textContent = `設定取得失敗: ${e.message}`; return; }
+  const c = r.config || {};
+  const setChk = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.checked = v !== false; };
+  const setVal = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.value = (v as string) || ''; };
+  setChk('dcEnabled', c.enabled);
+  setVal('dcSelfUserId', c.selfUserId); setVal('dcGuildId', c.guildId);
+  setChk('dcCaptureMessage', c.captureMessage); setChk('dcCapturePresence', c.capturePresence);
+  setChk('dcCaptureVoice', c.captureVoice); setChk('dcCaptureReaction', c.captureReaction);
+  setChk('dcAiProcess', c.aiProcess); setChk('dcMentionNotify', c.mentionNotify); setChk('dcAnnounce', c.announce);
+  setChk('dcAutoTask', c.autoTask); setChk('dcAutoMemo', c.autoMemo); setChk('dcAutoBookmark', c.autoBookmark);
+  setChk('dcAutoMeal', c.autoMeal); setChk('dcAutoRecommend', c.autoRecommend);
+  const s = $('discordStatus');
+  if (s) s.textContent = `状態: ${r.ready ? '✅ 起動可能' : '⚠ ' + (r.reason || '')} ／ token: ${r.token_set ? '設定済 (env)' : '未設定 (MEMORIA_DISCORD_BOT_TOKEN)'}`;
+  const btn = $('discordSaveBtn') as HTMLButtonElement | null;
+  if (btn) btn.onclick = saveDiscordSettings;
+}
+
+async function saveDiscordSettings() {
+  const chk = (id: string) => !!($(id) as HTMLInputElement | null)?.checked;
+  const val = (id: string) => (($(id) as HTMLInputElement | null)?.value || '').trim();
+  const payload = {
+    enabled: chk('dcEnabled'), selfUserId: val('dcSelfUserId'), guildId: val('dcGuildId'),
+    captureMessage: chk('dcCaptureMessage'), capturePresence: chk('dcCapturePresence'),
+    captureVoice: chk('dcCaptureVoice'), captureReaction: chk('dcCaptureReaction'),
+    aiProcess: chk('dcAiProcess'), mentionNotify: chk('dcMentionNotify'), announce: chk('dcAnnounce'),
+    autoTask: chk('dcAutoTask'), autoMemo: chk('dcAutoMemo'), autoBookmark: chk('dcAutoBookmark'),
+    autoMeal: chk('dcAutoMeal'), autoRecommend: chk('dcAutoRecommend'),
+  };
+  try {
+    await api('/api/discord/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    flashToast('Discord 設定を保存しました');
+    await loadDiscordSettings();
+  } catch (e: any) { alert(`保存失敗: ${e.message}`); }
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
@@ -6133,6 +6174,7 @@ let ensureMemoriaFeatureViews = function () {
     settingsTabs.insertBefore(allBtn, settingsTabs.firstChild);
     for (const spec of [
       ['privacy', '🔒 プライバシー / 表示'],
+      ['discord', '🤖 Discord'],
       ['setup', '📚 セットアップ手順'],
     ]) {
       const b = document.createElement('button');
@@ -6185,6 +6227,37 @@ let ensureMemoriaFeatureViews = function () {
       </p>
       <p class="diary-settings-help" style="margin-top:6px">「移動速度の閾値」 はプロフィール タブに移動しました。</p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+  if (footer && !$('discordSettingsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'discordSettingsBody';
+    sec.className = 'settings-tab-body foundation-form hidden';
+    sec.dataset.stab = 'discord';
+    sec.innerHTML = `
+      <h4>🤖 Discord Bot</h4>
+      <p class="diary-settings-help">行動ログ取得 + 自動処理 + 通知。Bot Token は <code>MEMORIA_DISCORD_BOT_TOKEN</code> (env) に設定してください。詳細は spec/feature/discord-bot.md。</p>
+      <div id="discordStatus" class="muted" style="margin:6px 0"></div>
+      <label class="check-inline"><input id="dcEnabled" type="checkbox" /> Discord Bot を有効にする (マスタ)</label>
+      <label>自分の Discord user id: <input id="dcSelfUserId" type="text" placeholder="123456789012345678" /></label>
+      <label>対象サーバー (guild) id: <input id="dcGuildId" type="text" placeholder="123456789012345678" /></label>
+      <h4 style="margin-top:12px">取得 (オプトアウト)</h4>
+      <label class="check-inline"><input id="dcCaptureMessage" type="checkbox" /> メッセージ本文を記録</label>
+      <label class="check-inline"><input id="dcCapturePresence" type="checkbox" /> オンライン状態 / アクティビティを記録</label>
+      <label class="check-inline"><input id="dcCaptureVoice" type="checkbox" /> ボイス入退室を記録</label>
+      <label class="check-inline"><input id="dcCaptureReaction" type="checkbox" /> リアクションを記録</label>
+      <h4 style="margin-top:12px">処理 / 通知 (オプトアウト)</h4>
+      <label class="check-inline"><input id="dcAiProcess" type="checkbox" /> AI で意図分類して自動処理する</label>
+      <label class="check-inline"><input id="dcMentionNotify" type="checkbox" /> 通知時に自分をメンションする</label>
+      <label class="check-inline"><input id="dcAnnounce" type="checkbox" /> 通知を #announce に投稿する</label>
+      <h4 style="margin-top:12px">自動処理 (オプトアウト)</h4>
+      <label class="check-inline"><input id="dcAutoTask" type="checkbox" /> タスク (リマインダー付き)</label>
+      <label class="check-inline"><input id="dcAutoMemo" type="checkbox" /> メモ</label>
+      <label class="check-inline"><input id="dcAutoBookmark" type="checkbox" /> ブックマーク (URL 検知)</label>
+      <label class="check-inline"><input id="dcAutoMeal" type="checkbox" /> 食事 (画像検知)</label>
+      <label class="check-inline"><input id="dcAutoRecommend" type="checkbox" /> おすすめ (/recommend)</label>
+      <div style="margin-top:10px"><button id="discordSaveBtn" type="button" class="primary">保存</button></div>
+      <p class="diary-settings-help" style="margin-top:6px">設定したチャンネル/カテゴリは Bot 有効化 + 起動時に自動生成されます。反映には Memoria の再起動が必要な場合があります。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer && !$('setupDocsBody')) {
