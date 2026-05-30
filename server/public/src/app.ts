@@ -5966,9 +5966,9 @@ function renderEvents(items) {
 
 // ── Discord 設定 (⚙ 設定 → 🤖 Discord タブ) ───────────────────────────────
 async function loadDiscordSettings() {
-  let r: any;
-  try { r = await api('/api/discord/config'); }
-  catch (e: any) { const s = $('discordStatus'); if (s) s.textContent = `設定取得失敗: ${e.message}`; return; }
+  let r: { config?: Record<string, unknown>; token_set?: boolean; ready?: boolean; reason?: string };
+  try { r = await api('/api/discord/config') as typeof r; }
+  catch (e) { const s = $('discordStatus'); if (s) s.textContent = `設定取得失敗: ${(e as Error).message}`; return; }
   const c = r.config || {};
   const setChk = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.checked = v !== false; };
   const setVal = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.value = (v as string) || ''; };
@@ -6004,7 +6004,7 @@ async function saveDiscordSettings() {
     await api('/api/discord/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     flashToast('Discord 設定を保存しました');
     await loadDiscordSettings();
-  } catch (e: any) { alert(`保存失敗: ${e.message}`); }
+  } catch (e) { alert(`保存失敗: ${(e as Error).message}`); }
 }
 
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
