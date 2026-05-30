@@ -34,6 +34,7 @@ import { startSchedulers } from './lib/scheduler.js';
 import { makeMcpServer } from './lib/mcp-server.js';
 import { startLegatusSubscriber } from './lib/legatus-subscriber.js';
 import { startMqttBroker } from './mqtt/broker.js';
+import { startDiscordBot } from './discord/index.js';
 import { startWifiLocation } from './wifi-location.js';
 import { fetchPageHtml } from './lib/fetch-page.js';
 import { privacySettings } from './lib/privacy.js';
@@ -44,6 +45,7 @@ import { makeDomainRouter } from './routes/domain.js';
 import { makeVisitRouter } from './routes/visit.js';
 import { makeDictRouter } from './routes/dict.js';
 import { makeMealRouter } from './routes/meal.js';
+import { makeDiscordRouter } from './routes/discord.js';
 import { makeDiaryRouter } from './routes/diary.js';
 import { makeTaskRouter } from './routes/task.js';
 import { makeAgentRouter } from './routes/agent.js';
@@ -236,6 +238,7 @@ app.route('/', makeDiaryRouter({
 app.route('/', makeTaskRouter({ db }));
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
+app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
@@ -460,6 +463,14 @@ try {
   const msg = e instanceof Error ? e.message : String(e);
   console.error(`[mqtt-broker] failed to start: ${msg}`);
 }
+
+// ---- Discord Bot (行動ログ取得 + 自動処理 + 通知) --------------------------
+//
+// features.discord.enabled かつ token/self/guild が揃っているときだけ起動。
+// spec/feature/discord-bot.md。 起動失敗は best-effort で本体に影響させない。
+startDiscordBot(db).catch((e: unknown) => {
+  console.error(`[discord] failed to start: ${e instanceof Error ? e.message : String(e)}`);
+});
 
 // ---- PC WiFi → 位置情報 (Google Geolocation API) --------------------------
 //

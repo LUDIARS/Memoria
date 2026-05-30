@@ -26,6 +26,7 @@
     "@hono/node-server": "^1.13.7",
     "aedes": "^0.51.3",
     "better-sqlite3": "^11.3.0",
+    "discord.js": "^14.26.4",
     "exifr": "^7.1.3",
     "hono": "^4.6.10",
     "mqtt": "^5.15.1",
