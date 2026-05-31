@@ -6,6 +6,13 @@
 ローカル LLM がそれを要約・分類・関連付けして、**学んだことを忘れないように
 可視化** する。 紙のノートと検索エンジンと活動ログの中間にいる存在。
 
+## セットアップ
+
+設定・起動手順は用途別に [`spec/setup/`](spec/setup/) にまとめてある:
+
+- [ローカルで起動する](spec/setup/local-startup.md) / [LLM プロバイダ](spec/setup/llm-providers.md) / [WebPush 通知](spec/setup/webpush.md) / [位置情報の取り込み](spec/setup/location-tracking.md) / [マルチサーバ Hub](spec/setup/hub.md)
+- 全設定キー: [spec/setup/config-reference.md](spec/setup/config-reference.md)
+
 ## 何ができるか (ひと言で)
 
 - **ライフログ**: ブラウザ履歴 / GPS 軌跡 / 開発活動 (commits + AI prompt) /
