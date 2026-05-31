@@ -1,6 +1,6 @@
 // Re-export all DB row types for the local SQLite schema.
 //
-// 1 ドメイン 1 ファイル方針 (spec/db/<domain>.md と対応)。
+// 1 ドメイン 1 ファイル方針 (spec/data/<domain>.md と対応)。
 // 個別 import したい場合は `from './types/<domain>.js'` 等で直接参照。
 
 export * from './bookmark.js';

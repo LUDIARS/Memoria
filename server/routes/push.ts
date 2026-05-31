@@ -1,5 +1,5 @@
 // /api/push* — WebPush API (VAPID 公開鍵 + subscription 管理 + テスト送信)。
-// Spec: spec/api/push.md
+// Spec: spec/interface/push.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

@@ -1,5 +1,5 @@
 // bookmark API request/response types
-// Spec: spec/api/bookmark.md
+// Spec: spec/interface/bookmark.md
 
 import type { BookmarkRow, AccessRow } from '../../db/types/bookmark.js';
 

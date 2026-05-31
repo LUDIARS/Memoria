@@ -14,12 +14,12 @@
 - dig セッション詳細 / bookmark 詳細からの追加
 
 ## データ
-- [dictionary_entries](../db/dictionary.md) — term (UNIQUE) / definition / notes / owner_user_id / shared_at
-- [dictionary_links](../db/dictionary.md) — entry_id × (cloud / dig / bookmark) × source_id の many-to-many
+- [dictionary_entries](../data/dictionary.md) — term (UNIQUE) / definition / notes / owner_user_id / shared_at
+- [dictionary_links](../data/dictionary.md) — entry_id × (cloud / dig / bookmark) × source_id の many-to-many
 
 ## API
-- [dict.md](../api/dict.md) — `/api/dictionary*` (CRUD + 検索) / `/api/dictionary/:id/links` (出典操作) / `/api/dictionary/upsert-from-source`
-- 関連: [multi.md](../api/multi.md) `/api/multi/share` (kind=dict) / `/api/multi/download`
+- [dict.md](../interface/dict.md) — `/api/dictionary*` (CRUD + 検索) / `/api/dictionary/:id/links` (出典操作) / `/api/dictionary/upsert-from-source`
+- 関連: [multi.md](../interface/multi.md) `/api/multi/share` (kind=dict) / `/api/multi/download`
 
 ## シェア可能か
 **Hub-shareable** (明示的シェア操作のみ)

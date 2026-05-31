@@ -13,10 +13,10 @@
 - `POST /api/external-chat/messages` で他ツールから投稿 (Memoria CLI / hook 等)
 
 ## データ
-- [external_chat_messages](../db/chat.md) — source / conversation_id / role / content / metadata_json / received_at
+- [external_chat_messages](../data/chat.md) — source / conversation_id / role / content / metadata_json / received_at
 
 ## API
-- [task.md](../api/task.md) (同じ router 内) — `POST /api/external-chat/messages` / `GET /api/external-chat/messages` (source / limit / offset で絞り込み)
+- [task.md](../interface/task.md) (同じ router 内) — `POST /api/external-chat/messages` / `GET /api/external-chat/messages` (source / limit / offset で絞り込み)
 
 ## シェア可能か
 **local-only**

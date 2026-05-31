@@ -13,7 +13,7 @@
 - `📝 ログ` → `軌跡` で結果を視認
 
 ## データ
-- [gps_locations](../db/gps.md) — `raw_json` に `{via: 'legatus-ws', topic_user, device}` を埋め込んで識別
+- [gps_locations](../data/gps.md) — `raw_json` に `{via: 'legatus-ws', topic_user, device}` を埋め込んで識別
 
 ## API
 - 受信側: `ws://127.0.0.1:17320/ws` (Legatus が listen) を Memoria が subscribe

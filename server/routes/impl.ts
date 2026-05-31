@@ -1,5 +1,5 @@
 // /api/implementation-notes* — 実装自慢ノート (本人 only / shareable で Hub 公開可)。
-// Spec: spec/api/impl.md
+// Spec: spec/interface/impl.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

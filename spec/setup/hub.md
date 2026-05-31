@@ -99,4 +99,4 @@ curl http://localhost:5280/healthz
 - [`README.md`](./README.md) — 設定の優先順位 / 個人データの扱い
 - [`../../server/multi/README.md`](../../server/multi/README.md) — Hub 構築 + Cernere OAuth ランブック
 - [`../../docs/multi-server-architecture.md`](../../docs/multi-server-architecture.md) — Hub アーキテクチャ
-- [`../api/multi.md`](../api/multi.md) — マルチサーバ API 仕様
+- [`../api/multi.md`](../interface/multi.md) — マルチサーバ API 仕様

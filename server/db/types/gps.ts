@@ -1,5 +1,5 @@
 // gps domain — gps_locations
-// Spec: spec/db/gps.md
+// Spec: spec/data/gps.md
 
 export type PlaceSource = 'places' | 'geocode' | 'cached' | 'failed';
 

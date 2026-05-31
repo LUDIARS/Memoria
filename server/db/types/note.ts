@@ -1,5 +1,5 @@
 // note domain — notes / note_blocks / note_comment_sets / note_comments
-// Spec: spec/db/note.md
+// Spec: spec/data/note.md
 
 export type NoteKind = 'doc' | 'chat' | 'bookmark' | 'meeting' | string;
 

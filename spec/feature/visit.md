@@ -16,13 +16,13 @@ Chrome 拡張 (`POST /api/access`) や Legatus DNS / SNI tap (`POST /api/visits/
 - 作業ログタブ (`📝 ログ`) → `/api/worklog/browsing`
 
 ## データ
-- [page_visits](../db/visit.md) — URL (PK) / first_seen_at / last_seen_at / visit_count
-- [visit_events](../db/visit.md) — URL / domain / visited_at / device_label / device_os / source (browser/dns/sni)
-- 関連: [page_metadata](../db/page.md) (lazy fetch)、 [domain_catalog](../db/page.md)、 [recommendation_dismissals](../db/dig.md)
+- [page_visits](../data/visit.md) — URL (PK) / first_seen_at / last_seen_at / visit_count
+- [visit_events](../data/visit.md) — URL / domain / visited_at / device_label / device_os / source (browser/dns/sni)
+- 関連: [page_metadata](../data/page.md) (lazy fetch)、 [domain_catalog](../data/page.md)、 [recommendation_dismissals](../data/dig.md)
 
 ## API
-- [visit.md](../api/visit.md) — `/api/access` (拡張ping) / `/api/visits/unsaved` `/api/visits/suggested` `/api/visits/unsaved/count` / `/api/visits/bookmark` (bulk save) / `/api/visits/external` (DNS/SNI) / `/api/visits/external/stats`
-- 関連: [misc.md](../api/misc.md) `/api/recommendations*` / `/api/trends/*`、 `/api/extension/status`
+- [visit.md](../interface/visit.md) — `/api/access` (拡張ping) / `/api/visits/unsaved` `/api/visits/suggested` `/api/visits/unsaved/count` / `/api/visits/bookmark` (bulk save) / `/api/visits/external` (DNS/SNI) / `/api/visits/external/stats`
+- 関連: [misc.md](../interface/misc.md) `/api/recommendations*` / `/api/trends/*`、 `/api/extension/status`
 
 ## シェア可能か
 **local-only**

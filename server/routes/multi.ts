@@ -1,6 +1,6 @@
 // /api/multi/* (Hub 連携) + /api/legatus/location-summary + /api/locations* (GPS)
 // + /api/tracks/settings + /api/work-sessions の GPS 取込部分。
-// Spec: spec/api/multi.md
+// Spec: spec/interface/multi.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

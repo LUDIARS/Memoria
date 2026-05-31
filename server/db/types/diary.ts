@@ -1,5 +1,5 @@
 // diary domain — diary_entries / weekly_reports / diary_settings
-// Spec: spec/db/diary.md
+// Spec: spec/data/diary.md
 
 export type DiaryStatus = 'pending' | 'done' | 'error';
 

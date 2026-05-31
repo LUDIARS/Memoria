@@ -1,5 +1,5 @@
 // impl (implementation_notes) API request/response types
-// Spec: spec/api/impl.md
+// Spec: spec/interface/impl.md
 
 import type { ImplementationNoteRow, ImplementationAttachmentType } from '../../db/types/impl.js';
 

@@ -1,5 +1,5 @@
 // /api/bookmark* — ブックマーク CRUD + URL から fetch + 要約キュー投入。
-// Spec: spec/api/bookmark.md
+// Spec: spec/interface/bookmark.md
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';

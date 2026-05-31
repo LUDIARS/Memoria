@@ -1,5 +1,5 @@
 // agent API request/response types
-// Spec: spec/api/agent.md
+// Spec: spec/interface/agent.md
 
 import type { AgentProjectRow, AgentRunRow, AgentKind, AgentRunStatus } from '../../db/types/agent.js';
 

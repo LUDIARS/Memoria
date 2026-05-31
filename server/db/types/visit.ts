@@ -1,5 +1,5 @@
 // visit domain — page_visits / visit_events
-// Spec: spec/db/visit.md
+// Spec: spec/data/visit.md
 
 /** URL 単位の閲覧サマリ. */
 export interface PageVisitRow {

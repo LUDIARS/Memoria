@@ -1,5 +1,5 @@
 // /share + /api/export + /api/import — その他の小物 endpoint。
-// Spec: spec/api/misc.md (一部) — uptime / events / queue は visit.ts / config.ts。
+// Spec: spec/interface/misc.md (一部) — uptime / events / queue は visit.ts / config.ts。
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

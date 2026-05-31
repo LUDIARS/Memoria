@@ -1,5 +1,5 @@
 // /api/meals* — 食事記録 (写真 + EXIF + GPS から食事内容 / カロリー推定)。
-// Spec: spec/api/meal.md
+// Spec: spec/interface/meal.md
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';

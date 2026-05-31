@@ -13,12 +13,12 @@ Memoria サーバ自身の起動 / 停止 / ダウンタイム / 再起動を `s
 - `/api/uptime` で heartbeat + downtime_threshold を返す
 
 ## データ
-- [server_events](../db/activity.md) — type (start/stop/downtime/restart) / occurred_at / ended_at / duration_ms / details_json
+- [server_events](../data/activity.md) — type (start/stop/downtime/restart) / occurred_at / ended_at / duration_ms / details_json
 - ファイル: `<DATA>/heartbeat.json` (1 秒間隔で更新)
 
 ## API
-- [misc.md](../api/misc.md) `/api/uptime` / `/api/events` (server_events 一覧)
-- [visit.md](../api/visit.md) `/api/worklog/server-events` (日付指定で 1 日分)
+- [misc.md](../interface/misc.md) `/api/uptime` / `/api/events` (server_events 一覧)
+- [visit.md](../interface/visit.md) `/api/worklog/server-events` (日付指定で 1 日分)
 
 ## シェア可能か
 **local-only**
