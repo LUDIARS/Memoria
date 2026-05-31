@@ -1,5 +1,5 @@
 // workplace domain — work_locations
-// Spec: spec/db/workplace.md
+// Spec: spec/data/workplace.md
 
 export interface WorkLocationRow {
   id: number;

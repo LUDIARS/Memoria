@@ -15,13 +15,13 @@
 - 関連: ブクマ詳細から「このページから dig」 / 日記から「この日の dig」
 
 ## データ
-- [dig_sessions](../db/dig.md) — query / status / result_json (Phase 2) / preview_json (Phase 1) / raw_results_json (Phase 0) / theme / owner / shared
-- [recommendation_dismissals](../db/dig.md) — おすすめタブで dismissed した URL
-- 派生: [word_clouds](../db/wordcloud.md) (origin=dig)、 [dictionary_links](../db/dictionary.md) (source_kind='dig')
+- [dig_sessions](../data/dig.md) — query / status / result_json (Phase 2) / preview_json (Phase 1) / raw_results_json (Phase 0) / theme / owner / shared
+- [recommendation_dismissals](../data/dig.md) — おすすめタブで dismissed した URL
+- 派生: [word_clouds](../data/wordcloud.md) (origin=dig)、 [dictionary_links](../data/dictionary.md) (source_kind='dig')
 
 ## API
-- [dig.md](../api/dig.md) — `/api/dig` (POST queue / GET 一覧) / `/api/dig/:id` / `/api/dig/:id/save` (URL 一括ブクマ化) / `/api/dig/themes` / `/api/dig/engines`
-- 関連: [multi.md](../api/multi.md) `/api/multi/share` (kind=dig) / `/api/multi/download`
+- [dig.md](../interface/dig.md) — `/api/dig` (POST queue / GET 一覧) / `/api/dig/:id` / `/api/dig/:id/save` (URL 一括ブクマ化) / `/api/dig/themes` / `/api/dig/engines`
+- 関連: [multi.md](../interface/multi.md) `/api/multi/share` (kind=dig) / `/api/multi/download`
 
 ## シェア可能か
 **Hub-shareable** (明示的シェア操作のみ)

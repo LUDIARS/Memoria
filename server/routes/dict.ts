@@ -1,5 +1,5 @@
 // /api/dictionary*, /api/stopwords*, /api/wordcloud*
-// Spec: spec/api/dict.md
+// Spec: spec/interface/dict.md
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

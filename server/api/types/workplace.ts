@@ -1,5 +1,5 @@
 // workplace API request/response types
-// Spec: spec/api/workplace.md
+// Spec: spec/interface/workplace.md
 
 import type { WorkLocationRow } from '../../db/types/workplace.js';
 

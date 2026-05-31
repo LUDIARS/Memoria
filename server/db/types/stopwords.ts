@@ -1,5 +1,5 @@
 // user_stopwords domain
-// Spec: spec/db/stopwords.md
+// Spec: spec/data/stopwords.md
 
 /** ワードクラウドや傾向ページから除外したいユーザー定義単語. */
 export interface UserStopwordRow {

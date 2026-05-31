@@ -1,5 +1,5 @@
 // task domain — tasks
-// Spec: spec/db/task.md
+// Spec: spec/data/task.md
 
 export type TaskStatus = 'todo' | 'doing' | 'done';
 export type TaskCreatorType = 'human' | 'ai';

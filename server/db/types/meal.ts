@@ -1,5 +1,5 @@
 // meal domain — meals
-// Spec: spec/db/meal.md
+// Spec: spec/data/meal.md
 
 export type MealEatenAtSource = 'manual' | 'exif' | 'gps' | 'inference';
 export type MealAiStatus = 'pending' | 'running' | 'done' | 'error';

@@ -13,11 +13,11 @@
 - 設定タブの `ストップワード` 一覧で削除
 
 ## データ
-- [user_stopwords](../db/stopwords.md) — word (PK, lowercased) / added_at
+- [user_stopwords](../data/stopwords.md) — word (PK, lowercased) / added_at
 - 注意: ドメインカタログ自動分類 (`classifyDomain`) のキーワード抽出には適用されない (汎用ストップワードと別運用)
 
 ## API
-- [dict.md](../api/dict.md) — `GET /api/stopwords` / `POST /api/stopwords` `{ word }` / `DELETE /api/stopwords/:word`
+- [dict.md](../interface/dict.md) — `GET /api/stopwords` / `POST /api/stopwords` `{ word }` / `DELETE /api/stopwords/:word`
 
 ## シェア可能か
 **local-only**

@@ -1,5 +1,5 @@
 // /api/diary*, /api/weekly* — 日記 / 週次レポート。
-// Spec: spec/api/diary.md
+// Spec: spec/interface/diary.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

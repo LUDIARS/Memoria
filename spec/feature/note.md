@@ -57,13 +57,13 @@ esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 
 マルチサーバ download 時 (Phase 2): `bookmark_embed` を含む note を受信したら、 `bookmark_url` で受信側 DB を検索 → 既に bookmark 済ならその local id に置換、 未保存なら **Hub から bookmark 本体も同時に download** して bookmark + URL HTML を取得し、 新しく付与された local id で `data_json.bookmark_id` を更新する。 これにより note を共有しても embed 表示が常にローカルキャッシュで成立する。
 
 ## データ
-- [notes](../db/note.md) — ヘッダ (UUID PK, bookmark_id 紐付け, Hub 連携カラム)
-- [note_blocks](../db/note.md) — ブロック (UUID + position REAL)
-- [note_comment_sets](../db/note.md) — 1 (note × user) = 1 set (UUID PK)
-- [note_comments](../db/note.md) — set 配下の個別コメント
+- [notes](../data/note.md) — ヘッダ (UUID PK, bookmark_id 紐付け, Hub 連携カラム)
+- [note_blocks](../data/note.md) — ブロック (UUID + position REAL)
+- [note_comment_sets](../data/note.md) — 1 (note × user) = 1 set (UUID PK)
+- [note_comments](../data/note.md) — set 配下の個別コメント
 
 ## API
-- [note.md](../api/note.md) — `/api/notes*` (UUID パス) + `/api/notes/:uuid/comment-sets*` + `/api/notes/from-chat`
+- [note.md](../interface/note.md) — `/api/notes*` (UUID パス) + `/api/notes/:uuid/comment-sets*` + `/api/notes/from-chat`
 - 関連: [bookmark.md](bookmark.md) (note のベース)
 - 関連: [external-chat.md](external-chat.md) (`/api/notes/from-chat` 副作用)
 

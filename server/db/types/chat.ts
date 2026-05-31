@@ -1,5 +1,5 @@
 // external_chat_messages domain
-// Spec: spec/db/chat.md
+// Spec: spec/data/chat.md
 
 export interface ExternalChatMessageRow {
   id: number;

@@ -19,7 +19,7 @@
 - runtime: `runtime.git_bash_path` (Windows + claude CLI 用、 memory `feedback_claude_cli_windows_bash.md`)
 
 ## API
-- [config.md](../api/config.md) — `GET /api/llm/config` (タスク + プロバイダ + モデル + 現状) / `PATCH /api/llm/config` (設定更新、 API key は `'***'` で来たら無視)
+- [config.md](../interface/config.md) — `GET /api/llm/config` (タスク + プロバイダ + モデル + 現状) / `PATCH /api/llm/config` (設定更新、 API key は `'***'` で来たら無視)
 
 ## シェア可能か
 **local-only**

@@ -3,7 +3,7 @@
 // /api/external/stats
 //
 // 「ブラウザ訪問 + 集計」 系の router。
-// Spec: spec/api/visit.md
+// Spec: spec/interface/visit.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

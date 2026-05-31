@@ -1,5 +1,5 @@
 // page domain — page_metadata / domain_catalog
-// Spec: spec/db/page.md
+// Spec: spec/data/page.md
 
 export type PageMetadataStatus = 'pending' | 'done' | 'error';
 

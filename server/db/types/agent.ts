@@ -1,5 +1,5 @@
 // agent domain — agent_projects / agent_runs (タスクの AI 委託)
-// Spec: spec/db/agent.md
+// Spec: spec/data/agent.md
 
 export type AgentKind = 'claude_code' | 'codex' | 'gemini';
 
