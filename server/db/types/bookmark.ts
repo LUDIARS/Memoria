@@ -1,5 +1,5 @@
 // bookmark domain — bookmarks / bookmark_categories / accesses
-// Spec: spec/db/bookmark.md
+// Spec: spec/data/bookmark.md
 
 /** 1 件のブックマーク。 SQLite から読んだ row そのまま (boolean は 0/1)。 */
 export interface BookmarkRow {

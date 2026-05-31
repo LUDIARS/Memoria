@@ -1,5 +1,5 @@
 // push API request/response types
-// Spec: spec/api/push.md
+// Spec: spec/interface/push.md
 
 import type { PushSubscriptionRow } from '../../db/types/push.js';
 

@@ -15,11 +15,11 @@
 - 訪問時に lazy enqueue: `recordAccess` / `upsertVisit` から `maybeQueueDomain`
 
 ## データ
-- [domain_catalog](../db/page.md) — domain (PK) / title / site_name / description / can_do / kind / notes / user_edited / domain_private / status
-- 関連: [page_visits / visit_events](../db/visit.md) (集計の入力)
+- [domain_catalog](../data/page.md) — domain (PK) / title / site_name / description / can_do / kind / notes / user_edited / domain_private / status
+- 関連: [page_visits / visit_events](../data/visit.md) (集計の入力)
 
 ## API
-- [domain.md](../api/domain.md) — `/api/domains*` (CRUD + 検索) / `/api/domains/from-url` / `/api/domains/:domain/regenerate` / `/api/domains/recatalog-all`
+- [domain.md](../interface/domain.md) — `/api/domains*` (CRUD + 検索) / `/api/domains/from-url` / `/api/domains/:domain/regenerate` / `/api/domains/recatalog-all`
 
 ## シェア可能か
 **local-only**

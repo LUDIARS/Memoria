@@ -1,5 +1,5 @@
 // dict (dictionary + stopwords) API request/response types
-// Spec: spec/api/dict.md
+// Spec: spec/interface/dict.md
 
 import type { DictionaryEntryRow, DictionaryLinkSourceKind } from '../../db/types/dictionary.js';
 import type { UserStopwordRow } from '../../db/types/stopwords.js';

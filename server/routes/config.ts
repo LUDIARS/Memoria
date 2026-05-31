@@ -1,6 +1,6 @@
 // /api/setup-docs*, /api/privacy/settings, /api/llm/*, /api/maps/*, /api/queue*
 // /api/locations/settings* (ingest key 管理) も含む。
-// Spec: spec/api/config.md
+// Spec: spec/interface/config.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

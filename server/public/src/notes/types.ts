@@ -1,5 +1,5 @@
 // Frontend types — mirror server/api/types/note.ts (rev2)
-// Spec: spec/api/note.md
+// Spec: spec/interface/note.md
 
 export type NoteBlockType =
   | 'text'

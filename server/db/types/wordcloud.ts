@@ -1,5 +1,5 @@
 // word_clouds domain
-// Spec: spec/db/wordcloud.md
+// Spec: spec/data/wordcloud.md
 
 export type WordCloudOrigin = 'bookmark' | 'bookmarks' | 'dig' | 'merged';
 export type WordCloudStatus = 'pending' | 'done' | 'error';

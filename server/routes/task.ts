@@ -1,5 +1,5 @@
 // /api/tasks*, /api/tasks/categories*, /api/external-chat/messages*
-// Spec: spec/api/task.md
+// Spec: spec/interface/task.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

@@ -23,16 +23,16 @@
 - 拡張 options: 実装自慢用キーワードルール / ショッピングドメインリスト編集
 
 ## データ
-- [app_settings](../db/settings.md) (新キー) — `extension.impl_rules` (JSON) / `extension.shopping_domains` (JSON) / `extension.chat_domains` (JSON、 default 値あり)
-- [tasks](../db/task.md) — ショッピングボタン押下時 `category='買い物'` で insert
-- [implementation_notes](../db/impl.md) — 実装自慢展開時のドラフト保存先 (shareable=0 で insert)
-- [external_chat_messages](../db/chat.md) — chat 取り込み時 1 message 1 行
-- [notes](../db/note.md) — chat 取り込み時 (`also_create_note=true`) Note + ブロック群を作成
+- [app_settings](../data/settings.md) (新キー) — `extension.impl_rules` (JSON) / `extension.shopping_domains` (JSON) / `extension.chat_domains` (JSON、 default 値あり)
+- [tasks](../data/task.md) — ショッピングボタン押下時 `category='買い物'` で insert
+- [implementation_notes](../data/impl.md) — 実装自慢展開時のドラフト保存先 (shareable=0 で insert)
+- [external_chat_messages](../data/chat.md) — chat 取り込み時 1 message 1 行
+- [notes](../data/note.md) — chat 取り込み時 (`also_create_note=true`) Note + ブロック群を作成
 
 ## API
 - 既存: `POST /api/bookmark` (全ボタン共通の保存)
 - 新規:
-  - `POST /api/notes/from-chat` ([note.md](../api/note.md)) — chat → Note + external_chat_messages
+  - `POST /api/notes/from-chat` ([note.md](../interface/note.md)) — chat → Note + external_chat_messages
   - `POST /api/extension/dispatch-hint` — 拡張からの「現在ページ種別をサーバ側で確認」 (現ルール一覧を返す)
   - `GET / PUT /api/extension/rules` — ルール (`impl_rules` / `shopping_domains` / `chat_domains`) 取得 + 更新
 - 関連: `POST /api/tasks` (買い物カテゴリで insert), `POST /api/implementation-notes` (impl 展開時)

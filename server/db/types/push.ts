@@ -1,5 +1,5 @@
 // push_subscriptions domain
-// Spec: spec/db/push.md
+// Spec: spec/data/push.md
 
 export interface PushSubscriptionRow {
   id: number;

@@ -1,5 +1,5 @@
 // diary API request/response types
-// Spec: spec/api/diary.md
+// Spec: spec/interface/diary.md
 
 import type { DiaryEntryRow, WeeklyReportRow } from '../../db/types/diary.js';
 import type { DigSessionRow } from '../../db/types/dig.js';

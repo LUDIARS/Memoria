@@ -1,5 +1,5 @@
 // /api/notes* — markdown ライク WYSIWYG ノート (UUID 管理) + bookmark base + per-user comment sets
-// Spec: spec/api/note.md / spec/feature/note.md / spec/feature/extension.md
+// Spec: spec/interface/note.md / spec/feature/note.md / spec/feature/extension.md
 
 import { Hono, type Context } from 'hono';
 import { existsSync, readFileSync } from 'node:fs';

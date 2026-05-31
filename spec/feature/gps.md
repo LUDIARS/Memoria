@@ -15,11 +15,11 @@ OwnTracks (HTTP / MQTT) または Legatus (WS subscriber) 経由で受け取る 
 - WebSocket `/ws/locations` で realtime 描画
 
 ## データ
-- [gps_locations](../db/gps.md) — recorded_at / lat / lon / accuracy_m / altitude_m / velocity_kmh / course_deg / battery_pct / conn / raw_json / samples_count / place_name / place_address / place_source
+- [gps_locations](../data/gps.md) — recorded_at / lat / lon / accuracy_m / altitude_m / velocity_kmh / course_deg / battery_pct / conn / raw_json / samples_count / place_name / place_address / place_source
 - 設定: `app_settings.tracks.decimate_meters` / `tracks.show_polyline` / `locations.ingest_key` / `features.tracks.enabled` / `features.tracks.visible`
 
 ## API
-- [multi.md](../api/multi.md) `/api/locations*` 系統:
+- [multi.md](../interface/multi.md) `/api/locations*` 系統:
   - `POST /api/locations/ingest` (1 点投入、 OwnTracks HTTP / 手動)
   - `POST /api/legatus/location-summary` (Legatus 5 分集計、 loopback)
   - `GET /api/locations` `/api/locations/recent` `/api/locations/latest` `/api/locations/days`

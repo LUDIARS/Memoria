@@ -1,5 +1,5 @@
 // activity domain — activity_events / server_events
-// Spec: spec/db/activity.md
+// Spec: spec/data/activity.md
 
 export type ActivityKind =
   | 'git_commit'

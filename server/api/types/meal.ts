@@ -1,5 +1,5 @@
 // meal API request/response types
-// Spec: spec/api/meal.md
+// Spec: spec/interface/meal.md
 
 import type { MealRow, MealAiStatus } from '../../db/types/meal.js';
 

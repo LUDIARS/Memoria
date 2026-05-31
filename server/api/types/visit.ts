@@ -1,5 +1,5 @@
 // visit (locations / page-metadata / visits) API request/response types
-// Spec: spec/api/visit.md
+// Spec: spec/interface/visit.md
 
 import type { GpsLocationRow } from '../../db/types/gps.js';
 import type { PageVisitRow, VisitEventSource } from '../../db/types/visit.js';

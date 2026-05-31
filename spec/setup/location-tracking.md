@@ -106,4 +106,4 @@ LAN 開放 / Cloudflare Tunnel 公開時に保護するための API key (`serve
 - [`config-reference.md`](./config-reference.md) — 全キー一覧
 - [`../../docs/mqtt-vpn-setup.md`](../../docs/mqtt-vpn-setup.md) — OwnTracks → 内蔵 broker (VPN)
 - [`../../docs/mobile-share.md`](../../docs/mobile-share.md) — スマホからの保存 (PWA / Shortcut)
-- [`../api/visit.md`](../api/visit.md) — locations / visit API 仕様
+- [`../api/visit.md`](../interface/visit.md) — locations / visit API 仕様

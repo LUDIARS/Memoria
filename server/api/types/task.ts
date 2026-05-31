@@ -1,5 +1,5 @@
 // task API request/response types
-// Spec: spec/api/task.md
+// Spec: spec/interface/task.md
 
 import type { TaskRow, TaskStatus, TaskCreatorType } from '../../db/types/task.js';
 import type { AgentRunRow, AgentKind } from '../../db/types/agent.js';

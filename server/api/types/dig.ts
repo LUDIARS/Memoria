@@ -1,5 +1,5 @@
 // dig (deep research + wordcloud) API request/response types
-// Spec: spec/api/dig.md
+// Spec: spec/interface/dig.md
 
 import type { DigSessionRow } from '../../db/types/dig.js';
 import type { WordCloudRow, WordCloudOrigin } from '../../db/types/wordcloud.js';

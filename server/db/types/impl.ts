@@ -1,5 +1,5 @@
 // implementation_notes domain
-// Spec: spec/db/impl.md
+// Spec: spec/data/impl.md
 
 export type ImplementationAttachmentType =
   | ''

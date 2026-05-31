@@ -15,13 +15,13 @@
 - ページング: `/api/diary/:date/bookmarks` `/api/diary/:date/digs` (1 日のブクマ / dig が多いと WebView がフリーズするため分離)
 
 ## データ
-- [diary_entries](../db/diary.md) — date (PK) / summary / work_content / highlights / notes / metrics_json / github_commits_json / work_minutes / status
-- [diary_settings](../db/diary.md) — GitHub PAT / user / repos の key/value (`app_settings` ではなく専用テーブル)
-- 集計参照: [activity_events](../db/activity.md), [page_visits / visit_events](../db/visit.md), [bookmarks / accesses](../db/bookmark.md), [dig_sessions](../db/dig.md), [meals](../db/meal.md), [gps_locations](../db/gps.md)
+- [diary_entries](../data/diary.md) — date (PK) / summary / work_content / highlights / notes / metrics_json / github_commits_json / work_minutes / status
+- [diary_settings](../data/diary.md) — GitHub PAT / user / repos の key/value (`app_settings` ではなく専用テーブル)
+- 集計参照: [activity_events](../data/activity.md), [page_visits / visit_events](../data/visit.md), [bookmarks / accesses](../data/bookmark.md), [dig_sessions](../data/dig.md), [meals](../data/meal.md), [gps_locations](../data/gps.md)
 - サイドカー: 太い `metrics_json` / `github_commits_json` は `<DATA>/diary/<date>.json` に切り出し (`migrateDiariesToSidecar`)
 
 ## API
-- [diary.md](../api/diary.md) — `/api/diary*` (月一覧 / 詳細 / 生成キュー / 編集 / 削除) / `/api/diary/settings` / `/api/diary/test-github` / `/api/diary/:date/bookmarks` / `/api/diary/:date/digs`
+- [diary.md](../interface/diary.md) — `/api/diary*` (月一覧 / 詳細 / 生成キュー / 編集 / 削除) / `/api/diary/settings` / `/api/diary/test-github` / `/api/diary/:date/bookmarks` / `/api/diary/:date/digs`
 
 ## シェア可能か
 **local-only**

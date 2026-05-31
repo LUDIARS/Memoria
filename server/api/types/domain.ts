@@ -1,5 +1,5 @@
 // domain (catalog) API request/response types
-// Spec: spec/api/domain.md
+// Spec: spec/interface/domain.md
 
 import type { DomainCatalogRow } from '../../db/types/page.js';
 

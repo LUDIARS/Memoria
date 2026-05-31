@@ -49,7 +49,7 @@ VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:you@example.com 
 
 push のトリガーは機能ごとに頻度が違う (運用メモ [[feedback_memoria_push_triggers]]):
 日記 / Dig は **即時**、 ブックマーク要約は **5 件 or 5 分の batch**。 同一 tag の
-連続 batch は上書きされる。 詳細は API spec [`../api/push.md`](../api/push.md)。
+連続 batch は上書きされる。 詳細は API spec [`../api/push.md`](../interface/push.md)。
 
 ## 注意点
 
@@ -74,5 +74,5 @@ push のトリガーは機能ごとに頻度が違う (運用メモ [[feedback_m
 
 - [`README.md`](./README.md) — 設定の優先順位
 - [`config-reference.md`](./config-reference.md) — 全キー一覧
-- [`../api/push.md`](../api/push.md) — WebPush API 仕様
+- [`../api/push.md`](../interface/push.md) — WebPush API 仕様
 - [`../../docs/setup/user-setup.md`](../../docs/setup/user-setup.md) — iOS PWA 通知の前提

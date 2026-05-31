@@ -1,5 +1,5 @@
 // /api/work-locations*, /api/workplaces*, /api/work-sessions
-// Spec: spec/api/workplace.md
+// Spec: spec/interface/workplace.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

@@ -1,5 +1,5 @@
 // Re-export all API request/response types.
-// Spec: spec/api/<domain>.md
+// Spec: spec/interface/<domain>.md
 
 export * from './task.js';
 export * from './agent.js';

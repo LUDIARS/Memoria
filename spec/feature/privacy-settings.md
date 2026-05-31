@@ -31,10 +31,10 @@
 | `tasks_reminder_nuntius_url` | `features.tasks.reminder.nuntius_url` | Nuntius プロキシ URL |
 
 ## データ
-- [app_settings](../db/settings.md) — 上記キーをすべて格納
+- [app_settings](../data/settings.md) — 上記キーをすべて格納
 
 ## API
-- [config.md](../api/config.md) — `GET /api/privacy/settings` / `PATCH /api/privacy/settings`
+- [config.md](../interface/config.md) — `GET /api/privacy/settings` / `PATCH /api/privacy/settings`
 
 ## シェア可能か
 **local-only**

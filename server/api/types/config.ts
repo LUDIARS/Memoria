@@ -1,5 +1,5 @@
 // config API request/response types — privacy / llm / tracks / setup-docs
-// Spec: spec/api/config.md
+// Spec: spec/interface/config.md
 
 // ── プライバシー / 機能 ON/OFF ───────────────────────────────────────────
 export interface PrivacySettings {

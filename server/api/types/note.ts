@@ -1,5 +1,5 @@
 // note API request/response types (rev2)
-// Spec: spec/api/note.md
+// Spec: spec/interface/note.md
 
 import type {
   NoteRow, NoteBlockRow, NoteBlockType, NoteKind,

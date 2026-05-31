@@ -1,5 +1,5 @@
 // /api/agent-projects*, /api/agent-runs*, /api/tasks/:id/agent-run
-// Spec: spec/api/agent.md
+// Spec: spec/interface/agent.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

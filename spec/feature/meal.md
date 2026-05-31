@@ -15,12 +15,12 @@
 - 詳細: 補正フィールド + 追加 / 編集 / 再分析 (`/api/meals/:id/reanalyze`)
 
 ## データ
-- [meals](../db/meal.md) — photo_path / eaten_at / eaten_at_source (manual/exif/gps/inference) / lat/lon / location_label / location_source / description / calories / items_json / nutrients_json / ai_status / user_note / user_corrected_* / additions_json
+- [meals](../data/meal.md) — photo_path / eaten_at / eaten_at_source (manual/exif/gps/inference) / lat/lon / location_label / location_source / description / calories / items_json / nutrients_json / ai_status / user_note / user_corrected_* / additions_json
 - 写真本体: `<DATA>/meals/<id>-<8hex>.<ext>` (DB は `photo_path` のみ)
 - 場所推定の入力: `gps_locations` (撮影時刻に最も近い GPS 点を `resolveMealLocation`)
 
 ## API
-- [meal.md](../api/meal.md) — `/api/meals` (multipart 投稿) / `/api/meals/manual` (JSON 投稿) / `/api/meals*` (一覧 / 詳細 / 写真 / 補正 / 削除 / 再分析) / `/api/meals/:id/additions*`
+- [meal.md](../interface/meal.md) — `/api/meals` (multipart 投稿) / `/api/meals/manual` (JSON 投稿) / `/api/meals*` (一覧 / 詳細 / 写真 / 補正 / 削除 / 再分析) / `/api/meals/:id/additions*`
 - 全 endpoint は `features.meals.enabled` / `features.meals.visible` フラグで gate
 
 ## シェア可能か

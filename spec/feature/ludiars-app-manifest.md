@@ -1,7 +1,7 @@
 # LUDIARS App Manifest フォーマット
 
 Memoria Hub Shell に集約されるアプリが Hub に対して公開する manifest の
-形式。 schema 正本は [`../schema/ludiars-app-manifest.schema.json`](../schema/ludiars-app-manifest.schema.json)、
+形式。 schema 正本は [`../schema/ludiars-app-manifest.schema.json`](../interface/schema/ludiars-app-manifest.schema.json)、
 shell 全体の設計は [`hub-shell.md`](./hub-shell.md) を参照。
 
 - **公開経路**: `GET https://<app>/.well-known/ludiars-app.json`

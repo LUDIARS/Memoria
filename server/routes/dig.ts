@@ -1,5 +1,5 @@
 // /api/dig* — Deep research (claude WebSearch / WebFetch を駆動して JSON で返す)。
-// Spec: spec/api/dig.md
+// Spec: spec/interface/dig.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
