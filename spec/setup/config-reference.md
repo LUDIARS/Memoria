@@ -77,14 +77,12 @@ task 一覧: `server/llm.ts:8-27`。 provider 一覧: `server/llm.ts:54-60`。
 | `LOCATIONS_INGEST_KEY` | env | (空) | 上記 app_settings の fallback | `server/lib/ingest-auth.ts:35` |
 | `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` | env | (無効) | PC WiFi → 位置 (Windows のみ) | `server/wifi-location.ts:64` |
 | `MEMORIA_WIFI_INTERVAL_SEC` | env | `600` | WiFi 位置の実行間隔 (最小 60) | `server/wifi-location.ts:74` |
-| `MEMORIA_PLACES_API_KEY` | env | (無し) | server-side Geocoding/Places key | `server/lib/place-resolver.ts:101` |
-| `GOOGLE_MAPS_API_KEY` | env | (無し) | Maps/Places の汎用 key fallback | `server/lib/place-resolver.ts:101` / `server/routes/config.ts:306` |
-| `maps.api_key` | app_settings | (無し) | SPA 用 Maps JS key (Referer 制限あり) | `server/routes/config.ts:306` |
+| `maps.api_key` | app_settings | (無し) | Maps/Places/Geocoding 共通 key。 設定 UI で入力 | `server/routes/config.ts:306` / `server/lib/place-resolver.ts:100-104` |
 
-解決順 (Places, server 側): `MEMORIA_PLACES_API_KEY` → `GOOGLE_MAPS_API_KEY` →
-app_settings `maps.api_key` (`server/lib/place-resolver.ts:100-104`)。
-解決順 (Maps, SPA 用): app_settings `maps.api_key` → `GOOGLE_MAPS_API_KEY`
-(`server/routes/config.ts:306`)。
+Google Maps/Places key は **設定 UI の app_settings `maps.api_key` を単一の情報源**とする
+(env からは読まない)。 server-side で Places/Geocoding を叩くので、 Cloud Console で
+Places API (New) + Geocoding API を有効化し、 referer 制限なし (or IP 制限) の key を
+入れること (referer 制限ありの Maps JS key は 403 `Requests from referer <empty>`)。
 
 ### Legatus (旧 OwnTracks 転送経路 / 既定 off)
 
