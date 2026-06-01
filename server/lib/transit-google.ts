@@ -9,8 +9,8 @@
 // ローカル DB (transit-stations-seed.ts) で駅検索するが、 ローカルに当たらない
 // (海外駅 / 住所等) ときの保険として Places Autocomplete を残す。
 //
-// 認証: Memoria 既存の maps.api_key を流用 (= server-side は MEMORIA_PLACES_API_KEY
-// env が必要、 referer 制限ありの browser key だと 403)。
+// 認証: Memoria 既存の maps.api_key (設定 UI / app_settings) を流用。 server-side 呼び出し
+// なので referer 制限ありの browser key だと 403、 referer 制限なしの server key を入れること。
 
 const PLACES_AUTOCOMPLETE_URL = 'https://places.googleapis.com/v1/places:autocomplete';
 const FETCH_TIMEOUT_MS = 15_000;

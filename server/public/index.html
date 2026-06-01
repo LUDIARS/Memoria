@@ -948,7 +948,7 @@
 
         <div id="tracksMissingKey" class="tracks-missing-key hidden">
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
-          を入れるか、 環境変数 <code>GOOGLE_MAPS_API_KEY</code> を設定してください。
+          を入れてください。
         </div>
         <div id="tracksWorkSessions" class="tracks-work-sessions"></div>
         <div id="tracksMap" class="tracks-map"></div>
@@ -1747,7 +1747,7 @@
         <span id="mapsApiKeyAutoStatus" class="ai-keystatus"></span>
       </div>
       <p class="ai-settings-help">「🔧 gcloud から自動取得」は <code>gcloud services api-keys list</code> を叩いて active project の Maps key を引き当て、 そのまま設定に書き込みます (Maps API 制限の付いた key 優先 → 無制限 → その他)。 事前に <code>gcloud auth login</code> + <code>gcloud config set project &lt;ID&gt;</code> が必要。</p>
-      <p class="ai-settings-help">優先順: <code>app_settings.maps.api_key</code> &gt; 環境変数 <code>GOOGLE_MAPS_API_KEY</code>。 ここで保存すれば DB 側に書かれ、 再起動不要で反映。</p>
+      <p class="ai-settings-help">key は <code>app_settings.maps.api_key</code> (この設定 UI) を単一の情報源とします。 ここで保存すれば DB 側に書かれ、 再起動不要で反映。 server-side で Places/Geocoding を叩くので、 referer 制限なし (or IP 制限) で Places API (New) + Geocoding API を有効化した key を入れてください。</p>
 
       <h4>🎮 Steam Web API (オプション)</h4>
       <p class="ai-settings-help">API key + SteamID を入れると <a href="https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames" target="_blank" rel="noopener">公式 GetRecentlyPlayedGames</a> で取得します。 未設定でも同じ PC に Steam が入っていればローカル VDF ファイルからフォールバックで取得 (= key 不要)。</p>

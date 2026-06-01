@@ -17,7 +17,8 @@ import type { EnvCliConfig } from "../../Cernere/packages/env-cli/src/types.js";
  *     bootstrap.ts の env-bootstrap が起動時に Infisical から fetch + inject する。
  *   - Hub (server/multi/) とは別の env-cli.config.ts。 同じ Infisical project を
  *     共有しても OK だが、 使うキーは別 (Hub は MEMORIA_PG_URL 等のサーバ系、
- *     local は MEMORIA_PLACES_API_KEY 等のクライアント系)。
+ *     local は MEMORIA_GH_TOKEN 等のクライアント系)。
+ *   - Google Maps/Places key は env ではなく設定 UI (app_settings `maps.api_key`) で管理。
  */
 
 const config: EnvCliConfig = {
@@ -47,10 +48,8 @@ const config: EnvCliConfig = {
     // 旧 online 経路の互換 fallback として残置可。
     CERNERE_BASE_URL: "",
 
-    // ─── Google Maps / Places (server-side key、 referer 制限なし) ───────────
-    MEMORIA_PLACES_API_KEY: "",
-    // SPA に渡す key (Maps JavaScript API、 referer 制限あり)
-    GOOGLE_MAPS_API_KEY: "",
+    // ─── Google Maps / Places ───────────────────────────────
+    // key は env ではなく設定 UI (app_settings `maps.api_key`) で管理するため env は持たない。
 
     // ─── GitHub (diary commit fetch + 📋 作業一覧 タブの fallback) ───────────
     // 通常は ⚙ 連携設定で UI から PAT を入れる方が推奨。 ここはサーバ起動時の fallback。

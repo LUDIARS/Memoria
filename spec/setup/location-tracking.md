@@ -55,8 +55,7 @@ LAN 開放 / Cloudflare Tunnel 公開時に保護するための API key (`serve
 
 | キー | env / app_settings | 既定 | 説明 | 根拠 |
 |---|---|---|---|---|
-| Places key (server) | env `MEMORIA_PLACES_API_KEY` → env `GOOGLE_MAPS_API_KEY` → app_settings `maps.api_key` | (無し) | Geocoding/Places 用、 Referer 制限なしの server-side key | `server/lib/place-resolver.ts:88-104` |
-| Maps key (SPA) | app_settings `maps.api_key` → env `GOOGLE_MAPS_API_KEY` | (無し) | Maps JavaScript API 用 (Referer 制限あり) | `server/routes/config.ts:306` |
+| Maps/Places key | app_settings `maps.api_key` (設定 UI、 env からは読まない) | (無し) | Maps JS + server-side Geocoding/Places で共用。 server-side 呼び出しがあるので Referer 制限なし (or IP 制限) の key を入れる | `server/lib/place-resolver.ts:88-104` / `server/routes/config.ts:306` |
 
 ## 手順
 
@@ -69,7 +68,8 @@ LAN 開放 / Cloudflare Tunnel 公開時に保護するための API key (`serve
 3. **PC WiFi 位置**を使うなら `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` を env に設定
    (Windows のみ)。
 4. **場所名表示**には Cloud Console で Places API (New) + Geocoding API を有効化した
-   Referer 制限なしの server key を `MEMORIA_PLACES_API_KEY` に入れる。
+   Referer 制限なし (or IP 制限) の key を、 設定 UI (設定 → AI / 連携 → Maps API key)
+   から `maps.api_key` に保存する (env では設定しない)。
 
 ## 注意点
 
@@ -79,9 +79,11 @@ LAN 開放 / Cloudflare Tunnel 公開時に保護するための API key (`serve
 - **ingest key を空のまま LAN/WAN に晒さない**。 空 = 認証無効なので、 ローカル
   バインド以外で開けるなら必ず `locations.ingest_key` を生成する
   (`server/lib/ingest-auth.ts:5-7`)。
-- **Places key は SPA 用 key を流用しない**。 `maps.api_key` (Referer 制限あり) で
-  server-side の Geocoding/Places を叩くと `REQUEST_DENIED`。 server 専用 key を
-  `MEMORIA_PLACES_API_KEY` に入れる (`server/lib/place-resolver.ts:88-99`)。
+- **Maps/Places key は Referer 制限なしにする**。 key は `maps.api_key` 一本で Maps JS と
+  server-side Geocoding/Places を共用するため、 Referer 制限ありの Maps JS 用 key を入れると
+  server-side 呼び出しが `Requests from referer <empty> are blocked.` (403) で弾かれる。
+  Referer 制限なし (or IP 制限) + Places API (New) + Geocoding API 有効化の key を入れる
+  (`server/lib/place-resolver.ts:88-99`)。
 - **Iv (Imperativus) の Mosquitto と port が衝突**しうる。 リポ同梱の
   `docker-compose.yml` は外部 mosquitto を立てる場合に host port を 1884/9002 に
   ずらしている (内蔵 broker を使う既定運用ではそもそも mosquitto は不要)。
@@ -96,7 +98,7 @@ LAN 開放 / Cloudflare Tunnel 公開時に保護するための API key (`serve
 |---|---|
 | OwnTracks が繋がらない | broker bind host / port / VPN 到達性を確認。 認証付きなら user/pass 両方 |
 | ingest が 401 | `locations.ingest_key` 設定済なのに key 不一致。 ヘッダ形式 (Bearer/Basic/X-) を確認 |
-| 場所名が出ない / REQUEST_DENIED | server 専用 Places key を `MEMORIA_PLACES_API_KEY` に。 API 有効化を確認 |
+| 場所名が出ない / REQUEST_DENIED / referer blocked | 設定 UI の `maps.api_key` に Referer 制限なし key を。 Places API (New) + Geocoding API 有効化を確認 |
 | WiFi 位置が動かない | Windows 以外 or `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` 未設定 → 自動 disable |
 | broker を止めたい | `MEMORIA_MQTT_BROKER=off` |
 
