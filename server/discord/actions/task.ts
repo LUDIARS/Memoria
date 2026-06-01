@@ -1,20 +1,21 @@
-// タスク / メモ作成。 既存 POST /api/tasks に委譲する。
-// タスク = due_at 付き (= リマインダー対象)、 メモ = due_at 無し + category 'memo'。
-
-import { apiPostJson } from '../http.js';
+﻿import { apiPostJson } from '../http.js';
 import { formatSingleTaskCard } from '../notify/card.js';
 
 export interface TaskInput {
   title: string;
   details?: string | null;
-  /** ISO 文字列。 指定時はリマインダー対象になる。 */
   dueAt?: string | null;
-  /** カンマ区切りカテゴリ ("買い物, 開発")。 */
   category?: string | null;
 }
 
-/** タスク作成 (リマインダー付き)。 AI 解釈した内容を確認カードで返す。 */
-export async function createTask(input: TaskInput): Promise<string> {
+export interface TaskCreateResult {
+  ok: boolean;
+  status: number;
+  taskId: number | null;
+  summary: string;
+}
+
+export async function createTaskDetailed(input: TaskInput): Promise<TaskCreateResult> {
   const res = await apiPostJson('/api/tasks', {
     title: input.title,
     details: input.details ?? '',
@@ -23,16 +24,28 @@ export async function createTask(input: TaskInput): Promise<string> {
     due_at: input.dueAt ?? null,
     category: input.category ?? null,
   });
-  if (!res.ok) return `タスク作成失敗 (${res.status})`;
-  return formatSingleTaskCard({
-    title: input.title,
-    category: input.category,
-    dueAt: input.dueAt,
-    details: input.details,
-  });
+  if (!res.ok) {
+    return { ok: false, status: res.status, taskId: null, summary: `タスク作成失敗 (${res.status})` };
+  }
+  const json = await res.json().catch(() => ({})) as { task?: { id?: number } };
+  return {
+    ok: true,
+    status: res.status,
+    taskId: typeof json.task?.id === 'number' ? json.task.id : null,
+    summary: formatSingleTaskCard({
+      title: input.title,
+      category: input.category,
+      dueAt: input.dueAt,
+      details: input.details,
+    }),
+  };
 }
 
-/** メモ作成 (リマインダー無し)。 */
+export async function createTask(input: TaskInput): Promise<string> {
+  const r = await createTaskDetailed(input);
+  return r.summary;
+}
+
 export async function createMemo(title: string, details = ''): Promise<string> {
   const res = await apiPostJson('/api/tasks', {
     title,

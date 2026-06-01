@@ -13,6 +13,14 @@ export async function apiPostJson(path: string, body: unknown): Promise<Response
   });
 }
 
+export async function apiPatchJson(path: string, body: unknown): Promise<Response> {
+  return fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function apiPostForm(path: string, form: FormData): Promise<Response> {
   return fetch(`${BASE}${path}`, { method: 'POST', body: form });
 }
