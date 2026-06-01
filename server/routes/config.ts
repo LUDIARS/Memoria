@@ -303,7 +303,7 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
   // ---- Google Maps client config -------------------------------------------
   r.get('/api/maps/config', (c: Context) => {
     const settings = getAppSettings(db);
-    const key = settings['maps.api_key'] || process.env.GOOGLE_MAPS_API_KEY || '';
+    const key = settings['maps.api_key'] || '';
     return c.json({ apiKey: key, hasKey: !!key });
   });
 
