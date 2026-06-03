@@ -44,6 +44,7 @@ export function ensureRssSchema(db: Db): void {
       ai_reason    TEXT,
       ai_matched   TEXT,
       ai_status    TEXT NOT NULL DEFAULT 'pending',
+      ai_summary   TEXT,
       starred      INTEGER NOT NULL DEFAULT 0,
       read_at      TEXT,
       notified_at  TEXT,
@@ -68,5 +69,20 @@ export function ensureRssSchema(db: Db): void {
       ON rss_articles(ai_status);
     CREATE INDEX IF NOT EXISTS idx_rss_articles_published
       ON rss_articles(published_at DESC);
+
+    CREATE TABLE IF NOT EXISTS rss_digests (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      date        TEXT NOT NULL UNIQUE,
+      content     TEXT NOT NULL,
+      article_ids TEXT NOT NULL DEFAULT '[]',
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
+
+  // Forward-compat: 旧 DB に ai_summary カラムを後付け (AI 要約)。
+  // memory: CREATE INDEX は ALTER の後 — ここは index 不要。
+  const cols = (db.prepare(`PRAGMA table_info(rss_articles)`).all() as { name: string }[]).map(c => c.name);
+  if (cols.length > 0 && !cols.includes('ai_summary')) {
+    db.exec(`ALTER TABLE rss_articles ADD COLUMN ai_summary TEXT`);
+  }
 }

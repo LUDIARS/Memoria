@@ -33,6 +33,7 @@ interface RssArticle {
   ai_reason: string | null;
   ai_matched: string | null;
   ai_status: string;
+  ai_summary: string | null;
   starred: number;
   read_at: string | null;
   feed_title: string | null;
@@ -62,9 +63,23 @@ interface RssConfig {
   auto_score: boolean;
   min_score_notify: number;
   notify_enabled: boolean;
+  auto_summarize: boolean;
 }
 
-type SubView = 'discover' | 'latest' | 'starred' | 'feeds' | 'interests' | 'settings';
+interface RssDigest {
+  date: string;
+  content: string;
+  created_at: string;
+}
+
+interface DiscoveredFeed {
+  url: string;
+  title: string | null;
+  kind: string;
+  alreadyRegistered: boolean;
+}
+
+type SubView = 'digest' | 'discover' | 'latest' | 'starred' | 'feeds' | 'interests' | 'settings';
 
 // ── 小物 ─────────────────────────────────────────────────────────────────────
 
@@ -72,6 +87,28 @@ function esc(s: unknown): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** 最小 Markdown → HTML (見出し / 箇条書き / 太字 / リンク)。 digest 表示用。 */
+function miniMarkdown(md: string): string {
+  const lines = md.split(/\r?\n/);
+  const html: string[] = [];
+  let inList = false;
+  const inline = (s: string) => esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) { if (!inList) { html.push('<ul>'); inList = true; } html.push(`<li>${inline(li[1])}</li>`); continue; }
+    if (inList) { html.push('</ul>'); inList = false; }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { const n = h[1].length; html.push(`<h${n + 2} class="rss-md-h">${inline(h[2])}</h${n + 2}>`); continue; }
+    if (!line) { html.push(''); continue; }
+    html.push(`<p>${inline(line)}</p>`);
+  }
+  if (inList) html.push('</ul>');
+  return html.join('\n');
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -129,7 +166,7 @@ function scoreBadge(a: RssArticle): string {
 // ── 描画状態 ─────────────────────────────────────────────────────────────────
 
 let inited = false;
-let sub: SubView = 'discover';
+let sub: SubView = 'digest';
 
 function root(): HTMLElement | null {
   return document.getElementById('rssRoot');
@@ -139,6 +176,7 @@ function buildSkeleton(el: HTMLElement): void {
   el.innerHTML = `
     <div class="rss-subnav">
       ${([
+        ['digest', '📰 ダイジェスト'],
         ['discover', '✨ ディスカバー'],
         ['latest', '🕐 新着'],
         ['starred', '⭐ スター'],
@@ -212,11 +250,13 @@ function articleCard(a: RssArticle): string {
         ${matched}
       </div>
       ${a.summary ? `<div class="rss-card-summary">${esc(a.summary)}</div>` : ''}
+      ${a.ai_summary ? `<div class="rss-card-aisummary">🧠 ${esc(a.ai_summary)}</div>` : ''}
       ${a.ai_reason ? `<div class="rss-card-reason">💡 ${esc(a.ai_reason)}</div>` : ''}
       ${trendMeta(a)}
       <div class="rss-card-actions">
         <button class="ghost rss-star" data-star="${a.id}">${a.starred ? '⭐' : '☆'}</button>
         <button class="ghost rss-readbtn" data-toggleread="${a.id}">${a.read_at ? '既読を外す' : '既読にする'}</button>
+        <button class="ghost rss-summ" data-summarize="${a.id}" title="AI で要約">🧠 要約</button>
         <button class="ghost rss-rescore" data-rescore="${a.id}" title="この記事を再採点">★再採点</button>
       </div>
     </div>`;
@@ -253,6 +293,24 @@ function bindArticleActions(container: HTMLElement): void {
       b.textContent = '採点中…';
       await sendJson(`/api/rss/articles/${id}/score`, 'POST', {}).catch(() => {});
       await renderSub();
+    });
+  });
+  container.querySelectorAll<HTMLButtonElement>('[data-summarize]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const id = Number(b.dataset.summarize);
+      b.textContent = '要約中…'; b.disabled = true;
+      const r = await sendJson<{ summary?: string }>(`/api/rss/articles/${id}/summarize`, 'POST', {}).catch(() => null);
+      const card = b.closest('.rss-card');
+      if (r?.summary && card) {
+        const div = document.createElement('div');
+        div.className = 'rss-card-aisummary';
+        div.textContent = `🧠 ${r.summary}`;
+        const existing = card.querySelector('.rss-card-aisummary');
+        if (existing) existing.replaceWith(div); else card.querySelector('.rss-card-actions')?.before(div);
+        b.textContent = '🧠 要約'; b.disabled = false;
+      } else {
+        b.textContent = '要約失敗'; b.disabled = false;
+      }
     });
   });
 }
@@ -309,6 +367,14 @@ async function renderFeeds(): Promise<void> {
       <div class="rss-presets">${presetBtns}</div>
     </div>
     <div class="rss-section">
+      <h3>サイトURLからRSSを探す</h3>
+      <div class="rss-add-form foundation-form">
+        <input id="rssDiscUrl" type="url" placeholder="サイトのURL (例: https://example.com)" />
+        <button id="rssDiscBtn">探す</button>
+      </div>
+      <div id="rssDiscResults"></div>
+    </div>
+    <div class="rss-section">
       <h3>登録済みフィード</h3>
       <div class="rss-feed-list">${feedRows}</div>
     </div>`;
@@ -335,6 +401,34 @@ async function renderFeeds(): Promise<void> {
         await renderFeeds();
       } catch (e) { setStatus(`登録失敗: ${e instanceof Error ? e.message : String(e)}`); }
     });
+  });
+  body.querySelector('#rssDiscBtn')?.addEventListener('click', async () => {
+    const url = (body.querySelector('#rssDiscUrl') as HTMLInputElement)?.value.trim();
+    const out = body.querySelector('#rssDiscResults');
+    if (!url || !out) return;
+    out.innerHTML = '<div class="muted">探索中…</div>';
+    try {
+      const { items } = await sendJson<{ items: DiscoveredFeed[] }>('/api/rss/discover', 'POST', { url });
+      if (!items.length) { out.innerHTML = '<div class="muted">RSS/Atom フィードが見つかりませんでした。</div>'; return; }
+      out.innerHTML = items.map((f, i) => `
+        <div class="rss-disc-row">
+          <span class="rss-feed-title" style="flex:1">${esc(f.title || f.url)}</span>
+          ${f.alreadyRegistered
+            ? '<span class="muted">登録済み</span>'
+            : `<button class="ghost" data-disc="${i}">+ 追加</button>`}
+        </div>`).join('');
+      out.querySelectorAll<HTMLButtonElement>('[data-disc]').forEach(b => {
+        b.addEventListener('click', async () => {
+          const f = items[Number(b.dataset.disc)];
+          if (!f) return;
+          b.textContent = '追加中…'; b.disabled = true;
+          await sendJson('/api/rss/feeds', 'POST', { url: f.url, kind: f.kind }).catch(() => {});
+          await renderFeeds();
+        });
+      });
+    } catch (e) {
+      out.innerHTML = `<div class="muted">探索に失敗しました: ${esc(e instanceof Error ? e.message : String(e))}</div>`;
+    }
   });
   body.querySelectorAll<HTMLInputElement>('[data-enable]').forEach(c => {
     c.addEventListener('change', () => {
@@ -427,6 +521,7 @@ async function renderSettings(): Promise<void> {
       <label class="rss-setting">取得間隔（分）
         <input type="number" id="rssCfgInterval" min="5" max="1440" value="${cfg.poll_interval_minutes}" style="max-width:100px"/></label>
       <label class="rss-setting"><input type="checkbox" id="rssCfgAutoScore" ${cfg.auto_score ? 'checked' : ''}/> 新着を自動で AI 採点する</label>
+      <label class="rss-setting"><input type="checkbox" id="rssCfgAutoSumm" ${cfg.auto_summarize ? 'checked' : ''}/> 高スコア新着を自動で AI 要約する (コスト増)</label>
       <label class="rss-setting"><input type="checkbox" id="rssCfgNotify" ${cfg.notify_enabled ? 'checked' : ''}/> 高スコア記事を push 通知する</label>
       <label class="rss-setting">通知の閾値（0〜1）
         <input type="number" id="rssCfgThreshold" min="0" max="1" step="0.05" value="${cfg.min_score_notify}" style="max-width:100px"/></label>
@@ -437,6 +532,7 @@ async function renderSettings(): Promise<void> {
       enabled: (body.querySelector('#rssCfgEnabled') as HTMLInputElement).checked,
       poll_interval_minutes: Number((body.querySelector('#rssCfgInterval') as HTMLInputElement).value),
       auto_score: (body.querySelector('#rssCfgAutoScore') as HTMLInputElement).checked,
+      auto_summarize: (body.querySelector('#rssCfgAutoSumm') as HTMLInputElement).checked,
       notify_enabled: (body.querySelector('#rssCfgNotify') as HTMLInputElement).checked,
       min_score_notify: Number((body.querySelector('#rssCfgThreshold') as HTMLInputElement).value),
     };
@@ -445,9 +541,34 @@ async function renderSettings(): Promise<void> {
   });
 }
 
+async function renderDigest(): Promise<void> {
+  const body = document.getElementById('rssBody');
+  if (!body) return;
+  body.innerHTML = '<div class="muted">読み込み中…</div>';
+  const { digest } = await getJson<{ digest: RssDigest | null }>('/api/rss/digest').catch(() => ({ digest: null }));
+  const genBtn = `<button id="rssDigestGen" class="ghost">${digest ? '↻ 再生成' : '✨ ダイジェストを生成'}</button>`;
+  const header = `<div class="rss-section" style="display:flex;align-items:center;gap:8px">
+      <h3 style="margin:0">📰 今日のダイジェスト</h3>
+      ${digest ? `<span class="muted">${esc(digest.date)}</span>` : ''}
+      <span class="grow"></span>${genBtn}
+    </div>`;
+  body.innerHTML = header + (digest
+    ? `<div class="rss-digest">${miniMarkdown(digest.content)}</div>`
+    : `<div class="empty">まだダイジェストがありません。上のボタンで、直近の上位記事から「今日のまとめ」を生成できます。</div>`);
+  body.querySelector('#rssDigestGen')?.addEventListener('click', async () => {
+    setStatus('ダイジェストを生成中… (記事数により少し時間がかかります)');
+    const btn = body.querySelector('#rssDigestGen') as HTMLButtonElement;
+    if (btn) { btn.textContent = '生成中…'; btn.disabled = true; }
+    const r = await sendJson<{ digest?: RssDigest; error?: string }>('/api/rss/digest', 'POST', {}).catch((e) => ({ error: String(e) }));
+    if (r && 'digest' in r && r.digest) { setStatus('ダイジェストを生成しました'); await renderDigest(); }
+    else { setStatus(`生成できませんでした: ${r?.error || ''}`); if (btn) { btn.textContent = '✨ 再試行'; btn.disabled = false; } }
+  });
+}
+
 async function renderSub(): Promise<void> {
   markActiveSubBtn();
   switch (sub) {
+    case 'digest': return renderDigest();
     case 'discover': return renderArticleList({ sort: 'score', empty: '記事がありません。フィードを登録し、興味テーマを設定してください。' });
     case 'latest': return renderArticleList({ sort: 'published', empty: 'まだ記事がありません。フィードを登録してください。' });
     case 'starred': return renderArticleList({ sort: 'published', starred: true, empty: 'スターを付けた記事はまだありません。' });

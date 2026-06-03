@@ -3,7 +3,7 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import type {
-  RssFeedRow, RssArticleRow, RssInterestRow, RssFeedKind, RssAiStatus, ParsedArticle,
+  RssFeedRow, RssArticleRow, RssInterestRow, RssDigestRow, RssFeedKind, RssAiStatus, ParsedArticle,
 } from './types.js';
 
 type Db = BetterSqlite3.Database;
@@ -209,9 +209,56 @@ export function setArticleScore(db: Db, id: number, p: ScorePatch): void {
   `).run(p.score, p.reason, p.matched, p.status, id);
 }
 
+export function setArticleSummary(db: Db, id: number, summary: string): void {
+  db.prepare(`UPDATE rss_articles SET ai_summary = ? WHERE id = ?`).run(summary, id);
+}
+
+/** 自動要約の対象: スコア閾値以上で未要約の記事 (新しい順)。 */
+export function listUnsummarizedTop(db: Db, minScore: number, limit = 5): RssArticleRow[] {
+  return db.prepare(`
+    SELECT * FROM rss_articles
+    WHERE ai_summary IS NULL AND ai_score >= ?
+    ORDER BY ai_score DESC, published_at DESC LIMIT ?
+  `).all(minScore, limit) as RssArticleRow[];
+}
+
+/** ダイジェスト素材: 直近 hours 時間の上位記事 (スコア優先、 無ければ新着)。 */
+export function listRecentTopArticles(db: Db, hours = 36, limit = 15): ArticleWithFeed[] {
+  const since = new Date(Date.now() - hours * 3600_000).toISOString();
+  return db.prepare(`
+    SELECT a.*, f.title AS feed_title, f.kind AS feed_kind, f.category AS feed_category
+    FROM rss_articles a
+    JOIN rss_feeds f ON f.id = a.feed_id
+    WHERE COALESCE(a.published_at, a.fetched_at) >= ?
+    ORDER BY (a.ai_score IS NULL), a.ai_score DESC, a.published_at DESC
+    LIMIT ?
+  `).all(since, limit) as ArticleWithFeed[];
+}
+
 /** 興味テーマを変えたら全記事を再スコア対象に戻す。 */
 export function resetAllScores(db: Db): void {
   db.prepare(`UPDATE rss_articles SET ai_status = 'pending' WHERE ai_status IN ('done', 'skip')`).run();
+}
+
+// ── digests (おすすめダイジェスト) ───────────────────────────────────────────
+
+export function getDigest(db: Db, date: string): RssDigestRow | undefined {
+  return db.prepare(`SELECT * FROM rss_digests WHERE date = ?`).get(date) as RssDigestRow | undefined;
+}
+
+export function getLatestDigest(db: Db): RssDigestRow | undefined {
+  return db.prepare(`SELECT * FROM rss_digests ORDER BY date DESC LIMIT 1`).get() as RssDigestRow | undefined;
+}
+
+export function upsertDigest(db: Db, date: string, content: string, articleIds: number[]): void {
+  db.prepare(`
+    INSERT INTO rss_digests (date, content, article_ids, created_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(date) DO UPDATE SET
+      content = excluded.content,
+      article_ids = excluded.article_ids,
+      created_at = excluded.created_at
+  `).run(date, content, JSON.stringify(articleIds));
 }
 
 // ── interests (AI Feeds テーマ) ──────────────────────────────────────────────
@@ -262,6 +309,8 @@ export interface RssConfig {
   auto_score: boolean;
   min_score_notify: number;
   notify_enabled: boolean;
+  /** 取得時に高スコア新着を自動で AI 要約する (コスト増)。 */
+  auto_summarize: boolean;
 }
 
 const DEFAULT_CONFIG: RssConfig = {
@@ -270,6 +319,7 @@ const DEFAULT_CONFIG: RssConfig = {
   auto_score: true,
   min_score_notify: 0.75,
   notify_enabled: false,
+  auto_summarize: false,
 };
 
 export function getRssConfig(db: Db): RssConfig {
@@ -290,6 +340,7 @@ export function getRssConfig(db: Db): RssConfig {
     auto_score: bool('rss.auto_score', DEFAULT_CONFIG.auto_score),
     min_score_notify: num('rss.min_score_notify', DEFAULT_CONFIG.min_score_notify),
     notify_enabled: bool('rss.notify_enabled', DEFAULT_CONFIG.notify_enabled),
+    auto_summarize: bool('rss.auto_summarize', DEFAULT_CONFIG.auto_summarize),
   };
 }
 
@@ -300,6 +351,7 @@ export function setRssConfig(db: Db, patch: Partial<RssConfig>): void {
   if (patch.auto_score !== undefined) map['rss.auto_score'] = patch.auto_score ? '1' : '0';
   if (patch.min_score_notify !== undefined) map['rss.min_score_notify'] = String(Math.min(1, Math.max(0, patch.min_score_notify)));
   if (patch.notify_enabled !== undefined) map['rss.notify_enabled'] = patch.notify_enabled ? '1' : '0';
+  if (patch.auto_summarize !== undefined) map['rss.auto_summarize'] = patch.auto_summarize ? '1' : '0';
   const tx = db.transaction(() => {
     for (const [k, v] of Object.entries(map)) {
       db.prepare(`

@@ -8,9 +8,11 @@ import { sendPushToAll } from '../push.js';
 import { fetchFeedXml } from './sources.js';
 import { parseFeedXml } from './parse.js';
 import { scoreArticle } from './score.js';
+import { summarizeArticle } from './summarize.js';
 import {
   getFeed, listEnabledFeeds, upsertArticle, markFeedFetched,
   getRssConfig, listPendingArticles, listNotifiableArticles, markArticleNotified,
+  listUnsummarizedTop,
 } from './store.js';
 
 type Db = BetterSqlite3.Database;
@@ -90,17 +92,29 @@ export async function notifyTopArticles(db: Db): Promise<number> {
 
 let pollInFlight = false;
 
+/** 高スコア未要約記事を直列に AI 要約 (auto_summarize 時)。 */
+export async function summarizeTopArticles(db: Db, minScore = 0.6, limit = 5): Promise<number> {
+  const targets = listUnsummarizedTop(db, minScore, limit);
+  let n = 0;
+  for (const a of targets) {
+    await summarizeArticle(db, a.id);
+    n++;
+  }
+  return n;
+}
+
 export interface PollAllResult {
   feeds: number;
   newArticles: number;
   scored: number;
+  summarized: number;
   notified: number;
   skipped?: boolean;
 }
 
 /** 全有効フィードを取得 → 自動スコアリング → 通知。 多重起動はスキップ。 */
 export async function pollAllFeeds(db: Db, opts: { score?: boolean } = {}): Promise<PollAllResult> {
-  if (pollInFlight) return { feeds: 0, newArticles: 0, scored: 0, notified: 0, skipped: true };
+  if (pollInFlight) return { feeds: 0, newArticles: 0, scored: 0, summarized: 0, notified: 0, skipped: true };
   pollInFlight = true;
   try {
     const cfg = getRssConfig(db);
@@ -115,8 +129,12 @@ export async function pollAllFeeds(db: Db, opts: { score?: boolean } = {}): Prom
     if (shouldScore && newArticles > 0) {
       scored = await scorePendingArticles(db);
     }
+    let summarized = 0;
+    if (cfg.auto_summarize && newArticles > 0) {
+      summarized = await summarizeTopArticles(db, Math.max(0.5, cfg.min_score_notify - 0.15));
+    }
     const notified = await notifyTopArticles(db);
-    return { feeds: feeds.length, newArticles, scored, notified };
+    return { feeds: feeds.length, newArticles, scored, summarized, notified };
   } finally {
     pollInFlight = false;
   }
