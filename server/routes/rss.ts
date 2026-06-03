@@ -12,6 +12,7 @@ import {
   detectFeedKind, discoverFeeds, FEED_PRESETS,
   pollFeed, pollAllFeeds, scoreArticle, scorePendingArticles,
   summarizeArticle, generateDigest,
+  assertFetchableFeedUrl, BlockedUrlError,
 } from '../rss/index.js';
 import type { RssFeedKind, DiscoveredFeed } from '../rss/index.js';
 import { postRssNewsNow } from '../discord/index.js';
@@ -48,6 +49,12 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
     const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
     const url = normalizeUrl(body?.url);
     if (!url) return c.json({ error: 'valid http(s) url required' }, 400);
+    try {
+      await assertFetchableFeedUrl(url);
+    } catch (e) {
+      if (e instanceof BlockedUrlError) return c.json({ error: 'url not allowed (internal/private address)' }, 400);
+      throw e;
+    }
     const found = await discoverFeeds(url);
     const items: DiscoveredFeed[] = found.map(f => ({ ...f, alreadyRegistered: !!getFeedByUrl(db, f.url) }));
     return c.json({ items });
@@ -60,6 +67,12 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
       | { url?: unknown; category?: unknown; kind?: unknown } | null;
     const url = normalizeUrl(body?.url);
     if (!url) return c.json({ error: 'valid http(s) url required' }, 400);
+    try {
+      await assertFetchableFeedUrl(url);
+    } catch (e) {
+      if (e instanceof BlockedUrlError) return c.json({ error: 'url not allowed (internal/private address)' }, 400);
+      throw e;
+    }
     if (getFeedByUrl(db, url)) return c.json({ error: 'already registered', duplicate: true }, 409);
 
     const kind: RssFeedKind = (body?.kind === 'hatena' || body?.kind === 'google_trends' || body?.kind === 'rss')

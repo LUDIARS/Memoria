@@ -47,6 +47,10 @@ jobs:
             typescript@5.6 @types/node@20 @types/better-sqlite3@7
           npx tsc --noEmit -p tsconfig.json
 
+      - name: Unit tests (server)
+        working-directory: server
+        run: npm test
+
       - name: Lint (server TS)
         working-directory: server
         run: |
