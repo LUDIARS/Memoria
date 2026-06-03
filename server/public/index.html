@@ -318,6 +318,9 @@
           <button class="tab" data-tab="packetmon">
             <span class="tab-label" data-full="🛡 パケット監視" data-short="🛡 監視">🛡 パケット監視</span>
           </button>
+          <button class="tab" data-tab="rss">
+            <span class="tab-label" data-full="📡 RSS" data-short="📡 RSS">📡 RSS</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -361,6 +364,10 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <div id="rssView" class="hidden">
+        <div id="rssRoot"></div>
       </div>
 
       <div id="trendsView" class="hidden">

@@ -13,7 +13,8 @@ export type LlmTaskName =
   | 'app_classify'
   | 'recommendation_agent' | 'recommendation_synthesize'
   | 'endpoint_identify'
-  | 'discord_route';
+  | 'discord_route'
+  | 'rss_score';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -24,6 +25,7 @@ export const TASKS: LlmTaskName[] = [
   'recommendation_agent', 'recommendation_synthesize',
   'endpoint_identify',
   'discord_route',
+  'rss_score',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
@@ -38,6 +40,7 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   recommendation_agent: 'sonnet',
   recommendation_synthesize: 'claude-opus-4-7[1m]',
   endpoint_identify: 'sonnet',
+  rss_score: 'haiku',   // 多数記事を高速・安価に採点する。
 };
 
 export type LlmProviderKey = 'algorithm' | 'claude' | 'codex' | 'gemini' | 'openai';

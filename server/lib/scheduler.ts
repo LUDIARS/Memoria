@@ -13,6 +13,7 @@ import {
   isRainingNow, nextRainStart, describeCode,
 } from './weather.js';
 import { runDetection as runTransitDetection } from './transit-detect.js';
+import { pollAllFeeds, getRssConfig } from '../rss/index.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -36,6 +37,35 @@ export function startSchedulers(deps: SchedulerDeps): void {
   startTaskReminderInterval(deps);
   startWeatherRainAlertInterval(deps);
   startTransitDetectionInterval(deps);
+  startRssPollInterval(deps);
+}
+
+// RSS / トレンド取り込み — rss.poll_interval_minutes おきに全フィードを
+// 取得 → 新着を AI 採点 → 閾値以上を push。 設定で OFF にできる。
+// 多重起動は pollAllFeeds 側の in-flight guard が防ぐ。
+function startRssPollInterval(deps: SchedulerDeps): void {
+  // 設定間隔を毎 tick 読み直す。 最小 5 分を内部で 1 分刻みに丸めるため、
+  // 1 分ごとに「前回から interval 経過したか」 を判定する素朴方式。
+  let lastRun = 0;
+  const tick = async () => {
+    try {
+      const cfg = getRssConfig(deps.db);
+      if (!cfg.enabled) return;
+      const intervalMs = Math.max(5, cfg.poll_interval_minutes) * 60 * 1000;
+      const now = Date.now();
+      if (now - lastRun < intervalMs) return;
+      lastRun = now;
+      const r = await pollAllFeeds(deps.db);
+      if (r.newArticles > 0 || r.notified > 0) {
+        console.log(`[rss] poll: feeds=${r.feeds} new=${r.newArticles} scored=${r.scored} notified=${r.notified}`);
+      }
+    } catch (e: unknown) {
+      console.warn('[rss] poll tick failed:', e instanceof Error ? e.message : String(e));
+    }
+  };
+  // 起動 45s 後に初回 (lastRun=0 なので即走る)、 以後 1 分ごとに判定。
+  setTimeout(() => { void tick(); }, 45_000).unref?.();
+  setInterval(() => { void tick(); }, 60_000).unref?.();
 }
 
 // Midnight scheduler — fires at next 00:00:05 local, generates the previous

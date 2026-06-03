@@ -4,6 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkS
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import { ensureRssSchema } from './rss/index.js';
 import type { BookmarkRow } from './db/types/bookmark.js';
 import type { TaskRow } from './db/types/task.js';
 import type { AgentRunRow, AgentProjectRow } from './db/types/agent.js';
@@ -1050,6 +1051,9 @@ export function openDb(dbPath: string): Db {
   if (!cols.includes('access_count')) {
     db.exec(`ALTER TABLE bookmarks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
   }
+
+  // RSS リーダー + トレンド取り込みドメインのスキーマ (自己完結モジュール)。
+  ensureRssSchema(db);
 
   return db;
 }
