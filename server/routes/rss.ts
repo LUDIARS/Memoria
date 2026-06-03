@@ -14,6 +14,7 @@ import {
   summarizeArticle, generateDigest,
 } from '../rss/index.js';
 import type { RssFeedKind, DiscoveredFeed } from '../rss/index.js';
+import { postRssNewsNow } from '../discord/index.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -169,6 +170,13 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
     const row = await generateDigest(db);
     if (!row) return c.json({ error: 'ダイジェストの素材になる記事がありません' }, 400);
     return c.json({ digest: row });
+  });
+
+  // 今日のダイジェスト + 気になるニュースを Discord #news に即時投稿。
+  r.post('/api/rss/discord-post', async (c: Context) => {
+    const r2 = await postRssNewsNow(db);
+    if (!r2.ok) return c.json({ error: r2.reason || 'Discord に投稿できませんでした (Bot 未接続?)' }, 502);
+    return c.json(r2);
   });
 
   // ── interests (AI Feeds テーマ) ──────────────────────────────────────────
