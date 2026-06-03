@@ -41,6 +41,7 @@ export interface RssArticleRow {
   ai_reason: string | null;
   ai_matched: string | null;    // マッチした興味テーマの label
   ai_status: RssAiStatus;
+  ai_summary: string | null;    // AI 生成の本文要約 (フィード提供の summary とは別)
   starred: number;              // 0 | 1
   read_at: string | null;
   notified_at: string | null;
@@ -55,6 +56,23 @@ export interface RssInterestRow {
   weight: number;     // 0.0 - 2.0 程度。 スコアの重み付けに使う
   enabled: number;    // 0 | 1
   created_at: string;
+}
+
+/** おすすめダイジェスト (日次)。 上位記事を AI が束ねた要約ブリーフィング。 */
+export interface RssDigestRow {
+  id: number;
+  date: string;          // 'YYYY-MM-DD' (ローカル)
+  content: string;       // Markdown ブリーフィング
+  article_ids: string;   // JSON 配列 (素材にした記事 id)
+  created_at: string;
+}
+
+/** サイト URL から発見した RSS/Atom フィード候補。 */
+export interface DiscoveredFeed {
+  url: string;
+  title: string | null;
+  kind: RssFeedKind;
+  alreadyRegistered: boolean;
 }
 
 /** parse.ts が XML から取り出す中立的な記事表現。 */
