@@ -526,6 +526,13 @@ async function renderSettings(): Promise<void> {
       <label class="rss-setting">通知の閾値（0〜1）
         <input type="number" id="rssCfgThreshold" min="0" max="1" step="0.05" value="${cfg.min_score_notify}" style="max-width:100px"/></label>
       <button id="rssCfgSave">保存</button>
+    </div>
+    <div class="rss-section">
+      <h3>Discord 連携</h3>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">
+        「今日のダイジェスト」 と 「気になるニュース (トレンド検知)」 を Discord の #news に投稿します。
+        Bot 接続中なら毎朝 8 時に自動投稿。 下のボタンで今すぐ投稿もできます。</p>
+      <button id="rssDiscordPost">📨 Discord に今すぐ投稿</button>
     </div>`;
   body.querySelector('#rssCfgSave')?.addEventListener('click', async () => {
     const patch = {
@@ -538,6 +545,18 @@ async function renderSettings(): Promise<void> {
     };
     await sendJson('/api/rss/settings', 'PATCH', patch).catch(() => {});
     setStatus('設定を保存しました');
+  });
+  body.querySelector('#rssDiscordPost')?.addEventListener('click', async () => {
+    const btn = body.querySelector('#rssDiscordPost') as HTMLButtonElement;
+    if (btn) { btn.textContent = '投稿中…'; btn.disabled = true; }
+    const r = await sendJson<{ digestPosted?: boolean; trendingPosted?: boolean; error?: string }>(
+      '/api/rss/discord-post', 'POST', {}).catch((e) => ({ error: String(e) }));
+    if (r && !('error' in r)) {
+      setStatus(`Discord に投稿しました (ダイジェスト=${r.digestPosted ? '○' : '×'} / トレンド=${r.trendingPosted ? '○' : '×'})`);
+    } else {
+      setStatus(`投稿できませんでした: ${(r as { error?: string })?.error || 'Bot 未接続?'}`);
+    }
+    if (btn) { btn.textContent = '📨 Discord に今すぐ投稿'; btn.disabled = false; }
   });
 }
 

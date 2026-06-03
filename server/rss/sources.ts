@@ -104,6 +104,12 @@ export const FEED_PRESETS: FeedPreset[] = [
     description: '米国の急上昇検索ワード',
   },
   {
+    label: 'Google ニュース検索 (例: AI)',
+    url: 'https://news.google.com/rss/search?hl=ja&gl=JP&ceid=JP:ja&q=AI',
+    kind: 'rss', category: 'トレンド',
+    description: 'キーワード検索の RSS 化。 登録後に URL 末尾の q= を編集してテーマ変更可',
+  },
+  {
     label: 'はてブ 人気エントリー (総合)',
     url: 'https://b.hatena.ne.jp/hotentry.rss',
     kind: 'hatena', category: 'トレンド',
@@ -135,10 +141,34 @@ export const FEED_PRESETS: FeedPreset[] = [
     description: '日本語技術記事コミュニティ',
   },
   {
-    label: 'Hacker News (front page)',
-    url: 'https://hnrss.org/frontpage',
+    label: 'Hacker News',
+    url: 'https://news.ycombinator.com/rss',
     kind: 'rss', category: 'テック',
     description: '海外テックの定番。 HN フロントページ',
+  },
+  {
+    label: 'Qiita 人気記事',
+    url: 'https://qiita.com/popular-items/feed',
+    kind: 'rss', category: 'テック',
+    description: '日本語技術記事コミュニティ (人気)',
+  },
+  {
+    label: 'ITmedia NEWS',
+    url: 'https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml',
+    kind: 'rss', category: 'テック',
+    description: 'IT・ガジェット・速報',
+  },
+  {
+    label: '＠IT',
+    url: 'https://rss.itmedia.co.jp/rss/2.0/ait.xml',
+    kind: 'rss', category: 'テック',
+    description: 'エンジニア向け技術情報',
+  },
+  {
+    label: '企業テックブログまとめ',
+    url: 'https://yamadashy.github.io/tech-blog-rss-feed/feeds/rss.xml',
+    kind: 'rss', category: 'テック',
+    description: '有志による企業テックブログ一括まとめ',
   },
   {
     label: 'GIGAZINE',
@@ -152,6 +182,18 @@ export const FEED_PRESETS: FeedPreset[] = [
     url: 'https://b.hatena.ne.jp/hotentry/social.rss',
     kind: 'hatena', category: 'ニュース',
     description: 'はてブ人気の社会・ニュースカテゴリ',
+  },
+  {
+    label: 'はてブ 総合ホットエントリー',
+    url: 'https://b.hatena.ne.jp/hotentry/all.rss',
+    kind: 'hatena', category: 'ニュース',
+    description: 'はてブ全カテゴリの人気エントリー',
+  },
+  {
+    label: 'Reddit r/technology',
+    url: 'https://www.reddit.com/r/technology/.rss',
+    kind: 'rss', category: 'ニュース',
+    description: '海外 Reddit のテクノロジー板',
   },
   {
     label: 'はてブ 経済・政治',

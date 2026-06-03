@@ -8,6 +8,7 @@ import { createDiscordClient } from './client.js';
 import { postAnnouncement } from './notifier.js';
 import { findTrigger } from './notify/config.js';
 import { fireTrigger } from './notify/engine.js';
+import { postRssNews, type NewsPostResult } from './news.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -39,6 +40,15 @@ export function stopDiscordBot(): void {
 export async function announceToDiscord(db: Db, text: string): Promise<void> {
   if (!current?.isReady()) return;
   await postAnnouncement(current, db, text);
+}
+
+/**
+ * RSS「今日のダイジェスト + 気になるニュース」 を #news に即時投稿する seam。
+ * 設定 UI / API の「Discord に投稿」 から呼ぶ。 Bot 未起動なら not_ready。
+ */
+export async function postRssNewsNow(db: Db): Promise<NewsPostResult> {
+  if (!current?.isReady()) return { ok: false, reason: 'not_ready', digestPosted: false, trendingPosted: false };
+  return postRssNews(current, db);
 }
 
 /**

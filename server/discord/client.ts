@@ -11,6 +11,7 @@ import { registerInteractions, registerSlashCommands } from './slash-commands.js
 import { ensureDiscordLayout } from './layout.js';
 import { startNotifyScheduler } from './notify/scheduler.js';
 import { startMonitor } from './monitor.js';
+import { startNewsScheduler } from './news.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -35,6 +36,8 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
     startNotifyScheduler(c, db);
     // monitor 状態カード (状態 / 今日の締切 / 次の通知) を起動。
     startMonitor(c, db);
+    // RSS ニュース (ダイジェスト + トレンド) の日次自動投稿を起動。
+    startNewsScheduler(c, db);
   });
 
   client.on(Events.Error, (e) => {
