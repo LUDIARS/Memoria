@@ -222,6 +222,20 @@ export function listUnsummarizedTop(db: Db, minScore: number, limit = 5): RssArt
   `).all(minScore, limit) as RssArticleRow[];
 }
 
+/** トレンド検知記事: トレンド系フィード (Google トレンド / はてブ) の直近上位。 */
+export function listTrendingArticles(db: Db, hours = 24, limit = 8): ArticleWithFeed[] {
+  const since = new Date(Date.now() - hours * 3600_000).toISOString();
+  return db.prepare(`
+    SELECT a.*, f.title AS feed_title, f.kind AS feed_kind, f.category AS feed_category
+    FROM rss_articles a
+    JOIN rss_feeds f ON f.id = a.feed_id
+    WHERE f.kind IN ('google_trends', 'hatena')
+      AND COALESCE(a.published_at, a.fetched_at) >= ?
+    ORDER BY (a.ai_score IS NULL), a.ai_score DESC, a.published_at DESC, a.id DESC
+    LIMIT ?
+  `).all(since, limit) as ArticleWithFeed[];
+}
+
 /** ダイジェスト素材: 直近 hours 時間の上位記事 (スコア優先、 無ければ新着)。 */
 export function listRecentTopArticles(db: Db, hours = 36, limit = 15): ArticleWithFeed[] {
   const since = new Date(Date.now() - hours * 3600_000).toISOString();
