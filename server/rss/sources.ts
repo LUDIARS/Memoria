@@ -3,7 +3,7 @@
 // fetchPageHtml は content-type を text/html に絞っているため RSS には使えない。
 // ここで XML/RSS 用の取得関数を別に持つ。
 
-import type { RssFeedKind } from './types.js';
+import type { RssFeedKind, DiscoveredFeed } from './types.js';
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB 上限 (巨大フィードの暴走防止)
 
@@ -30,6 +30,47 @@ export async function fetchFeedXml(url: string, timeoutMs = 20_000): Promise<str
   }
 }
 
+/** サイト URL から登録できる RSS/Atom フィードを発見する (alreadyRegistered は呼び側で付与)。 */
+export async function discoverFeeds(siteUrl: string): Promise<Omit<DiscoveredFeed, 'alreadyRegistered'>[]> {
+  let body: string;
+  try {
+    body = await fetchFeedXml(siteUrl, 15_000);
+  } catch {
+    return [];
+  }
+  const head = body.slice(0, 500).toLowerCase();
+
+  // 渡された URL 自体が既にフィードならそれを返す。
+  if (/^\s*<\?xml|<rss|<feed|<rdf/.test(head)) {
+    const m = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    return [{
+      url: siteUrl,
+      title: m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) : null,
+      kind: detectFeedKind(siteUrl),
+    }];
+  }
+
+  // HTML の <link rel="alternate" type="application/rss+xml|atom+xml" href="...">。
+  const out: Omit<DiscoveredFeed, 'alreadyRegistered'>[] = [];
+  const seen = new Set<string>();
+  const linkRe = /<link\b[^>]*>/gi;
+  let lm: RegExpExecArray | null;
+  while ((lm = linkRe.exec(body)) !== null) {
+    const tag = lm[0];
+    if (!/rel\s*=\s*["']?alternate/i.test(tag)) continue;
+    if (!/type\s*=\s*["']?application\/(rss|atom)\+xml/i.test(tag)) continue;
+    const href = tag.match(/href\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    let abs: string;
+    try { abs = new URL(href, siteUrl).toString(); } catch { continue; }
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    const title = tag.match(/title\s*=\s*["']([^"']*)["']/i)?.[1] || null;
+    out.push({ url: abs, title: title ? title.trim().slice(0, 200) : null, kind: detectFeedKind(abs) });
+  }
+  return out;
+}
+
 /** URL から種別を推定する (表示・パースの出し分け用)。 */
 export function detectFeedKind(url: string): RssFeedKind {
   let host = '';
@@ -47,34 +88,87 @@ export interface FeedPreset {
   description: string;
 }
 
-/** ワンクリックで登録できる代表的なトレンドソース。 */
+/** ワンクリックで登録できる代表的なソースのカタログ。 自由に増やせる。 */
 export const FEED_PRESETS: FeedPreset[] = [
+  // ── トレンド ──
   {
     label: 'Google トレンド (日本・急上昇)',
     url: 'https://trends.google.co.jp/trending/rss?geo=JP',
-    kind: 'google_trends',
-    category: 'トレンド',
+    kind: 'google_trends', category: 'トレンド',
     description: '日本でいま急激に検索されているワード (マクロトレンド)',
   },
   {
-    label: 'はてなブックマーク 人気エントリー',
+    label: 'Google トレンド (US)',
+    url: 'https://trends.google.com/trending/rss?geo=US',
+    kind: 'google_trends', category: 'トレンド',
+    description: '米国の急上昇検索ワード',
+  },
+  {
+    label: 'はてブ 人気エントリー (総合)',
     url: 'https://b.hatena.ne.jp/hotentry.rss',
-    kind: 'hatena',
-    category: 'トレンド',
-    description: 'はてブで多くブックマークされた話題のページ (総合)',
+    kind: 'hatena', category: 'トレンド',
+    description: 'はてブで多くブックマークされた話題のページ',
   },
   {
-    label: 'はてなブックマーク テクノロジー',
-    url: 'https://b.hatena.ne.jp/hotentry/it.rss',
-    kind: 'hatena',
-    category: 'テック',
-    description: 'はてブ人気エントリーの IT/テクノロジーカテゴリ',
-  },
-  {
-    label: 'はてなブックマーク 新着 (総合)',
+    label: 'はてブ 新着 (総合)',
     url: 'https://b.hatena.ne.jp/entrylist.rss',
-    kind: 'hatena',
-    category: 'トレンド',
-    description: 'はてブ新着エントリー (人気になる前の早耳ネタ)',
+    kind: 'hatena', category: 'トレンド',
+    description: '人気になる前の早耳ネタ',
+  },
+  // ── テック ──
+  {
+    label: 'はてブ テクノロジー',
+    url: 'https://b.hatena.ne.jp/hotentry/it.rss',
+    kind: 'hatena', category: 'テック',
+    description: 'はてブ人気の IT/テクノロジーカテゴリ',
+  },
+  {
+    label: 'Publickey',
+    url: 'https://www.publickey1.jp/atom.xml',
+    kind: 'rss', category: 'テック',
+    description: 'エンタープライズIT / クラウド / 開発',
+  },
+  {
+    label: 'Zenn トレンド',
+    url: 'https://zenn.dev/feed',
+    kind: 'rss', category: 'テック',
+    description: '日本語技術記事コミュニティ',
+  },
+  {
+    label: 'Hacker News (front page)',
+    url: 'https://hnrss.org/frontpage',
+    kind: 'rss', category: 'テック',
+    description: '海外テックの定番。 HN フロントページ',
+  },
+  {
+    label: 'GIGAZINE',
+    url: 'https://gigazine.net/news/rss_2.0/',
+    kind: 'rss', category: 'テック',
+    description: 'テック / サイエンス / カルチャー',
+  },
+  // ── ニュース / ビジネス ──
+  {
+    label: 'はてブ 世の中 (ニュース)',
+    url: 'https://b.hatena.ne.jp/hotentry/social.rss',
+    kind: 'hatena', category: 'ニュース',
+    description: 'はてブ人気の社会・ニュースカテゴリ',
+  },
+  {
+    label: 'はてブ 経済・政治',
+    url: 'https://b.hatena.ne.jp/hotentry/economics.rss',
+    kind: 'hatena', category: 'ビジネス',
+    description: 'はてブ人気の経済・政治・ビジネス',
+  },
+  {
+    label: 'NHK ニュース 主要',
+    url: 'https://www.nhk.or.jp/rss/news/cat0.xml',
+    kind: 'rss', category: 'ニュース',
+    description: 'NHK の主要ニュース',
+  },
+  {
+    label: 'TechCrunch',
+    url: 'https://techcrunch.com/feed/',
+    kind: 'rss', category: 'ビジネス',
+    description: 'スタートアップ / VC / 新製品 (英語)',
   },
 ];

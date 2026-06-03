@@ -7301,3 +7301,14 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
 .rss-feed-sub { font-size: 12px; margin-top: 2px; }
 .rss-err { color: #dc2626; }
 .rss-setting { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
+.rss-card-aisummary {
+  font-size: 13px; color: var(--fg); margin-top: 6px; line-height: 1.55;
+  padding: 6px 10px; background: rgba(22,163,74,.08); border-left: 3px solid #16a34a; border-radius: 4px;
+}
+.rss-disc-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+.rss-digest { padding: 8px 4px 24px; line-height: 1.7; }
+.rss-digest .rss-md-h { margin: 18px 0 8px; font-size: 15px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.rss-digest ul { margin: 6px 0 6px 18px; }
+.rss-digest li { margin: 4px 0; }
+.rss-digest p { margin: 6px 0; }
+.rss-digest a { color: var(--accent); }

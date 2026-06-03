@@ -8,10 +8,12 @@ import {
   listArticles, getArticle, setArticleRead, setArticleStar,
   listInterests, insertInterest, updateInterest, deleteInterest,
   getRssConfig, setRssConfig, resetAllScores,
-  detectFeedKind, FEED_PRESETS,
+  getLatestDigest,
+  detectFeedKind, discoverFeeds, FEED_PRESETS,
   pollFeed, pollAllFeeds, scoreArticle, scorePendingArticles,
+  summarizeArticle, generateDigest,
 } from '../rss/index.js';
-import type { RssFeedKind } from '../rss/index.js';
+import type { RssFeedKind, DiscoveredFeed } from '../rss/index.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -39,6 +41,16 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
   // ── presets / feeds ──────────────────────────────────────────────────────
 
   r.get('/api/rss/presets', (c: Context) => c.json({ items: FEED_PRESETS }));
+
+  // サイト URL から登録可能な RSS/Atom フィードを発見する。
+  r.post('/api/rss/discover', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
+    const url = normalizeUrl(body?.url);
+    if (!url) return c.json({ error: 'valid http(s) url required' }, 400);
+    const found = await discoverFeeds(url);
+    const items: DiscoveredFeed[] = found.map(f => ({ ...f, alreadyRegistered: !!getFeedByUrl(db, f.url) }));
+    return c.json({ items });
+  });
 
   r.get('/api/rss/feeds', (c: Context) => c.json({ items: listFeeds(db) }));
 
@@ -141,6 +153,24 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
     return c.json({ ok: true, id, score, article: getArticle(db, id) });
   });
 
+  r.post('/api/rss/articles/:id/summarize', async (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id) || !getArticle(db, id)) return c.json({ error: 'not found' }, 404);
+    const summary = await summarizeArticle(db, id);
+    if (!summary) return c.json({ error: '要約の生成に失敗しました' }, 502);
+    return c.json({ ok: true, id, summary, article: getArticle(db, id) });
+  });
+
+  // ── おすすめダイジェスト ─────────────────────────────────────────────────
+
+  r.get('/api/rss/digest', (c: Context) => c.json({ digest: getLatestDigest(db) ?? null }));
+
+  r.post('/api/rss/digest', async (c: Context) => {
+    const row = await generateDigest(db);
+    if (!row) return c.json({ error: 'ダイジェストの素材になる記事がありません' }, 400);
+    return c.json({ digest: row });
+  });
+
   // ── interests (AI Feeds テーマ) ──────────────────────────────────────────
 
   r.get('/api/rss/interests', (c: Context) => c.json({ items: listInterests(db) }));
@@ -197,6 +227,7 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
       auto_score: typeof body.auto_score === 'boolean' ? body.auto_score : undefined,
       min_score_notify: Number.isFinite(Number(body.min_score_notify)) ? Number(body.min_score_notify) : undefined,
       notify_enabled: typeof body.notify_enabled === 'boolean' ? body.notify_enabled : undefined,
+      auto_summarize: typeof body.auto_summarize === 'boolean' ? body.auto_summarize : undefined,
     });
     return c.json(getRssConfig(db));
   });
