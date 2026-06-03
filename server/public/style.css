@@ -7240,3 +7240,64 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   flex-shrink: 0;
 }
 .repo-watch-commit-text { overflow: hidden; text-overflow: ellipsis; }
+
+/* ── RSS リーダー / Discover ─────────────────────────────────────────────── */
+.rss-subnav {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 2px; border-bottom: 1px solid var(--border);
+}
+.rss-subnav-btn {
+  background: var(--card); border: 1px solid var(--border); color: var(--fg);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.rss-subnav-btn:hover { border-color: var(--accent); }
+.rss-subnav-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.rss-list { display: flex; flex-direction: column; gap: 10px; padding: 12px 2px; }
+.rss-card {
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+  background: var(--card); transition: border-color .15s;
+}
+.rss-card:hover { border-color: var(--accent); }
+.rss-card.rss-read { opacity: .55; }
+.rss-card-head { display: flex; align-items: baseline; gap: 8px; }
+.rss-card-title { font-weight: 600; font-size: 15px; color: var(--fg); text-decoration: none; line-height: 1.4; }
+.rss-card-title:hover { text-decoration: underline; }
+.rss-card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; margin-top: 4px; }
+.rss-kind { font-size: 11px; }
+.rss-card-summary { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.rss-card-reason { font-size: 12px; color: var(--accent); margin-top: 6px; }
+.rss-card-actions { display: flex; gap: 6px; margin-top: 8px; }
+.rss-card-actions .ghost { font-size: 12px; padding: 3px 8px; }
+.rss-score {
+  display: inline-block; min-width: 36px; text-align: center; font-size: 11px;
+  font-weight: 700; border-radius: 6px; padding: 2px 6px; flex-shrink: 0;
+}
+.rss-score-hi { background: #16a34a; color: #fff; }
+.rss-score-mid { background: #d97706; color: #fff; }
+.rss-score-lo { background: var(--border); color: var(--muted); }
+.rss-score-pending { background: var(--border); color: var(--muted); }
+.rss-matched { font-size: 11px; background: rgba(99,102,241,.15); color: var(--accent); border-radius: 6px; padding: 1px 6px; }
+.rss-trend-meta { margin-top: 8px; font-size: 12px; }
+.rss-traffic { font-weight: 600; color: #dc2626; margin-right: 8px; }
+.rss-news { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.rss-news-link { font-size: 12px; color: var(--fg); text-decoration: none; }
+.rss-news-link:hover { text-decoration: underline; }
+.rss-section { padding: 14px 2px; border-bottom: 1px solid var(--border); }
+.rss-section h3 { margin: 0 0 10px; font-size: 14px; }
+.rss-add-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rss-add-form input, .rss-add-form textarea { flex: 1 1 200px; }
+.rss-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.rss-preset {
+  background: var(--card); border: 1px dashed var(--border); color: var(--fg);
+  border-radius: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+}
+.rss-preset:hover { border-color: var(--accent); border-style: solid; }
+.rss-feed-row, .rss-interest-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.rss-feed-main { flex: 1; min-width: 0; }
+.rss-feed-title { font-size: 14px; font-weight: 600; }
+.rss-feed-sub { font-size: 12px; margin-top: 2px; }
+.rss-err { color: #dc2626; }
+.rss-setting { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
