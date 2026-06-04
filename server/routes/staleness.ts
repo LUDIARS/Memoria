@@ -5,7 +5,7 @@
 // たら該当機能を heavy load し直す方式。
 //
 // 対象 (= 「逐次発行されるけど WS push してない」 もの):
-//   review        : ludiars-review cron が repo の review/*.md を逐次書く
+//   review        : ludiars-review が Review/<repo>/*.md を逐次書く (Castra 集約)
 //   weather       : scheduler が weather_snapshots に append
 //   transit_rides : detector cron が transit_rides に append
 //
@@ -14,7 +14,7 @@
 
 import { Hono, type Context } from 'hono';
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { resolve, isAbsolute, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import { listReviewTargets } from '../db.js';
 
@@ -27,6 +27,8 @@ export interface StalenessRouterDeps { db: Db }
 // FS スキャン結果は 30 秒 cache。 review tree は repo×date×file で
 // 数百 stat になるので、 staleness ping のたびに走らせるとさすがに勿体無い。
 const REVIEW_SIG_TTL_MS = 30_000;
+/** 集約レビュー記録のルート (Castra が git 管理する Ars 直下の Review/)。 */
+const REVIEW_ROOT = join(LUDIARS_ROOT, 'Review');
 let _reviewSigCache: { sig: string; expires_at: number } | null = null;
 
 function reviewSignature(db: Db): string {
@@ -37,9 +39,7 @@ function reviewSignature(db: Db): string {
   let fileCount = 0;
   try {
     for (const t of listReviewTargets(db, { enabledOnly: true })) {
-      const reviewDir = isAbsolute(t.local_path)
-        ? join(t.local_path, 'review')
-        : join(LUDIARS_ROOT, t.local_path, 'review');
+      const reviewDir = join(REVIEW_ROOT, basename(t.local_path));
       if (!existsSync(reviewDir)) continue;
       let dateDirs: string[];
       try { dateDirs = readdirSync(reviewDir); } catch { continue; }
