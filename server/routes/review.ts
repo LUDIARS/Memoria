@@ -1,10 +1,12 @@
-// /api/review/* — レビュー対象 (`review_targets` テーブル) と、 各ターゲットの
-// ローカル clone にある `review/<YYYY-MM-DD>/` 配下のファイルを返す API。
+// /api/review/* — レビュー対象 (`review_targets` テーブル) と、 集約された
+// レビュー記録 `Review/<repo>/<YYYY-MM-DD>/` 配下のファイルを返す API。
 //
 // データソース:
 //   - SQLite テーブル `review_targets` で 「どのリポを対象に listing するか」 を管理
-//   - 各ターゲットの local_path 配下 `review/` フォルダから日付ディレクトリ・
-//     latest.json・各 REVIEW_*.md を読む
+//   - レビュー記録は各サービスリポ配下ではなく、 ワークスペース直下の集約フォルダ
+//     `LUDIARS_ROOT/Review/<repo>/` に置く (Castra が git 管理。 各リポの
+//     worktree cleanup / branch 切替 / gitignore で消えないよう切り離した)。
+//   - <repo> はターゲットのローカルクローンのディレクトリ名 (= basename)。
 //
 // 起動時に `LUDIARS_ROOT` (= E:/Document/Ars) を走査して LUDIARS clone を
 // 自動 seed する (init.ts から `seedReviewTargets` を呼ぶ)。
@@ -12,7 +14,7 @@
 import { Hono, type Context } from 'hono';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { join, resolve, isAbsolute } from 'node:path';
+import { join, resolve, isAbsolute, basename } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   listReviewTargets, getReviewTargetByName, insertReviewTarget,
@@ -23,6 +25,8 @@ import {
 type Db = BetterSqlite3.Database;
 
 const LUDIARS_ROOT = resolve(process.env.LUDIARS_ROOT ?? 'E:/Document/Ars');
+/** 集約レビュー記録のルート (Castra が git 管理する Ars 直下の Review/)。 */
+const REVIEW_ROOT = join(LUDIARS_ROOT, 'Review');
 const SUPPORTED_FORMATS = new Set(['aiformat']);
 
 const REVIEW_FILES = [
@@ -58,8 +62,9 @@ function resolveTargetPath(target: ReviewTargetRow): string {
   return isAbsolute(target.local_path) ? target.local_path : resolve(LUDIARS_ROOT, target.local_path);
 }
 
+/** 集約 Review/<repo>/ のパス。 <repo> はクローンディレクトリ名 (= basename)。 */
 function reviewDir(target: ReviewTargetRow): string {
-  return join(resolveTargetPath(target), 'review');
+  return join(REVIEW_ROOT, basename(resolveTargetPath(target)));
 }
 
 function readLatest(target: ReviewTargetRow): LatestJson | null {
