@@ -1,5 +1,5 @@
-// discord.js client の生成とライフサイクル。 ready 時にレイアウトを冪等生成し、
-// capture を登録する。 Discord 障害は Memoria 本体を止めないよう全て best-effort。
+// discord.js client lifecycle. Discord failures are best-effort and must not
+// stop the Memoria server.
 
 import { Client, Events } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -10,12 +10,14 @@ import { registerRouter } from './message-router.js';
 import { registerInteractions, registerSlashCommands } from './slash-commands.js';
 import { ensureDiscordLayout } from './layout.js';
 import { startNotifyScheduler } from './notify/scheduler.js';
+import { registerDailyTaskReviewInteractions } from './notify/daily-review.js';
 import { startMonitor } from './monitor.js';
 import { startNewsScheduler } from './news.js';
+import { startDiarySummaryScheduler } from './diary-summary.js';
 
 type Db = BetterSqlite3.Database;
 
-/** login 済みの client を生成して返す。 失敗時は null (本体は継続)。 */
+/** Create and login a Discord client. Returns null on login failure. */
 export async function createDiscordClient(db: Db): Promise<Client | null> {
   const client = new Client({ intents: DISCORD_INTENTS, partials: DISCORD_PARTIALS });
 
@@ -24,20 +26,19 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
     const guildId = discordSettings(db).guildId;
     const guild = c.guilds.cache.get(guildId);
     if (!guild) {
-      console.warn(`[discord] guild ${guildId} not found (Bot が招待されていない可能性)`);
+      console.warn(`[discord] guild ${guildId} not found`);
       return;
     }
     ensureDiscordLayout(guild, db)
       .then(() => registerSlashCommands(guild))
       .catch((e: unknown) => {
-        console.warn(`[discord] layout / slash 登録失敗: ${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[discord] layout / slash registration failed: ${e instanceof Error ? e.message : String(e)}`);
       });
-    // タスク通知エンジン (時刻 / GPS / ランダム トリガー) を起動。
+
     startNotifyScheduler(c, db);
-    // monitor 状態カード (状態 / 今日の締切 / 次の通知) を起動。
     startMonitor(c, db);
-    // RSS ニュース (ダイジェスト + トレンド) の日次自動投稿を起動。
     startNewsScheduler(c, db);
+    startDiarySummaryScheduler(c, db);
   });
 
   client.on(Events.Error, (e) => {
@@ -46,13 +47,14 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
 
   registerCapture(client, db);
   registerRouter(client, db);
+  registerDailyTaskReviewInteractions(client, db);
   registerInteractions(client, db);
 
   try {
     await client.login(discordBotToken(db));
     return client;
   } catch (e: unknown) {
-    console.error(`[discord] login 失敗: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`[discord] login failed: ${e instanceof Error ? e.message : String(e)}`);
     try { client.destroy(); } catch { /* swallow */ }
     return null;
   }
