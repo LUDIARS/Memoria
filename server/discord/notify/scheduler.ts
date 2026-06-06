@@ -6,6 +6,7 @@ import { discordSettings } from '../settings.js';
 import { loadTriggers } from './config.js';
 import { detectHomeTransition } from './geofence.js';
 import { fireTrigger } from './engine.js';
+import { startDailyTaskReview } from './daily-review.js';
 import type { NotifyTrigger, RandomSpec } from './types.js';
 
 type Db = BetterSqlite3.Database;
@@ -87,6 +88,9 @@ async function minuteTick(client: Client, db: Db): Promise<void> {
         if (t.trigger.at !== hhmm) continue;
         if (getAppSettings(db)[firedKey(t)] === today) continue;
         await fireTrigger(client, db, t);
+        if (t.filter.deadline === 'due_today_or_overdue') {
+          await startDailyTaskReview(client, db, t.filter, t.channel, now);
+        }
         setAppSettings(db, { [firedKey(t)]: today });
       } else if (t.trigger.type === 'random') {
         const plan = ensureRandomPlan(db, t, t.trigger, today);

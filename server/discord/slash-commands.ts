@@ -6,8 +6,10 @@
 import { type Client, Events, type Guild, SlashCommandBuilder, MessageFlags } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discordSettings } from './settings.js';
+import { isSelf } from './user-map.js';
 import { createTask, createMemo } from './actions/task.js';
 import { runRecommend } from './actions/recommend.js';
+import { startDailyTaskReview } from './notify/daily-review.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -18,6 +20,7 @@ const COMMANDS = [
     .addStringOption((o) => o.setName('due').setDescription('期日 (ISO8601)')),
   new SlashCommandBuilder().setName('memo').setDescription('メモを登録 (リマインダー無し)')
     .addStringOption((o) => o.setName('text').setDescription('内容').setRequired(true)),
+  new SlashCommandBuilder().setName('task-review').setDescription('\u30bf\u30b9\u30af\u68da\u5378\u3057\u3092\u958b\u59cb\u3059\u308b'),
 ].map((c) => c.toJSON());
 
 export async function registerSlashCommands(guild: Guild): Promise<void> {
@@ -41,6 +44,28 @@ export function registerInteractions(client: Client, db: Db): void {
         } else if (interaction.commandName === 'memo') {
           const text = interaction.options.getString('text', true);
           await interaction.reply(await createMemo(text));
+        } else if (interaction.commandName === 'task-review') {
+          if (!isSelf(cfg, interaction.user.id)) {
+            await interaction.reply({ content: '\u3053\u306e\u64cd\u4f5c\u306f\u8a31\u53ef\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002', flags: MessageFlags.Ephemeral });
+            return;
+          }
+          const result = await startDailyTaskReview(
+            client,
+            db,
+            { categories: ['all'], deadline: 'due_today_or_overdue' },
+            'task',
+            new Date(),
+            { force: true, channelId: interaction.channelId },
+          );
+          if (result.started) {
+            await interaction.reply({ content: `\u30bf\u30b9\u30af\u68da\u5378\u3057\u3092\u958b\u59cb\u3057\u307e\u3057\u305f (${result.count} \u4ef6)\u3002`, flags: MessageFlags.Ephemeral });
+          } else if (result.reason === 'already_running') {
+            await interaction.reply({ content: `\u30bf\u30b9\u30af\u68da\u5378\u3057\u306f\u3059\u3067\u306b\u9032\u884c\u4e2d\u3067\u3059 (${result.count} \u4ef6\u6b8b\u308a)\u3002`, flags: MessageFlags.Ephemeral });
+          } else if (result.reason === 'channel_missing') {
+            await interaction.reply({ content: '\u3053\u306e\u30c1\u30e3\u30f3\u30cd\u30eb\u306b\u68da\u5378\u3057\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u9001\u4fe1\u3067\u304d\u307e\u305b\u3093\u3002', flags: MessageFlags.Ephemeral });
+          } else {
+            await interaction.reply({ content: '\u68da\u5378\u3057\u5bfe\u8c61\u306e\u30bf\u30b9\u30af\u306f\u3042\u308a\u307e\u305b\u3093\u3002', flags: MessageFlags.Ephemeral });
+          }
         }
       } catch {
         try { await interaction.reply({ content: '処理に失敗しました', flags: MessageFlags.Ephemeral }); } catch { /* swallow */ }
