@@ -8534,6 +8534,7 @@ const DB_SUB_VIEWS = {
   workplace: 'workplaceView',
   apps: 'appsView',
   endpoints: 'endpointsView',
+  weather: 'weatherView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -8568,6 +8569,7 @@ function switchDatabaseSub(sub) {
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
   if (sub === 'endpoints') loadKnownEndpoints().catch(console.warn);
+  if (sub === 'weather') loadTracksWeather();
 }
 
 interface ApplicationCatalogRow {
