@@ -11071,6 +11071,45 @@ async function postBlackboxVerdict(id: number, verdict: 'ok' | 'ng') {
   } catch (e: unknown) { alert(`記録失敗: ${(e as Error)?.message || ''}`); }
 }
 
+// /api/weather/ensemble を叩いて全API のアンサンブルを DB 保存 + 時間別の表で表示。
+interface EnsembleHourDto {
+  hour: string; votesRain: number; votesTotal: number; agreement: number;
+  avgPop: number | null; maxPrecipMm: number | null;
+}
+interface EnsembleSourceDto { id: string; ok: boolean; error: string | null; points: number; }
+async function loadEnsembleTable() {
+  const host = document.getElementById('tracksEnsembleTable');
+  if (!host) return;
+  host.innerHTML = '<span class="muted">全予報サイトを取得中…</span>';
+  try {
+    const r = await api('/api/weather/ensemble') as {
+      snapshot_id: number; date: string; sources: EnsembleSourceDto[]; hours: EnsembleHourDto[]; agreement_threshold: number;
+    };
+    const okN = r.sources.filter((s) => s.ok).length;
+    const head = `<div style="margin-bottom:4px">DB保存: <code>weather_ensemble_snapshots</code> #${r.snapshot_id} / ソース ${okN}/${r.sources.length}成功 / 一致しきい値 ${Math.round(r.agreement_threshold * 100)}%`
+      + ` <span class="muted">(${r.sources.map((s) => `${s.ok ? '○' : '×'}${escapeHtml(s.id)}`).join(' ')})</span></div>`;
+    if (!r.hours.length) { host.innerHTML = head + '<span class="muted">これ以降の予報なし</span>'; return; }
+    const rows = r.hours.map((h) => {
+      const rain = h.agreement >= r.agreement_threshold;
+      return `<tr style="${rain ? 'background:rgba(52,152,219,.12)' : ''}">
+        <td style="padding:2px 6px">${h.hour.slice(11, 16)}</td>
+        <td style="padding:2px 6px;text-align:center">${rain ? '☔' : '·'} ${h.votesRain}/${h.votesTotal}</td>
+        <td style="padding:2px 6px;text-align:right">${Math.round(h.agreement * 100)}%</td>
+        <td style="padding:2px 6px;text-align:right">${h.avgPop != null ? h.avgPop + '%' : '—'}</td>
+        <td style="padding:2px 6px;text-align:right">${h.maxPrecipMm != null ? h.maxPrecipMm.toFixed(1) : '0'}mm</td>
+      </tr>`;
+    }).join('');
+    host.innerHTML = head + `<table style="border-collapse:collapse;width:100%;font-size:11px">
+      <thead><tr style="border-bottom:1px solid var(--border,#ddd)">
+        <th style="padding:2px 6px;text-align:left">時刻</th><th style="padding:2px 6px">雨票(雨/全)</th>
+        <th style="padding:2px 6px;text-align:right">一致</th><th style="padding:2px 6px;text-align:right">降水確率</th>
+        <th style="padding:2px 6px;text-align:right">降水量</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e: unknown) {
+    host.innerHTML = `<span style="color:var(--danger)">取得失敗: ${escapeHtml((e as Error)?.message || '')}</span>`;
+  }
+}
+
 function renderWeatherHourly(hourly: { time: string[]; temperature: number[];
   precipitation: number[]; precipitation_probability: number[]; weather_code: number[] }, date: string) {
   const host = document.getElementById('tracksWeatherHourly');
@@ -11165,6 +11204,7 @@ async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
 document.getElementById('tracksWeatherRefresh')?.addEventListener('click', () => void loadTracksWeather({ force: true }));
 document.getElementById('tracksWeatherSettingsBtn')?.addEventListener('click', () => void openWeatherSettings());
 document.getElementById('tracksBriefingRefresh')?.addEventListener('click', () => void loadWeatherBriefing());
+document.getElementById('tracksEnsembleRefresh')?.addEventListener('click', () => void loadEnsembleTable());
 document.getElementById('weatherSettingsSaveBtn')?.addEventListener('click', () => void saveWeatherSettings());
 document.getElementById('weatherSettingsClearBtn')?.addEventListener('click', () => void saveWeatherSettings({ clear: true }));
 document.getElementById('weatherSettingsCloseBtn')?.addEventListener('click', () => hideModal('weatherSettingsModal'));

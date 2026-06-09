@@ -4,8 +4,8 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import type { BlackBoxEngine } from '../blackbox/index.js';
 import { getWeatherConfig } from './config.js';
-import { runEnabledSources } from './sources/index.js';
-import { aggregate, hoursForDay, type EnsembleHour } from './ensemble.js';
+import { hoursForDay, type EnsembleHour } from './ensemble.js';
+import { runAndStoreEnsemble } from './ensemble-service.js';
 import { resolveTargets, type TargetPlace } from './targets.js';
 import { decideWillRain } from './domains.js';
 
@@ -52,10 +52,10 @@ export async function buildBriefing(db: Db, engine: BlackBoxEngine, now = new Da
 
   const entries: BriefingEntry[] = [];
   for (const t of targets) {
-    const forecasts = await runEnabledSources(t.lat, t.lon, cfg.ctx, cfg.enabledSourceIds);
-    const sourcesUsed = forecasts.filter((f) => f.ok).length;
-    const sourcesFailed = forecasts.length - sourcesUsed;
-    const today = hoursForDay(aggregate(forecasts), date, now);
+    const ens = await runAndStoreEnsemble(db, t.lat, t.lon, t.name, now);
+    const sourcesUsed = ens.sources.filter((s) => s.ok).length;
+    const sourcesFailed = ens.sources.length - sourcesUsed;
+    const today = hoursForDay(ens.hours, date, now);
 
     const verdict = await decideWillRain(
       engine, { place: t.name, date, hours: today }, cfg.agreementThreshold, month,
