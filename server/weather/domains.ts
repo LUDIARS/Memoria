@@ -155,7 +155,7 @@ export function likelyPlaceFeatures(input: LikelyPlaceInput): FeatureMap {
   };
 }
 
-async function likelyPlaceLlm(input: LikelyPlaceInput, features: FeatureMap): Promise<LlmJudgement<LikelyPlaceOutput>> {
+async function likelyPlaceLlm(input: LikelyPlaceInput, _features: FeatureMap): Promise<LlmJudgement<LikelyPlaceOutput>> {
   const list = input.candidates
     .map((c) => `${c.name}: ${input.dowName}曜の訪問 ${c.visitsThisDow} 回`)
     .join('\n');
