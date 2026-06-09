@@ -23,6 +23,7 @@ function desiredChannels(cfg: ReturnType<typeof discordSettings>): string[] {
   if (cfg.announce) out.push('announce');
   if (cfg.monitor) out.push('monitor'); // 状態カード (状態/締切/次通知)
   if (cfg.news) out.push('news');       // RSS ニュース (ダイジェスト)
+  if (cfg.briefing) out.push('briefing'); // 定期ブリーフィング (運行/天気/ニュース/防災)
   return out;
 }
 

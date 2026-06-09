@@ -236,6 +236,19 @@ export function listTrendingArticles(db: Db, hours = 24, limit = 8): ArticleWith
   `).all(since, limit) as ArticleWithFeed[];
 }
 
+/** 直近 N 分に取り込んだ記事 (fetched_at ベース、 新しい順)。 ブリーフィングの「直近◯分のニュース」 用。 */
+export function listArticlesSinceMinutes(db: Db, minutes: number, limit = 8): ArticleWithFeed[] {
+  const m = Math.max(1, Math.round(minutes));
+  return db.prepare(`
+    SELECT a.*, f.title AS feed_title, f.kind AS feed_kind, f.category AS feed_category
+    FROM rss_articles a
+    JOIN rss_feeds f ON f.id = a.feed_id
+    WHERE a.fetched_at >= datetime('now', ?)
+    ORDER BY a.fetched_at DESC, a.id DESC
+    LIMIT ?
+  `).all(`-${m} minutes`, Math.min(50, Math.max(1, limit))) as ArticleWithFeed[];
+}
+
 /** ダイジェスト素材: 直近 hours 時間の上位記事 (スコア優先、 無ければ新着)。 */
 export function listRecentTopArticles(db: Db, hours = 36, limit = 15): ArticleWithFeed[] {
   const since = new Date(Date.now() - hours * 3600_000).toISOString();
