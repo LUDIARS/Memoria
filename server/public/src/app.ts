@@ -11163,11 +11163,24 @@ function setText(id: string, v: string) {
   if (el) el.textContent = v;
 }
 
-// 固定 lat/lon モーダル
+// 固定 lat/lon + プロバイダ API キーのモーダル
+function setKeyState(id: string, isSet: boolean) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = isSet ? '（設定済み）' : '（未設定）';
+}
+
 async function openWeatherSettings() {
   const r = await api('/api/weather/config') as { fixed_lat: number | null; fixed_lon: number | null };
   ($('weatherSettingsLat') as HTMLInputElement).value = r.fixed_lat != null ? String(r.fixed_lat) : '';
   ($('weatherSettingsLon') as HTMLInputElement).value = r.fixed_lon != null ? String(r.fixed_lon) : '';
+  // キーは値を読み戻さない (サーバは has_*_key の真偽のみ返す)。 入力は空にして状態だけ表示。
+  ($('weatherSettingsOwmKey') as HTMLInputElement).value = '';
+  ($('weatherSettingsWapiKey') as HTMLInputElement).value = '';
+  try {
+    const s = await api('/api/weather/sources') as { has_openweathermap_key?: boolean; has_weatherapi_key?: boolean };
+    setKeyState('weatherOwmKeyState', !!s.has_openweathermap_key);
+    setKeyState('weatherWapiKeyState', !!s.has_weatherapi_key);
+  } catch { /* sources 取得失敗は状態非表示で続行 */ }
   const err = $('weatherSettingsError');
   if (err) { err.hidden = true; err.textContent = ''; }
   showModal('weatherSettingsModal');
@@ -11176,26 +11189,45 @@ async function openWeatherSettings() {
 async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
   const err = $('weatherSettingsError');
   const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
-  let payload: { lat: number | null; lon: number | null };
+
+  // 1) 座標: clear なら null、 両方入力ありなら保存、 空なら触らない
+  let configPayload: { lat: number | null; lon: number | null } | null = null;
   if (opts.clear) {
-    payload = { lat: null, lon: null };
+    configPayload = { lat: null, lon: null };
   } else {
     const latStr = ($('weatherSettingsLat') as HTMLInputElement).value.trim();
     const lonStr = ($('weatherSettingsLon') as HTMLInputElement).value.trim();
-    if (!latStr || !lonStr) return showErr('lat / lon の両方を入力してください (空欄保存は ✖ 解除 ボタン)');
-    const lat = Number(latStr); const lon = Number(lonStr);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return showErr('数値を入力してください');
-    payload = { lat, lon };
-  }
-  try {
-    const res = await fetch('/api/weather/config', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({})) as { error?: string };
-      return showErr(body.error || `${res.status}`);
+    if (latStr || lonStr) {
+      if (!latStr || !lonStr) return showErr('座標は lat / lon の両方を入力してください (解除は「座標解除」 ボタン)');
+      const lat = Number(latStr); const lon = Number(lonStr);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return showErr('座標は数値で入力してください');
+      configPayload = { lat, lon };
     }
+  }
+
+  // 2) API キー: 入力があるものだけ送る (空欄は変更しない)
+  const owm = opts.clear ? '' : ($('weatherSettingsOwmKey') as HTMLInputElement).value.trim();
+  const wapi = opts.clear ? '' : ($('weatherSettingsWapiKey') as HTMLInputElement).value.trim();
+  const sourcesPayload: { openweathermap_api_key?: string; weatherapi_api_key?: string } = {};
+  if (owm) sourcesPayload.openweathermap_api_key = owm;
+  if (wapi) sourcesPayload.weatherapi_api_key = wapi;
+  const hasSources = Object.keys(sourcesPayload).length > 0;
+
+  if (!configPayload && !hasSources) return showErr('変更がありません');
+
+  const patch = async (url: string, body: unknown): Promise<boolean> => {
+    const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      showErr(b.error || `${res.status}`);
+      return false;
+    }
+    return true;
+  };
+
+  try {
+    if (configPayload && !(await patch('/api/weather/config', configPayload))) return;
+    if (hasSources && !(await patch('/api/weather/sources', sourcesPayload))) return;
     hideModal('weatherSettingsModal');
     void loadTracksWeather({ force: true });
   } catch (e) {

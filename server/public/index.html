@@ -1518,14 +1518,15 @@
 
   <div id="weatherSettingsModal" class="dict-detail modal-panel hidden foundation-form">
     <div class="dict-detail-head">
-      <h3 style="margin:0;flex:1">📍 天気の固定座標</h3>
+      <h3 style="margin:0;flex:1">📍 天気の設定（座標・APIキー）</h3>
       <button id="weatherSettingsSaveBtn">保存</button>
-      <button id="weatherSettingsClearBtn" class="ghost">解除</button>
+      <button id="weatherSettingsClearBtn" class="ghost">座標解除</button>
       <button id="weatherSettingsCloseBtn" class="modal-close" title="閉じる">×</button>
     </div>
     <p class="muted" style="margin:8px 0;font-size:12px">
       GPS が無い PC で天気カードを使うとき、 ここに緯度/経度を入れると
-      Open-Meteo はそこを基準に予報を返す。 空欄保存で 「GPS 優先」 に戻る。
+      Open-Meteo はそこを基準に予報を返す。 空欄のまま保存しても座標は維持
+      (「座標解除」 で GPS 優先に戻る)。
     </p>
     <label class="simple-field">
       <span>緯度 (latitude)</span>
@@ -1535,6 +1536,22 @@
       <span>経度 (longitude)</span>
       <input id="weatherSettingsLon" type="number" step="0.0001" placeholder="例 139.7454" />
     </label>
+    <div style="margin-top:12px;border-top:1px solid var(--border,#30363d);padding-top:10px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:2px">🔑 天気プロバイダ API キー（任意）</div>
+      <p class="muted" style="font-size:11px;margin:2px 0 8px">
+        既定の Open-Meteo はキー不要。 OpenWeatherMap / WeatherAPI を併用して
+        マルチソース検証の精度を上げたいときだけ入力します。 空欄なら変更しません
+        (保存済みのキーは保持)。
+      </p>
+      <label class="simple-field">
+        <span>OpenWeatherMap API キー <span id="weatherOwmKeyState" class="muted" style="font-size:11px"></span></span>
+        <input id="weatherSettingsOwmKey" type="password" autocomplete="off" placeholder="未設定" />
+      </label>
+      <label class="simple-field" style="margin-top:8px">
+        <span>WeatherAPI.com キー <span id="weatherWapiKeyState" class="muted" style="font-size:11px"></span></span>
+        <input id="weatherSettingsWapiKey" type="password" autocomplete="off" placeholder="未設定" />
+      </label>
+    </div>
     <div id="weatherSettingsError" class="muted" style="margin-top:8px;font-size:11px;color:#c0392b" hidden></div>
   </div>
 
