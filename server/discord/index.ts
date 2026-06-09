@@ -5,10 +5,11 @@ import type { Client } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
-import { postAnnouncement, postToChannel } from './notifier.js';
+import { postAnnouncement } from './notifier.js';
 import { findTrigger } from './notify/config.js';
 import { fireTrigger } from './notify/engine.js';
 import { postRssNews, type NewsPostResult } from './news.js';
+import { postRollingBriefing } from './briefing-post.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -48,15 +49,13 @@ export function discordClientReady(): boolean {
 }
 
 /**
- * 定期ブリーフィングを #briefing に投稿する seam。 既に分割済みのテキスト配列を
- * 順に送る。 Bot 未起動なら false (= 送らなかった)。
+ * 定期ブリーフィングを #briefing に「1 件だけ」 保って投稿する seam。
+ * 前回メッセージを編集 (チャンク数一致時) もしくは削除して再投稿する。
+ * Bot 未起動なら false (= 送らなかった)。
  */
 export async function postBriefingToDiscord(db: Db, parts: string[]): Promise<boolean> {
   if (!current?.isReady()) return false;
-  for (const part of parts) {
-    await postToChannel(current, db, 'briefing', part);
-  }
-  return true;
+  return postRollingBriefing(current, db, parts);
 }
 
 /**

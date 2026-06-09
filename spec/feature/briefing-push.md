@@ -72,6 +72,16 @@ briefing/
 
 `features.discord.briefing` (既定 true) で #briefing チャンネル生成を制御。
 
+### Discord は 1 件に集約 (rolling message)
+
+毎回新規投稿するとチャンネルが流れるため、 #briefing には常にブリーフィングを
+**1 件だけ**保つ (`discord/briefing-post.ts`):
+
+- 前回のチャンク数と同じなら各メッセージを **edit** で上書き
+- 違う (or 前回が無い) なら 旧メッセージを **削除して再投稿**
+
+投稿した message id 群は app_settings (`briefing.discord.message_ids` / `briefing.discord.channel_id`) に保存し次回参照する。 Hora 側は毎回新規 (吹き出しは一過性) なので集約対象外。
+
 ## 送信先と安全性
 
 - スケジューラは「送信先が無い (Discord未起動 かつ Hora無効)」 なら組み立てもしない (外部API無駄叩き防止)。
