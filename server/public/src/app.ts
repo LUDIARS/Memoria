@@ -10997,6 +10997,80 @@ async function loadTracksWeather(opts: { force?: boolean } = {}) {
   }
 }
 
+// /api/weather/briefing で今日の対象地点を複数サイト検証し、 雨判定を表示。
+// あわせて成長型ブラックボックスのレビュー待ち (OK/NG) を読み込む。
+interface BriefingEntryDto {
+  place: string; kind: string; willRain: boolean; onsetHour: string | null;
+  votesAtOnset: { rain: number; total: number } | null; popAtOnset: number | null;
+  source: string; status: string; rationale: string;
+  sourcesUsed: number; sourcesFailed: number;
+}
+async function loadWeatherBriefing() {
+  const body = document.getElementById('tracksBriefingBody');
+  const pill = document.getElementById('tracksBriefingPill');
+  if (!body) return;
+  if (pill) { pill.className = 'ext-cfg-pill ext-cfg-pill-loading'; pill.textContent = '検証中…'; }
+  body.innerHTML = '<span class="muted">複数サイトを照合中…</span>';
+  try {
+    const b = await api('/api/weather/briefing') as { date: string; entries: BriefingEntryDto[]; anyRain: boolean };
+    if (!b.entries.length) {
+      body.innerHTML = '<span class="muted">対象地点なし。 「作業場所」 に自宅 (🏠) を登録してください。</span>';
+      if (pill) { pill.className = 'ext-cfg-pill ext-cfg-pill-inactive'; pill.textContent = '地点なし'; }
+      return;
+    }
+    body.innerHTML = b.entries.map((e) => {
+      const kindIcon = e.kind === 'home' ? '🏠' : '📍';
+      const rain = e.willRain
+        ? `☔ ${e.onsetHour ? e.onsetHour.slice(11, 16) + ' 頃から' : '日中'}雨`
+        : '☀️ 雨なし';
+      const votes = e.votesAtOnset ? ` (${e.votesAtOnset.rain}/${e.votesAtOnset.total}ソース一致${e.popAtOnset != null ? ` / 降水確率${e.popAtOnset}%` : ''})` : '';
+      const prov = e.source === 'rule'
+        ? (e.status === 'pending_review' ? '<span style="color:#b8860b">ルール判定(承認待ち)</span>' : 'ルール判定')
+        : 'AI判定';
+      const srcInfo = `${e.sourcesUsed}サイト${e.sourcesFailed ? ` (失敗${e.sourcesFailed})` : ''}`;
+      return `<div style="padding:4px 0;border-bottom:1px solid var(--border,#eee)">
+        <div><strong>${kindIcon} ${escapeHtml(e.place)}</strong> — ${rain}${escapeHtml(votes)}</div>
+        <div class="muted" style="font-size:11px">${prov} / ${srcInfo} — ${escapeHtml(e.rationale)}</div>
+      </div>`;
+    }).join('');
+    if (pill) {
+      pill.className = 'ext-cfg-pill ' + (b.anyRain ? 'ext-cfg-pill-configured' : 'ext-cfg-pill-active');
+      pill.textContent = b.anyRain ? '雨の予報あり' : '雨なし';
+    }
+  } catch (e: unknown) {
+    body.innerHTML = `<span style="color:var(--danger)">検証失敗: ${escapeHtml((e as Error)?.message || '')}</span>`;
+    if (pill) { pill.className = 'ext-cfg-pill ext-cfg-pill-inactive'; pill.textContent = '失敗'; }
+  }
+  void loadBlackboxReview();
+}
+
+interface BlackboxDecisionDto { id: number; domain: string; rationale: string; output: unknown; }
+async function loadBlackboxReview() {
+  const host = document.getElementById('tracksBlackboxReview');
+  if (!host) return;
+  try {
+    const r = await api('/api/blackbox/decisions?status=pending_review&limit=20') as { items: BlackboxDecisionDto[] };
+    if (!r.items.length) { host.innerHTML = ''; return; }
+    host.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">ルールが先に判断した項目 — OK/NG で育てる:</div>'
+      + r.items.map((d) => `<div class="bb-review-item" data-id="${d.id}" style="display:flex;gap:6px;align-items:center;padding:3px 0">
+          <span style="flex:1;font-size:11px">[${escapeHtml(d.domain)}] ${escapeHtml(d.rationale)}</span>
+          <button class="ghost bb-ok" data-id="${d.id}" type="button">OK</button>
+          <button class="ghost bb-ng" data-id="${d.id}" type="button">NG</button>
+        </div>`).join('');
+    host.querySelectorAll<HTMLButtonElement>('.bb-ok').forEach((btn) =>
+      btn.addEventListener('click', () => void postBlackboxVerdict(Number(btn.dataset.id), 'ok')));
+    host.querySelectorAll<HTMLButtonElement>('.bb-ng').forEach((btn) =>
+      btn.addEventListener('click', () => void postBlackboxVerdict(Number(btn.dataset.id), 'ng')));
+  } catch { host.innerHTML = ''; }
+}
+
+async function postBlackboxVerdict(id: number, verdict: 'ok' | 'ng') {
+  try {
+    await api(`/api/blackbox/decisions/${id}/verdict`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ verdict }) });
+    await loadBlackboxReview();
+  } catch (e: unknown) { alert(`記録失敗: ${(e as Error)?.message || ''}`); }
+}
+
 function renderWeatherHourly(hourly: { time: string[]; temperature: number[];
   precipitation: number[]; precipitation_probability: number[]; weather_code: number[] }, date: string) {
   const host = document.getElementById('tracksWeatherHourly');
@@ -11090,6 +11164,7 @@ async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
 
 document.getElementById('tracksWeatherRefresh')?.addEventListener('click', () => void loadTracksWeather({ force: true }));
 document.getElementById('tracksWeatherSettingsBtn')?.addEventListener('click', () => void openWeatherSettings());
+document.getElementById('tracksBriefingRefresh')?.addEventListener('click', () => void loadWeatherBriefing());
 document.getElementById('weatherSettingsSaveBtn')?.addEventListener('click', () => void saveWeatherSettings());
 document.getElementById('weatherSettingsClearBtn')?.addEventListener('click', () => void saveWeatherSettings({ clear: true }));
 document.getElementById('weatherSettingsCloseBtn')?.addEventListener('click', () => hideModal('weatherSettingsModal'));

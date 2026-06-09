@@ -64,6 +64,9 @@ import { makeRepoRouter } from './routes/repo.js';
 import { makePacketMonitorRouter } from './routes/packet-monitor.js';
 import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
 import { makeWeatherRouter } from './routes/weather.js';
+import { makeBlackBoxRouter } from './routes/blackbox.js';
+import { makeBlackBoxEngine } from './blackbox/index.js';
+import { DOMAIN_WILL_RAIN, DOMAIN_LIKELY_PLACE } from './weather/domains.js';
 import { makeTransitRouter } from './routes/transit.js';
 import { makeStalenessRouter } from './routes/staleness.js';
 import { makeRssRouter } from './routes/rss.js';
@@ -199,6 +202,9 @@ app.use('/api/*', makeMultiProxyMiddleware(db));
 // ── routers (mount with absolute /api/... paths inside each) ──────────────
 const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSummary };
 
+// 成長型ブラックボックス engine (天気の雨判定 / 行きがち場所推定 + 将来の汎用ルール)。
+const blackbox = makeBlackBoxEngine(db);
+
 app.route('/', makeBookmarkRouter({
   db, htmlDir: HTML_DIR,
   summaryQueue: queues.summaryQueue,
@@ -271,7 +277,12 @@ app.route('/', makePacketMonitorRouter({
   dataDir: DATA_DIR,
   aiAnalysisQueue: queues.aiAnalysisQueue,
 }));
-app.route('/', makeWeatherRouter({ db }));
+app.route('/', makeWeatherRouter({ db, engine: blackbox.engine }));
+app.route('/', makeBlackBoxRouter({
+  engine: blackbox.engine,
+  ledger: blackbox.ledger,
+  knownDomains: [DOMAIN_WILL_RAIN, DOMAIN_LIKELY_PLACE],
+}));
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
 app.route('/', makeRssRouter({ db }));
@@ -388,6 +399,7 @@ setInterval(() => {
 // ── schedulers ────────────────────────────────────────────────────────────
 startSchedulers({
   db,
+  blackbox: blackbox.engine,
   enqueueDiary: queues.enqueueDiary,
   enqueueWeekly: queues.enqueueWeekly,
   getPrivacySettings: () => {
