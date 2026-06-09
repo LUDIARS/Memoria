@@ -28,7 +28,7 @@ export interface PrivacySettingsResponse {
 }
 
 // ── LLM 設定 ─────────────────────────────────────────────────────────────
-export type LlmProviderKey = 'algorithm' | 'claude' | 'codex' | 'gemini' | 'openai';
+export type LlmProviderKey = 'algorithm' | 'claude' | 'codex' | 'gemini' | 'openai' | 'gamma';
 
 export interface LlmTaskConfig {
   provider: LlmProviderKey;
@@ -41,6 +41,11 @@ export interface LlmConfigState {
   openai_api_key: string;               // GET 時は '***' or '' に masked
   openai_api_key_set?: boolean;
   openai_model: string;
+  // gamma = ローカル LLM (OpenAI 互換)。 base_url は平文、 api_key は GET 時 masked。
+  gamma_base_url?: string;
+  gamma_api_key?: string;               // GET 時は '***' or '' に masked
+  gamma_api_key_set?: boolean;
+  gamma_model?: string;
   git_bash_path: string;
   diary_global_memo?: string;
   user_profile?: {
@@ -79,6 +84,9 @@ export interface LlmConfigPatch {
   bins?: Partial<{ claude: string; gemini: string; codex: string }>;
   openai_api_key?: string;
   openai_model?: string;
+  gamma_base_url?: string;
+  gamma_api_key?: string;
+  gamma_model?: string;
   git_bash_path?: string;
   diary_global_memo?: string;
   user_profile?: Partial<LlmConfigState['user_profile']>;
