@@ -208,6 +208,9 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
         // Mask the API key when returning to FE.
         openai_api_key: cfg.openai_api_key ? '***' : '',
         openai_api_key_set: !!cfg.openai_api_key,
+        // gamma (ローカル LLM): base_url は平文表示、 api_key は masked。
+        gamma_api_key: cfg.gamma_api_key ? '***' : '',
+        gamma_api_key_set: !!cfg.gamma_api_key,
         // Standing memo passed to every diary generation.
         diary_global_memo: settings['diary.global_memo'] || '',
         user_profile: {
@@ -245,6 +248,7 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
     const patch = settingsPatchFromConfig(body);
     // Don't blow away the API key with the masked '***' value.
     if (patch['llm.openai.api_key'] === '***') delete patch['llm.openai.api_key'];
+    if (patch['llm.gamma.api_key'] === '***') delete patch['llm.gamma.api_key'];
     // Diary-specific standing memo lives outside the LLM config object.
     if (typeof body.diary_global_memo === 'string') {
       patch['diary.global_memo'] = body.diary_global_memo;
