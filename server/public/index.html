@@ -963,8 +963,14 @@
             「↻」 で今日の対象地点 (自宅 + その曜日に行きがちな場所) を複数の予報サイトで検証します。
           </div>
           <div id="tracksBlackboxReview" style="margin-top:8px"></div>
+          <div class="ext-cfg-row" style="margin-top:10px">
+            <strong style="font-size:12px">📊 全API アンサンブル予報 (DB保存)</strong>
+            <button id="tracksEnsembleRefresh" class="ghost" type="button" title="全ソース取得してDB保存">取得</button>
+          </div>
+          <div id="tracksEnsembleTable" class="muted" style="font-size:11px;overflow-x:auto">「取得」 で全予報サイトを突き合わせた時間別アンサンブルを DB に保存して表示します。</div>
           <p class="ext-cfg-help">
             複数サイトの一致度で雨を判定。 ルールが先に判断した項目は OK/NG で承認すると、 やがて AI なしで自動判定するようになります (成長型ブラックボックス)。
+            アンサンブルは <code>weather_ensemble_snapshots</code> に保存されます。
           </p>
         </div>
 
