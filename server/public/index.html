@@ -729,7 +729,59 @@
           <button class="wl-subtab" data-db-sub="workplace">🗺️ 作業場所</button>
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
           <button class="wl-subtab" data-db-sub="endpoints">🛡 既知エンドポイント</button>
+          <button class="wl-subtab" data-db-sub="weather">🌤 天気</button>
         </nav>
+      </div>
+
+      <!-- 🌤 天気サブビュー (データベースタブ配下)。 今日の天気 + マルチソース雨検証 +
+           全API アンサンブル (DB保存) + 成長型ブラックボックスのレビュー。 -->
+      <div id="weatherView" class="hidden">
+        <div class="tracks-sources">
+          <!-- 天気カード: Open-Meteo の forecast を 「位置 (GPS / 固定 lat/lon)」 で取得。 -->
+          <div id="tracksWeatherCard" class="tracks-source-card">
+            <div class="ext-cfg-row">
+              <strong>🌤 今日の天気</strong>
+              <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksWeatherPill">取得中…</span>
+              <button id="tracksWeatherRefresh" class="ghost" type="button" title="再取得 (force)">↻</button>
+            </div>
+            <div class="ext-cfg-stats" id="tracksWeatherStats">
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">天気</span><span id="tracksWeatherLabel" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最高/最低</span><span id="tracksWeatherTemp" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">降水合計</span><span id="tracksWeatherPrecip" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">雨予報</span><span id="tracksWeatherRain" class="ext-cfg-stat-val">—</span></div>
+              <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">位置</span><span id="tracksWeatherLoc" class="ext-cfg-stat-val">—</span></div>
+            </div>
+            <details id="tracksWeatherHourlyWrap" style="margin-top:6px">
+              <summary class="muted" style="font-size:11px;cursor:pointer">時間別予報 (12h)</summary>
+              <div id="tracksWeatherHourly" class="tracks-weather-hourly"></div>
+            </details>
+            <p class="ext-cfg-help" id="tracksWeatherHint">
+              位置は <code>?lat=&amp;lon=</code> &gt; 設定 <code>weather.fixed_lat/lon</code> &gt; 直近 GPS の順。
+              <button id="tracksWeatherSettingsBtn" class="ghost" type="button" style="margin-left:4px">📍 固定座標</button>
+            </p>
+          </div>
+          <!-- マルチソース検証 + 朝の雨ブリーフィング + 成長型ブラックボックスのレビュー -->
+          <div id="tracksBriefingCard" class="tracks-source-card">
+            <div class="ext-cfg-row">
+              <strong>🌦 マルチソース雨検証 / 朝のブリーフィング</strong>
+              <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksBriefingPill">未取得</span>
+              <button id="tracksBriefingRefresh" class="ghost" type="button" title="今すぐ生成">↻</button>
+            </div>
+            <div id="tracksBriefingBody" class="muted" style="font-size:12px;line-height:1.6">
+              「↻」 で今日の対象地点 (自宅 + その曜日に行きがちな場所) を複数の予報サイトで検証します。
+            </div>
+            <div id="tracksBlackboxReview" style="margin-top:8px"></div>
+            <div class="ext-cfg-row" style="margin-top:10px">
+              <strong style="font-size:12px">📊 全API アンサンブル予報 (DB保存)</strong>
+              <button id="tracksEnsembleRefresh" class="ghost" type="button" title="全ソース取得してDB保存">取得</button>
+            </div>
+            <div id="tracksEnsembleTable" class="muted" style="font-size:11px;overflow-x:auto">「取得」 で全予報サイトを突き合わせた時間別アンサンブルを DB に保存して表示します。</div>
+            <p class="ext-cfg-help">
+              複数サイトの一致度で雨を判定。 ルールが先に判断した項目は OK/NG で承認すると、 やがて AI なしで自動判定するようになります (成長型ブラックボックス)。
+              アンサンブルは <code>weather_ensemble_snapshots</code> に保存されます。
+            </p>
+          </div>
+        </div>
       </div>
 
       <div id="worklogView" class="hidden">
@@ -928,51 +980,7 @@
           </div>
           <p class="ext-cfg-help" id="tracksWifiHint">優先度: OwnTracks GPS &gt; WiFi SSID &gt; 有線 (= 自宅)。 高優先度のソースで判定できなければ次の段に fallback します。</p>
         </div>
-        <!-- 天気カード: Open-Meteo の forecast を 「位置 (GPS / 固定 lat/lon)」 で取得。
-             位置情報 UI の隣に置くのは GPS 不在時の確認動線として自然なので。 -->
-        <div id="tracksWeatherCard" class="tracks-source-card">
-          <div class="ext-cfg-row">
-            <strong>🌤 今日の天気</strong>
-            <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksWeatherPill">取得中…</span>
-            <button id="tracksWeatherRefresh" class="ghost" type="button" title="再取得 (force)">↻</button>
-          </div>
-          <div class="ext-cfg-stats" id="tracksWeatherStats">
-            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">天気</span><span id="tracksWeatherLabel" class="ext-cfg-stat-val">—</span></div>
-            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">最高/最低</span><span id="tracksWeatherTemp" class="ext-cfg-stat-val">—</span></div>
-            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">降水合計</span><span id="tracksWeatherPrecip" class="ext-cfg-stat-val">—</span></div>
-            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">雨予報</span><span id="tracksWeatherRain" class="ext-cfg-stat-val">—</span></div>
-            <div class="ext-cfg-stat"><span class="ext-cfg-stat-label">位置</span><span id="tracksWeatherLoc" class="ext-cfg-stat-val">—</span></div>
-          </div>
-          <details id="tracksWeatherHourlyWrap" style="margin-top:6px">
-            <summary class="muted" style="font-size:11px;cursor:pointer">時間別予報 (12h)</summary>
-            <div id="tracksWeatherHourly" class="tracks-weather-hourly"></div>
-          </details>
-          <p class="ext-cfg-help" id="tracksWeatherHint">
-            位置は <code>?lat=&amp;lon=</code> &gt; 設定 <code>weather.fixed_lat/lon</code> &gt; 直近 GPS の順。
-            <button id="tracksWeatherSettingsBtn" class="ghost" type="button" style="margin-left:4px">📍 固定座標</button>
-          </p>
-        </div>
-        <!-- マルチソース検証 + 朝の雨ブリーフィング + 成長型ブラックボックスのレビュー -->
-        <div id="tracksBriefingCard" class="tracks-source-card">
-          <div class="ext-cfg-row">
-            <strong>🌦 マルチソース雨検証 / 朝のブリーフィング</strong>
-            <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksBriefingPill">未取得</span>
-            <button id="tracksBriefingRefresh" class="ghost" type="button" title="今すぐ生成">↻</button>
-          </div>
-          <div id="tracksBriefingBody" class="muted" style="font-size:12px;line-height:1.6">
-            「↻」 で今日の対象地点 (自宅 + その曜日に行きがちな場所) を複数の予報サイトで検証します。
-          </div>
-          <div id="tracksBlackboxReview" style="margin-top:8px"></div>
-          <div class="ext-cfg-row" style="margin-top:10px">
-            <strong style="font-size:12px">📊 全API アンサンブル予報 (DB保存)</strong>
-            <button id="tracksEnsembleRefresh" class="ghost" type="button" title="全ソース取得してDB保存">取得</button>
-          </div>
-          <div id="tracksEnsembleTable" class="muted" style="font-size:11px;overflow-x:auto">「取得」 で全予報サイトを突き合わせた時間別アンサンブルを DB に保存して表示します。</div>
-          <p class="ext-cfg-help">
-            複数サイトの一致度で雨を判定。 ルールが先に判断した項目は OK/NG で承認すると、 やがて AI なしで自動判定するようになります (成長型ブラックボックス)。
-            アンサンブルは <code>weather_ensemble_snapshots</code> に保存されます。
-          </p>
-        </div>
+        <!-- 天気カードは「データベース → 🌤 天気」 サブビュー (#weatherView) へ移設。 -->
 
         <div id="tracksMissingKey" class="tracks-missing-key hidden">
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>
