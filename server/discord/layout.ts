@@ -22,7 +22,7 @@ function desiredChannels(cfg: ReturnType<typeof discordSettings>): string[] {
   if (cfg.autoRecommend) out.push('recommend');
   if (cfg.announce) out.push('announce');
   if (cfg.monitor) out.push('monitor'); // 状態カード (状態/締切/次通知)
-  if (cfg.news) out.push('news');       // RSS ニュース (ダイジェスト/トレンド)
+  if (cfg.news) out.push('news');       // RSS ニュース (ダイジェスト)
   return out;
 }
 

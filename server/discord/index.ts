@@ -43,7 +43,7 @@ export async function announceToDiscord(db: Db, text: string): Promise<void> {
 }
 
 /**
- * RSS「今日のダイジェスト + 気になるニュース」 を #news に即時投稿する seam。
+ * RSS「今日のダイジェスト」 を #news に即時投稿する seam。
  * 設定 UI / API の「Discord に投稿」 から呼ぶ。 Bot 未起動なら not_ready。
  */
 export async function postRssNewsNow(db: Db): Promise<NewsPostResult> {
