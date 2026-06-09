@@ -33,6 +33,8 @@ export interface DiscordSettings {
   monitor: boolean;
   // RSS ニュース投稿 (今日のダイジェスト、既定 true)
   news: boolean;
+  // 定期ブリーフィング投稿 (#briefing、既定 true)
+  briefing: boolean;
 }
 
 /**
@@ -69,6 +71,7 @@ export function discordSettings(db: Db): DiscordSettings {
     autoRecommend: settingBool(s, 'features.discord.autoproc.recommend', true),
     monitor: settingBool(s, 'features.discord.monitor', true),
     news: settingBool(s, 'features.discord.news', true),
+    briefing: settingBool(s, 'features.discord.briefing', true),
   };
 }
 

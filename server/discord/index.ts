@@ -5,7 +5,7 @@ import type { Client } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
-import { postAnnouncement } from './notifier.js';
+import { postAnnouncement, postToChannel } from './notifier.js';
 import { findTrigger } from './notify/config.js';
 import { fireTrigger } from './notify/engine.js';
 import { postRssNews, type NewsPostResult } from './news.js';
@@ -40,6 +40,23 @@ export function stopDiscordBot(): void {
 export async function announceToDiscord(db: Db, text: string): Promise<void> {
   if (!current?.isReady()) return;
   await postAnnouncement(current, db, text);
+}
+
+/** Discord Bot が起動済みで接続中か。 ブリーフィングなど「送信先があるか」 判定に使う。 */
+export function discordClientReady(): boolean {
+  return current?.isReady() ?? false;
+}
+
+/**
+ * 定期ブリーフィングを #briefing に投稿する seam。 既に分割済みのテキスト配列を
+ * 順に送る。 Bot 未起動なら false (= 送らなかった)。
+ */
+export async function postBriefingToDiscord(db: Db, parts: string[]): Promise<boolean> {
+  if (!current?.isReady()) return false;
+  for (const part of parts) {
+    await postToChannel(current, db, 'briefing', part);
+  }
+  return true;
 }
 
 /**
