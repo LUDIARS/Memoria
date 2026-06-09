@@ -499,6 +499,23 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_weather_snapshots_date
       ON weather_snapshots(date DESC, fetched_at DESC);
 
+    -- マルチソース・アンサンブルの保存。 1 fetch = 1 行。 全API の予報を時刻別に
+    -- 突き合わせた結果 (hours_json) と、 どのソースが成功したか (sources_json) を残す。
+    -- spec/feature/weather-multisource.md / spec/data/weather.md。
+    CREATE TABLE IF NOT EXISTS weather_ensemble_snapshots (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      fetched_at          INTEGER NOT NULL,
+      date                TEXT NOT NULL,
+      lat                 REAL NOT NULL,
+      lon                 REAL NOT NULL,
+      label               TEXT,
+      agreement_threshold REAL NOT NULL,
+      sources_json        TEXT NOT NULL,
+      hours_json          TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_weather_ensemble_fetched
+      ON weather_ensemble_snapshots(fetched_at DESC);
+
     -- 成長型ブラックボックス (汎用ルールエンジン)。 spec/feature/blackbox.md。
     -- ドメイン非依存: 天気 (weather.will_rain / weather.likely_place) が最初の利用者。
     -- when_json は直列化された Condition AST。 output_json は条件成立時の判断結果。

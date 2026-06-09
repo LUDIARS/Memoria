@@ -28,8 +28,10 @@ import { getAppSettings, setAppSettings } from '../db.js';
 import { featureEnabled } from '../lib/privacy.js';
 import type { BlackBoxEngine } from '../blackbox/index.js';
 import { getWeatherConfig } from '../weather/config.js';
-import { ALL_SOURCES, runEnabledSources } from '../weather/sources/index.js';
-import { aggregate, hoursForDay } from '../weather/ensemble.js';
+import { ALL_SOURCES } from '../weather/sources/index.js';
+import { hoursForDay } from '../weather/ensemble.js';
+import { runAndStoreEnsemble } from '../weather/ensemble-service.js';
+import { listEnsembleSnapshots, getEnsembleSnapshot } from '../weather/ensemble-store.js';
 import { resolveTargets } from '../weather/targets.js';
 import { buildBriefing } from '../weather/briefing.js';
 
@@ -184,24 +186,44 @@ export function makeWeatherRouter(deps: WeatherRouterDeps): Hono {
 
   // ── マルチソース ──────────────────────────────────────────────────────
 
-  /** 1 地点を全ソースで取得してアンサンブル (時刻別の一致度) を返す。 */
+  /** 1 地点を全ソースで取得してアンサンブル → DB 保存して返す。
+   *  hours = 今日のこれから / hours_all = 保存した全時間帯 (今日 + 明日)。 */
   r.get('/api/weather/ensemble', async (c: Context) => {
     if (!featureEnabled(db, 'weather_enabled')) return c.json({ error: 'weather feature disabled' }, 404);
     const loc = resolveLocation(db, c);
     if (!loc) return c.json({ error: 'no location available' }, 400);
-    const cfg = getWeatherConfig(db);
+    const url = new URL(c.req.url);
+    const label = url.searchParams.get('label');
     try {
-      const forecasts = await runEnabledSources(loc.lat, loc.lon, cfg.ctx, cfg.enabledSourceIds);
-      const hours = hoursForDay(aggregate(forecasts), todayLocal());
+      const res = await runAndStoreEnsemble(db, loc.lat, loc.lon, label);
       return c.json({
-        lat: loc.lat, lon: loc.lon, source: loc.source,
-        agreement_threshold: cfg.agreementThreshold,
-        sources: forecasts.map((f) => ({ id: f.sourceId, ok: f.ok, error: f.error ?? null, points: f.points.length })),
-        hours,
+        snapshot_id: res.snapshotId,
+        date: res.date,
+        lat: res.lat, lon: res.lon, source: loc.source,
+        agreement_threshold: res.agreementThreshold,
+        sources: res.sources,
+        hours: hoursForDay(res.hours, res.date),
+        hours_all: res.hours,
       });
     } catch (e: unknown) {
       return c.json({ error: `ensemble failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
     }
+  });
+
+  /** 保存済みアンサンブルの一覧 (新しい順、 各 hours 込み)。 DB 表示用。 */
+  r.get('/api/weather/ensemble/snapshots', (c: Context) => {
+    const url = new URL(c.req.url);
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+    return c.json({ snapshots: listEnsembleSnapshots(db, limit) });
+  });
+
+  /** 保存済みアンサンブル 1 件。 */
+  r.get('/api/weather/ensemble/snapshot/:id', (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
+    const snap = getEnsembleSnapshot(db, id);
+    if (!snap) return c.json({ error: 'not found' }, 404);
+    return c.json(snap);
   });
 
   /** 今日の対象地点 (自宅 + 行きがちな場所)。 likely 判定は blackbox 由来。 */
