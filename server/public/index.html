@@ -952,6 +952,21 @@
             <button id="tracksWeatherSettingsBtn" class="ghost" type="button" style="margin-left:4px">📍 固定座標</button>
           </p>
         </div>
+        <!-- マルチソース検証 + 朝の雨ブリーフィング + 成長型ブラックボックスのレビュー -->
+        <div id="tracksBriefingCard" class="tracks-source-card">
+          <div class="ext-cfg-row">
+            <strong>🌦 マルチソース雨検証 / 朝のブリーフィング</strong>
+            <span class="ext-cfg-pill ext-cfg-pill-loading" id="tracksBriefingPill">未取得</span>
+            <button id="tracksBriefingRefresh" class="ghost" type="button" title="今すぐ生成">↻</button>
+          </div>
+          <div id="tracksBriefingBody" class="muted" style="font-size:12px;line-height:1.6">
+            「↻」 で今日の対象地点 (自宅 + その曜日に行きがちな場所) を複数の予報サイトで検証します。
+          </div>
+          <div id="tracksBlackboxReview" style="margin-top:8px"></div>
+          <p class="ext-cfg-help">
+            複数サイトの一致度で雨を判定。 ルールが先に判断した項目は OK/NG で承認すると、 やがて AI なしで自動判定するようになります (成長型ブラックボックス)。
+          </p>
+        </div>
 
         <div id="tracksMissingKey" class="tracks-missing-key hidden">
           Google Maps API key 未設定。 設定 → AI / 連携 で <code>maps_api_key</code>

@@ -14,7 +14,8 @@ export type LlmTaskName =
   | 'recommendation_agent' | 'recommendation_synthesize'
   | 'endpoint_identify'
   | 'discord_route'
-  | 'rss_score' | 'rss_summarize' | 'rss_digest';
+  | 'rss_score' | 'rss_summarize' | 'rss_digest'
+  | 'weather_rain_verify' | 'weather_likely_place';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -26,6 +27,7 @@ export const TASKS: LlmTaskName[] = [
   'endpoint_identify',
   'discord_route',
   'rss_score', 'rss_summarize', 'rss_digest',
+  'weather_rain_verify', 'weather_likely_place',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
@@ -43,6 +45,8 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   rss_score: 'haiku',      // 多数記事を高速・安価に採点する。
   rss_summarize: 'haiku',  // 記事ごとの短い要約。 数が出るので安価に。
   rss_digest: 'sonnet',    // 上位記事を束ねる日次ブリーフィング (品質寄り)。
+  weather_rain_verify: 'sonnet',    // 複数ソースの一致から雨を検証 + ルール提案。
+  weather_likely_place: 'sonnet',   // 曜日 × 訪問履歴から行きがちな場所を推定。
 };
 
 export type LlmProviderKey = 'algorithm' | 'claude' | 'codex' | 'gemini' | 'openai';

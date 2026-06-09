@@ -14,11 +14,16 @@ import {
 } from './weather.js';
 import { runDetection as runTransitDetection } from './transit-detect.js';
 import { pollAllFeeds, getRssConfig } from '../rss/index.js';
+import type { BlackBoxEngine } from '../blackbox/index.js';
+import { getWeatherConfig } from '../weather/config.js';
+import { buildBriefing, formatBriefingPush } from '../weather/briefing.js';
 
 type Db = BetterSqlite3.Database;
 
 export interface SchedulerDeps {
   db: Db;
+  /** 成長型ブラックボックス engine (朝の雨ブリーフィングで雨判定に使う)。 */
+  blackbox: BlackBoxEngine;
   enqueueDiary: (dateStr: string) => void;
   enqueueWeekly: (weekStart: string) => void;
   /** privacySettings() を呼べるように渡す。 settings を毎回読みたいので関数渡し */
@@ -36,8 +41,48 @@ export function startSchedulers(deps: SchedulerDeps): void {
   scheduleSundayEvening(deps);
   startTaskReminderInterval(deps);
   startWeatherRainAlertInterval(deps);
+  startWeatherMorningBriefingInterval(deps);
   startTransitDetectionInterval(deps);
   startRssPollInterval(deps);
+}
+
+// 朝の雨ブリーフィング — 1 分おきに時刻を見て、 設定時刻 (既定 7:00) に当日 1 回だけ、
+// 対象地点 (自宅 + 行きがちな場所) をマルチソースで検証し、 雨があれば push。
+// 「いま雨」 アラート (startWeatherRainAlertInterval) とは別系統のマルチソース版。
+function startWeatherMorningBriefingInterval(deps: SchedulerDeps): void {
+  const tick = async () => {
+    try {
+      if (!featureEnabled(deps.db, 'weather_enabled')) return;
+      const cfg = getWeatherConfig(deps.db);
+      if (!cfg.briefing.enabled) return;
+
+      const now = new Date();
+      if (now.getHours() !== cfg.briefing.hour || now.getMinutes() !== 0) return;
+
+      const today = formatLocalDate(now);
+      const appS = getAppSettings(deps.db);
+      if (appS['weather.morning_briefing.last_sent_date'] === today) return;
+
+      const briefing = await buildBriefing(deps.db, deps.blackbox, now);
+      const payload = formatBriefingPush(briefing, cfg.briefing.notifyWhenClear);
+      // 送信有無に関わらず当日分は処理済みにする (雨ゼロでも再計算を避ける)。
+      setAppSettings(deps.db, { 'weather.morning_briefing.last_sent_date': today });
+      if (!payload) {
+        console.log(`[weather briefing] ${today}: 雨なし — 送信スキップ`);
+        return;
+      }
+      await sendPushToAll(deps.db, {
+        title: payload.title, body: payload.body,
+        tag: `memoria-weather-briefing-${today}`, url: '/?tab=weather',
+      }).catch((e: unknown) => console.error('[weather briefing] push failed:', e instanceof Error ? e.message : String(e)));
+      console.log(`[weather briefing] sent for ${today}: ${payload.title}`);
+    } catch (e: unknown) {
+      console.warn('[weather briefing] tick failed:', e instanceof Error ? e.message : String(e));
+    }
+  };
+  // 起動 20s 後に 1 回 (起動が briefing 時刻ちょうどなら拾う)、 以後 1 分おき。
+  setTimeout(() => { void tick(); }, 20_000).unref?.();
+  setInterval(() => { void tick(); }, 60_000).unref?.();
 }
 
 // RSS / トレンド取り込み — rss.poll_interval_minutes おきに全フィードを

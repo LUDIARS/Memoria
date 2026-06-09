@@ -499,6 +499,48 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_weather_snapshots_date
       ON weather_snapshots(date DESC, fetched_at DESC);
 
+    -- 成長型ブラックボックス (汎用ルールエンジン)。 spec/feature/blackbox.md。
+    -- ドメイン非依存: 天気 (weather.will_rain / weather.likely_place) が最初の利用者。
+    -- when_json は直列化された Condition AST。 output_json は条件成立時の判断結果。
+    CREATE TABLE IF NOT EXISTS blackbox_rules (
+      id           TEXT PRIMARY KEY,
+      domain       TEXT NOT NULL,
+      description  TEXT NOT NULL,
+      when_json    TEXT NOT NULL,
+      output_json  TEXT,
+      confidence   REAL NOT NULL DEFAULT 0.7,
+      enabled      INTEGER NOT NULL DEFAULT 1,
+      source       TEXT NOT NULL DEFAULT 'manual',   -- 'llm' | 'manual' | 'seed'
+      approvals    INTEGER NOT NULL DEFAULT 0,
+      rejections   INTEGER NOT NULL DEFAULT 0,
+      priority     INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_blackbox_rules_domain
+      ON blackbox_rules(domain, enabled, priority DESC);
+
+    -- 判断 ledger。 status='pending_review' AND verdict IS NULL がレビュー待ちキュー。
+    CREATE TABLE IF NOT EXISTS blackbox_decisions (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain        TEXT NOT NULL,
+      input_json    TEXT,
+      features_json TEXT,
+      output_json   TEXT,
+      source        TEXT NOT NULL,                    -- 'rule' | 'llm'
+      rule_id       TEXT,
+      confidence    REAL NOT NULL DEFAULT 0,
+      rationale     TEXT NOT NULL DEFAULT '',
+      status        TEXT NOT NULL,                    -- 'auto' | 'pending_review'
+      verdict       TEXT,                             -- 'ok' | 'ng' | NULL
+      created_at    TEXT NOT NULL,
+      reviewed_at   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_blackbox_decisions_pending
+      ON blackbox_decisions(status, verdict, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_blackbox_decisions_domain
+      ON blackbox_decisions(domain, created_at DESC);
+
     -- レビュー対象リポジトリ。 ludiars-review skill (= cloud routine) が
     -- iterate するリスト。 起動時に LUDIARS_ROOT 配下の git clone を seed し、
     -- ユーザは UI から任意のローカルパスを足せる。 format_key は将来カスタム
