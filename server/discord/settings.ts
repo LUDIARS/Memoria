@@ -31,7 +31,7 @@ export interface DiscordSettings {
   autoRecommend: boolean;
   // 状態カード (既定 true)
   monitor: boolean;
-  // RSS ニュース投稿 (今日のダイジェスト + 気になるニュース、 既定 true)
+  // RSS ニュース投稿 (今日のダイジェスト、既定 true)
   news: boolean;
 }
 

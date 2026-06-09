@@ -185,7 +185,7 @@ export function makeRssRouter(deps: RssRouterDeps): Hono {
     return c.json({ digest: row });
   });
 
-  // 今日のダイジェスト + 気になるニュースを Discord #news に即時投稿。
+  // 今日のダイジェストを Discord #news に即時投稿。
   r.post('/api/rss/discord-post', async (c: Context) => {
     const r2 = await postRssNewsNow(db);
     if (!r2.ok) return c.json({ error: r2.reason || 'Discord に投稿できませんでした (Bot 未接続?)' }, 502);
