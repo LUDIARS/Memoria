@@ -71,6 +71,7 @@ import { makeTransitRouter } from './routes/transit.js';
 import { makeStalenessRouter } from './routes/staleness.js';
 import { makeRssRouter } from './routes/rss.js';
 import { makeBriefingRouter } from './routes/briefing.js';
+import { makeGoalEvalRouter } from './goals/router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -288,6 +289,7 @@ app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
 app.route('/', makeRssRouter({ db }));
 app.route('/', makeBriefingRouter({ db }));
+app.route('/', makeGoalEvalRouter({ db }));
 
 // ---- Corpus hub マニフェスト (VantanHub-DESIGN.md D6) ----------------------
 // Memoria は横断 hub サービス Corpus から参照される leaf。 knowledge (ブクマ /
