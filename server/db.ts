@@ -715,6 +715,19 @@ export function openDb(dbPath: string): Db {
     -- idx_tasks_kind は ALTER で kind カラムを足した後にしか作れないので、
     -- migration block の末尾で作成する (下記 ALTER 群の直後を参照)。
 
+    CREATE TABLE IF NOT EXISTS goal_eval_logs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      goal_id      INTEGER NOT NULL,
+      date         TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(goal_id, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goal_eval_logs_date
+      ON goal_eval_logs(date DESC);
+    CREATE INDEX IF NOT EXISTS idx_goal_eval_logs_goal
+      ON goal_eval_logs(goal_id, date DESC);
+
     CREATE TABLE IF NOT EXISTS agent_projects (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       name           TEXT NOT NULL,

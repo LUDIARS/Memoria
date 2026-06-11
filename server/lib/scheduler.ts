@@ -18,6 +18,7 @@ import type { BlackBoxEngine } from '../blackbox/index.js';
 import { getWeatherConfig } from '../weather/config.js';
 import { buildBriefing, formatBriefingPush } from '../weather/briefing.js';
 import { startBriefingScheduler } from '../briefing/index.js';
+import { startGoalEvalScheduler } from '../goals/eval-scheduler.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -46,6 +47,7 @@ export function startSchedulers(deps: SchedulerDeps): void {
   startTransitDetectionInterval(deps);
   startRssPollInterval(deps);
   startBriefingScheduler(deps.db);
+  startGoalEvalScheduler(deps.db);
 }
 
 // 朝の雨ブリーフィング — 1 分おきに時刻を見て、 設定時刻 (既定 7:00) に当日 1 回だけ、

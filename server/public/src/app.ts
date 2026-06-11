@@ -167,6 +167,7 @@ import { initHelpDrawer, openHelpFor } from './help-drawer.js';
 // のときだけ叩いてダイアログを出さない。 詳細は geo.ts 参照。
 import { silentGetPosition, requestPosition, type PositionLike } from './geo.js';
 import { loadRssView } from './rss-view.js';
+import { loadGoalsView } from './goals-view.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
@@ -1195,6 +1196,7 @@ function switchTab(tab) {
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   $('packetmonView')?.classList.toggle('hidden', tab !== 'packetmon');
   $('rssView')?.classList.toggle('hidden', tab !== 'rss');
+  $('goalsView')?.classList.toggle('hidden', tab !== 'goals');
   // 🛡 パケット監視 タブから離れたら 60s auto-refresh を止める。
   if (tab !== 'packetmon') stopPacketmonAutoRefresh();
   if (tab === 'database') {
@@ -1218,6 +1220,7 @@ function switchTab(tab) {
   if (tab === 'multi') loadMulti();
   if (tab === 'packetmon') { loadPacketMonitor(); void loadPacketmonProcesses(); }
   if (tab === 'rss') loadRssView();
+  if (tab === 'goals') void loadGoalsView();
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
