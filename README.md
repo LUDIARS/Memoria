@@ -275,6 +275,23 @@ UI 設定が無い限り使うのは port / data dir くらい。
 | `MEMORIA_WIFI_INTERVAL_SEC` | `600` | WiFi 位置の実行間隔 |
 | `MEMORIA_LEGATUS_WS` | (off) | `on` で旧 Legatus 経由 subscriber を opt-in (通常は内蔵 broker のみ) |
 
+## 出席チェックイン受信 (Aedilis 連携・投機実装)
+
+会場の出席チェックイン (Aedilis) を「在席ログの 1 種」 として取り込む受け口。
+
+- `POST /api/attendance/ingest` — body は Aedilis cloud の webhook 形式
+  (`{ type:'attendance.checked_in', userId, facilityId, checkedInAt, reservationId|null, source }`)。
+  認証は GPS 取込と同じ ingest key (`X-Memoria-Ingest-Key` / `Authorization: Bearer` /
+  Basic、 未設定なら LAN-only 前提で素通り)。 `(userId, facilityId, checkedInAt)`
+  で冪等化 (再送は `deduped:true`)。
+- `GET /api/attendance/recent?limit=&facility=` — 受信済み一覧 (確認用)。
+- **個人データは userId アンカーのみ**。 facilityId / checkedInAt / reservationId だけ
+  保存し、 氏名等の生 PII は持たない ([[project_personal_data_rule]])。
+- **本番化 TODO**: Memoria は online への直接 write 不可で relay 経由が正
+  ([[feedback_memoria_online_flow]])。 本番では Aedilis が直接ここへ POST するのでは
+  なく、 Imperativus / Legatus 系の relay フォワーダ経由でこの受け口へ届ける構成に
+  寄せる (I/F はそのまま流用可)。 契約書 = `Aedilis/checkin-spike/CONTRACTS.md §5`。
+
 ## ユーザがやる必要のある設定
 
 各機能を使うには「ユーザ側で鍵を入れる / hook をインストールする」 など必須。

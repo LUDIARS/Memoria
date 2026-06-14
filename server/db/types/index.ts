@@ -10,6 +10,7 @@ export * from './visit.js';
 export * from './page.js';
 export * from './diary.js';
 export * from './activity.js';
+export * from './attendance.js';
 export * from './gps.js';
 export * from './meal.js';
 export * from './task.js';
