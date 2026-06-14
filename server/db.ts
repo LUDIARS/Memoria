@@ -19,6 +19,7 @@ import type { PageVisitRow, VisitEventRow } from './db/types/visit.js';
 import type { PageMetadataRow, DomainCatalogRow } from './db/types/page.js';
 import type { ApplicationRow } from './db/types/application.js';
 import type { ServerEventRow, ActivityEventRow, ActivityKind } from './db/types/activity.js';
+import type { AttendanceEventRow } from './db/types/attendance.js';
 import type { PushSubscriptionRow } from './db/types/push.js';
 import type { ExternalChatMessageRow } from './db/types/chat.js';
 import type { UserStopwordRow } from './db/types/stopwords.js';
@@ -236,6 +237,28 @@ export function openDb(dbPath: string): Db {
     -- 同一 ref_id (sha 等) の重複登録を防ぐ — kind+ref_id の組で一意。
     CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_events_ref
       ON activity_events(kind, ref_id) WHERE ref_id IS NOT NULL;
+
+    -- 出席チェックイン (Aedilis → Memoria webhook、 CONTRACTS.md §5)。
+    -- 在席ログの 1 種としてローカルに記録する。 個人データは user_id アンカー
+    -- のみ ([[project_personal_data_rule]])。 生 PII は持たない。
+    CREATE TABLE IF NOT EXISTS attendance_events (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id       TEXT NOT NULL,
+      facility_id   TEXT NOT NULL,
+      checked_in_at INTEGER NOT NULL,
+      reservation_id TEXT,
+      source        TEXT NOT NULL DEFAULT 'aedilis',
+      event_type    TEXT NOT NULL DEFAULT 'attendance.checked_in',
+      ingested_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_events_user
+      ON attendance_events(user_id, checked_in_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_attendance_events_recent
+      ON attendance_events(checked_in_at DESC);
+    -- 同一の出席 (同 user × 同施設 × 同時刻) を二重記録しない。 webhook は
+    -- fire-and-forget で再送されうるので冪等ガードを置く。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_events_dedup
+      ON attendance_events(user_id, facility_id, checked_in_at);
 
     CREATE TABLE IF NOT EXISTS diary_entries (
       date                  TEXT PRIMARY KEY,
@@ -2594,6 +2617,56 @@ export function recordActivityEvent(
     metadata ? JSON.stringify(metadata) : null,
   );
   return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
+}
+
+// ── attendance events (Aedilis 出席チェックイン、 CONTRACTS.md §5) ─────────
+
+export interface RecordAttendanceEventInput {
+  userId: string;
+  facilityId: string;
+  checkedInAt: number;             // epoch ms
+  reservationId?: string | null;   // walk-in は null
+  source?: string | null;          // 既定 'aedilis'
+}
+
+/**
+ * 出席チェックインを 1 件記録する。 webhook の再送に備え、
+ * (user_id, facility_id, checked_in_at) の UNIQUE で冪等化する
+ * (重複は INSERT OR IGNORE で deduped=true)。
+ */
+export function recordAttendanceEvent(
+  db: Db,
+  { userId, facilityId, checkedInAt, reservationId, source }: RecordAttendanceEventInput,
+): { inserted: boolean; id: number } {
+  const info = db.prepare(`
+    INSERT OR IGNORE INTO attendance_events
+      (user_id, facility_id, checked_in_at, reservation_id, source, event_type)
+    VALUES (?, ?, ?, ?, ?, 'attendance.checked_in')
+  `).run(
+    userId,
+    facilityId,
+    checkedInAt,
+    reservationId ?? null,
+    source ?? 'aedilis',
+  );
+  return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
+}
+
+/** 出席イベントを新しい順に返す (UI / デバッグ用)。 facility で絞り込み可。 */
+export function listAttendanceEvents(
+  db: Db,
+  { limit = 50, facilityId = null }: { limit?: number; facilityId?: string | null } = {},
+): AttendanceEventRow[] {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50));
+  const where = facilityId ? 'WHERE facility_id = ?' : '';
+  const args: unknown[] = facilityId ? [facilityId, safeLimit] : [safeLimit];
+  return db.prepare(`
+    SELECT id, user_id, facility_id, checked_in_at, reservation_id, source, event_type, ingested_at
+    FROM attendance_events
+    ${where}
+    ORDER BY checked_in_at DESC
+    LIMIT ?
+  `).all(...args) as AttendanceEventRow[];
 }
 
 export interface ActivityEventParsed extends Omit<ActivityEventRow, 'ingested_at'> {

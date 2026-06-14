@@ -50,6 +50,7 @@ import { makeDiaryRouter } from './routes/diary.js';
 import { makeTaskRouter } from './routes/task.js';
 import { makeAgentRouter } from './routes/agent.js';
 import { makeWorkplaceRouter } from './routes/workplace.js';
+import { makeAttendanceRouter } from './routes/attendance.js';
 import { makeActivityRouter } from './routes/activity.js';
 import { configureActivitySamplers } from './lib/activity-sampler.js';
 import { makeImplRouter } from './routes/impl.js';
@@ -247,6 +248,7 @@ app.route('/', makeDiaryRouter({
 app.route('/', makeTaskRouter({ db }));
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
+app.route('/', makeAttendanceRouter({ db }));
 app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
