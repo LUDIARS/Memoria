@@ -77,7 +77,12 @@ interface Interpreted {
 async function classify(text: string): Promise<Interpreted> {
   const prompt = `あなたはライフログ Bot のルーターです。次のメッセージを task/memo/bookmark/recommend のいずれかに分類し、JSON のみで答えてください。\n`
     + `task=締切のある予定/やること, memo=締切のないメモ, recommend=おすすめ要求, bookmark=保存したいURL。\n`
-    + `task の場合は内容を解釈して title(簡潔な見出し) / category(買い物・開発 等のカンマ区切り、無ければ空) / due_at(ISO8601 か null) / details(補足、無ければ空) を埋めること。\n`
+    + `task の場合は内容を解釈して title(簡潔な見出し) / category(下記ルール) / due_at(ISO8601 か null) / details(補足、無ければ空) を埋めること。\n`
+    + `【カテゴリ命名ルール】`
+    + ` (1)人間が手で行う確認・検証・チェック・レビュー作業は"確認作業"を必ず含める。`
+    + ` (2)プロジェクト開発タスクはプロジェクト正式名をカテゴリにする`
+    + ` (例: KuzuSurvivors / Tirocinium / Memoria / Discutere / Concordia 等。略称・「開発」接尾語は使わない)。`
+    + ` (3)複数カテゴリはカンマ区切り。(4)上記に当てはまらなければ空。\n`
     + `形式: {"action":"task|memo|bookmark|recommend|none","title":"...","due_at":"ISO8601 or null","category":"...","details":"..."}\n\nメッセージ: ${text}`;
   try {
     const raw = await runLlm({ task: 'discord_route', prompt, timeoutMs: 30_000 });
