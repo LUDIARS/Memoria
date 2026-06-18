@@ -1,0 +1,12 @@
+# AIFormat HARNESS の決定的ルール (マイグレ禁止事項 / 個人データ列) を CI ゲート化する。
+# 実体は AIFormat の再利用可能ワークフロー。詳細: AIFormat/scripts/HARNESS_CHECKS.md
+name: harness-checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  harness:
+    uses: LUDIARS/AIFormat/.github/workflows/harness-checks.yml@main
