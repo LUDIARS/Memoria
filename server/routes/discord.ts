@@ -32,6 +32,8 @@ const BOOL_KEYS: Record<string, string> = {
 const STRING_KEYS: Record<string, string> = {
   selfUserId: 'features.discord.self_user_id',
   guildId: 'features.discord.guild_id',
+  newsTime: 'features.discord.news_time',
+  recommendTime: 'features.discord.recommend_time',
 };
 
 export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
