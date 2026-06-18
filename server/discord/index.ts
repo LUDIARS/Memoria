@@ -11,6 +11,7 @@ import { fireTrigger } from './notify/engine.js';
 import { postRssNews, type NewsPostResult } from './news.js';
 import { postRollingBriefing } from './briefing-post.js';
 import { formatSingleTaskCard } from './notify/card.js';
+import { postMorningRecommend } from './recommend-scheduler.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -85,6 +86,15 @@ export async function postTaskToDiscord(
     details: task.details,
   });
   await postToChannel(current, db, 'task', card);
+}
+
+/**
+ * 朝のおすすめを即時生成して #recommend に投稿する seam (設定 UI のテスト送信用)。
+ * Bot 未起動なら false。
+ */
+export async function postRecommendNow(db: Db): Promise<{ ok: boolean; count: number }> {
+  if (!current?.isReady()) return { ok: false, count: 0 };
+  return postMorningRecommend(current, db);
 }
 
 /**
