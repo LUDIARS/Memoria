@@ -10,47 +10,31 @@ import { runAiRecommendations, isAiRecommendationsAvailable, type RecResultItem 
 
 type Db = BetterSqlite3.Database;
 
-const MAX_LEN = 1900;
-
 function localDateStr(now: Date): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
 /**
- * おすすめ結果をタイトル + 補足 (why / expected_value) 付きで Discord 用にフォーマット。
- * 1900 字制限に合わせて複数メッセージに分割して返す。
+ * おすすめ結果を 1 アイテム 1 メッセージ の配列で返す。
+ * 先頭はヘッダー、以降は各アイテム (タイトル + URL + 補足)。
+ * リアクション FB・URL コピーのため分割する。
  */
 function formatRecommendMessages(items: RecResultItem[]): string[] {
   const shown = items.slice(0, 5);
-  const header = `🎯 **今日のおすすめ** (${shown.length}件)`;
-  const blocks: string[] = [header];
+  const messages: string[] = [];
 
   for (let i = 0; i < shown.length; i++) {
     const it = shown[i];
     const title = (it.title || it.url).slice(0, 80);
     const url = it.url.slice(0, 120);
-    const why = (it.why || '').slice(0, 120);
-    const val = (it.expected_value || '').slice(0, 60);
+    const why = (it.why || '').slice(0, 150);
+    const val = (it.expected_value || '').slice(0, 80);
     const supplement = [why, val].filter(Boolean).join(' — ');
-    const block = supplement
+    messages.push(supplement
       ? `**${i + 1}.** ${title}\n${url}\n> ${supplement}`
-      : `**${i + 1}.** ${title}\n${url}`;
-    blocks.push(block);
+      : `**${i + 1}.** ${title}\n${url}`);
   }
 
-  // 1900 字単位に分割
-  const messages: string[] = [];
-  let buf = '';
-  for (const b of blocks) {
-    const sep = buf ? '\n\n' : '';
-    if (buf.length + sep.length + b.length > MAX_LEN) {
-      if (buf) messages.push(buf.trim());
-      buf = b;
-    } else {
-      buf += sep + b;
-    }
-  }
-  if (buf) messages.push(buf.trim());
   return messages;
 }
 
@@ -65,7 +49,6 @@ export async function postMorningRecommend(client: Client, db: Db): Promise<{ ok
     const result = await runAiRecommendations(db, { force: true });
     const items = result.items ?? [];
     if (!items.length) {
-      await postToChannel(client, db, 'recommend', '🎯 今日のおすすめ — 該当なし');
       return { ok: true, count: 0 };
     }
     for (const msg of formatRecommendMessages(items)) {
