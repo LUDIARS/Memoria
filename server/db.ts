@@ -4965,6 +4965,7 @@ export function listTaskCategories(db: Db): string[] {
     SELECT category
     FROM tasks
     WHERE category IS NOT NULL AND category != ''
+      AND status IN ('todo', 'doing')
   `).all() as { category: string | null }[];
   const fromTasks = new Set<string>();
   for (const row of rows) {
