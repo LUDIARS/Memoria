@@ -63,6 +63,7 @@ import { makeMiscRouter } from './routes/misc.js';
 import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
 import { makeRepoRouter } from './routes/repo.js';
 import { makePacketMonitorRouter } from './routes/packet-monitor.js';
+import { makeMetricsRouter } from './routes/metrics.js';
 import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
 import { makeWeatherRouter } from './routes/weather.js';
 import { makeBlackBoxRouter } from './routes/blackbox.js';
@@ -246,6 +247,7 @@ app.route('/', makeDiaryRouter({
   enqueueWeekly: queues.enqueueWeekly,
 }));
 app.route('/', makeTaskRouter({ db }));
+app.route('/', makeMetricsRouter());
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
 app.route('/', makeAttendanceRouter({ db }));
