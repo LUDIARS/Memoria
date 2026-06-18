@@ -62,7 +62,21 @@ export async function postMorningRecommend(client: Client, db: Db): Promise<{ ok
 }
 
 /**
- * 毎分 tick して `features.discord.recommend_hour`(既定 8) 時 00 分に 1 日 1 回
+ * "HH:MM" 文字列を [hour, minute] に分解。不正なら既定値 [8, 0] を返す。
+ * 設定キー: features.discord.recommend_time (例: "06:30")
+ */
+function parseTimeStr(raw: unknown): [number, number] {
+  const s = String(raw ?? '').trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return [8, 0];
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return [8, 0];
+  return [h, min];
+}
+
+/**
+ * 毎分 tick して `features.discord.recommend_time`(既定 "08:00") に 1 日 1 回
  * おすすめを生成して #recommend へ投稿するスケジューラ。
  * `cfg.autoRecommend` が OFF なら何もしない。
  */
@@ -72,10 +86,9 @@ export function startRecommendScheduler(client: Client, db: Db): void {
       const cfg = discordSettings(db);
       if (!cfg.autoRecommend) return;
       const s = getAppSettings(db);
-      const raw = Number(s['features.discord.recommend_hour']);
-      const targetHour = Number.isFinite(raw) && raw >= 0 && raw <= 23 ? raw : 8;
+      const [targetHour, targetMin] = parseTimeStr(s['features.discord.recommend_time']);
       const now = new Date();
-      if (now.getHours() !== targetHour || now.getMinutes() !== 0) return;
+      if (now.getHours() !== targetHour || now.getMinutes() !== targetMin) return;
       const today = localDateStr(now);
       if (s['features.discord.recommend_last_sent'] === today) return;
       setAppSettings(db, { 'features.discord.recommend_last_sent': today });
