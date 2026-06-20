@@ -21,17 +21,22 @@ Memoria の AI 関連機能を 1 つの「🤖 AI」タブに集約し、毎朝 
 ### 新タブ「🤖 AI」(data-tab="ai")
 サブタブ:
 - **✨ おすすめ** (既存 recommend ビューをこの配下へ移動)
-- **📰 AI記事** (ai_articles 一覧。各記事: 表示 / 📓ノートへ転写 ボタン)
+- **📰 AI記事** (ai_articles 一覧。各記事: タグ chips + 表示 / 📓ノートへ転写 ボタン。先頭に **フィルタバー**=対象日(for_date)範囲 + タグ category 別 chips。日付・タグで AND 絞り込み)
+- **📝 記事ネタ** (`ai_article_seeds` の status='pending' を一覧。各行: 記事化を依頼する / 却下)
 - **💡 AIアドバイス** (最新の ai_advice を表示 + 「今すぐ生成」)
+
+> 記事ネタは当初 📝 ログ(worklog)タブ配下に置いたが、AI 由来コンテンツの一元化のため 🤖 AI タブ配下へ移設した (worklog の seeds サブタブ/コンテナは廃止)。
 
 ### 既存タブの整理
 - **「✨ 実装自慢」を完全削除** (subtab spec の 'impl' エントリ、implView/simple-panel、implEditorModal、関連 load/render/handler を全て除去)。
 - **「📋 作業一覧」(worklist = リポジトリ監視ダッシュボード) を「📦 プロジェクト」に改名し、🗄 データベースのサブタブ (data-db-sub="projects") へ移動**。トップレベルの worklist タブは削除。中身 (loadRepoWatch / repoList) はそのまま。
 - **トップレベルの「✨ おすすめ」タブは削除** (AI 配下へ移動済みのため)。
 
-### 📝 ログ (worklog) タブに「記事ネタ」セクション追加
-- worklog のサブタブに `📝 記事ネタ` (data-sub="seeds") を追加し、`ai_article_seeds` の status='pending' を一覧。
-- 各行: タイトル + 提案アングル + 出所、ボタン「記事化を依頼する」「却下」。
+### 📅 日記タブに「さかのぼり AIノート生成」を追加
+- 日記がある日について、その日の作業ログ (activity_events + session-log) から既存 digest を走らせて AIノートを生成する機能を日記タブに持たせる。
+- **日次**: 日記詳細ヘッダに `📝 AIノートを書く` ボタン → `POST /api/ai/digest/run-now {date}` (選択中の日付)。
+- **一括 (backfill)**: diary-bar の `📝 AIノート一括生成` ボタンでパネルを開閉。開始日/終了日 (既定 2026-04-01〜2026-06-30) + 「生成済みの日はスキップ」。`GET /api/ai/digest/candidates` で日記がある日を取得 → 古い順にクライアントが逐次 `run-now` を叩き、進捗バー + ログを表示 (停止可)。
+- 生成物はすべて 🤖 AI タブ「AI記事」(と残りは記事ネタ) に溜まる。
 
 ## データ (server/db.ts に追加)
 
@@ -43,7 +48,8 @@ CREATE TABLE IF NOT EXISTS ai_articles (
   topic_key   TEXT,                       -- 重複排除キー (repo:theme 等)
   source_refs TEXT,                       -- JSON 配列: [{kind, ref, repo}]
   origin      TEXT NOT NULL DEFAULT 'digest', -- 'digest' | 'requested'
-  for_date    TEXT,                       -- 対象作業日 YYYY-MM-DD
+  for_date    TEXT,                       -- 対象作業日 YYYY-MM-DD ("いつ書いたものか")
+  tags        TEXT,                       -- JSON 配列: [{category, value}] (言語/プロジェクト/内容タイプ/技術領域/その他)
   note_id     INTEGER,                    -- 転写先 note.id (NULL=未転写)
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -72,6 +78,11 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
 > 既存 CREATE TABLE と同じ exec ブロックに置く (db boot 時の冪等作成)。CREATE INDEX は CREATE TABLE の後 ([[feedback_sqlite_create_index_after_alter]] に準拠)。
 
+> **tags 列は後付け migration**: 既存 DB には ai_articles が既にあるため、`ALTER TABLE ai_articles ADD COLUMN tags TEXT` を PRAGMA table_info ガード付きで冪等発行し、その直後に `CREATE INDEX idx_ai_articles_for_date ON ai_articles(for_date DESC)` を発行する ([[feedback_sqlite_create_index_after_alter]]: INDEX は ALTER の後)。
+
+#### タグの分類軸
+`言語` / `プロジェクト` / `内容タイプ` / `技術領域` / `その他` の 5 分類 (`TAG_CATEGORIES`)。各記事に category ごと 0〜3 個。`プロジェクト` は source_refs のリポ名から決定論的に補完し、それ以外は `article_write` LLM が本文と同時に JSON で返す。`日付 (for_date) × タグ` で AND フィルタできる。
+
 ### app_settings キー
 - `ai_digest.enabled` 既定 '1'
 - `ai_digest.time` 既定 '06:00'
@@ -86,7 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
 ## API (server/routes/ai-hub.ts, mount `/api/ai`)
 
-- `GET  /api/ai/articles?limit=50` → `{ articles: AiArticle[] }`
+- `GET  /api/ai/articles?limit=50&from=&to=&tag=言語:TypeScript&tag=...` → `{ articles: AiArticle[] }` (for_date 範囲 + タグ AND 絞り込み。tag は `category:value` を繰り返し指定)
+- `GET  /api/ai/tags` → `{ tags: ArticleTagCount[] }` (全記事のタグを category+value で集計、件数降順。フィルタ chips 用)
+- `GET  /api/ai/digest/candidates?from=&to=` → `{ days: [{date, articleCount}] }` (範囲内で日記がある日 + 既存記事件数。一括生成 UI 用)
 - `GET  /api/ai/articles/:id` → `{ article }` (404 if none)
 - `POST /api/ai/articles/:id/transcribe` → 記事から note を作成し note_id を更新 → `{ note }`
 - `GET  /api/ai/seeds?status=pending` → `{ seeds: AiSeed[] }`
@@ -100,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
 `LlmTaskName` / `TASKS` / `TASK_DEFAULT_MODELS` に追加:
 - `article_topics` (既定 'sonnet') — 前日データから記事候補トピックを JSON で抽出・ランク付け
-- `article_write` (既定 'claude-opus-4-7[1m]') — 1 トピックを本記事 (Markdown) に。文体は下記スタイル指示を prompt に同梱
+- `article_write` (既定 'claude-opus-4-7[1m]') — 1 トピックを本記事 (Markdown) に。文体は下記スタイル指示を prompt に同梱。出力 JSON に `tags`(言語/プロジェクト/内容タイプ/技術領域/その他)も同梱させ、`プロジェクト`は source_refs のリポ名で決定論補完する (別 LLM 呼び出しは増やさない)
 - `ai_advice` (既定 'sonnet') — 週次データから助言 (Markdown)
 
 ### 文体スタイル (article_write prompt に同梱する固定文字列)

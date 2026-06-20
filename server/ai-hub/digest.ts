@@ -115,6 +115,7 @@ export async function runDigest(db: Db, dateStr: string): Promise<DigestResult> 
         source_refs: topic.sourceRefs,
         origin: 'digest',
         for_date: dateStr,
+        tags: written.tags,
       });
       const row = getAiArticle(db, id);
       if (row) articles.push(row);
@@ -165,6 +166,7 @@ export async function requestSeed(db: Db, seedId: number): Promise<AiArticle | n
     source_refs: seed.source_refs,
     origin: 'requested',
     for_date: seed.for_date,
+    tags: written.tags,
   });
   return getAiArticle(db, id);
 }

@@ -4946,6 +4946,116 @@ $('dictSearch')?.addEventListener('input', (e) => {
   state.dictSearch = (e.target as HTMLInputElement).value.trim();
   loadDictionary();
 });
+// ── さかのぼり AIノート生成 (日記タブ) ───────────────────────────────────────
+// 日記がある日について、 その日の作業ログ (activity_events + session-log) から
+// 既存 digest を走らせて AIノートを生成する。 生成物は 🤖 AI タブ「AI記事」に溜まる。
+let diaryBackfillRunning = false;
+let diaryBackfillAbort = false;
+
+function setupDiaryAiNotes() {
+  $('diaryBackfillToggle')?.addEventListener('click', () => {
+    $('diaryBackfillPanel')?.classList.toggle('hidden');
+  });
+  $('diaryWriteAiNote')?.addEventListener('click', writeAiNoteForCurrentDay);
+  $('diaryBackfillStart')?.addEventListener('click', () => void runDiaryBackfill());
+  $('diaryBackfillStop')?.addEventListener('click', () => { diaryBackfillAbort = true; });
+}
+
+async function writeAiNoteForCurrentDay() {
+  const date = state.diaryDetail?.date;
+  if (!date) { flashToast('日付が選択されていません'); return; }
+  const btn = $('diaryWriteAiNote') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  try {
+    const res = await fetch('/api/ai/digest/run-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date }),
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json() as { articles?: unknown[]; seeds?: unknown[] };
+    const na = data.articles?.length || 0;
+    const ns = data.seeds?.length || 0;
+    flashToast(`${date}: AI記事 ${na} 本 / 記事ネタ ${ns} 件を生成。🤖 AI タブで確認できます。`);
+  } catch (e) {
+    flashToast(`生成に失敗しました: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📝 AIノートを書く'; }
+  }
+}
+
+async function runDiaryBackfill() {
+  if (diaryBackfillRunning) return;
+  const from = ($('diaryBackfillFrom') as HTMLInputElement | null)?.value;
+  const to = ($('diaryBackfillTo') as HTMLInputElement | null)?.value;
+  const skipExisting = ($('diaryBackfillSkip') as HTMLInputElement | null)?.checked ?? true;
+  const statusEl = $('diaryBackfillStatus');
+  const progressEl = $('diaryBackfillProgress');
+  const logEl = $('diaryBackfillLog');
+  if (!from || !to) { flashToast('開始日・終了日を指定してください'); return; }
+  if (statusEl) statusEl.textContent = '候補日を取得中…';
+  if (logEl) logEl.innerHTML = '';
+
+  let days: { date: string; articleCount: number }[] = [];
+  try {
+    const res = await fetch(`/api/ai/digest/candidates?from=${from}&to=${to}`);
+    if (!res.ok) throw new Error(String(res.status));
+    days = (await res.json() as { days: typeof days }).days || [];
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `候補取得に失敗: ${(e as Error).message}`;
+    return;
+  }
+  // 古い順に処理する (候補は新しい順で返る)。
+  const targets = days
+    .filter(d => !skipExisting || d.articleCount === 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const skipped = days.length - targets.length;
+  if (!targets.length) {
+    if (statusEl) statusEl.textContent = `対象 0 日 (日記 ${days.length} 日中 ${skipped} 日は生成済み)。`;
+    return;
+  }
+
+  diaryBackfillRunning = true;
+  diaryBackfillAbort = false;
+  $('diaryBackfillStart')?.classList.add('hidden');
+  $('diaryBackfillStop')?.classList.remove('hidden');
+
+  let done = 0, ok = 0, failed = 0;
+  for (const t of targets) {
+    if (diaryBackfillAbort) break;
+    done++;
+    if (statusEl) statusEl.textContent = `${done}/${targets.length} 日を処理中… (生成済みスキップ ${skipped})`;
+    if (progressEl) progressEl.style.setProperty('--pct', `${Math.round((done / targets.length) * 100)}%`);
+    try {
+      const res = await fetch('/api/ai/digest/run-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: t.date }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json() as { articles?: unknown[]; seeds?: unknown[] };
+      ok++;
+      appendBackfillLog(logEl, `✅ ${t.date}: AI記事 ${data.articles?.length || 0} 本 / ネタ ${data.seeds?.length || 0} 件`);
+    } catch (e) {
+      failed++;
+      appendBackfillLog(logEl, `⚠️ ${t.date}: 失敗 (${(e as Error).message})`);
+    }
+  }
+
+  diaryBackfillRunning = false;
+  $('diaryBackfillStart')?.classList.remove('hidden');
+  $('diaryBackfillStop')?.classList.add('hidden');
+  const aborted = diaryBackfillAbort ? ' (停止)' : '';
+  if (statusEl) statusEl.textContent = `完了${aborted}: 成功 ${ok} 日 / 失敗 ${failed} 日 / スキップ ${skipped} 日。🤖 AI タブの「AI記事」で確認できます。`;
+}
+
+function appendBackfillLog(logEl: HTMLElement | null, msg: string) {
+  if (!logEl) return;
+  const li = document.createElement('li');
+  li.textContent = msg;
+  logEl.prepend(li);
+}
+
 $('diaryPrevMonth')?.addEventListener('click', () => {
   state.diaryMonth = shiftMonth(state.diaryMonth || todayMonth(), -1);
   refreshDiaryMonth();
@@ -4962,6 +5072,7 @@ $('diaryToday')?.addEventListener('click', () => {
 $('diaryGenerate')?.addEventListener('click', () => generateDiary());
 $('diaryImproveBtn')?.addEventListener('click', improveDiary);
 $('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
+setupDiaryAiNotes();
 $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
 // GitHub 設定の入口は ⚙ 設定 → 🔌 連携 / API key に移動済 (openAiSettings で load)
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
@@ -8004,7 +8115,6 @@ const WL_SUB_VIEWS = {
   tracks: 'tracksView',
   activity: 'wlActivityView',
   games: 'wlGamesView',
-  seeds: 'wlSeedsView',
 };
 
 // データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
@@ -8061,6 +8171,7 @@ function switchDatabaseSub(sub) {
 const AI_SUB_VIEWS = {
   recommend: 'recommendView',
   articles: 'aiArticlesView',
+  seeds: 'aiSeedsView',
   advice: 'aiAdviceView',
 };
 
@@ -8092,6 +8203,7 @@ function switchAiSub(sub) {
   }
   if (sub === 'recommend') loadRecommendations();
   if (sub === 'articles') void loadAiArticlesView();
+  if (sub === 'seeds') void loadAiSeedsView();
   if (sub === 'advice') void loadAiAdviceView();
 }
 
@@ -8426,7 +8538,6 @@ async function loadWorklog() {
   if (sub === 'tracks') return loadTracks();
   if (sub === 'activity') return loadWorklogActivityCard(date);
   if (sub === 'games') return loadWorklogGamesView(date);
-  if (sub === 'seeds') return void loadAiSeedsView();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
