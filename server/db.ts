@@ -5004,6 +5004,7 @@ export function listTaskCategories(db: Db): string[] {
     SELECT category
     FROM tasks
     WHERE category IS NOT NULL AND category != ''
+      AND status IN ('todo', 'doing')
   `).all() as { category: string | null }[];
   const fromTasks = new Set<string>();
   for (const row of rows) {
@@ -5175,6 +5176,10 @@ export interface NoteListRow extends NoteRow {
   preview: string;
 }
 
+function normalizeNoteText(text: string | undefined): string {
+  return (text ?? '').replace(/\r\n|\r/g, '\n');
+}
+
 export function listNotes(db: Db, opts: ListNotesOptions = {}): { items: NoteListRow[]; total: number } {
   const { q = '', kind = null, bookmarkId = null, limit = 50, offset = 0 } = opts;
   const where: string[] = [];
@@ -5326,7 +5331,7 @@ export function insertBlock(db: Db, noteId: string, input: InsertBlockInput): No
   const info = db.prepare(`
     INSERT INTO note_blocks (uuid, note_id, position, block_type, text, data_json)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(uuid, noteId, position, input.block_type, input.text ?? '', dataJson);
+  `).run(uuid, noteId, position, input.block_type, normalizeNoteText(input.text), dataJson);
   bumpNoteUpdated(db, noteId);
   const id = Number(info.lastInsertRowid);
   return db.prepare(`SELECT * FROM note_blocks WHERE id = ?`).get(id) as NoteBlockRow;
@@ -5344,7 +5349,7 @@ export function updateBlock(db: Db, noteId: string, blockUuid: string, patch: Re
     cols.push('block_type = ?'); args.push(patch.block_type);
   }
   if (typeof patch.text === 'string') {
-    cols.push('text = ?'); args.push(patch.text);
+    cols.push('text = ?'); args.push(normalizeNoteText(patch.text));
   }
   if ('data' in patch) {
     cols.push('data_json = ?');

@@ -56,18 +56,30 @@ export async function postRssNews(client: Client, db: Db): Promise<NewsPostResul
   return { ok: digestPosted, digestPosted, trendingPosted: false };
 }
 
-// Check once a minute and post at features.discord.news_hour (default 8:00),
-// once per local day.
+/** "HH:MM" または整数時刻を [hour, minute] に変換。既定 [8, 0]。 */
+function parseNewsTime(s: Record<string, string | null>): [number, number] {
+  const t = String(s['features.discord.news_time'] ?? '').trim();
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) {
+    const h = Number(m[1]); const min = Number(m[2]);
+    if (h >= 0 && h <= 23 && min >= 0 && min <= 59) return [h, min];
+  }
+  // 旧キー (整数時刻) にフォールバック
+  const hour = Number(s['features.discord.news_hour']);
+  return [Number.isFinite(hour) && hour >= 0 && hour <= 23 ? hour : 8, 0];
+}
+
+// Check once a minute and post at features.discord.news_time (default "08:00"),
+// once per local day. Falls back to features.discord.news_hour for compatibility.
 export function startNewsScheduler(client: Client, db: Db): void {
   setInterval(() => {
     try {
       const cfg = discordSettings(db);
       if (!cfg.news) return;
       const s = getAppSettings(db);
-      const hour = Number(s['features.discord.news_hour']);
-      const targetHour = Number.isFinite(hour) ? hour : 8;
+      const [targetHour, targetMin] = parseNewsTime(s);
       const now = new Date();
-      if (now.getHours() !== targetHour || now.getMinutes() !== 0) return;
+      if (now.getHours() !== targetHour || now.getMinutes() !== targetMin) return;
       const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       if (s['features.discord.news_last_sent'] === today) return;
       setAppSettings(db, { 'features.discord.news_last_sent': today });

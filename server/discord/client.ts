@@ -14,6 +14,7 @@ import { registerDailyTaskReviewInteractions } from './notify/daily-review.js';
 import { startMonitor } from './monitor.js';
 import { startNewsScheduler } from './news.js';
 import { startDiarySummaryScheduler } from './diary-summary.js';
+import { startRecommendScheduler } from './recommend-scheduler.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -39,6 +40,7 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
     startMonitor(c, db);
     startNewsScheduler(c, db);
     startDiarySummaryScheduler(c, db);
+    startRecommendScheduler(c, db);
   });
 
   client.on(Events.Error, (e) => {

@@ -5,7 +5,7 @@ import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings, setAppSettings } from '../db.js';
 import { discordSettings, discordReady, discordBotToken } from '../discord/settings.js';
-import { announceToDiscord, fireNotifyTriggerById } from '../discord/index.js';
+import { announceToDiscord, fireNotifyTriggerById, postRecommendNow } from '../discord/index.js';
 import { loadTriggers, saveTriggers, normalizeTriggers } from '../discord/notify/config.js';
 import { NOTIFY_CHANNEL_KINDS } from '../discord/notify/types.js';
 
@@ -32,6 +32,8 @@ const BOOL_KEYS: Record<string, string> = {
 const STRING_KEYS: Record<string, string> = {
   selfUserId: 'features.discord.self_user_id',
   guildId: 'features.discord.guild_id',
+  newsTime: 'features.discord.news_time',
+  recommendTime: 'features.discord.recommend_time',
 };
 
 export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
@@ -88,6 +90,13 @@ export function makeDiscordRouter(deps: DiscordRouterDeps): Hono {
     const res = await fireNotifyTriggerById(db, id);
     if (!res.ok) return c.json({ ok: false, reason: res.reason }, res.reason === 'not_found' ? 404 : 409);
     return c.json({ ok: true, count: res.count ?? 0 });
+  });
+
+  // おすすめを即時生成して #recommend に投稿 (手動発火 / 動作確認)。
+  r.post('/api/discord/recommend/post-now', async (c: Context) => {
+    const res = await postRecommendNow(db);
+    if (!res.ok) return c.json({ ok: false, reason: 'bot not ready or generation failed' }, 409);
+    return c.json({ ok: true, count: res.count });
   });
 
   // 通知を Discord #announce に流す seam (テスト / 外部トリガ用)。
