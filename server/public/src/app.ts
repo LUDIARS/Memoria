@@ -8388,6 +8388,14 @@ document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
 document.querySelectorAll('#aiSubtabs [data-ai-sub]').forEach(btn => {
   btn.addEventListener('click', () => switchAiSub(btn.dataset.aiSub));
 });
+// ── 起動時のタブ表示 (boot activation) ───────────────────────────────────
+// migrate*SubViews() は bookmarks / recommend 等のサブビューを hidden コンテナ
+// (databaseView / aiView) に取り込んで全て hidden にする。 既定タブ (state.tab)
+// を一度 switchTab して実際に中身を表示しないと、 active なタブボタンだけ光って
+// ビューが hidden のまま = 「データベース / AI タブが表示されない」状態になる。
+// (静的 HTML で唯一 hidden の無かった bookmarksView も migrate 後は hidden に
+//  なるため、 この明示的な活性化が必須。)
+switchTab(state.tab as string);
 // ai-view.ts のトーストを app.ts の flashToast に接続。
 setAiToast((msg) => flashToast(msg));
 $('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());

@@ -12,7 +12,8 @@ node_modules/
 server/multi/.infisical-creds.json
 
 # user data — never commit
-data/
+# ルートにアンカー (`/data/`)。無アンカーだと spec/data/ も無視され HARNESS check-spec-structure が落ちる。
+/data/
 *.db
 *.db-journal
 *.db-wal
