@@ -23,6 +23,7 @@ export async function createTaskDetailed(input: TaskInput): Promise<TaskCreateRe
     creator_type: 'ai',
     due_at: input.dueAt ?? null,
     category: input.category ?? null,
+    _skip_discord_notify: true, // message-router がすでに Discord に返信するため二重投稿を防ぐ
   });
   if (!res.ok) {
     return { ok: false, status: res.status, taskId: null, summary: `タスク作成失敗 (${res.status})` };

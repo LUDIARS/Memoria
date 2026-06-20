@@ -5,11 +5,13 @@ import type { Client } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
-import { postAnnouncement } from './notifier.js';
+import { postAnnouncement, postToChannel } from './notifier.js';
 import { findTrigger } from './notify/config.js';
 import { fireTrigger } from './notify/engine.js';
 import { postRssNews, type NewsPostResult } from './news.js';
 import { postRollingBriefing } from './briefing-post.js';
+import { formatSingleTaskCard } from './notify/card.js';
+import { postMorningRecommend } from './recommend-scheduler.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -65,6 +67,34 @@ export async function postBriefingToDiscord(db: Db, parts: string[]): Promise<bo
 export async function postRssNewsNow(db: Db): Promise<NewsPostResult> {
   if (!current?.isReady()) return { ok: false, reason: 'not_ready', digestPosted: false, trendingPosted: false };
   return postRssNews(current, db);
+}
+
+/**
+ * タスク登録を #task チャンネルに通知する seam。
+ * Discord RWF 経由の登録はすでに返信済みのため `_skip_discord_notify` フラグで抑制。
+ * Bot 未起動なら何もしない (best-effort)。
+ */
+export async function postTaskToDiscord(
+  db: Db,
+  task: { title: string; category: string | null; due_at: string | null; details?: string | null },
+): Promise<void> {
+  if (!current?.isReady()) return;
+  const card = formatSingleTaskCard({
+    title: task.title,
+    category: task.category,
+    dueAt: task.due_at,
+    details: task.details,
+  });
+  await postToChannel(current, db, 'task', card);
+}
+
+/**
+ * 朝のおすすめを即時生成して #recommend に投稿する seam (設定 UI のテスト送信用)。
+ * Bot 未起動なら false。
+ */
+export async function postRecommendNow(db: Db): Promise<{ ok: boolean; count: number }> {
+  if (!current?.isReady()) return { ok: false, count: 0 };
+  return postMorningRecommend(current, db);
 }
 
 /**

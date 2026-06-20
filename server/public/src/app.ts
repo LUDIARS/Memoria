@@ -7530,23 +7530,27 @@ function closeTaskEditor() {
 function renderTaskCategoryMenu() {
   const list = $('tasksCategoryList');
   if (!list) return;
-  // Distinct categories from currently loaded tasks (each task may have many) + pre-fetched cache
+  // カテゴリ表示/カウントは todo/doing のアクティブタスクのみ対象
+  const activeTasks = state.taskItems.filter(t => t.status === 'todo' || t.status === 'doing');
   const fromTasks = new Set();
-  for (const t of state.taskItems) {
+  for (const t of activeTasks) {
     for (const c of parseTaskCategories(t.category)) fromTasks.add(c);
   }
   const merged = new Set([...(_taskCategoriesCache || []), ...fromTasks]);
-  const cats = [...merged].sort((a, b) => a.localeCompare(b));
+  // アクティブタスクが 0 件のカテゴリはパネルに表示しない
+  const cats = [...merged].filter(c => (counts[c] || 0) > 0).sort((a, b) => a.localeCompare(b));
   const counts = { __none__: 0 };
-  for (const t of state.taskItems) {
+  for (const t of activeTasks) {
     const cs = parseTaskCategories(t.category);
     if (!cs.length) counts.__none__ += 1;
     for (const c of cs) counts[c] = (counts[c] || 0) + 1;
   }
   const buttons = [
-    `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${state.taskItems.length}</span></button>`,
-    `<button type="button" data-task-cat="__none__" class="${state.taskCategoryFilter === '__none__' ? 'active' : ''}">未分類 <span class="muted">${counts['__none__'] || 0}</span></button>`,
+    `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${activeTasks.length}</span></button>`,
   ];
+  if ((counts['__none__'] || 0) > 0) {
+    buttons.push(`<button type="button" data-task-cat="__none__" class="${state.taskCategoryFilter === '__none__' ? 'active' : ''}">未分類 <span class="muted">${counts['__none__']}</span></button>`);
+  }
   for (const c of cats) {
     buttons.push(
       `<button type="button" data-task-cat="${escapeHtml(c)}" class="${state.taskCategoryFilter === c ? 'active' : ''}" title="${escapeHtml(c)}">

@@ -70,6 +70,29 @@ Memoria server に discord.js Gateway Bot を同梱し、Discord を **行動ロ
 | おすすめ | `/recommend` slash | `recommendations-ai` → 結果投稿 |
 | アナウンス | 既存通知トリガー | `notifier` → `#announce` 投稿 + 必要なら self メンション |
 
+## タスク登録後の Discord 投稿 (2026-06-18)
+
+`POST /api/tasks` 完了後、自動的に `#task` チャンネルへ登録内容を投稿する。
+
+- **投稿内容**: `formatSingleTaskCard` 形式 (タイトル / カテゴリ / 期日 / 詳細)。
+- **二重投稿防止**: Discord RWF (`message-router.ts` → `actions/task.ts`) 経由の登録は
+  リクエストボディに `_skip_discord_notify: true` を付け、`routes/task.ts` で skip する。
+- **best-effort**: Bot 未起動 / 未接続なら何もしない。
+
+## RWF カテゴリ命名ルール
+
+AI ルーターが `classify()` でカテゴリを決定するとき、および Claude がタスクを登録するときは
+以下のルールに従う。
+
+| 種類 | カテゴリ名 |
+|------|----------|
+| 人間が手で行う確認・検証・チェック・レビュー | `確認作業` を必ず含める |
+| プロジェクト開発タスク | プロジェクト正式名 (例: `KuzuSurvivors`, `Tirocinium`, `Memoria`) |
+| 複数該当 | カンマ区切り (例: `KuzuSurvivors, 確認作業`) |
+| 上記外 | 内容に合う語 (例: `買い物`, `学習`) または空 |
+
+**禁止パターン**: 略称 (`KS開発`, `Tr開発`) 、「開発」接尾語の単独使用。
+
 ## AI ルーター (Imperativus 風 / 制限付き)
 
 `#task/#memo/#bookmark/#meal` 以外への投稿、または曖昧な投稿は AI で意図分類し

@@ -12,6 +12,7 @@ import {
 } from '../db.js';
 import { formatLocalDate } from '../diary.js';
 import { privacySettings } from '../lib/privacy.js';
+import { postTaskToDiscord } from '../discord/index.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -96,7 +97,7 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
   r.post('/api/tasks', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as
       { title?: unknown; details?: unknown; status?: unknown; kind?: unknown; creator_type?: unknown;
-        due_at?: unknown; share_actio?: unknown; category?: unknown };
+        due_at?: unknown; share_actio?: unknown; category?: unknown; _skip_discord_notify?: unknown };
     const title = String(body.title ?? '').trim();
     if (!title) return c.json({ error: 'title required' }, 400);
     const status: 'todo' | 'doing' | 'done' = (['todo', 'doing', 'done'] as const).includes(body.status as 'todo' | 'doing' | 'done')
@@ -122,6 +123,9 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
       content: created.title,
       metadata: created.due_at ? { due_at: created.due_at } : undefined,
     });
+    if (!body._skip_discord_notify) {
+      void postTaskToDiscord(db, created).catch(() => {});
+    }
     return c.json({ task: created }, 201);
   });
 
