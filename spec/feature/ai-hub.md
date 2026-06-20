@@ -81,7 +81,9 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 > **tags 列は後付け migration**: 既存 DB には ai_articles が既にあるため、`ALTER TABLE ai_articles ADD COLUMN tags TEXT` を PRAGMA table_info ガード付きで冪等発行し、その直後に `CREATE INDEX idx_ai_articles_for_date ON ai_articles(for_date DESC)` を発行する ([[feedback_sqlite_create_index_after_alter]]: INDEX は ALTER の後)。
 
 #### タグの分類軸
-`言語` / `プロジェクト` / `内容タイプ` / `技術領域` / `その他` の 5 分類 (`TAG_CATEGORIES`)。各記事に category ごと 0〜3 個。`プロジェクト` は source_refs のリポ名から決定論的に補完し、それ以外は `article_write` LLM が本文と同時に JSON で返す。`日付 (for_date) × タグ` で AND フィルタできる。
+`言語` / `プロジェクト` / `内容タイプ` / `技術領域` / `その他` の 5 分類 (`TAG_CATEGORIES`)。各記事に category ごと 0〜3 個。`日付 (for_date) × タグ` で AND フィルタできる。
+
+タグ付けは **完成記事から専用の `article_tags` LLM (haiku) で抽出** する。当初は `article_write` の出力 JSON に tags を同梱させたが、長文の本文 (Markdown) と同じ JSON に tags を載せると末尾の tags が欠落・破損して `プロジェクト` (決定論) だけが残る不具合が出たため、短い出力だけを返す独立タスクに分離した。`プロジェクト` は source_refs のリポ名から決定論補完し、`article_tags` の結果とマージする。旧生成記事の救済に `POST /api/ai/articles/retag` (LLM 軸タグが欠けた記事を再タグ付け) を用意。
 
 ### app_settings キー
 - `ai_digest.enabled` 既定 '1'
@@ -99,6 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
 - `GET  /api/ai/articles?limit=50&from=&to=&tag=言語:TypeScript&tag=...` → `{ articles: AiArticle[] }` (for_date 範囲 + タグ AND 絞り込み。tag は `category:value` を繰り返し指定)
 - `GET  /api/ai/tags` → `{ tags: ArticleTagCount[] }` (全記事のタグを category+value で集計、件数降順。フィルタ chips 用)
+- `POST /api/ai/articles/retag` (body `{id?}`) → `{ updated, considered }` (id 指定で 1 件、無指定で LLM 軸タグが欠けた記事を一括再タグ付け)
 - `GET  /api/ai/digest/candidates?from=&to=` → `{ days: [{date, articleCount}] }` (範囲内で日記がある日 + 既存記事件数。一括生成 UI 用)
 - `GET  /api/ai/articles/:id` → `{ article }` (404 if none)
 - `POST /api/ai/articles/:id/transcribe` → 記事から note を作成し note_id を更新 → `{ note }`
@@ -113,7 +116,8 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
 `LlmTaskName` / `TASKS` / `TASK_DEFAULT_MODELS` に追加:
 - `article_topics` (既定 'sonnet') — 前日データから記事候補トピックを JSON で抽出・ランク付け
-- `article_write` (既定 'claude-opus-4-7[1m]') — 1 トピックを本記事 (Markdown) に。文体は下記スタイル指示を prompt に同梱。出力 JSON に `tags`(言語/プロジェクト/内容タイプ/技術領域/その他)も同梱させ、`プロジェクト`は source_refs のリポ名で決定論補完する (別 LLM 呼び出しは増やさない)
+- `article_write` (既定 'claude-opus-4-7[1m]') — 1 トピックを本記事 (Markdown) に。文体は下記スタイル指示を prompt に同梱
+- `article_tags` (既定 'haiku') — 完成記事 (title + body) から 5 分類タグ (言語/プロジェクト/内容タイプ/技術領域/その他) を JSON 配列で抽出。短文・安価。`プロジェクト` は source_refs のリポ名で決定論補完してマージ
 - `ai_advice` (既定 'sonnet') — 週次データから助言 (Markdown)
 
 ### 文体スタイル (article_write prompt に同梱する固定文字列)

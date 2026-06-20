@@ -6,11 +6,12 @@ import type BetterSqlite3 from 'better-sqlite3';
 import {
   listAiArticles, getAiArticle, setAiArticleNote,
   listAiArticleTags, listDiaryDigestCandidates,
+  setAiArticleTags, listAiArticlesMissingLlmTags,
   listAiSeeds, getAiSeed, updateAiSeedStatus,
   latestAiAdvice,
   insertNote, insertBlock, getNote,
 } from '../db.js';
-import { runDigest, requestSeed, runAdvice } from '../ai-hub/index.js';
+import { runDigest, requestSeed, runAdvice, generateArticleTags } from '../ai-hub/index.js';
 import type { ArticleTag } from '../ai-hub/types.js';
 import { yesterdayLocal, formatLocalDate } from '../diary.js';
 
@@ -55,6 +56,34 @@ export function makeAiHubRouter(deps: AiHubRouterDeps): Hono {
   // フィルタ chips 用: 全記事のタグを category+value で集計。
   r.get('/api/ai/tags', (c: Context) => {
     return c.json({ tags: listAiArticleTags(db) });
+  });
+
+  // 再タグ付け: LLM 軸タグ (言語/内容タイプ/技術領域/その他) が欠けた記事を
+  // 完成済み本文から再タグ付けする。 body.id 指定で 1 件、 無指定で欠落分一括。
+  r.post('/api/ai/articles/retag', async (c: Context) => {
+    const body = await c.req.json().catch(() => ({})) as { id?: unknown };
+    const targets = typeof body.id === 'number'
+      ? [getAiArticle(db, body.id)].filter((a): a is NonNullable<typeof a> => !!a)
+      : listAiArticlesMissingLlmTags(db);
+    let updated = 0;
+    for (const a of targets) {
+      try {
+        const llmTags = await generateArticleTags(a.title, a.body_md);
+        if (!llmTags.length) continue;
+        const project = a.tags.filter((t) => t.category === 'プロジェクト');
+        const merged: ArticleTag[] = [];
+        const seen = new Set<string>();
+        for (const t of [...project, ...llmTags]) {
+          const k = `${t.category} ${t.value}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          merged.push(t);
+        }
+        setAiArticleTags(db, a.id, merged);
+        updated++;
+      } catch { /* 1 件失敗で止めない */ }
+    }
+    return c.json({ updated, considered: targets.length });
   });
 
   r.get('/api/ai/articles/:id', (c: Context) => {
