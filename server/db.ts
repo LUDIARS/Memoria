@@ -6112,6 +6112,11 @@ export function setAiArticleTags(db: Db, id: number, tags: ArticleTag[]): void {
     .run(tags.length ? JSON.stringify(tags) : null, id);
 }
 
+/** 記事のタイトル + 本文を差し替える (raw JSON 混入の救済用)。 */
+export function setAiArticleBody(db: Db, id: number, title: string, body_md: string): void {
+  db.prepare(`UPDATE ai_articles SET title = ?, body_md = ? WHERE id = ?`).run(title, body_md, id);
+}
+
 /**
  * LLM 由来のタグ軸 (言語/内容タイプ/技術領域/その他) が 1 つも無い記事を返す。
  * プロジェクトタグしか無い = 旧生成 (article_write が tags を落とした) 記事の検出に使う。
