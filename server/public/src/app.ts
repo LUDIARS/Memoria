@@ -168,6 +168,12 @@ import { initHelpDrawer, openHelpFor } from './help-drawer.js';
 import { silentGetPosition, requestPosition, type PositionLike } from './geo.js';
 import { loadRssView } from './rss-view.js';
 import { loadGoalsView } from './goals-view.js';
+import {
+  loadAiArticlesView,
+  loadAiAdviceView,
+  loadAiSeedsView,
+  setAiToast,
+} from './ai-view.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
@@ -517,12 +523,6 @@ async function api<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
 function apiSilent<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
   return api<T>(path, { ...(opts || {}), silent: true });
 }
-
-// 元 JS で `funcName = function () {...}` の形で宣言なしに代入 + 後段で再代入
-// される関数群は、 TS 化に当たって `let` で前置宣言する。 これらは module
-// スコープのまま、 元 JS と同じく後段の再代入 (5340/5663 行付近) を受ける。
-let upgradeImplementationFormMarkup: () => void = () => { /* placeholder, reassigned later */ };
-let setupImplementationFormKeyboard: () => void = () => { /* placeholder, reassigned later */ };
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -1149,7 +1149,9 @@ function jobLabel(item) {
 // 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
 // meals は top-level タブ。
 const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'external']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'external', 'worklist']);
+// 'recommend' は 🤖 AI タブの「✨ おすすめ」 サブへ集約 (旧トップレベルタブは廃止)。
+const AI_REDIRECT_TABS = new Set(['recommend']);
 
 function switchTab(tab) {
   // Multi モード時、 個人ログ系タブはグレーアウト = 切替を弾く。
@@ -1166,11 +1168,21 @@ function switchTab(tab) {
     return;
   }
   if (DATABASE_REDIRECT_TABS.has(tab)) {
-    const sub = tab;
+    // 'worklist' は database の 'projects' サブに改名・移設済み。
+    const sub = tab === 'worklist' ? 'projects' : tab;
     state.database = state.database || {};
     state.database.sub = sub;
     switchTab('database');
     switchDatabaseSub(sub);
+    return;
+  }
+  if (AI_REDIRECT_TABS.has(tab)) {
+    // 'recommend' は 🤖 AI タブの 'recommend' サブへ。
+    const sub = tab;
+    state.ai = state.ai || {};
+    state.ai.sub = sub;
+    switchTab('ai');
+    switchAiSub(sub);
     return;
   }
   state.tab = tab;
@@ -1182,17 +1194,15 @@ function switchTab(tab) {
   $('databaseView')?.classList.toggle('hidden', tab !== 'database');
   $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
-  $('recommendView').classList.toggle('hidden', tab !== 'recommend');
+  $('aiView')?.classList.toggle('hidden', tab !== 'ai');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
-  $('worklistView')?.classList.toggle('hidden', tab !== 'worklist');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
-  $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   $('packetmonView')?.classList.toggle('hidden', tab !== 'packetmon');
   $('rssView')?.classList.toggle('hidden', tab !== 'rss');
@@ -1204,19 +1214,21 @@ function switchTab(tab) {
     const sub = state.database?.sub || 'bookmarks';
     switchDatabaseSub(sub);
   }
+  if (tab === 'ai') {
+    // Re-show whichever AI sub was last picked (既定 = おすすめ)。
+    const sub = state.ai?.sub || 'recommend';
+    switchAiSub(sub);
+  }
   if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
-  if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
-  if (tab === 'worklist') loadRepoWatch();
   if (tab === 'transit') loadTransit();
   if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
-  if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
   if (tab === 'packetmon') { loadPacketMonitor(); void loadPacketmonProcesses(); }
   if (tab === 'rss') loadRssView();
@@ -5050,11 +5062,10 @@ function hideModal(panelId) {
   const appsOpen = $('appsDetail') ? !$('appsDetail').classList.contains('hidden') : false;
   const reviewTgtOpen = $('reviewTargetModal') ? !$('reviewTargetModal').classList.contains('hidden') : false;
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
-  const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
   const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
   const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -5066,7 +5077,6 @@ function closeAllModals() {
   if ($('appsDetail')) hideModal('appsDetail');
   if ($('reviewTargetModal')) hideModal('reviewTargetModal');
   hideModal('taskEditorModal');
-  hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
   if ($('agentProjectEditor')) hideModal('agentProjectEditor');
   if ($('agentRunModal')) hideModal('agentRunModal');
@@ -6171,7 +6181,6 @@ let ensureMemoriaFeatureViews = function () {
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
     for (const spec of [
       ['tasks', '📝 タスク'],
-      ['impl', '✨ 実装自慢'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -6203,31 +6212,6 @@ let ensureMemoriaFeatureViews = function () {
           </div>
         </div>
         <div id="tasksList" class="simple-list"></div>
-      </div>`;
-    content.appendChild(div);
-  }
-  if (content && !$('implView')) {
-    const div = document.createElement('div');
-    div.id = 'implView';
-    div.className = 'hidden';
-    div.innerHTML = `
-      <div class="simple-panel">
-        <div class="simple-panel-head">
-          <h2>実装自慢</h2>
-          <button id="implNewBtn" type="button">+ ノートを追加</button>
-        </div>
-        <div id="implForm" class="simple-form hidden">
-          <input id="implProduct" type="text" placeholder="プロダクト名" />
-          <input id="implTitle" type="text" placeholder="短いタイトル" />
-          <textarea id="implGood" rows="4" placeholder="良かった点"></textarea>
-          <textarea id="implBad" rows="3" placeholder="悪かった点 / トレードオフ"></textarea>
-          <label class="check-inline multi-only-control"><input id="implShareable" type="checkbox" /> シェア可能にする</label>
-          <div class="simple-actions">
-            <button id="implAddBtn">追加</button>
-            <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
-          </div>
-        </div>
-        <div id="implList" class="simple-list"></div>
       </div>`;
     content.appendChild(div);
   }
@@ -6440,9 +6424,7 @@ let ensureMemoriaFeatureViews = function () {
   // 「AI 実装プロジェクト」 タブは廃止 (タスクの 🤖 AI実装 機能と共に休止)。
 
   upgradeTaskFormMarkup();
-  upgradeImplementationFormMarkup();
   setupTaskFormKeyboard();
-  setupImplementationFormKeyboard();
 
   if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
     $('taskForm')?.classList.remove('hidden');
@@ -6450,12 +6432,6 @@ let ensureMemoriaFeatureViews = function () {
   };
   if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
   if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
-  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
-    $('implForm')?.classList.remove('hidden');
-    $('implProduct')?.focus();
-  };
-  if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
-  if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
 };
 
 function localDatetimeValue(date) {
@@ -6531,69 +6507,6 @@ function setupTaskFormKeyboard() {
     }
   };
   if (details) details.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      add?.focus();
-    }
-  };
-}
-
-upgradeImplementationFormMarkup = function () {
-  const form = $('implForm');
-  if (!form || form.dataset.upgraded === '1') return;
-  form.dataset.upgraded = '1';
-  form.innerHTML = `
-    <label class="simple-field">
-      <span>プロダクト名</span>
-      <input id="implProduct" type="text" placeholder="Memoria" />
-    </label>
-    <label class="simple-field">
-      <span>タイトル</span>
-      <input id="implTitle" type="text" placeholder="短いタイトル" />
-    </label>
-    <label class="simple-field">
-      <span>良かった点</span>
-      <textarea id="implGood" rows="5" placeholder="実装して良かった点"></textarea>
-    </label>
-    <label class="simple-field">
-      <span>悪かった点 / トレードオフ</span>
-      <textarea id="implBad" rows="4" placeholder="悪かった点、迷った点、次に直したい点"></textarea>
-    </label>
-    <label class="simple-check-row multi-only-control">
-      <input id="implShareable" type="checkbox" tabindex="-1" />
-      <span>シェア可能にする</span>
-    </label>
-    <div class="simple-actions">
-      <button id="implAddBtn">追加</button>
-      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
-    </div>`;
-};
-
-setupImplementationFormKeyboard = function () {
-  const product = $('implProduct');
-  const title = $('implTitle');
-  const good = $('implGood');
-  const bad = $('implBad');
-  const add = $('implAddBtn');
-  if (product) product.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      title?.focus();
-    }
-  };
-  if (title) title.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      good?.focus();
-    }
-  };
-  if (good) good.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      bad?.focus();
-    }
-  };
-  if (bad) bad.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       add?.focus();
@@ -6809,245 +6722,6 @@ let addTaskFromForm = async function () {
   loadTasks();
 };
 
-// `let` 形式 (元 JS は後段で上書き再定義あり)
-let loadImplementationNotes = async function () {
-  ensureMemoriaFeatureViews();
-  const r = await api('/api/implementation-notes');
-  const list = $('implList');
-  const items = r.items || [];
-  if (!list) return;
-  if (!items.length) {
-    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
-    return;
-  }
-  list.innerHTML = items.map(n => `
-    <div class="simple-item" data-id="${n.id}">
-      <div class="simple-item-head"><strong>${escapeHtml(n.product)}: ${escapeHtml(n.title)}</strong></div>
-      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
-      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
-      <div class="simple-actions">
-        <button class="danger" data-impl-delete="${n.id}">削除</button>
-      </div>
-    </div>`).join('');
-  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
-      loadImplementationNotes();
-    });
-  });
-};
-
-// `let` 形式 (元 JS は後段で上書き再定義あり)
-let addImplementationNoteFromForm = async function () {
-  const product = $('implProduct')?.value.trim();
-  const title = $('implTitle')?.value.trim();
-  if (!product || !title) return;
-  await api('/api/implementation-notes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      product,
-      title,
-      good_points: $('implGood')?.value.trim() || '',
-      bad_points: $('implBad')?.value.trim() || '',
-      shareable: !!$('implShareable')?.checked,
-    }),
-  });
-  for (const id of ['implProduct', 'implTitle', 'implGood', 'implBad']) $(id).value = '';
-  $('implForm')?.classList.add('hidden');
-  loadImplementationNotes();
-};
-
-function implementationAttachmentLabel(type) {
-  return ({
-    github: 'GitHub のプロダクト',
-    screenshot: 'スクリーンキャプチャ',
-    video: '動画',
-    code: 'コードスニペット',
-    other: 'その他',
-  })[type] || '';
-}
-
-function renderImplementationAttachment(note) {
-  const type = note.attachment_type || '';
-  const value = note.attachment_value || '';
-  if (!type || !value) return '';
-  const label = implementationAttachmentLabel(type) || '添付';
-  if (type === 'code') {
-    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><pre><code>${escapeHtml(value)}</code></pre></div>`;
-  }
-  if (/^https?:\/\//i.test(value)) {
-    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><a href="${escapeHtml(value)}" target="_blank" rel="noopener">${escapeHtml(value)}</a></div>`;
-  }
-  return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><p>${escapeHtml(value)}</p></div>`;
-}
-
-upgradeImplementationFormMarkup = function () {
-  const form = $('implForm');
-  if (!form || form.dataset.upgraded === '2') return;
-  form.dataset.upgraded = '2';
-  form.innerHTML = `
-    <label class="simple-field">
-      <span>ドヤポイント</span>
-      <input id="implTitle" type="text" placeholder="ここを作り込んだ、ここが気持ちいい" />
-    </label>
-    <label class="simple-field">
-      <span>良かった点</span>
-      <textarea id="implGood" rows="5" placeholder="設計、実装、体験で良かった点"></textarea>
-    </label>
-    <label class="simple-field">
-      <span>悪かった点 / トレードオフ</span>
-      <textarea id="implBad" rows="4" placeholder="迷った点、直したい点、次に改善する点"></textarea>
-    </label>
-    <label class="simple-field">
-      <span>添付するもの</span>
-      <select id="implAttachmentType">
-        <option value="">なし</option>
-        <option value="github">GitHub のプロダクト</option>
-        <option value="screenshot">スクリーンキャプチャ</option>
-        <option value="video">動画</option>
-        <option value="code">コードスニペット</option>
-        <option value="other">その他</option>
-      </select>
-    </label>
-    <label class="simple-field">
-      <span>添付内容</span>
-      <textarea id="implAttachmentValue" rows="4" placeholder="URL、画像や動画のパス、コードなどを 1 つだけ記入"></textarea>
-    </label>
-    <label class="simple-check-row multi-only-control">
-      <input id="implShareable" type="checkbox" tabindex="-1" />
-      <span>シェア可能にする</span>
-    </label>
-    <div class="simple-actions">
-      <button id="implAddBtn">追加</button>
-      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
-    </div>`;
-};
-
-setupImplementationFormKeyboard = function () {
-  const title = $('implTitle');
-  const good = $('implGood');
-  const bad = $('implBad');
-  const attachmentType = $('implAttachmentType');
-  const attachmentValue = $('implAttachmentValue');
-  const add = $('implAddBtn');
-  if (title) title.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      good?.focus();
-    }
-  };
-  if (good) good.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      bad?.focus();
-    }
-  };
-  if (bad) bad.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      attachmentType?.focus();
-    }
-  };
-  if (attachmentType) attachmentType.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      attachmentValue?.focus();
-    }
-  };
-  if (attachmentValue) attachmentValue.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      add?.focus();
-    }
-  };
-};
-
-loadImplementationNotes = async function () {
-  ensureMemoriaFeatureViews();
-  const r = await api('/api/implementation-notes');
-  const list = $('implList');
-  const items = r.items || [];
-  if (!list) return;
-  if (!items.length) {
-    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
-    return;
-  }
-  list.innerHTML = items.map(n => `
-    <div class="simple-item" data-id="${n.id}" data-impl-open="${n.id}">
-      ${multiUsersHeader(n as Loose)}
-      <div class="simple-item-head"><strong>${escapeHtml(n.title)}</strong></div>
-      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
-      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
-      ${renderImplementationAttachment(n)}
-      <div class="simple-actions">
-        <button class="danger" data-impl-delete="${n.id}">削除</button>
-      </div>
-    </div>`).join('');
-  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
-      loadImplementationNotes();
-    });
-  });
-  list.querySelectorAll('[data-impl-open]').forEach(el => {
-    el.addEventListener('click', (ev) => {
-      if (ev.target.closest('button,a,input,select,textarea')) return;
-      const id = Number(el.dataset.implOpen || 0);
-      const note = items.find((n) => n.id === id);
-      if (note) openImplEditor(note);
-    });
-  });
-};
-
-addImplementationNoteFromForm = async function () {
-  const title = $('implEditorTitle')?.value.trim();
-  if (!title) return;
-  const noteId = Number($('implEditorNoteId')?.value || 0);
-  const attachmentType = $('implEditorAttachmentType')?.value || '';
-  const attachmentValue = $('implEditorAttachmentValue')?.value.trim() || '';
-  // attachment_type=github の場合は github.com の URL を必須に
-  if (attachmentType === 'github') {
-    let host = '';
-    try { host = new URL(attachmentValue).hostname.toLowerCase(); } catch {}
-    if (!/^(www\.)?github\.com$|\.github\.com$/.test(host)) {
-      alert('GitHub のプロダクトを選択した場合は GitHub の URL (https://github.com/...) を「添付内容」に入れてください。');
-      $('implEditorAttachmentValue')?.focus();
-      return;
-    }
-  }
-  if (attachmentType === 'article') {
-    if (!/^https?:\/\//.test(attachmentValue)) {
-      alert('「記事」を選択した場合は URL を「添付内容」に入れてください。');
-      $('implEditorAttachmentValue')?.focus();
-      return;
-    }
-  }
-  const payload = {
-    title,
-    good_points: $('implEditorGood')?.value.trim() || '',
-    bad_points: $('implEditorBad')?.value.trim() || '',
-    attachment_type: attachmentType,
-    attachment_value: attachmentValue,
-    shareable: !!$('implEditorShareable')?.checked,
-  };
-  if (noteId) {
-    await api(`/api/implementation-notes/${noteId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } else {
-    await api('/api/implementation-notes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  }
-  closeImplEditor();
-  loadImplementationNotes();
-};
 
 renderDomainList = function () {
   const ul = $('domainList');
@@ -7852,133 +7526,6 @@ function closeTaskEditor() {
   hideModal('taskEditorModal');
 }
 
-function openImplEditor(note = null) {
-  const isEdit = !!note;
-  if (!$('implEditorModal')) return;
-  $('implEditorHeading').textContent = isEdit ? '実装自慢を変更' : '実装自慢を追加';
-  $('implEditorNoteId').value = note?.id ? String(note.id) : '';
-  $('implEditorTitle').value = note?.title || '';
-  $('implEditorGood').value = note?.good_points || '';
-  $('implEditorBad').value = note?.bad_points || '';
-  $('implEditorAttachmentType').value = note?.attachment_type || '';
-  $('implEditorAttachmentValue').value = note?.attachment_value || '';
-  $('implEditorShareable').checked = !!note?.shareable;
-  if ($('implEditorAttachmentHint')) $('implEditorAttachmentHint').textContent = '';
-  showModal('implEditorModal');
-  $('implEditorTitle').focus();
-}
-
-// ── implEditor paste / drop 自動分類 ─────────────────────────────────────
-const _GITHUB_HOST = /(^|\.)github\.com$/i;
-const _CODE_HINT = /^\s*(import |export |function |class |const |let |var |if \(|for \(|while \(|def |#include|<\?php|public class|fn |package )/m;
-
-function _classifyTextValue(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed) return null;
-  // URL one-liner?
-  const urlMatch = trimmed.match(/^https?:\/\/\S+$/);
-  if (urlMatch) {
-    let host = '';
-    try { host = new URL(trimmed).hostname.toLowerCase(); } catch {}
-    if (_GITHUB_HOST.test(host)) return { type: 'github', value: trimmed };
-    return { type: 'article', value: trimmed };
-  }
-  // Code-ish? (multiple lines + code keywords)
-  const lines = trimmed.split(/\r?\n/);
-  if (lines.length >= 2 && _CODE_HINT.test(trimmed)) {
-    return { type: 'code', value: trimmed };
-  }
-  return null; // free text → leave as-is
-}
-
-function _applyAutoClassification(result, hint) {
-  if (!result) return;
-  const sel = $('implEditorAttachmentType');
-  const val = $('implEditorAttachmentValue');
-  const help = $('implEditorAttachmentHint');
-  if (sel) sel.value = result.type;
-  if (val) val.value = result.value;
-  if (help) help.textContent = hint || `${result.type} として自動分類しました。`;
-}
-
-function wireImplEditorPasteAndDrop(modal) {
-  // paste — テキストか画像
-  modal.addEventListener('paste', async (ev) => {
-    const items = ev.clipboardData?.items || [];
-    let handled = false;
-    for (const it of items) {
-      if (it.kind === 'file') {
-        const file = it.getAsFile();
-        if (!file) continue;
-        if (file.type.startsWith('image/')) {
-          const dataUrl = await _fileToDataUrl(file);
-          _applyAutoClassification({ type: 'screenshot', value: dataUrl }, `スクリーンキャプチャ (${file.type}, ${(file.size/1024).toFixed(0)} KB)`);
-          handled = true;
-          break;
-        }
-        if (file.type.startsWith('video/')) {
-          _applyAutoClassification({ type: 'video', value: file.name }, `動画ファイル: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB) — パスや URL を手動で記入してください`);
-          handled = true;
-          break;
-        }
-      }
-    }
-    if (handled) { ev.preventDefault(); return; }
-    // text path: 直接 paste されると textarea にも入るので preventDefault しない。
-    // 自動分類は textarea の value を見て決める。
-    setTimeout(() => {
-      const text = $('implEditorAttachmentValue')?.value || '';
-      const r = _classifyTextValue(text);
-      if (r) _applyAutoClassification(r, `${r.type === 'github' ? 'GitHub URL' : r.type === 'article' ? '記事 URL' : 'コードスニペット'} として自動分類しました。`);
-    }, 0);
-  });
-  // drop — ファイル
-  modal.addEventListener('dragover', (ev) => {
-    if (ev.dataTransfer?.types?.includes('Files')) {
-      ev.preventDefault();
-      modal.classList.add('drag-over');
-    }
-  });
-  modal.addEventListener('dragleave', () => modal.classList.remove('drag-over'));
-  modal.addEventListener('drop', async (ev) => {
-    modal.classList.remove('drag-over');
-    const files = [...(ev.dataTransfer?.files || [])];
-    const text = ev.dataTransfer?.getData('text/uri-list') || ev.dataTransfer?.getData('text/plain') || '';
-    if (files.length) {
-      ev.preventDefault();
-      const file = files[0];
-      if (file.type.startsWith('image/')) {
-        const dataUrl = await _fileToDataUrl(file);
-        _applyAutoClassification({ type: 'screenshot', value: dataUrl }, `スクリーンキャプチャ ${file.name}`);
-        return;
-      }
-      if (file.type.startsWith('video/')) {
-        _applyAutoClassification({ type: 'video', value: file.name }, `動画ファイル: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)`);
-        return;
-      }
-      _applyAutoClassification({ type: 'other', value: file.name }, `その他ファイル: ${file.name}`);
-      return;
-    }
-    if (text) {
-      ev.preventDefault();
-      const r = _classifyTextValue(text);
-      if (r) _applyAutoClassification(r, '');
-    }
-  });
-}
-
-function _fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(fr.result);
-    fr.onerror = () => reject(fr.error);
-    fr.readAsDataURL(file);
-  });
-}
-
-function closeImplEditor() {
-  hideModal('implEditorModal');
-}
 
 function renderTaskCategoryMenu() {
   const list = $('tasksCategoryList');
@@ -8180,7 +7727,6 @@ function renderTaskBoard() {
 
 function decorateTaskAndImplTabs() {
   const taskTab = document.querySelector('.tab[data-tab="tasks"]');
-  const implTab = document.querySelector('.tab[data-tab="impl"]');
   const workplaceTab = document.querySelector('.tab[data-tab="workplace"]');
   if (taskTab) {
     const label = taskTab.querySelector('.tab-label');
@@ -8191,16 +7737,6 @@ function decorateTaskAndImplTabs() {
     }
     if (!isNarrowViewport()) taskTab.style.order = '-20';
     else taskTab.style.order = '';
-  }
-  if (implTab) {
-    const label = implTab.querySelector('.tab-label');
-    if (label) {
-      label.textContent = '✨ 実装自慢';
-      label.dataset.full = '✨ 実装自慢';
-      label.dataset.short = '✨ 実装自慢';
-    }
-    if (!isNarrowViewport()) implTab.style.order = '-19';
-    else implTab.style.order = '';
   }
   if (workplaceTab) workplaceTab.remove(); // workplace は database のサブタブに移行
 }
@@ -8301,66 +7837,9 @@ ensureMemoriaFeatureViews = function () {
         </section>
       </div>`;
   }
-  const implView = $('implView');
-  if (implView && !$('implEditorModal')) {
-    const panel = implView.querySelector('.simple-panel') || implView;
-    const modal = document.createElement('section');
-    modal.id = 'implEditorModal';
-    modal.className = 'dict-detail modal-panel hidden foundation-form';
-    modal.innerHTML = `
-      <button type="button" class="modal-close" id="implEditorClose" aria-label="close">×</button>
-      <h3 id="implEditorHeading">実装自慢を追加</h3>
-      <input type="hidden" id="implEditorNoteId" />
-      <p class="diary-settings-help" style="margin-top:-4px">
-        このウィンドウを開いている間、 <b>コピペ</b> と <b>ファイル D&D</b> を受け付けます。
-        画像 → スクリーンキャプチャ、 リンク → GitHub なら GitHub / 記事なら 記事 / その他、
-        コード片 → コードスニペット、 動画ファイル → 動画 として自動選択 + 添付内容に転記。
-      </p>
-      <label class="simple-field">
-        <span>ドヤポイント</span>
-        <input id="implEditorTitle" type="text" />
-      </label>
-      <label class="simple-field">
-        <span>良かった点</span>
-        <textarea id="implEditorGood" rows="5"></textarea>
-      </label>
-      <label class="simple-field">
-        <span>悪かった点 / トレードオフ</span>
-        <textarea id="implEditorBad" rows="4"></textarea>
-      </label>
-      <label class="simple-field">
-        <span>添付するもの</span>
-        <select id="implEditorAttachmentType">
-          <option value="">なし</option>
-          <option value="github">GitHub のプロダクト</option>
-          <option value="article">記事</option>
-          <option value="screenshot">スクリーンキャプチャ</option>
-          <option value="video">動画</option>
-          <option value="code">コードスニペット</option>
-          <option value="other">その他</option>
-        </select>
-      </label>
-      <label class="simple-field">
-        <span>添付内容</span>
-        <textarea id="implEditorAttachmentValue" rows="4"></textarea>
-        <span id="implEditorAttachmentHint" class="muted" style="font-size:11px"></span>
-      </label>
-      <label class="simple-check-row">
-        <input id="implEditorShareable" type="checkbox" />
-        <span>シェア可能にする</span>
-      </label>
-      <div class="simple-actions">
-        <button id="implEditorSaveBtn">保存</button>
-        <button id="implEditorCancelBtn" type="button" class="ghost">キャンセル</button>
-      </div>`;
-    panel.appendChild(modal);
-    wireImplEditorPasteAndDrop(modal);
-  }
   decorateTaskAndImplTabs();
   upgradeTaskFormMarkup();
-  upgradeImplementationFormMarkup();
   setupTaskFormKeyboard();
-  setupImplementationFormKeyboard();
   if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
     openTaskEditor(null);
   };
@@ -8368,12 +7847,6 @@ ensureMemoriaFeatureViews = function () {
   if ($('taskEditorCancelBtn')) $('taskEditorCancelBtn').onclick = closeTaskEditor;
   if ($('taskEditorSaveBtn')) $('taskEditorSaveBtn').onclick = addTaskFromForm;
   wireTaskEditorDueShortcuts();
-  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
-    openImplEditor(null);
-  };
-  if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
-  if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
-  if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
   if ($('agentProjectAddBtn')) $('agentProjectAddBtn').onclick = () => openAgentProjectEditor(null);
   if ($('agentProjectEditorClose')) $('agentProjectEditorClose').onclick = closeAgentProjectEditor;
   if ($('agentProjectEditorCancelBtn')) $('agentProjectEditorCancelBtn').onclick = closeAgentProjectEditor;
@@ -8527,6 +8000,7 @@ const WL_SUB_VIEWS = {
   tracks: 'tracksView',
   activity: 'wlActivityView',
   games: 'wlGamesView',
+  seeds: 'wlSeedsView',
 };
 
 // データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
@@ -8538,6 +8012,8 @@ const DB_SUB_VIEWS = {
   apps: 'appsView',
   endpoints: 'endpointsView',
   weather: 'weatherView',
+  // 旧トップレベル 📋 作業一覧 (worklist) を 📦 プロジェクト サブとして移設。
+  projects: 'worklistView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -8573,6 +8049,46 @@ function switchDatabaseSub(sub) {
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
   if (sub === 'endpoints') loadKnownEndpoints().catch(console.warn);
   if (sub === 'weather') loadTracksWeather();
+  if (sub === 'projects') loadRepoWatch();
+}
+
+// ── 🤖 AI タブのサブビュー ───────────────────────────────────────────────────
+// recommendView は旧トップレベルビューを再利用 (migrateAiSubViews で aiView に取込)。
+const AI_SUB_VIEWS = {
+  recommend: 'recommendView',
+  articles: 'aiArticlesView',
+  advice: 'aiAdviceView',
+};
+
+state.ai = state.ai || { sub: 'recommend' };
+
+function migrateAiSubViews() {
+  const aiv = $('aiView');
+  if (!aiv) return;
+  for (const id of Object.values(AI_SUB_VIEWS)) {
+    const v = $(id);
+    if (v && v.parentNode !== aiv) {
+      v.classList.add('hidden');
+      v.classList.add('wl-sub');
+      aiv.appendChild(v);
+    }
+  }
+}
+
+function switchAiSub(sub) {
+  if (!AI_SUB_VIEWS[sub]) return;
+  state.ai = state.ai || {};
+  state.ai.sub = sub;
+  document.querySelectorAll('#aiSubtabs [data-ai-sub]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.aiSub === sub);
+  });
+  for (const [key, viewId] of Object.entries(AI_SUB_VIEWS)) {
+    const view = $(viewId);
+    if (view) view.classList.toggle('hidden', key !== sub);
+  }
+  if (sub === 'recommend') loadRecommendations();
+  if (sub === 'articles') void loadAiArticlesView();
+  if (sub === 'advice') void loadAiAdviceView();
 }
 
 interface ApplicationCatalogRow {
@@ -8861,9 +8377,15 @@ function migrateWorklogSubViews() {
 }
 migrateWorklogSubViews();
 migrateDatabaseSubViews();
+migrateAiSubViews();
 document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
   btn.addEventListener('click', () => switchDatabaseSub(btn.dataset.dbSub));
 });
+document.querySelectorAll('#aiSubtabs [data-ai-sub]').forEach(btn => {
+  btn.addEventListener('click', () => switchAiSub(btn.dataset.aiSub));
+});
+// ai-view.ts のトーストを app.ts の flashToast に接続。
+setAiToast((msg) => flashToast(msg));
 $('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
 
 function switchWorklogSub(sub) {
@@ -8892,6 +8414,7 @@ async function loadWorklog() {
   if (sub === 'tracks') return loadTracks();
   if (sub === 'activity') return loadWorklogActivityCard(date);
   if (sub === 'games') return loadWorklogGamesView(date);
+  if (sub === 'seeds') return void loadAiSeedsView();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);
@@ -14734,7 +14257,7 @@ function scrollPageToTop() {
     '.notes-pane', '.notes-comments', '.notes-sidebar',
     '.bookmarks-main', '.bookmarks-categories',
     '#cards', '#mealsList', '#reviewCards', '#reviewBody',
-    '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView', '#implView',
+    '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView',
   ];
   document.querySelectorAll(selectors.join(',')).forEach((el) => {
     if ((el as HTMLElement).scrollTop > 0) (el as HTMLElement).scrollTop = 0;
