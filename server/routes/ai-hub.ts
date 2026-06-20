@@ -6,12 +6,12 @@ import type BetterSqlite3 from 'better-sqlite3';
 import {
   listAiArticles, getAiArticle, setAiArticleNote,
   listAiArticleTags, listDiaryDigestCandidates,
-  setAiArticleTags, listAiArticlesMissingLlmTags,
+  setAiArticleTags, listAiArticlesMissingLlmTags, setAiArticleBody,
   listAiSeeds, getAiSeed, updateAiSeedStatus,
   latestAiAdvice,
   insertNote, insertBlock, getNote,
 } from '../db.js';
-import { runDigest, requestSeed, runAdvice, generateArticleTags } from '../ai-hub/index.js';
+import { runDigest, requestSeed, runAdvice, generateArticleTags, repairArticleBody } from '../ai-hub/index.js';
 import type { ArticleTag } from '../ai-hub/types.js';
 import { yesterdayLocal, formatLocalDate } from '../diary.js';
 
@@ -56,6 +56,17 @@ export function makeAiHubRouter(deps: AiHubRouterDeps): Hono {
   // フィルタ chips 用: 全記事のタグを category+value で集計。
   r.get('/api/ai/tags', (c: Context) => {
     return c.json({ tags: listAiArticleTags(db) });
+  });
+
+  // 救済: body_md に raw JSON が入った旧記事を、内側の Markdown に直す (LLM 不要)。
+  r.post('/api/ai/articles/repair-bodies', (c: Context) => {
+    const articles = listAiArticles(db, { limit: 500 });
+    let repaired = 0;
+    for (const a of articles) {
+      const fixed = repairArticleBody(a.body_md, a.title);
+      if (fixed) { setAiArticleBody(db, a.id, fixed.title, fixed.body_md); repaired++; }
+    }
+    return c.json({ repaired, considered: articles.length });
   });
 
   // 再タグ付け: LLM 軸タグ (言語/内容タイプ/技術領域/その他) が欠けた記事を

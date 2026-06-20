@@ -102,6 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 - `GET  /api/ai/articles?limit=50&from=&to=&tag=言語:TypeScript&tag=...` → `{ articles: AiArticle[] }` (for_date 範囲 + タグ AND 絞り込み。tag は `category:value` を繰り返し指定)
 - `GET  /api/ai/tags` → `{ tags: ArticleTagCount[] }` (全記事のタグを category+value で集計、件数降順。フィルタ chips 用)
 - `POST /api/ai/articles/retag` (body `{id?}`) → `{ updated, considered }` (id 指定で 1 件、無指定で LLM 軸タグが欠けた記事を一括再タグ付け)
+- `POST /api/ai/articles/repair-bodies` → `{ repaired, considered }` (body_md に raw JSON が入った旧記事を内側 Markdown に修復、LLM 不要)
 - `GET  /api/ai/digest/candidates?from=&to=` → `{ days: [{date, articleCount}] }` (範囲内で日記がある日 + 既存記事件数。一括生成 UI 用)
 - `GET  /api/ai/articles/:id` → `{ article }` (404 if none)
 - `POST /api/ai/articles/:id/transcribe` → 記事から note を作成し note_id を更新 → `{ note }`
@@ -116,7 +117,8 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
 `LlmTaskName` / `TASKS` / `TASK_DEFAULT_MODELS` に追加:
 - `article_topics` (既定 'sonnet') — 前日データから記事候補トピックを JSON で抽出・ランク付け
-- `article_write` (既定 'claude-opus-4-7[1m]') — 1 トピックを本記事 (Markdown) に。文体は下記スタイル指示を prompt に同梱
+- `article_write` (既定 'claude-opus-4-7[1m]') — 1 トピックを本記事に。**プレーン Markdown** で出力させ (先頭行を `# タイトル` にし、本文に ```コードブロック``` 可)、先頭 H1 をタイトルとして分離する。文体は下記スタイル指示を prompt に同梱。
+  - 当初は `{title, body_md}` の JSON で返させていたが、本文の ```コードブロック``` が JSON フェンス抽出を壊して raw JSON が body_md にそのまま入る不具合が出たため、プレーン Markdown 出力に変更した。旧記事の救済に `POST /api/ai/articles/repair-bodies` (raw JSON body を内側 Markdown に直す、LLM 不要)。
 - `article_tags` (既定 'haiku') — 完成記事 (title + body) から 5 分類タグ (言語/プロジェクト/内容タイプ/技術領域/その他) を JSON 配列で抽出。短文・安価。`プロジェクト` は source_refs のリポ名で決定論補完してマージ
 - `ai_advice` (既定 'sonnet') — 週次データから助言 (Markdown)
 
