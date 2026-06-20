@@ -389,12 +389,17 @@
         <nav class="worklog-subtabs" id="aiSubtabs">
           <button class="wl-subtab active" data-ai-sub="recommend">✨ おすすめ</button>
           <button class="wl-subtab" data-ai-sub="articles">📰 AI記事</button>
+          <button class="wl-subtab" data-ai-sub="seeds">📝 記事ネタ</button>
           <button class="wl-subtab" data-ai-sub="advice">💡 AIアドバイス</button>
         </nav>
       </div>
 
       <div id="aiArticlesView" class="hidden">
         <div id="aiArticlesRoot"></div>
+      </div>
+
+      <div id="aiSeedsView" class="hidden">
+        <div id="aiSeedsRoot"></div>
       </div>
 
       <div id="aiAdviceView" class="hidden">
@@ -576,6 +581,22 @@
           <button id="diaryNextMonth" class="ghost">▶</button>
           <button id="diaryToday" class="ghost">今日</button>
           <span class="grow"></span>
+          <button id="diaryBackfillToggle" class="ghost" title="日記がある日の作業ログから、🤖 AI タブの AIノートをまとめて生成します">📝 AIノート一括生成</button>
+        </div>
+        <!-- さかのぼり生成パネル: 日記がある日について作業ログから AIノートを生成する。
+             既存 digest を日ごとに走らせ、生成物は 🤖 AI タブ「AI記事」に溜まる。 -->
+        <div id="diaryBackfillPanel" class="diary-backfill foundation-form hidden">
+          <div class="diary-backfill-row">
+            <label>開始 <input type="date" id="diaryBackfillFrom" value="2026-04-01" /></label>
+            <label>終了 <input type="date" id="diaryBackfillTo" value="2026-06-30" /></label>
+            <label class="diary-backfill-check"><input type="checkbox" id="diaryBackfillSkip" checked /> 生成済みの日はスキップ</label>
+            <span class="grow"></span>
+            <button id="diaryBackfillStart" class="primary">生成開始</button>
+            <button id="diaryBackfillStop" class="ghost hidden">停止</button>
+          </div>
+          <div id="diaryBackfillStatus" class="diary-backfill-status muted"></div>
+          <div id="diaryBackfillProgress" class="diary-backfill-progress"></div>
+          <ul id="diaryBackfillLog" class="diary-backfill-log"></ul>
         </div>
         <div class="diary-layout">
           <div class="diary-calendar-wrap">
@@ -607,6 +628,7 @@
               <span id="diaryStatus" class="diary-status-tag"></span>
               <span id="diaryWorkMinutes" class="diary-status-tag" hidden></span>
               <span class="grow"></span>
+              <button id="diaryWriteAiNote" class="ghost" title="この日の作業ログから 🤖 AI タブの AIノートを生成します">📝 AIノートを書く</button>
               <button id="diaryGenerate" class="ghost">再生成</button>
               <button id="diaryDelete" class="danger">削除</button>
             </div>
@@ -837,7 +859,6 @@
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
           <button class="wl-subtab" data-sub="activity">💻 アプリ</button>
           <button class="wl-subtab" data-sub="games">🎮 ゲーム</button>
-          <button class="wl-subtab" data-sub="seeds">📝 記事ネタ</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">
@@ -949,9 +970,6 @@
           <div class="wl-summary-row" id="wlGamesSummary"></div>
           <ul id="wlGamesList" class="wl-list"></ul>
           <div id="wlGamesEmpty" class="queue-empty hidden">この日のゲームログはありません。</div>
-        </section>
-        <section id="wlSeedsView" class="wl-sub hidden">
-          <div id="aiSeedsRoot"></div>
         </section>
       </div>
 

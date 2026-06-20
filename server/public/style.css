@@ -7362,3 +7362,35 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
 .ai-seed-angle, .ai-seed-summary { font-size: 12px; margin-top: 4px; }
 .ai-seed-meta { font-size: 11px; margin-top: 6px; }
 .ai-seed-actions { margin-top: 0; }
+
+/* AIノートのタグ (言語/プロジェクト/内容タイプ/技術領域/その他) */
+.ai-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.ai-tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; border: 1px solid transparent; }
+.ai-tag-言語       { background: #e3f0ff; color: #1d4ed8; }
+.ai-tag-プロジェクト { background: #e8f7ec; color: #15803d; }
+.ai-tag-内容タイプ  { background: #fff1e0; color: #c2620a; }
+.ai-tag-技術領域    { background: #f3e8ff; color: #7c3aed; }
+.ai-tag-その他      { background: var(--accent-bg); color: var(--accent); }
+
+/* AI記事フィルタバー (日付範囲 + タグ chips) */
+.ai-filter-bar { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--card-bg, var(--bg)); }
+.ai-filter-dates { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px; }
+.ai-filter-dates input[type="date"] { padding: 4px 6px; }
+.ai-filter-tags { display: flex; flex-direction: column; gap: 6px; }
+.ai-filter-cat { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ai-filter-cat-label { font-size: 11px; color: var(--muted); min-width: 64px; }
+.ai-tag-filter { font-size: 11px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+.ai-tag-filter:hover { border-color: var(--accent); }
+.ai-tag-filter.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+.ai-tag-filter .ai-tag-n { font-size: 9px; opacity: 0.6; }
+
+/* 📅 日記タブ — さかのぼり AIノート一括生成パネル */
+.diary-backfill { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 8px 0 12px; background: var(--card-bg, var(--bg)); }
+.diary-backfill-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 12px; }
+.diary-backfill-row input[type="date"] { padding: 4px 6px; }
+.diary-backfill-check { display: inline-flex; align-items: center; gap: 5px; }
+.diary-backfill-status { margin-top: 8px; font-size: 12px; }
+.diary-backfill-progress { height: 6px; border-radius: 3px; background: var(--border); margin: 8px 0; overflow: hidden; }
+.diary-backfill-progress::after { content: ""; display: block; height: 100%; width: var(--pct, 0%); background: var(--accent); transition: width 0.2s ease; }
+.diary-backfill-log { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: 12px; }
+.diary-backfill-log li { padding: 3px 0; border-bottom: 1px solid var(--border); }
