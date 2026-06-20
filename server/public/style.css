@@ -7344,3 +7344,21 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   .goals-dot-doing   { background: #1e3a5f; color: #93c5fd; }
   .goals-dot-todo    { background: #374151; color: #9ca3af; }
 }
+
+/* ── 🤖 AI タブ (AI記事 / AIアドバイス / 記事ネタ) ───────────────────────── */
+.ai-article-list, .ai-seed-list { display: flex; flex-direction: column; gap: 12px; padding-bottom: 24px; }
+.ai-article-card { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--card-bg, var(--bg)); }
+.ai-article-title { font-size: 15px; }
+.ai-article-meta { font-size: 11px; margin: 4px 0 8px; }
+.ai-article-body { margin: 10px 0; line-height: 1.7; }
+.ai-article-actions, .ai-seed-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.ai-src-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.ai-src-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; }
+.ai-advice-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ai-advice-body { line-height: 1.7; padding-bottom: 24px; }
+.ai-seed-row { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: var(--card-bg, var(--bg)); display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.ai-seed-main { flex: 1; min-width: 200px; }
+.ai-seed-title { font-size: 14px; }
+.ai-seed-angle, .ai-seed-summary { font-size: 12px; margin-top: 4px; }
+.ai-seed-meta { font-size: 11px; margin-top: 6px; }
+.ai-seed-actions { margin-top: 0; }

@@ -15,7 +15,8 @@ export type LlmTaskName =
   | 'endpoint_identify'
   | 'discord_route'
   | 'rss_score' | 'rss_summarize' | 'rss_digest'
-  | 'weather_rain_verify' | 'weather_likely_place';
+  | 'weather_rain_verify' | 'weather_likely_place'
+  | 'article_topics' | 'article_write' | 'ai_advice';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -28,6 +29,7 @@ export const TASKS: LlmTaskName[] = [
   'discord_route',
   'rss_score', 'rss_summarize', 'rss_digest',
   'weather_rain_verify', 'weather_likely_place',
+  'article_topics', 'article_write', 'ai_advice',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
@@ -47,6 +49,9 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   rss_digest: 'sonnet',    // 上位記事を束ねる日次ブリーフィング (品質寄り)。
   weather_rain_verify: 'sonnet',    // 複数ソースの一致から雨を検証 + ルール提案。
   weather_likely_place: 'sonnet',   // 曜日 × 訪問履歴から行きがちな場所を推定。
+  article_topics: 'sonnet',          // 前日データから記事候補トピックを JSON 抽出・ランク付け。
+  article_write: 'claude-opus-4-7[1m]', // 1 トピックを本記事 (Markdown) に。 品質寄り + 長文。
+  ai_advice: 'sonnet',               // 週次データから助言 (Markdown)。
 };
 
 // gamma = ローカル LLM レーン。 OpenAI 互換エンドポイント (既定 Ollama
