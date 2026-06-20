@@ -16,7 +16,7 @@ export type LlmTaskName =
   | 'discord_route'
   | 'rss_score' | 'rss_summarize' | 'rss_digest'
   | 'weather_rain_verify' | 'weather_likely_place'
-  | 'article_topics' | 'article_write' | 'ai_advice';
+  | 'article_topics' | 'article_write' | 'article_tags' | 'ai_advice';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -29,7 +29,7 @@ export const TASKS: LlmTaskName[] = [
   'discord_route',
   'rss_score', 'rss_summarize', 'rss_digest',
   'weather_rain_verify', 'weather_likely_place',
-  'article_topics', 'article_write', 'ai_advice',
+  'article_topics', 'article_write', 'article_tags', 'ai_advice',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
@@ -51,6 +51,7 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   weather_likely_place: 'sonnet',   // 曜日 × 訪問履歴から行きがちな場所を推定。
   article_topics: 'sonnet',          // 前日データから記事候補トピックを JSON 抽出・ランク付け。
   article_write: 'claude-opus-4-7[1m]', // 1 トピックを本記事 (Markdown) に。 品質寄り + 長文。
+  article_tags: 'haiku',             // 完成記事から分類タグ (言語/技術領域 等) を抽出。 短文・安価。
   ai_advice: 'sonnet',               // 週次データから助言 (Markdown)。
 };
 

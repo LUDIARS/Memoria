@@ -6072,7 +6072,7 @@ export function listAiArticleTags(db: Db): ArticleTagCount[] {
   const counts = new Map<string, ArticleTagCount>();
   for (const r of rows) {
     for (const t of parseTags(r.tags)) {
-      const key = `${t.category} ${t.value}`;
+      const key = `${t.category} ${t.value}`;
       const ex = counts.get(key);
       if (ex) ex.count += 1;
       else counts.set(key, { category: t.category, value: t.value, count: 1 });
@@ -6104,6 +6104,23 @@ export function listDiaryDigestCandidates(
 
 export function setAiArticleNote(db: Db, id: number, noteId: string): void {
   db.prepare(`UPDATE ai_articles SET note_id = ? WHERE id = ?`).run(noteId, id);
+}
+
+/** 記事のタグを丸ごと差し替える (再タグ付け用)。 */
+export function setAiArticleTags(db: Db, id: number, tags: ArticleTag[]): void {
+  db.prepare(`UPDATE ai_articles SET tags = ? WHERE id = ?`)
+    .run(tags.length ? JSON.stringify(tags) : null, id);
+}
+
+/**
+ * LLM 由来のタグ軸 (言語/内容タイプ/技術領域/その他) が 1 つも無い記事を返す。
+ * プロジェクトタグしか無い = 旧生成 (article_write が tags を落とした) 記事の検出に使う。
+ */
+export function listAiArticlesMissingLlmTags(db: Db, limit = 500): AiArticle[] {
+  const rows = db.prepare(`SELECT ${AI_ARTICLE_COLS} FROM ai_articles ORDER BY created_at DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(2000, limit))) as AiArticleDbRow[];
+  return rows.map(rowToAiArticle)
+    .filter(a => !a.tags.some(t => t.category !== 'プロジェクト'));
 }
 
 interface AiSeedDbRow {
