@@ -1,4 +1,4 @@
-// 🤖 AI タブ — AI記事 / AIアドバイス と 📝 ログ配下の「記事ネタ」 のフロントエンド。
+// 🤖 AI タブ — AI記事 (タグ/日付フィルタ) / 記事ネタ / AIアドバイス のフロントエンド。
 //
 // app.ts (巨大 God file) からは loadAiArticlesView() / loadAiAdviceView() /
 // loadAiSeedsView() を呼ぶだけ。 各々が自前で対象 root に fetch + 描画する
@@ -11,6 +11,17 @@ import { renderMarkdownBlock } from './markdown-block.js';
 
 // ── API 型 (server/ai-hub/types.ts に対応) ───────────────────────────────────
 
+interface ArticleTag {
+  category: string;
+  value: string;
+}
+
+interface ArticleTagCount {
+  category: string;
+  value: string;
+  count: number;
+}
+
 interface AiArticle {
   id: number;
   title: string;
@@ -19,8 +30,20 @@ interface AiArticle {
   source_refs: string | null;
   origin: string;
   for_date: string | null;
+  tags: ArticleTag[];
   note_id: number | null;
   created_at: string;
+}
+
+// タグ分類の表示順 (server の TAG_CATEGORIES と一致)。
+const TAG_CATEGORY_ORDER = ['言語', 'プロジェクト', '内容タイプ', '技術領域', 'その他'];
+
+// 🤖 AI記事フィルタの状態 (モジュールローカルに保持して再描画間で維持)。
+const articleFilter: { from: string; to: string; tags: Set<string> } = {
+  from: '', to: '', tags: new Set<string>(),
+};
+function tagKey(t: { category: string; value: string }): string {
+  return `${t.category}:${t.value}`;
 }
 
 interface AiSeed {
@@ -115,6 +138,18 @@ function toast(msg: string): void {
 
 // ── 📰 AI記事 ────────────────────────────────────────────────────────────────
 
+/** タグを分類順にチップ列へ。 category ごとに色クラスを付ける。 */
+function tagChips(tags: ArticleTag[]): string {
+  if (!tags || !tags.length) return '';
+  const sorted = [...tags].sort((x, y) =>
+    TAG_CATEGORY_ORDER.indexOf(x.category) - TAG_CATEGORY_ORDER.indexOf(y.category));
+  const chips = sorted.map((t) => {
+    const cat = TAG_CATEGORY_ORDER.includes(t.category) ? t.category : 'その他';
+    return `<span class="ai-tag ai-tag-${esc(cat)}" title="${esc(t.category)}">${esc(t.value)}</span>`;
+  }).join('');
+  return `<div class="ai-tags">${chips}</div>`;
+}
+
 function articleCard(a: AiArticle): string {
   const transcribed = a.note_id != null;
   const meta = [
@@ -128,6 +163,7 @@ function articleCard(a: AiArticle): string {
         <strong class="ai-article-title">${esc(a.title)}</strong>
       </div>
       <div class="ai-article-meta muted">${meta}</div>
+      ${tagChips(a.tags)}
       ${sourceRefsBadges(a.source_refs)}
       <div class="ai-article-body hidden" data-article-body="${a.id}"></div>
       <div class="ai-article-actions">
@@ -179,19 +215,92 @@ function bindArticleActions(container: HTMLElement, articles: AiArticle[]): void
   });
 }
 
+/** 現在のフィルタ状態から /api/ai/articles のクエリ文字列を組む。 */
+function buildArticleQuery(): string {
+  const params = new URLSearchParams();
+  params.set('limit', '200');
+  if (articleFilter.from) params.set('from', articleFilter.from);
+  if (articleFilter.to) params.set('to', articleFilter.to);
+  for (const key of articleFilter.tags) params.append('tag', key);
+  return params.toString();
+}
+
+/** フィルタ chips バーを描く (日付範囲 + タグ category 別)。 */
+function renderArticleFilterBar(tagCounts: ArticleTagCount[]): string {
+  const byCat = new Map<string, ArticleTagCount[]>();
+  for (const t of tagCounts) {
+    const arr = byCat.get(t.category) || [];
+    arr.push(t);
+    byCat.set(t.category, arr);
+  }
+  const catBlocks = TAG_CATEGORY_ORDER
+    .filter((cat) => byCat.has(cat))
+    .map((cat) => {
+      const chips = (byCat.get(cat) || []).map((t) => {
+        const key = tagKey(t);
+        const active = articleFilter.tags.has(key) ? ' active' : '';
+        return `<button class="ai-tag-filter ai-tag-${esc(cat)}${active}" data-tag-key="${esc(key)}">${esc(t.value)}<span class="ai-tag-n">${t.count}</span></button>`;
+      }).join('');
+      return `<div class="ai-filter-cat"><span class="ai-filter-cat-label">${esc(cat)}</span>${chips}</div>`;
+    }).join('');
+  const hasActive = articleFilter.tags.size || articleFilter.from || articleFilter.to;
+  return `
+    <div class="ai-filter-bar">
+      <div class="ai-filter-dates">
+        <label>対象日 <input type="date" id="aiFilterFrom" value="${esc(articleFilter.from)}"></label>
+        <label>〜 <input type="date" id="aiFilterTo" value="${esc(articleFilter.to)}"></label>
+        <button class="ghost" id="aiFilterClear"${hasActive ? '' : ' disabled'}>クリア</button>
+      </div>
+      ${catBlocks ? `<div class="ai-filter-tags">${catBlocks}</div>` : ''}
+    </div>`;
+}
+
+function bindArticleFilter(root: HTMLElement): void {
+  root.querySelector('#aiFilterFrom')?.addEventListener('change', (e) => {
+    articleFilter.from = (e.target as HTMLInputElement).value;
+    void loadAiArticlesView();
+  });
+  root.querySelector('#aiFilterTo')?.addEventListener('change', (e) => {
+    articleFilter.to = (e.target as HTMLInputElement).value;
+    void loadAiArticlesView();
+  });
+  root.querySelector('#aiFilterClear')?.addEventListener('click', () => {
+    articleFilter.from = '';
+    articleFilter.to = '';
+    articleFilter.tags.clear();
+    void loadAiArticlesView();
+  });
+  root.querySelectorAll<HTMLButtonElement>('[data-tag-key]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.tagKey;
+      if (!key) return;
+      if (articleFilter.tags.has(key)) articleFilter.tags.delete(key);
+      else articleFilter.tags.add(key);
+      void loadAiArticlesView();
+    });
+  });
+}
+
 /** app.ts の switchTab('ai') → サブ 'articles' から呼ばれる。 */
 export async function loadAiArticlesView(): Promise<void> {
   const root = document.getElementById('aiArticlesRoot');
   if (!root) return;
   root.innerHTML = '<div class="muted">読み込み中…</div>';
   try {
-    const { articles } = await getJson<{ articles: AiArticle[] }>('/api/ai/articles?limit=50');
-    if (!articles.length) {
-      root.innerHTML = `<div class="empty">まだ AI 記事がありません。毎朝 6:00 に前日の作業から自動生成されます。「記事ネタ」 から記事化を依頼することもできます。</div>`;
-      return;
-    }
-    root.innerHTML = `<div class="ai-article-list">${articles.map(articleCard).join('')}</div>`;
-    bindArticleActions(root, articles);
+    const [{ articles }, tagsRes] = await Promise.all([
+      getJson<{ articles: AiArticle[] }>(`/api/ai/articles?${buildArticleQuery()}`),
+      getJson<{ tags: ArticleTagCount[] }>('/api/ai/tags').catch(() => ({ tags: [] as ArticleTagCount[] })),
+    ]);
+    const filterBar = renderArticleFilterBar(tagsRes.tags || []);
+    const filtering = articleFilter.tags.size || articleFilter.from || articleFilter.to;
+    const list = articles.length
+      ? `<div class="ai-article-list">${articles.map(articleCard).join('')}</div>`
+      : `<div class="empty">${filtering
+          ? '条件に合う記事がありません。フィルタを変えてみてください。'
+          : 'まだ AI 記事がありません。毎朝 6:00 に前日の作業から自動生成されます。「記事ネタ」 から記事化を依頼するか、📅 日記タブの「AIノート一括生成」 でさかのぼって生成できます。'}</div>`;
+    root.innerHTML = filterBar + list;
+    bindArticleFilter(root);
+    if (articles.length) bindArticleActions(root, articles);
   } catch (e) {
     root.innerHTML = `<div class="empty">読み込みに失敗しました: ${esc(e instanceof Error ? e.message : String(e))}</div>`;
   }
@@ -255,7 +364,7 @@ function seedRow(s: AiSeed): string {
     </div>`;
 }
 
-/** app.ts の worklog サブ 'seeds' から呼ばれる。 */
+/** app.ts の switchTab('ai') → サブ 'seeds' から呼ばれる (🤖 AI タブ配下)。 */
 export async function loadAiSeedsView(): Promise<void> {
   const root = document.getElementById('aiSeedsRoot');
   if (!root) return;

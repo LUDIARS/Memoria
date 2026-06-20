@@ -29,7 +29,7 @@ import type {
   NoteCommentSetRow, NoteCommentRow,
 } from './db/types/note.js';
 import { NOTE_BLOCK_TYPES } from './db/types/note.js';
-import type { AiArticle, AiSeed, AiAdvice, SourceRef } from './ai-hub/types.js';
+import type { AiArticle, AiSeed, AiAdvice, SourceRef, ArticleTag, AiArticleFilter, ArticleTagCount } from './ai-hub/types.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -1109,6 +1109,15 @@ export function openDb(dbPath: string): Db {
   // and writes it here. Replaces the visit_events session heuristic, which
   // over-counted days with long idle browser tabs (see trendsWorkHours).
   if (!deCols.includes('work_minutes')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_minutes INTEGER`);
+
+  // ai_articles: タグ列 (言語/プロジェクト/内容タイプ/技術領域/その他) を後付け。
+  // JSON 配列 [{category,value}] を持ち、 日付 × タグでフィルタする。
+  // ([[feedback_sqlite_create_index_after_alter]] に従い INDEX は ALTER の後)
+  const aaCols = (db.prepare(`PRAGMA table_info(ai_articles)`).all() as { name: string }[]).map(c => c.name);
+  if (aaCols.length > 0 && !aaCols.includes('tags')) {
+    db.exec(`ALTER TABLE ai_articles ADD COLUMN tags TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_articles_for_date ON ai_articles(for_date DESC)`);
 
   // gps_locations: 圧縮メタ列を後付けで足す
   const gpsCols = (db.prepare(`PRAGMA table_info(gps_locations)`).all() as { name: string }[]).map(c => c.name);
@@ -5945,6 +5954,20 @@ function parseSourceRefs(json: string | null): SourceRef[] {
   return Array.isArray(v) ? (v as SourceRef[]) : [];
 }
 
+function parseTags(json: string | null): ArticleTag[] {
+  const v = safeParse(json);
+  if (!Array.isArray(v)) return [];
+  const out: ArticleTag[] = [];
+  for (const t of v) {
+    if (!t || typeof t !== 'object') continue;
+    const o = t as Record<string, unknown>;
+    const category = typeof o.category === 'string' ? o.category.trim() : '';
+    const value = typeof o.value === 'string' ? o.value.trim() : '';
+    if (category && value) out.push({ category, value });
+  }
+  return out;
+}
+
 interface AiArticleDbRow {
   id: number;
   title: string;
@@ -5953,6 +5976,7 @@ interface AiArticleDbRow {
   source_refs: string | null;
   origin: string;
   for_date: string | null;
+  tags: string | null;
   note_id: string | null;
   created_at: string;
 }
@@ -5966,10 +5990,14 @@ function rowToAiArticle(r: AiArticleDbRow): AiArticle {
     source_refs: parseSourceRefs(r.source_refs),
     origin: r.origin,
     for_date: r.for_date,
+    tags: parseTags(r.tags),
     note_id: r.note_id,
     created_at: r.created_at,
   };
 }
+
+const AI_ARTICLE_COLS =
+  'id, title, body_md, topic_key, source_refs, origin, for_date, tags, note_id, created_at';
 
 export interface InsertAiArticleInput {
   title: string;
@@ -5978,12 +6006,13 @@ export interface InsertAiArticleInput {
   source_refs?: SourceRef[] | null;
   origin?: 'digest' | 'requested';
   for_date?: string | null;
+  tags?: ArticleTag[] | null;
 }
 
 export function insertAiArticle(db: Db, input: InsertAiArticleInput): number {
   const res = db.prepare(`
-    INSERT INTO ai_articles (title, body_md, topic_key, source_refs, origin, for_date)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO ai_articles (title, body_md, topic_key, source_refs, origin, for_date, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.title,
     input.body_md,
@@ -5991,27 +6020,86 @@ export function insertAiArticle(db: Db, input: InsertAiArticleInput): number {
     input.source_refs && input.source_refs.length ? JSON.stringify(input.source_refs) : null,
     input.origin ?? 'digest',
     input.for_date ?? null,
+    input.tags && input.tags.length ? JSON.stringify(input.tags) : null,
   );
   return Number(res.lastInsertRowid);
 }
 
-export function listAiArticles(db: Db, limit = 50): AiArticle[] {
-  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50));
+/**
+ * 記事一覧。 旧シグネチャ (limit: number) と新シグネチャ (filter: AiArticleFilter)
+ * の両対応。 日付範囲は SQL で、 タグ AND 絞り込みは JSON 列のため JS 側で行う。
+ */
+export function listAiArticles(db: Db, opts: number | AiArticleFilter = 50): AiArticle[] {
+  const filter: AiArticleFilter = typeof opts === 'number' ? { limit: opts } : opts;
+  const safeLimit = Math.max(1, Math.min(500, Number(filter.limit) || 50));
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (filter.from) { where.push('for_date >= ?'); params.push(filter.from); }
+  if (filter.to)   { where.push('for_date <= ?'); params.push(filter.to); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  // タグ絞り込みがある場合は LIMIT 前に全件マッチさせたいので、 SQL では広めに
+  // 取得 (500 上限) し、 JS でタグ AND を適用してから limit する。
+  const wantTagFilter = !!(filter.tags && filter.tags.length);
+  const sqlLimit = wantTagFilter ? 500 : safeLimit;
   const rows = db.prepare(`
-    SELECT id, title, body_md, topic_key, source_refs, origin, for_date, note_id, created_at
+    SELECT ${AI_ARTICLE_COLS}
     FROM ai_articles
-    ORDER BY created_at DESC
+    ${whereSql}
+    ORDER BY COALESCE(for_date, substr(created_at,1,10)) DESC, created_at DESC
     LIMIT ?
-  `).all(safeLimit) as AiArticleDbRow[];
-  return rows.map(rowToAiArticle);
+  `).all(...params, sqlLimit) as AiArticleDbRow[];
+  let articles = rows.map(rowToAiArticle);
+  if (wantTagFilter) {
+    const need = filter.tags as ArticleTag[];
+    articles = articles.filter(a =>
+      need.every(nt => a.tags.some(t => t.category === nt.category && t.value === nt.value)),
+    ).slice(0, safeLimit);
+  }
+  return articles;
 }
 
 export function getAiArticle(db: Db, id: number): AiArticle | null {
   const row = db.prepare(`
-    SELECT id, title, body_md, topic_key, source_refs, origin, for_date, note_id, created_at
+    SELECT ${AI_ARTICLE_COLS}
     FROM ai_articles WHERE id = ?
   `).get(id) as AiArticleDbRow | undefined;
   return row ? rowToAiArticle(row) : null;
+}
+
+/** 全記事のタグを category+value で集計する (フィルタ chips 用)。 件数降順。 */
+export function listAiArticleTags(db: Db): ArticleTagCount[] {
+  const rows = db.prepare(`SELECT tags FROM ai_articles WHERE tags IS NOT NULL`).all() as { tags: string | null }[];
+  const counts = new Map<string, ArticleTagCount>();
+  for (const r of rows) {
+    for (const t of parseTags(r.tags)) {
+      const key = `${t.category} ${t.value}`;
+      const ex = counts.get(key);
+      if (ex) ex.count += 1;
+      else counts.set(key, { category: t.category, value: t.value, count: 1 });
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count);
+}
+
+/**
+ * さかのぼり生成の候補日。 指定範囲で日記がある日を新しい順に返し、 各日の
+ * 既存 ai_articles 件数を添える (UI が「未生成のみ」 判定に使う)。
+ */
+export function listDiaryDigestCandidates(
+  db: Db, from: string, to: string,
+): { date: string; articleCount: number }[] {
+  const days = db.prepare(`
+    SELECT date FROM diary_entries
+    WHERE date >= ? AND date <= ?
+    ORDER BY date DESC
+  `).all(from, to) as { date: string }[];
+  const counts = db.prepare(`
+    SELECT for_date AS d, COUNT(*) AS c FROM ai_articles
+    WHERE for_date >= ? AND for_date <= ?
+    GROUP BY for_date
+  `).all(from, to) as { d: string; c: number }[];
+  const byDate = new Map(counts.map(r => [r.d, r.c]));
+  return days.map(r => ({ date: r.date, articleCount: byDate.get(r.date) ?? 0 }));
 }
 
 export function setAiArticleNote(db: Db, id: number, noteId: string): void {
