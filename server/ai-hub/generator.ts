@@ -85,7 +85,7 @@ function extractJsonArray(raw: string): unknown[] {
 
 /**
  * 完成記事 (title + body) から分類タグを抽出する専用の LLM 呼び出し。
- * 長文の article_write JSON に tags を同梱させると末尾が欠落・壊れやすいため、
+ * 長文の本文と同じ JSON に tags を載せると末尾が欠落・壊れやすいため、
  * 短い出力だけを返す独立タスク (haiku) に分離する。 失敗時は空配列。
  */
 export async function generateArticleTags(title: string, body: string): Promise<ArticleTag[]> {
@@ -115,28 +115,39 @@ export async function generateArticleTags(title: string, body: string): Promise<
   }
 }
 
-/** LLM の出力 (```json フェンス等を含むことがある) から JSON オブジェクトを抜き出す。 */
-function extractJsonObject(raw: string): unknown {
-  const trimmed = raw.trim();
-  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fence ? fence[1].trim() : trimmed;
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    // 最初の { 〜 最後の } を試す
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try { return JSON.parse(candidate.slice(start, end + 1)); } catch { /* fall through */ }
-    }
-    return null;
+/**
+ * LLM が返した記事 Markdown を整形する。
+ * - 全体を ```markdown ... ``` で包んでいたら剥がす
+ * - 先頭の見出し `# タイトル` をタイトルとして取り出し、本文からは除去する
+ *   (カードはタイトルを別表示するため、本文と二重に出さない)。
+ * 見出しが無ければ fallbackTitle を使い、本文はそのまま。
+ *
+ * article_write は当初 {title, body_md} の JSON で返させていたが、本文に
+ * ```コードブロック``` が入ると JSON フェンス抽出・パースが壊れて raw JSON が
+ * そのまま本文に入る不具合が出たため、プレーン Markdown 出力に変更した。
+ */
+function parseMarkdownArticle(raw: string, fallbackTitle: string): { title: string; body_md: string } {
+  let md = raw.trim();
+  const wrap = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/i.exec(md);
+  if (wrap) md = wrap[1].trim();
+
+  const lines = md.split('\n');
+  let idx = 0;
+  while (idx < lines.length && lines[idx].trim() === '') idx++;
+  const h1 = idx < lines.length ? /^#\s+(.+?)\s*#*$/.exec(lines[idx].trim()) : null;
+  let title = fallbackTitle;
+  if (h1) {
+    title = h1[1].trim();
+    lines.splice(idx, 1);
   }
+  const body = lines.join('\n').trim();
+  return { title, body_md: body || md };
 }
 
 /**
  * 1 トピックを本記事化する。 LLM には文体スタイル + トピック情報 + 出所事実を
- * 渡し、 {title, body_md} を JSON で返させる。 JSON 解釈に失敗した場合は raw を
- * 本文として扱い、 タイトルはトピック由来で補う。
+ * 渡し、 プレーン Markdown (先頭 `# タイトル`) で返させる。 タグは完成記事から
+ * 専用 LLM (article_tags) で別途抽出し、 プロジェクトは source_refs から決定論補完。
  */
 export async function writeArticle(_db: Db, topic: TopicCandidate): Promise<WrittenArticle> {
   const sourceFacts = topic.sourceRefs.length
@@ -144,7 +155,7 @@ export async function writeArticle(_db: Db, topic: TopicCandidate): Promise<Writ
     : '(出所参照なし — 与えられた要約とアングルの範囲で書く)';
 
   const prompt = [
-    'あなたはゲーム開発の技術記事ライターだ。 以下のトピックを 1 本の技術記事 (Markdown) にする。',
+    'あなたはゲーム開発の技術記事ライターだ。 以下のトピックを 1 本の技術記事にする。',
     '',
     '## 文体スタイル (厳守)',
     ARTICLE_STYLE,
@@ -157,44 +168,41 @@ export async function writeArticle(_db: Db, topic: TopicCandidate): Promise<Writ
     '## 出所 (この事実だけを根拠にする。 捏造禁止)',
     sourceFacts,
     '',
-    '## タグ付け',
-    'この記事に以下 5 分類でタグを付ける。 各分類は 0〜3 個、 該当が無ければ省略してよい。',
-    '- 言語: プログラミング言語 (TypeScript / C++ / Rust 等)',
-    '- プロジェクト: 対象リポ・サービス名 (Memoria / Ergo 等。 出所のリポ名を優先)',
-    '- 内容タイプ: 作業の性質 (設計 / 開発 / 運用 / テスト / デバッグ / リファクタ 等)',
-    '- 技術領域: 扱った領域 (ネットワーク / 描画 / DB / AI / ビルド / UI 等)',
-    '- その他: 上記に入らない特徴語',
-    '',
-    '## 出力形式',
-    '次の JSON オブジェクトだけを返せ (前後に説明を付けない):',
-    '{ "title": "記事タイトル", "body_md": "記事本文 (Markdown)", "tags": [{ "category": "言語", "value": "TypeScript" }] }',
+    '## 出力形式 (厳守)',
+    '記事本文だけをプレーンな Markdown で出力する。 JSON にしない。 前後に説明文を付けない。',
+    '1 行目を `# 記事タイトル` (H1) にし、 2 行目以降に本文を書く。',
+    '本文中のコード例は ```言語 ... ``` のコードブロックで書いてよい (出力全体を ``` で包まない)。',
   ].join('\n');
 
   const raw = await runLlm({ task: 'article_write', prompt });
-  const parsed = extractJsonObject(raw);
   const detTags = projectTagsFromSources(topic);
+  const { title, body_md } = parseMarkdownArticle(raw, topic.title);
+  const safeBody = body_md.trim() || `# ${topic.title}\n\n(本文生成に失敗しました)`;
+  const llmTags = body_md.trim() ? await generateArticleTags(title, safeBody) : [];
+  return { title, body_md: safeBody, tags: mergeTags(llmTags, detTags) };
+}
 
-  if (parsed && typeof parsed === 'object') {
-    const o = parsed as { title?: unknown; body_md?: unknown; body?: unknown; tags?: unknown };
-    const title = typeof o.title === 'string' && o.title.trim() ? o.title.trim() : topic.title;
-    const body = typeof o.body_md === 'string' && o.body_md.trim()
-      ? o.body_md
-      : (typeof o.body === 'string' ? o.body : '');
-    if (body.trim()) {
-      // タグは完成記事から専用 LLM で抽出 (長文 JSON 同梱だと末尾欠落しやすいため分離)。
-      // article_write が tags を返していればそれも併せてマージする。
-      const llmTags = await generateArticleTags(title, body);
-      return { title, body_md: body, tags: mergeTags([...coerceTags(o.tags), ...llmTags], detTags) };
+/**
+ * 旧 JSON 出力時代に「raw JSON がそのまま body_md に入った」記事を救済する。
+ * body_md が `{...,"body_md":"..."}` 形式なら内側の Markdown を取り出し、
+ * 先頭 H1 をタイトルとして分離して返す。 プレーン Markdown ならば null。
+ */
+export function repairArticleBody(storedBody: string, fallbackTitle: string): { title: string; body_md: string } | null {
+  const t = storedBody.trim();
+  if (!t.startsWith('{')) return null; // すでにプレーン Markdown
+  let inner: string | null = null;
+  let innerTitle = '';
+  try {
+    const obj = JSON.parse(t) as { title?: unknown; body_md?: unknown };
+    if (obj && typeof obj.body_md === 'string' && obj.body_md.trim()) {
+      inner = obj.body_md;
+      if (typeof obj.title === 'string' && obj.title.trim()) innerTitle = obj.title.trim();
     }
+  } catch {
+    // 末尾の `"body_md":"..."}` を緩く抜き出して JSON 文字列としてデコードする。
+    const m = /"body_md"\s*:\s*"([\s\S]*)"\s*\}\s*$/.exec(t);
+    if (m) { try { inner = JSON.parse(`"${m[1]}"`) as string; } catch { inner = null; } }
   }
-
-  // JSON 解釈不能 — raw を本文として扱う (空でない限り)。
-  const fallbackBody = raw.trim();
-  const fbBody = fallbackBody || `# ${topic.title}\n\n(本文生成に失敗しました)`;
-  const fbTags = fallbackBody ? await generateArticleTags(topic.title, fbBody) : [];
-  return {
-    title: topic.title,
-    body_md: fbBody,
-    tags: mergeTags(fbTags, detTags),
-  };
+  if (inner == null) return null;
+  return parseMarkdownArticle(inner, innerTitle || fallbackTitle);
 }
