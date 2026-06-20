@@ -297,8 +297,8 @@
           <button class="tab" data-tab="trends">
             <span class="tab-label" data-full="📊 傾向" data-short="📊 傾向">📊 傾向</span>
           </button>
-          <button class="tab" data-tab="recommend">
-            <span class="tab-label" data-full="✨ おすすめ" data-short="✨ 推薦">✨ おすすめ</span>
+          <button class="tab" data-tab="ai">
+            <span class="tab-label" data-full="🤖 AI" data-short="🤖 AI">🤖 AI</span>
             <span id="tabRecommendCount" class="tab-count hidden">0</span>
           </button>
           <button class="tab" data-tab="dig">
@@ -312,9 +312,6 @@
           </button>
           <button class="tab" data-tab="review">
             <span class="tab-label" data-full="🔍 レビュー" data-short="🔍 レビュ">🔍 レビュー</span>
-          </button>
-          <button class="tab" data-tab="worklist">
-            <span class="tab-label" data-full="📋 作業一覧" data-short="📋 作業">📋 作業一覧</span>
           </button>
           <button class="tab" data-tab="transit">
             <span class="tab-label" data-full="🚆 交通" data-short="🚆 交通">🚆 交通</span>
@@ -383,6 +380,25 @@
 
       <div id="goalsView" class="hidden">
         <div id="goalsRoot"></div>
+      </div>
+
+      <!-- 🤖 AI タブ。 サブビュー (recommendView / aiArticlesView / aiAdviceView) は
+           起動時に migrateAiSubViews() でこの container に取り込まれる
+           (databaseView と同じ仕組み)。 -->
+      <div id="aiView" class="hidden">
+        <nav class="worklog-subtabs" id="aiSubtabs">
+          <button class="wl-subtab active" data-ai-sub="recommend">✨ おすすめ</button>
+          <button class="wl-subtab" data-ai-sub="articles">📰 AI記事</button>
+          <button class="wl-subtab" data-ai-sub="advice">💡 AIアドバイス</button>
+        </nav>
+      </div>
+
+      <div id="aiArticlesView" class="hidden">
+        <div id="aiArticlesRoot"></div>
+      </div>
+
+      <div id="aiAdviceView" class="hidden">
+        <div id="aiAdviceRoot"></div>
       </div>
 
       <div id="trendsView" class="hidden">
@@ -745,6 +761,7 @@
           <button class="wl-subtab" data-db-sub="apps">💻 アプリ</button>
           <button class="wl-subtab" data-db-sub="endpoints">🛡 既知エンドポイント</button>
           <button class="wl-subtab" data-db-sub="weather">🌤 天気</button>
+          <button class="wl-subtab" data-db-sub="projects">📦 プロジェクト</button>
         </nav>
       </div>
 
@@ -820,6 +837,7 @@
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
           <button class="wl-subtab" data-sub="activity">💻 アプリ</button>
           <button class="wl-subtab" data-sub="games">🎮 ゲーム</button>
+          <button class="wl-subtab" data-sub="seeds">📝 記事ネタ</button>
         </nav>
 
         <section id="wlScheduleView" class="wl-sub">
@@ -931,6 +949,9 @@
           <div class="wl-summary-row" id="wlGamesSummary"></div>
           <ul id="wlGamesList" class="wl-list"></ul>
           <div id="wlGamesEmpty" class="queue-empty hidden">この日のゲームログはありません。</div>
+        </section>
+        <section id="wlSeedsView" class="wl-sub hidden">
+          <div id="aiSeedsRoot"></div>
         </section>
       </div>
 

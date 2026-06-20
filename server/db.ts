@@ -29,6 +29,7 @@ import type {
   NoteCommentSetRow, NoteCommentRow,
 } from './db/types/note.js';
 import { NOTE_BLOCK_TYPES } from './db/types/note.js';
+import type { AiArticle, AiSeed, AiAdvice, SourceRef } from './ai-hub/types.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -885,6 +886,44 @@ export function openDb(dbPath: string): Db {
       ON note_comments(set_id, position);
     CREATE INDEX IF NOT EXISTS idx_note_comments_target
       ON note_comments(target_block_uuid);
+
+    -- AI ハブ (🤖 AI タブ)。 前日の作業ログから自動生成する技術記事・記事ネタ・
+    -- 週次の AI 助言を保持する。 すべて個人の作業ログ由来の派生物でローカル完結
+    -- ([[project_personal_data_rule]])。
+    CREATE TABLE IF NOT EXISTS ai_articles (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      title       TEXT NOT NULL,
+      body_md     TEXT NOT NULL,              -- 記事本文 (Markdown)
+      topic_key   TEXT,                       -- 重複排除キー (repo:theme 等)
+      source_refs TEXT,                       -- JSON 配列: [{kind, ref, repo}]
+      origin      TEXT NOT NULL DEFAULT 'digest', -- 'digest' | 'requested'
+      for_date    TEXT,                       -- 対象作業日 YYYY-MM-DD
+      -- 転写先 note.id (NULL=未転写)。 notes.id は UUID (TEXT) なので TEXT で持つ
+      -- (spec の "INTEGER" は note id が UUID 化される前の名残。 実体に合わせる)。
+      note_id     TEXT,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE TABLE IF NOT EXISTS ai_article_seeds (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      title       TEXT NOT NULL,
+      summary     TEXT,                       -- なぜ記事になるか
+      angle       TEXT,                       -- 提案アングル
+      source_refs TEXT,                       -- JSON
+      for_date    TEXT,
+      status      TEXT NOT NULL DEFAULT 'pending', -- 'pending'|'requested'|'done'|'dismissed'
+      article_id  INTEGER,                    -- 記事化済みなら ai_articles.id
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE TABLE IF NOT EXISTS ai_advice (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      for_date     TEXT NOT NULL,             -- 生成対象日 YYYY-MM-DD
+      body_md      TEXT NOT NULL,             -- 助言本文 (Markdown)
+      data_summary TEXT,                      -- JSON: 投入データの件数等
+      created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_articles_created ON ai_articles(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_seeds_status ON ai_article_seeds(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
   `);
 
   // notes rev1 → rev2: 旧 INTEGER 行を UUID で再挿入
@@ -5888,4 +5927,218 @@ export function recRecentDigs(db: Db, sinceDays = 7, limit = 25): RecDigSummary[
     status: r.status,
     result_preview: r.result_json ? String(r.result_json).slice(0, 400) : '',
   }));
+}
+
+// ── AI ハブ (ai_articles / ai_article_seeds / ai_advice) ─────────────────────
+//
+// 前日の作業ログから自動生成する技術記事・記事ネタ・週次助言。 すべて個人の
+// 作業ログ由来の派生物でローカル完結 ([[project_personal_data_rule]])。
+// source_refs / data_summary は DB に JSON 文字列で持ち、 読み出し時に parse する。
+
+function parseSourceRefs(json: string | null): SourceRef[] {
+  const v = safeParse(json);
+  return Array.isArray(v) ? (v as SourceRef[]) : [];
+}
+
+interface AiArticleDbRow {
+  id: number;
+  title: string;
+  body_md: string;
+  topic_key: string | null;
+  source_refs: string | null;
+  origin: string;
+  for_date: string | null;
+  note_id: string | null;
+  created_at: string;
+}
+
+function rowToAiArticle(r: AiArticleDbRow): AiArticle {
+  return {
+    id: r.id,
+    title: r.title,
+    body_md: r.body_md,
+    topic_key: r.topic_key,
+    source_refs: parseSourceRefs(r.source_refs),
+    origin: r.origin,
+    for_date: r.for_date,
+    note_id: r.note_id,
+    created_at: r.created_at,
+  };
+}
+
+export interface InsertAiArticleInput {
+  title: string;
+  body_md: string;
+  topic_key?: string | null;
+  source_refs?: SourceRef[] | null;
+  origin?: 'digest' | 'requested';
+  for_date?: string | null;
+}
+
+export function insertAiArticle(db: Db, input: InsertAiArticleInput): number {
+  const res = db.prepare(`
+    INSERT INTO ai_articles (title, body_md, topic_key, source_refs, origin, for_date)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    input.title,
+    input.body_md,
+    input.topic_key ?? null,
+    input.source_refs && input.source_refs.length ? JSON.stringify(input.source_refs) : null,
+    input.origin ?? 'digest',
+    input.for_date ?? null,
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function listAiArticles(db: Db, limit = 50): AiArticle[] {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50));
+  const rows = db.prepare(`
+    SELECT id, title, body_md, topic_key, source_refs, origin, for_date, note_id, created_at
+    FROM ai_articles
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(safeLimit) as AiArticleDbRow[];
+  return rows.map(rowToAiArticle);
+}
+
+export function getAiArticle(db: Db, id: number): AiArticle | null {
+  const row = db.prepare(`
+    SELECT id, title, body_md, topic_key, source_refs, origin, for_date, note_id, created_at
+    FROM ai_articles WHERE id = ?
+  `).get(id) as AiArticleDbRow | undefined;
+  return row ? rowToAiArticle(row) : null;
+}
+
+export function setAiArticleNote(db: Db, id: number, noteId: string): void {
+  db.prepare(`UPDATE ai_articles SET note_id = ? WHERE id = ?`).run(noteId, id);
+}
+
+interface AiSeedDbRow {
+  id: number;
+  title: string;
+  summary: string | null;
+  angle: string | null;
+  source_refs: string | null;
+  for_date: string | null;
+  status: string;
+  article_id: number | null;
+  created_at: string;
+}
+
+function rowToAiSeed(r: AiSeedDbRow): AiSeed {
+  return {
+    id: r.id,
+    title: r.title,
+    summary: r.summary,
+    angle: r.angle,
+    source_refs: parseSourceRefs(r.source_refs),
+    for_date: r.for_date,
+    status: r.status,
+    article_id: r.article_id,
+    created_at: r.created_at,
+  };
+}
+
+export interface InsertAiSeedInput {
+  title: string;
+  summary?: string | null;
+  angle?: string | null;
+  source_refs?: SourceRef[] | null;
+  for_date?: string | null;
+  status?: string;
+}
+
+export function insertAiSeed(db: Db, input: InsertAiSeedInput): number {
+  const res = db.prepare(`
+    INSERT INTO ai_article_seeds (title, summary, angle, source_refs, for_date, status)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    input.title,
+    input.summary ?? null,
+    input.angle ?? null,
+    input.source_refs && input.source_refs.length ? JSON.stringify(input.source_refs) : null,
+    input.for_date ?? null,
+    input.status ?? 'pending',
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function listAiSeeds(db: Db, status: string | null = 'pending', limit = 100): AiSeed[] {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  const where = status ? `WHERE status = ?` : '';
+  const args: unknown[] = status ? [status, safeLimit] : [safeLimit];
+  const rows = db.prepare(`
+    SELECT id, title, summary, angle, source_refs, for_date, status, article_id, created_at
+    FROM ai_article_seeds
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(...args) as AiSeedDbRow[];
+  return rows.map(rowToAiSeed);
+}
+
+export function getAiSeed(db: Db, id: number): AiSeed | null {
+  const row = db.prepare(`
+    SELECT id, title, summary, angle, source_refs, for_date, status, article_id, created_at
+    FROM ai_article_seeds WHERE id = ?
+  `).get(id) as AiSeedDbRow | undefined;
+  return row ? rowToAiSeed(row) : null;
+}
+
+/** seed の status を更新する。 記事化済みなら articleId を併せて設定する。 */
+export function updateAiSeedStatus(db: Db, id: number, status: string, articleId: number | null = null): void {
+  if (articleId != null) {
+    db.prepare(`UPDATE ai_article_seeds SET status = ?, article_id = ? WHERE id = ?`).run(status, articleId, id);
+  } else {
+    db.prepare(`UPDATE ai_article_seeds SET status = ? WHERE id = ?`).run(status, id);
+  }
+}
+
+interface AiAdviceDbRow {
+  id: number;
+  for_date: string;
+  body_md: string;
+  data_summary: string | null;
+  created_at: string;
+}
+
+function rowToAiAdvice(r: AiAdviceDbRow): AiAdvice {
+  const summary = safeParse(r.data_summary);
+  return {
+    id: r.id,
+    for_date: r.for_date,
+    body_md: r.body_md,
+    data_summary: summary && typeof summary === 'object' && !Array.isArray(summary)
+      ? (summary as Record<string, unknown>)
+      : null,
+    created_at: r.created_at,
+  };
+}
+
+export interface InsertAiAdviceInput {
+  for_date: string;
+  body_md: string;
+  data_summary?: Record<string, unknown> | null;
+}
+
+export function insertAiAdvice(db: Db, input: InsertAiAdviceInput): number {
+  const res = db.prepare(`
+    INSERT INTO ai_advice (for_date, body_md, data_summary)
+    VALUES (?, ?, ?)
+  `).run(
+    input.for_date,
+    input.body_md,
+    input.data_summary ? JSON.stringify(input.data_summary) : null,
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function latestAiAdvice(db: Db): AiAdvice | null {
+  const row = db.prepare(`
+    SELECT id, for_date, body_md, data_summary, created_at
+    FROM ai_advice
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get() as AiAdviceDbRow | undefined;
+  return row ? rowToAiAdvice(row) : null;
 }

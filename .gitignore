@@ -20,6 +20,8 @@ data/
 
 # logs / artifacts
 *.log
+logs/
+server/logs/
 .DS_Store
 Thumbs.db
 
