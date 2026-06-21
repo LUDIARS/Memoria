@@ -6081,6 +6081,12 @@ export function listAiArticleTags(db: Db): ArticleTagCount[] {
   return [...counts.values()].sort((a, b) => b.count - a.count);
 }
 
+/** 記事の総数 (タグフィルタの「記事数/10」 しきい値計算用)。 */
+export function countAiArticles(db: Db): number {
+  const r = db.prepare(`SELECT COUNT(*) AS c FROM ai_articles`).get() as { c: number };
+  return r.c;
+}
+
 /**
  * さかのぼり生成の候補日。 指定範囲で日記がある日を新しい順に返し、 各日の
  * 既存 ai_articles 件数を添える (UI が「未生成のみ」 判定に使う)。

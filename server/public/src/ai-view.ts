@@ -225,24 +225,48 @@ function buildArticleQuery(): string {
   return params.toString();
 }
 
-/** フィルタ chips バーを描く (日付範囲 + タグ category 別)。 */
-function renderArticleFilterBar(tagCounts: ArticleTagCount[]): string {
-  const byCat = new Map<string, ArticleTagCount[]>();
-  for (const t of tagCounts) {
-    const arr = byCat.get(t.category) || [];
-    arr.push(t);
-    byCat.set(t.category, arr);
+// サジェスト用に最後に取得した全タグ + 記事総数を保持 (検索ハンドラが参照)。
+let allTagCounts: ArticleTagCount[] = [];
+let totalArticles = 0;
+
+/** popular (count >= 記事数/10) + ランダムなタグを quick-pick 用に選ぶ。 */
+function pickQuickTags(tagCounts: ArticleTagCount[], total: number): { popular: ArticleTagCount[]; random: ArticleTagCount[] } {
+  const threshold = total / 10;
+  const popular = tagCounts.filter((t) => t.count >= threshold)
+    .sort((a, b) => b.count - a.count).slice(0, 20);
+  const popularKeys = new Set(popular.map(tagKey));
+  const pool = tagCounts.filter((t) => !popularKeys.has(tagKey(t)));
+  // ランダム最大 6 個 (部分 Fisher-Yates)。 Math.random はブラウザなので可。
+  const random: ArticleTagCount[] = [];
+  const n = Math.min(6, pool.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(Math.random() * (pool.length - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+    random.push(pool[i]);
   }
-  const catBlocks = TAG_CATEGORY_ORDER
-    .filter((cat) => byCat.has(cat))
-    .map((cat) => {
-      const chips = (byCat.get(cat) || []).map((t) => {
-        const key = tagKey(t);
-        const active = articleFilter.tags.has(key) ? ' active' : '';
-        return `<button class="ai-tag-filter ai-tag-${esc(cat)}${active}" data-tag-key="${esc(key)}">${esc(t.value)}<span class="ai-tag-n">${t.count}</span></button>`;
-      }).join('');
-      return `<div class="ai-filter-cat"><span class="ai-filter-cat-label">${esc(cat)}</span>${chips}</div>`;
-    }).join('');
+  return { popular, random };
+}
+
+function quickChip(t: ArticleTagCount, marker: string): string {
+  const cat = TAG_CATEGORY_ORDER.includes(t.category) ? t.category : 'その他';
+  const active = articleFilter.tags.has(tagKey(t)) ? ' active' : '';
+  return `<button class="ai-tag-quick ai-tag-${esc(cat)}${active}" data-tag-key="${esc(tagKey(t))}" title="${esc(t.category)} (${t.count}件)">${marker}${esc(t.value)}<span class="ai-tag-n">${t.count}</span></button>`;
+}
+
+/** フィルタバー: 日付範囲 + 選択中タグ + タグ検索(サジェスト) + quick-pick(人気/ランダム)。 */
+function renderArticleFilterBar(tagCounts: ArticleTagCount[], total: number): string {
+  const byKey = new Map(tagCounts.map((t) => [tagKey(t), t]));
+  const activeChips = [...articleFilter.tags].map((key) => {
+    const t = byKey.get(key);
+    const cat = t && TAG_CATEGORY_ORDER.includes(t.category) ? t.category : 'その他';
+    const label = key.split(':').slice(1).join(':') || key;
+    return `<button class="ai-tag-active ai-tag-${esc(cat)}" data-tag-remove="${esc(key)}" title="${esc(key)}">${esc(label)} ✕</button>`;
+  }).join('');
+  const { popular, random } = pickQuickTags(tagCounts, total);
+  const quick = [
+    ...popular.map((t) => quickChip(t, '★ ')),
+    ...random.map((t) => quickChip(t, '🎲 ')),
+  ].join('');
   const hasActive = articleFilter.tags.size || articleFilter.from || articleFilter.to;
   return `
     <div class="ai-filter-bar">
@@ -251,8 +275,28 @@ function renderArticleFilterBar(tagCounts: ArticleTagCount[]): string {
         <label>〜 <input type="date" id="aiFilterTo" value="${esc(articleFilter.to)}"></label>
         <button class="ghost" id="aiFilterClear"${hasActive ? '' : ' disabled'}>クリア</button>
       </div>
-      ${catBlocks ? `<div class="ai-filter-tags">${catBlocks}</div>` : ''}
+      ${activeChips ? `<div class="ai-filter-active"><span class="ai-filter-cat-label">選択中</span>${activeChips}</div>` : ''}
+      <div class="ai-filter-search">
+        <input type="text" id="aiTagSearch" placeholder="タグで絞り込み (入力してサジェスト)" autocomplete="off">
+        <div id="aiTagSuggest" class="ai-tag-suggest hidden"></div>
+      </div>
+      ${quick ? `<div class="ai-filter-quick"><span class="ai-filter-cat-label">よく使う / おすすめ</span>${quick}</div>` : ''}
     </div>`;
+}
+
+/** タグ検索のサジェスト行 HTML (query にマッチ・active 除外・上位 12)。 */
+function renderTagSuggest(query: string): string {
+  const q = query.trim().toLowerCase();
+  if (!q) return '';
+  const matches = allTagCounts
+    .filter((t) => !articleFilter.tags.has(tagKey(t)))
+    .filter((t) => t.value.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
+    .slice(0, 12);
+  if (!matches.length) return '<div class="ai-suggest-empty muted">該当なし</div>';
+  return matches.map((t) => {
+    const cat = TAG_CATEGORY_ORDER.includes(t.category) ? t.category : 'その他';
+    return `<button class="ai-suggest-row" data-tag-add="${esc(tagKey(t))}"><span class="ai-tag ai-tag-${esc(cat)}">${esc(t.category)}</span><span class="ai-suggest-val">${esc(t.value)}</span><span class="ai-tag-n">${t.count}</span></button>`;
+  }).join('');
 }
 
 function bindArticleFilter(root: HTMLElement): void {
@@ -270,6 +314,15 @@ function bindArticleFilter(root: HTMLElement): void {
     articleFilter.tags.clear();
     void loadAiArticlesView();
   });
+  // 選択中タグの削除
+  root.querySelectorAll<HTMLButtonElement>('[data-tag-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.tagRemove;
+      if (key) articleFilter.tags.delete(key);
+      void loadAiArticlesView();
+    });
+  });
+  // quick-pick (人気/ランダム) のトグル
   root.querySelectorAll<HTMLButtonElement>('[data-tag-key]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.tagKey;
@@ -279,6 +332,25 @@ function bindArticleFilter(root: HTMLElement): void {
       void loadAiArticlesView();
     });
   });
+  // タグ検索: サジェストはローカル更新 (フル再描画しない=フォーカス維持)、選択で再描画。
+  const search = root.querySelector<HTMLInputElement>('#aiTagSearch');
+  const suggest = root.querySelector<HTMLElement>('#aiTagSuggest');
+  if (search && suggest) {
+    const update = () => {
+      const html = renderTagSuggest(search.value);
+      suggest.innerHTML = html;
+      suggest.classList.toggle('hidden', !html);
+      suggest.querySelectorAll<HTMLButtonElement>('[data-tag-add]').forEach((row) => {
+        row.addEventListener('click', () => {
+          const key = row.dataset.tagAdd;
+          if (key) articleFilter.tags.add(key);
+          void loadAiArticlesView();
+        });
+      });
+    };
+    search.addEventListener('input', update);
+    search.addEventListener('focus', update);
+  }
 }
 
 /** app.ts の switchTab('ai') → サブ 'articles' から呼ばれる。 */
@@ -289,9 +361,12 @@ export async function loadAiArticlesView(): Promise<void> {
   try {
     const [{ articles }, tagsRes] = await Promise.all([
       getJson<{ articles: AiArticle[] }>(`/api/ai/articles?${buildArticleQuery()}`),
-      getJson<{ tags: ArticleTagCount[] }>('/api/ai/tags').catch(() => ({ tags: [] as ArticleTagCount[] })),
+      getJson<{ tags: ArticleTagCount[]; total: number }>('/api/ai/tags')
+        .catch(() => ({ tags: [] as ArticleTagCount[], total: 0 })),
     ]);
-    const filterBar = renderArticleFilterBar(tagsRes.tags || []);
+    allTagCounts = tagsRes.tags || [];
+    totalArticles = tagsRes.total || 0;
+    const filterBar = renderArticleFilterBar(allTagCounts, totalArticles);
     const filtering = articleFilter.tags.size || articleFilter.from || articleFilter.to;
     const list = articles.length
       ? `<div class="ai-article-list">${articles.map(articleCard).join('')}</div>`

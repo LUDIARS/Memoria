@@ -7384,6 +7384,24 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
 .ai-tag-filter.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
 .ai-tag-filter .ai-tag-n { font-size: 9px; opacity: 0.6; }
 
+/* AI記事フィルタ: 選択中タグ + タグ検索(サジェスト) + quick-pick(人気/ランダム) */
+.ai-filter-active { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ai-tag-active { font-size: 11px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent); cursor: pointer; font-weight: 600; }
+.ai-tag-active:hover { filter: brightness(0.95); }
+.ai-filter-search { position: relative; max-width: 360px; }
+.ai-filter-search input { width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; box-sizing: border-box; }
+.ai-tag-suggest { position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 20; background: var(--card-bg, var(--bg)); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; }
+.ai-suggest-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: none; border: none; border-bottom: 1px solid var(--border); cursor: pointer; text-align: left; font-size: 12px; }
+.ai-suggest-row:hover { background: var(--accent-bg); }
+.ai-suggest-row:last-child { border-bottom: none; }
+.ai-suggest-val { flex: 1; }
+.ai-suggest-empty { padding: 8px 10px; font-size: 12px; }
+.ai-filter-quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ai-tag-quick { font-size: 11px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.ai-tag-quick:hover { border-color: var(--accent); }
+.ai-tag-quick.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+.ai-tag-quick .ai-tag-n { font-size: 9px; opacity: 0.6; }
+
 /* 📅 日記タブ — さかのぼり AIノート一括生成パネル */
 .diary-backfill { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 8px 0 12px; background: var(--card-bg, var(--bg)); }
 .diary-backfill-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 12px; }
