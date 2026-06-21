@@ -6,7 +6,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import {
   listAiArticles, getAiArticle, setAiArticleNote,
   listAiArticleTags, listDiaryDigestCandidates,
-  setAiArticleTags, listAiArticlesMissingLlmTags, setAiArticleBody,
+  setAiArticleTags, listAiArticlesMissingLlmTags, setAiArticleBody, countAiArticles,
   listAiSeeds, getAiSeed, updateAiSeedStatus,
   latestAiAdvice,
   insertNote, insertBlock, getNote,
@@ -53,9 +53,9 @@ export function makeAiHubRouter(deps: AiHubRouterDeps): Hono {
     return c.json({ articles: listAiArticles(db, { limit, from, to, tags }) });
   });
 
-  // フィルタ chips 用: 全記事のタグを category+value で集計。
+  // フィルタ chips / サジェスト用: 全記事のタグを category+value で集計 + 記事総数。
   r.get('/api/ai/tags', (c: Context) => {
-    return c.json({ tags: listAiArticleTags(db) });
+    return c.json({ tags: listAiArticleTags(db), total: countAiArticles(db) });
   });
 
   // 救済: body_md に raw JSON が入った旧記事を、内側の Markdown に直す (LLM 不要)。
