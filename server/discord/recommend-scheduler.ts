@@ -6,7 +6,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings, setAppSettings } from '../db.js';
 import { discordSettings } from './settings.js';
 import { postToChannel } from './notifier.js';
-import { runAiRecommendations, isAiRecommendationsAvailable, type RecResultItem } from '../recommendations-ai.js';
+import { runAiRecommendations, isAiRecommendationsAvailable, REC_AXIS_LABELS, type RecResultItem } from '../recommendations-ai.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -16,23 +16,34 @@ function localDateStr(now: Date): string {
 
 /**
  * おすすめ結果を 1 アイテム 1 メッセージ の配列で返す。
- * 先頭はヘッダー、以降は各アイテム (タイトル + URL + 補足)。
+ * 先頭はヘッダー、以降は各アイテム (軸ラベル + タイトル + URL + 補足)。
  * リアクション FB・URL コピーのため分割する。
+ *
+ * 2 軸 (停滞打開 / 不足補間) の両方が出るよう、 各軸から最大 3 件ずつ拾って交互に並べる。
  */
 function formatRecommendMessages(items: RecResultItem[]): string[] {
-  const shown = items.slice(0, 5);
-  const messages: string[] = [];
+  const stagnation = items.filter((it) => it.axis === 'stagnation').slice(0, 3);
+  const antenna = items.filter((it) => it.axis === 'news_antenna').slice(0, 3);
+  // 交互に並べて両軸を均等に見せる (片方が尽きたら残りをそのまま続ける)。
+  const shown: RecResultItem[] = [];
+  for (let i = 0; i < Math.max(stagnation.length, antenna.length); i++) {
+    if (stagnation[i]) shown.push(stagnation[i]);
+    if (antenna[i]) shown.push(antenna[i]);
+  }
 
+  const messages: string[] = [];
   for (let i = 0; i < shown.length; i++) {
     const it = shown[i];
+    const axisLabel = REC_AXIS_LABELS[it.axis] ?? '';
+    const tag = axisLabel ? `\`${axisLabel}\` ` : '';
     const title = (it.title || it.url).slice(0, 80);
     const url = it.url.slice(0, 120);
     const why = (it.why || '').slice(0, 150);
     const val = (it.expected_value || '').slice(0, 80);
     const supplement = [why, val].filter(Boolean).join(' — ');
     messages.push(supplement
-      ? `**${i + 1}.** ${title}\n${url}\n> ${supplement}`
-      : `**${i + 1}.** ${title}\n${url}`);
+      ? `**${i + 1}.** ${tag}${title}\n${url}\n> ${supplement}`
+      : `**${i + 1}.** ${tag}${title}\n${url}`);
   }
 
   return messages;
