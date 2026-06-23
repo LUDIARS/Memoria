@@ -24,6 +24,22 @@ Chrome 拡張 (`POST /api/access`) や Legatus DNS / SNI tap (`POST /api/visits/
 - [visit.md](../interface/visit.md) — `/api/access` (拡張ping) / `/api/visits/unsaved` `/api/visits/suggested` `/api/visits/unsaved/count` / `/api/visits/bookmark` (bulk save) / `/api/visits/external` (DNS/SNI) / `/api/visits/external/stats`
 - 関連: [misc.md](../interface/misc.md) `/api/recommendations*` / `/api/trends/*`、 `/api/extension/status`
 
+## おすすめ生成ロジック (2 軸) — `server/recommendations-ai.ts`
+`/api/recommendations` の AI 主導おすすめは **2 軸** で評価する (2026-06-23 改訂)。
+各領域を Sonnet agent が並列分析し、 Opus が 2 軸で統合して URL リスト + 理由 + 軸 を返す。
+
+- **軸A 停滞分析 → 打開情報** (`axis: 'stagnation'`): ユーザ自身の活動 6 領域
+  (ブラウザ履歴 / ブクマ / git commit / Claude prompt / ゲーム・アプリ / ノート + Dig)
+  から「停滞テーマ」 と「もう一押しで打開できる情報」 を出す。
+- **軸B ニュースアンテナ → 不足補間** (`axis: 'news_antenna'`): **ニュース** (RSS 記事
+  `listRecentTopArticles`) と **AI 記事** (`listAiArticles`) をアンテナとし、 ユーザの
+  関心・作業領域 (interests + 作業リポ + 最近のノート) と照らして **まだ追えていない
+  重要・新出トピック** を見つけ、 補間するおすすめを出す。
+
+統合は両軸をバランス良く (目安 各軸 4〜6 件) 選定する。 結果 `RecResultItem` は
+`axis` フィールドを持ち、 Discord (#recommend) / Web の おすすめタブで軸ラベル
+(停滞打開 / 不足補間) を表示する。 `axis` 欠落時は `agent_kinds` から推定 (`inferAxis`)。
+
 ## シェア可能か
 **local-only**
 

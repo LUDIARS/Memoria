@@ -750,6 +750,17 @@ body:not([data-multi-mode="on"]) .multi-only-control { display: none !important;
   border-radius: 999px;
   padding: 1px 8px;
 }
+.rec-axis {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.rec-axis-stagnation { background: #fde9c8; color: #9a5b00; }
+.rec-axis-news_antenna { background: #d8ecff; color: #0a5aa6; }
 .rec-card .url a { color: var(--muted); text-decoration: none; }
 .rec-card .url a:hover { text-decoration: underline; }
 
