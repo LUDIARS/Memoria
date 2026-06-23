@@ -3966,6 +3966,14 @@ const REC_AGENT_LABELS = {
   claude_prompts: 'Claude',
   games_apps: 'ゲーム/アプリ',
   notes_digs: 'ノート+Dig',
+  news: 'ニュース',
+  ai_articles: 'AI記事',
+};
+
+// おすすめの評価軸ラベル (停滞打開 / 不足補間)。
+const REC_AXIS_LABELS = {
+  stagnation: '停滞打開',
+  news_antenna: '不足補間',
 };
 
 let recPollTimer = null;
@@ -4084,10 +4092,14 @@ function renderRecommendations() {
     const kinds = (r.agent_kinds || [])
       .map(k => `<span class="rec-tag">${escapeHtml(REC_AGENT_LABELS[k] || k)}</span>`)
       .join('');
+    const axisLabel = REC_AXIS_LABELS[r.axis];
+    const axisBadge = axisLabel
+      ? `<span class="rec-axis rec-axis-${escapeHtml(r.axis)}">${escapeHtml(axisLabel)}</span>`
+      : '';
     return `
       <div class="rec-card" data-url="${escapeHtml(r.url)}">
         <div class="rec-head">
-          <div class="rec-title">${escapeHtml(r.title || r.url)}</div>
+          <div class="rec-title">${axisBadge}${escapeHtml(r.title || r.url)}</div>
           <div class="rec-kinds">${kinds}</div>
         </div>
         <div class="url"><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.url)}</a></div>
