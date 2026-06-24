@@ -74,6 +74,7 @@ import { makeStalenessRouter } from './routes/staleness.js';
 import { makeRssRouter } from './routes/rss.js';
 import { makeBriefingRouter } from './routes/briefing.js';
 import { makeGoalEvalRouter } from './goals/router.js';
+import { makeRoadmapRouter } from './roadmap/router.js';
 import { makeAiHubRouter } from './routes/ai-hub.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -295,6 +296,7 @@ app.route('/', makeStalenessRouter({ db }));
 app.route('/', makeRssRouter({ db }));
 app.route('/', makeBriefingRouter({ db }));
 app.route('/', makeGoalEvalRouter({ db }));
+app.route('/', makeRoadmapRouter());
 app.route('/', makeAiHubRouter({ db }));
 
 // ---- Corpus hub マニフェスト (VantanHub-DESIGN.md D6) ----------------------
