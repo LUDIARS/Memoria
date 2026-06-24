@@ -7356,6 +7356,57 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
   .goals-dot-todo    { background: #374151; color: #9ca3af; }
 }
 
+/* ── 事業ロードマップ進捗 (目標タブの主役) ── */
+.rm-section-head { display: flex; align-items: center; gap: 12px; padding: 12px 4px 10px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.rm-section-title { font-weight: 700; font-size: 16px; }
+.rm-section-head .goals-refresh-btn { margin-left: auto; }
+.rm-summary { font-size: 12px; padding: 0 4px 12px; }
+.rm-error { font-size: 12px; padding: 8px 12px; border: 1px solid var(--border); background: var(--bg); border-radius: 6px; margin: 0 0 12px; color: var(--muted); }
+.rm-empty { padding: 16px 4px; }
+.rm-lines { display: flex; flex-direction: column; gap: 12px; }
+.rm-line { border: 1px solid var(--border); border-left: 4px solid var(--rm-accent, var(--accent)); border-radius: 8px; padding: 12px 14px; background: var(--panel); }
+.rm-line-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rm-icon { font-size: 20px; }
+.rm-title { font-weight: 700; font-size: 15px; }
+.rm-vis { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--rm-accent, var(--accent)); color: var(--rm-accent, var(--accent)); }
+.rm-sub { font-size: 12px; }
+.rm-maturity { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.rm-month { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 8px; }
+.rm-month-key { font-weight: 600; font-size: 13px; }
+.rm-theme { font-size: 13px; }
+.rm-ach { font-size: 11px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.rm-ach-pending { background: #f3f4f6; color: #6b7280; }
+.rm-ach-good { background: #d4f5dc; color: #166534; }
+.rm-ach-mid { background: #fdeccb; color: #92600a; }
+.rm-ach-low { background: #fbdcdc; color: #9b2b2b; }
+.rm-goalprog { font-size: 11px; margin-left: auto; }
+.rm-progbar { display: inline-block; width: 72px; height: 7px; border-radius: 4px; background: var(--border); overflow: hidden; }
+.rm-progfill { display: block; height: 100%; background: var(--rm-accent, var(--accent)); }
+.rm-goals { list-style: none; padding: 0; margin: 6px 0 4px; }
+.rm-goals li { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 13px; }
+.rm-goal-mark { width: 13px; height: 13px; border-radius: 4px; border: 1.5px solid var(--border); margin-top: 3px; flex: none; }
+.rm-goal-done .rm-goal-mark { background: #4ade80; border-color: #4ade80; }
+.rm-goal-miss .rm-goal-mark { background: #f0a0a8; border-color: #f0a0a8; }
+.rm-goal-text { flex: 1; min-width: 0; }
+.rm-goal-done .rm-goal-text { color: var(--muted); text-decoration: line-through; }
+.rm-goal-metric { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.rm-goal-empty { font-size: 12px; padding: 4px 0; }
+.rm-detail { margin-top: 8px; }
+.rm-detail > summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+.rm-status { font-size: 12px; margin: 8px 0; }
+.rm-members { display: flex; flex-wrap: wrap; gap: 6px; }
+.rm-mem { font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); white-space: nowrap; }
+.rm-mem-i3 { border-color: var(--rm-accent, var(--accent)); font-weight: 600; }
+.rm-mem-star { color: var(--rm-accent, var(--accent)); }
+.rm-mem-mat { color: var(--muted); }
+.goals-legacy-head { margin-top: 24px; }
+@media (prefers-color-scheme: dark) {
+  .rm-ach-pending { background: #374151; color: #9ca3af; }
+  .rm-ach-good { background: #14532d; color: #86efac; }
+  .rm-ach-mid { background: #4a3a10; color: #f0cd80; }
+  .rm-ach-low { background: #4a1d1d; color: #f0a0a8; }
+}
+
 /* ── 🤖 AI タブ (AI記事 / AIアドバイス / 記事ネタ) ───────────────────────── */
 .ai-article-list, .ai-seed-list { display: flex; flex-direction: column; gap: 12px; padding-bottom: 24px; }
 .ai-article-card { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--card-bg, var(--bg)); }
