@@ -10972,10 +10972,15 @@ async function loadReviewRepos() {
       renderReviewCards();
       return;
     }
-    if (!reviewState.listDate || !reviewState.availableDates.includes(reviewState.listDate)) {
-      reviewState.listDate = reviewState.availableDates[0];
+    // 既定は「全期間 (各リポの最新)」= listDate 未指定。 ユーザが日付を選んだ
+    // ときだけ絞り込む。 (Foedus 等が repo 固有の新しい日付を増やすと、 最新日を
+    // 自動選択する旧挙動では他リポが日付フィルタから外れて消えて見えるため。)
+    if (reviewState.listDate && !reviewState.availableDates.includes(reviewState.listDate)) {
+      reviewState.listDate = null;
     }
-    const r = await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`);
+    const r = reviewState.listDate
+      ? await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`)
+      : await api('/api/review/repos');
     reviewState.items = (r.items || []).slice().sort((a, b) => a.repo.localeCompare(b.repo));
     renderReviewListDateMenu();
     renderReviewMenu();
@@ -10998,7 +11003,8 @@ function renderReviewListDateMenu() {
     return;
   }
   sel.disabled = false;
-  sel.innerHTML = reviewState.availableDates.map((d) =>
+  const allOpt = `<option value=""${reviewState.listDate ? '' : ' selected'}>全期間 (最新)</option>`;
+  sel.innerHTML = allOpt + reviewState.availableDates.map((d) =>
     `<option value="${escapeHtml(d)}"${d === reviewState.listDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
 }
 
@@ -11298,9 +11304,9 @@ document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
 });
 document.getElementById('reviewListDateSel')?.addEventListener('change', (ev) => {
   const v = (ev.target as HTMLSelectElement).value;
-  if (!v) return;
-  reviewState.listDate = v;
-  // 日付を切り替えると repo フィルタはリセット (= 別日付のリストに移るため)
+  // 空 = 「全期間 (最新)」。 日付選択時はその日で絞り込む。
+  reviewState.listDate = v || null;
+  // 日付を切り替えると repo フィルタはリセット (= 別リストに移るため)
   reviewState.filterRepo = null;
   void loadReviewRepos();
 });
