@@ -132,9 +132,19 @@ function reviewDir(target: ReviewTargetRow): string {
 }
 
 function readLatest(target: ReviewTargetRow): Record<string, unknown> | null {
-  const p = join(reviewDir(target), 'latest.json');
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { return null; }
+  const top = join(reviewDir(target), 'latest.json');
+  if (existsSync(top)) {
+    try { return JSON.parse(readFileSync(top, 'utf8')) as Record<string, unknown>; } catch { /* fall through */ }
+  }
+  // 集約トップに latest.json を持たない形式 (= cernere-hub-review/foedus は
+  // 日付ディレクトリ配下にしか出さない) は、 最新日付の latest.json を採用する。
+  for (const d of listDates(target)) {
+    const p = join(reviewDir(target), d, 'latest.json');
+    if (existsSync(p)) {
+      try { return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { /* try older */ }
+    }
+  }
+  return null;
 }
 
 /** 指定日付の `review/<date>/latest.json` を読む。 無ければ null。 */
