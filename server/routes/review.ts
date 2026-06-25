@@ -27,34 +27,98 @@ type Db = BetterSqlite3.Database;
 const LUDIARS_ROOT = resolve(process.env.LUDIARS_ROOT ?? 'E:/Document/Ars');
 /** 集約レビュー記録のルート (Castra が git 管理する Ars 直下の Review/)。 */
 const REVIEW_ROOT = join(LUDIARS_ROOT, 'Review');
-const SUPPORTED_FORMATS = new Set(['aiformat']);
+const SUPPORTED_FORMATS = new Set(['aiformat', 'foedus']);
 
-const REVIEW_FILES = [
-  'REVIEW.md',
-  'REVIEW_DESIGN.md',
-  'REVIEW_VULNERABILITY.md',
-  'REVIEW_IMPLEMENTATION.md',
-  'REVIEW_MISSING_FEATURES.md',
-  'REVIEW_QUALITY.md',
-] as const;
+// レビュー形式ごとに表示/配信を許可するファイル集合。
+//   aiformat = ludiars-review (設計/脆弱性/実装/不足/品質 + 総合)
+//   foedus   = Cernere↔Hub 連結契約レビュー (層B Foedus + 層C 観点)
+const REVIEW_FILES_BY_FORMAT: Record<string, readonly string[]> = {
+  aiformat: [
+    'REVIEW.md',
+    'REVIEW_DESIGN.md',
+    'REVIEW_VULNERABILITY.md',
+    'REVIEW_IMPLEMENTATION.md',
+    'REVIEW_MISSING_FEATURES.md',
+    'REVIEW_QUALITY.md',
+  ],
+  foedus: [
+    'REVIEW.md',
+    'REVIEW_DATA_BOUNDARY.md',
+    'REVIEW_LINKAGE_CONTRACT.md',
+    'REVIEW_SECURITY.md',
+    'REVIEW_FLOW.md',
+    'CONTRACT.md',
+  ],
+};
+/** 全形式を合算した許可集合 (format 不明時のフォールバック判定用)。 */
+const ALL_REVIEW_FILES = new Set<string>(Object.values(REVIEW_FILES_BY_FORMAT).flat());
 
-type ReviewFile = typeof REVIEW_FILES[number];
-
-interface LatestJson {
-  date: string;
-  weighted_score?: string;
-  scores?: Record<string, string>;
-  critical_count?: number;
-  high_count?: number;
-  fix_pr?: string | null;
+function reviewFilesFor(format: string): readonly string[] {
+  return REVIEW_FILES_BY_FORMAT[format] ?? REVIEW_FILES_BY_FORMAT.aiformat;
 }
 
 function safeDate(s: string): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
-function safeFile(name: string): ReviewFile | null {
-  return (REVIEW_FILES as readonly string[]).includes(name) ? (name as ReviewFile) : null;
+/** ファイル名がレビュー成果物として許可されているか。 format 指定時はその形式の
+ *  集合に限定し、 未指定なら全形式合算で判定する。 */
+function safeFile(name: string, format?: string): string | null {
+  if (format) return reviewFilesFor(format).includes(name) ? name : null;
+  return ALL_REVIEW_FILES.has(name) ? name : null;
+}
+
+/** 正規化済みの latest メタ (形式差を吸収してカード表示に使う)。 */
+interface NormalizedLatest {
+  date: string | null;
+  weighted_score: string | null;
+  grade: string | null;
+  critical_count: number;
+  high_count: number;
+  fix_pr: string | null;
+}
+
+function asString(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+function asCount(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+/** 形式別の latest.json を共通のカード表示メタに正規化する。
+ *  - aiformat: weighted_score / critical_count / high_count をそのまま使う
+ *  - foedus:   grade を score 欄に流用し、 contract.by_severity から件数を引く */
+function normalizeLatest(raw: Record<string, unknown> | null, format: string): NormalizedLatest {
+  const empty: NormalizedLatest = {
+    date: null, weighted_score: null, grade: null,
+    critical_count: 0, high_count: 0, fix_pr: null,
+  };
+  if (!raw) return empty;
+  const date = asString(raw.date);
+  const fix_pr = asString(raw.fix_pr);
+  if (format === 'foedus') {
+    const grade = asString(raw.grade);
+    const contract = (raw.contract && typeof raw.contract === 'object')
+      ? raw.contract as Record<string, unknown> : {};
+    const bySev = (contract.by_severity && typeof contract.by_severity === 'object')
+      ? contract.by_severity as Record<string, unknown> : {};
+    return {
+      date, grade,
+      weighted_score: grade,
+      critical_count: asCount(bySev.critical),
+      high_count: asCount(bySev.high),
+      fix_pr,
+    };
+  }
+  const weighted = asString(raw.weighted_score);
+  return {
+    date,
+    weighted_score: weighted,
+    grade: weighted,
+    critical_count: asCount(raw.critical_count),
+    high_count: asCount(raw.high_count),
+    fix_pr,
+  };
 }
 
 /** ターゲットの local_path を絶対パスに解決 (= 相対なら LUDIARS_ROOT 起点)。 */
@@ -67,17 +131,17 @@ function reviewDir(target: ReviewTargetRow): string {
   return join(REVIEW_ROOT, basename(resolveTargetPath(target)));
 }
 
-function readLatest(target: ReviewTargetRow): LatestJson | null {
+function readLatest(target: ReviewTargetRow): Record<string, unknown> | null {
   const p = join(reviewDir(target), 'latest.json');
   if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')) as LatestJson; } catch { return null; }
+  try { return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { return null; }
 }
 
 /** 指定日付の `review/<date>/latest.json` を読む。 無ければ null。 */
-function readDateLatest(target: ReviewTargetRow, date: string): LatestJson | null {
+function readDateLatest(target: ReviewTargetRow, date: string): Record<string, unknown> | null {
   const p = join(reviewDir(target), date, 'latest.json');
   if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')) as LatestJson; } catch { return null; }
+  try { return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>; } catch { return null; }
 }
 
 function listDates(target: ReviewTargetRow): string[] {
@@ -130,6 +194,44 @@ export function seedReviewTargets(db: Db): { seeded: number; skipped: number } {
       name,
       local_path: full,
       format_key: 'aiformat',
+    });
+    if (inserted) seeded++; else skipped++;
+  }
+  return { seeded, skipped };
+}
+
+/** 日付ディレクトリのどれかに Foedus マーカー (`CONTRACT.md` か `violations.json`)
+ *  があれば foedus 形式のレビュースコープとみなす。 */
+function isFoedusScope(dir: string): boolean {
+  let entries: string[];
+  try { entries = readdirSync(dir); } catch { return false; }
+  for (const d of entries) {
+    if (!safeDate(d)) continue;
+    const dd = join(dir, d);
+    try { if (!statSync(dd).isDirectory()) continue; } catch { continue; }
+    if (existsSync(join(dd, 'CONTRACT.md')) || existsSync(join(dd, 'violations.json'))) return true;
+  }
+  return false;
+}
+
+/** 起動時に集約 `Review/` 直下を走査し、 git clone ではない「仮想レビュースコープ」
+ *  (= Foedus の Cernere↔Hub 連結契約レビュー等) を review_targets に登録する。
+ *  日付ディレクトリ内に CONTRACT.md / violations.json を持つものを foedus 形式とし、
+ *  basename がそのまま reviewDir (`Review/<name>`) に解決される。 既存はスキップ。 */
+export function seedReviewScopes(db: Db): { seeded: number; skipped: number } {
+  if (!existsSync(REVIEW_ROOT)) return { seeded: 0, skipped: 0 };
+  let seeded = 0;
+  let skipped = 0;
+  for (const name of readdirSync(REVIEW_ROOT).sort()) {
+    const dir = join(REVIEW_ROOT, name);
+    let stat;
+    try { stat = statSync(dir); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+    if (!isFoedusScope(dir)) continue;
+    const inserted = insertReviewTargetIfMissing(db, {
+      name,
+      local_path: dir,
+      format_key: 'foedus',
     });
     if (inserted) seeded++; else skipped++;
   }
@@ -220,7 +322,8 @@ export function makeReviewRouter(deps: ReviewRouterDeps): Hono {
     const items = targets
       .map((t) => {
         const dates = listDates(t);
-        const meta = dateParam ? readDateLatest(t, dateParam) : readLatest(t);
+        const raw = dateParam ? readDateLatest(t, dateParam) : readLatest(t);
+        const meta = normalizeLatest(raw, t.format_key);
         // dateParam 指定時: その日のディレクトリ自体が無ければ除外。
         const matchesDate = dateParam ? dates.includes(dateParam) : dates.length > 0;
         return {
@@ -230,11 +333,12 @@ export function makeReviewRouter(deps: ReviewRouterDeps): Hono {
           format_key: t.format_key,
           has_dates: dates.length > 0,
           matches_date: matchesDate,
-          latest_date: meta?.date ?? (dateParam ?? dates[0] ?? null),
-          weighted_score: meta?.weighted_score ?? null,
-          critical_count: meta?.critical_count ?? 0,
-          high_count: meta?.high_count ?? 0,
-          fix_pr: meta?.fix_pr ?? null,
+          latest_date: meta.date ?? (dateParam ?? dates[0] ?? null),
+          weighted_score: meta.weighted_score,
+          grade: meta.grade,
+          critical_count: meta.critical_count,
+          high_count: meta.high_count,
+          fix_pr: meta.fix_pr,
         };
       })
       .filter((it) => it.matches_date);
@@ -252,9 +356,9 @@ export function makeReviewRouter(deps: ReviewRouterDeps): Hono {
 
   r.get('/api/review/repos/:repo/:date/:file', (c: Context) => {
     const repo = c.req.param('repo') ?? '';
-    const date = safeDate(c.req.param('date') ?? '');
-    const file = safeFile(c.req.param('file') ?? '');
     const target = getReviewTargetByName(db, repo);
+    const date = safeDate(c.req.param('date') ?? '');
+    const file = target ? safeFile(c.req.param('file') ?? '', target.format_key) : null;
     if (!target || !date || !file) return c.json({ error: 'invalid path' }, 400);
     const p = join(reviewDir(target), date, file);
     if (!existsSync(p)) return c.json({ error: 'not_found' }, 404);

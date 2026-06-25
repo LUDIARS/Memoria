@@ -60,7 +60,7 @@ import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMultiProxyMiddleware } from './local/multi-proxy.js';
 import { makeMiscRouter } from './routes/misc.js';
-import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
+import { makeReviewRouter, seedReviewTargets, seedReviewScopes } from './routes/review.js';
 import { makeRepoRouter } from './routes/repo.js';
 import { makePacketMonitorRouter } from './routes/packet-monitor.js';
 import { makeMetricsRouter } from './routes/metrics.js';
@@ -144,6 +144,11 @@ try {
   const seedResult = seedReviewTargets(db);
   if (seedResult.seeded > 0) {
     console.log(`[startup] seeded ${seedResult.seeded} review target(s) from LUDIARS clones (${seedResult.skipped} skipped)`);
+  }
+  // git clone ではない仮想スコープ (Foedus の Cernere↔Hub 連結契約レビュー等) も seed。
+  const scopeResult = seedReviewScopes(db);
+  if (scopeResult.seeded > 0) {
+    console.log(`[startup] seeded ${scopeResult.seeded} foedus review scope(s) (${scopeResult.skipped} skipped)`);
   }
 } catch (e) {
   const msg = e instanceof Error ? e.message : String(e);

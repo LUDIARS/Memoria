@@ -10930,12 +10930,25 @@ const REVIEW_FILES_UI = [
   ['REVIEW_MISSING_FEATURES.md', '不足機能'],
   ['REVIEW_QUALITY.md', '品質'],
 ];
+// Foedus (Cernere↔Hub 連結契約レビュー) 形式のファイルタブ。
+const FOEDUS_FILES_UI = [
+  ['REVIEW.md', '総合'],
+  ['REVIEW_DATA_BOUNDARY.md', 'データ境界'],
+  ['REVIEW_LINKAGE_CONTRACT.md', '連結契約'],
+  ['REVIEW_SECURITY.md', 'セキュリティ'],
+  ['REVIEW_FLOW.md', '横断フロー'],
+  ['CONTRACT.md', '契約 (層B)'],
+];
+function reviewFilesUi(format) {
+  return format === 'foedus' ? FOEDUS_FILES_UI : REVIEW_FILES_UI;
+}
 const reviewState = {
   items: [],
   availableDates: [],          // 全 repo を横断した「レビューが存在する日」 (新しい順)
   listDate: null,              // 現在カードを絞り込む日付 (null = 未初期化)
   filterRepo: null,            // null = 全カテゴリ
   selected: null,
+  format: 'aiformat',          // 選択中レビューの形式 (aiformat | foedus)
   dates: [],
   currentDate: null,
   currentFile: 'REVIEW.md',
@@ -11031,10 +11044,13 @@ function renderReviewCards() {
     const prBadge = activePrCount > 0
       ? `<a class="badge review-pr-badge" href="${escapeHtml(it.fix_pr || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="要修正 PR を開く">🔧 ${activePrCount}</a>`
       : '';
+    const foedusTag = it.format_key === 'foedus'
+      ? `<span class="badge" title="Foedus 連結契約レビュー (Cernere↔Hub)">🔗 Foedus</span>` : '';
     return `
       <article class="card review-card" data-review-card="${escapeHtml(it.repo)}">
         <header class="review-card-head">
           <strong class="review-card-repo">${escapeHtml(it.repo)}</strong>
+          ${foedusTag}
           ${prBadge}
         </header>
         <div class="review-card-meta">
@@ -11054,9 +11070,10 @@ async function openReviewDetail(repo) {
   try {
     const r = await api(`/api/review/repos/${encodeURIComponent(repo)}`);
     reviewState.selected = repo;
+    reviewState.format = r.format_key || 'aiformat';
     reviewState.dates = r.dates || [];
     reviewState.currentDate = r.dates?.[0] ?? null;
-    reviewState.currentFile = 'REVIEW.md';
+    reviewState.currentFile = reviewFilesUi(reviewState.format)[0][0];
     reviewState.fixPr = r.latest?.fix_pr ?? null;
     if (!reviewState.currentDate) {
       alert(`${repo}: レビューフォルダはありますが日付ディレクトリが見つかりません。`);
@@ -11091,7 +11108,7 @@ function renderReviewDetailHeader() {
   repoEl.textContent = reviewState.selected || '';
   dateSel.innerHTML = reviewState.dates.map((d) =>
     `<option value="${escapeHtml(d)}"${d === reviewState.currentDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
-  fileTabs.innerHTML = REVIEW_FILES_UI.map(([f, label]) =>
+  fileTabs.innerHTML = reviewFilesUi(reviewState.format).map(([f, label]) =>
     `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${escapeHtml(f)}">${escapeHtml(label)}</button>`).join('');
   if (reviewState.fixPr) {
     fixLink.setAttribute('href', reviewState.fixPr);
