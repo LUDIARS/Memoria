@@ -171,6 +171,7 @@ function articleCard(a: AiArticle): string {
         <button class="ghost" data-article-transcribe="${a.id}" ${transcribed ? 'disabled' : ''}>
           ${transcribed ? '📓 転写済み' : '📓 ノートへ転写'}
         </button>
+        <button class="ghost" data-article-export="${a.id}">📥 .md</button>
       </div>
     </div>`;
 }
@@ -195,6 +196,19 @@ function bindArticleActions(container: HTMLElement, articles: AiArticle[]): void
         bodyEl.classList.remove('hidden');
         btn.textContent = '📖 隠す';
       }
+    });
+  });
+  container.querySelectorAll<HTMLButtonElement>('[data-article-export]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.articleExport);
+      // Content-Disposition: attachment が付くので、 同一オリジンの a[download] で
+      // ページ遷移せずにファイル名付きダウンロードさせる。
+      const a = document.createElement('a');
+      a.href = `/api/ai/articles/${id}/export.md`;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     });
   });
   container.querySelectorAll<HTMLButtonElement>('[data-article-transcribe]').forEach((btn) => {
