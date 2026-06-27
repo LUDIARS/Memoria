@@ -105,6 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 - `POST /api/ai/articles/repair-bodies` → `{ repaired, considered }` (body_md に raw JSON が入った旧記事を内側 Markdown に修復、LLM 不要)
 - `GET  /api/ai/digest/candidates?from=&to=` → `{ days: [{date, articleCount}] }` (範囲内で日記がある日 + 既存記事件数。一括生成 UI 用)
 - `GET  /api/ai/articles/:id` → `{ article }` (404 if none)
+- `GET  /api/ai/articles/:id/export.md` → 記事を Markdown ファイルとして書き出す (`text/markdown` + `Content-Disposition: attachment`、日本語ファイル名は RFC 5987 `filename*`)。frontmatter (title/date/origin/tags/source) + `# title` 本文 + 出所セクション。フォーマットは `server/ai-hub/markdown.ts` の `articleToMarkdown` に集約
 - `POST /api/ai/articles/:id/transcribe` → 記事から note を作成し note_id を更新 → `{ note }`
 - `GET  /api/ai/seeds?status=pending` → `{ seeds: AiSeed[] }`
 - `POST /api/ai/seeds/:id/request` → seed を LLM で本記事化、ai_articles に insert、seed.status='done'+article_id 設定 → `{ article }`
