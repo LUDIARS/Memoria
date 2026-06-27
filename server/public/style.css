@@ -7379,6 +7379,11 @@ button.packetmon-badge-unknown:disabled { cursor: progress; opacity: 0.7; }
 .rm-vis { font-size: 10px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--rm-accent, var(--accent)); color: var(--rm-accent, var(--accent)); }
 .rm-sub { font-size: 12px; }
 .rm-maturity { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.rm-contract { font-size: 10px; padding: 1px 7px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.rm-contract-a { background: #d4edda; color: #155724; }
+.rm-contract-b { background: #cce5ff; color: #004085; }
+.rm-contract-c { background: #fff3cd; color: #856404; }
+.rm-contract-d { background: #f8d7da; color: #721c24; }
 .rm-month { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 8px; }
 .rm-month-key { font-weight: 600; font-size: 13px; }
 .rm-theme { font-size: 13px; }
