@@ -32,6 +32,13 @@ export interface RoadmapMonths {
   }>;
 }
 
+export interface ContractGrade {
+  grade: string;
+  summary: { violations: number; skipped: number; bySeverity: Record<string, number>; worst: string | null };
+  global: { grade: string; violations: number; skipped: number; reposScanned: string[] };
+  generated: string;
+}
+
 export interface RoadmapLine extends RoadmapServices, RoadmapMonths {
   repo: string;            // ディレクトリ名 (roadmap-musa 等)
   memberCount: number;
@@ -40,6 +47,7 @@ export interface RoadmapLine extends RoadmapServices, RoadmapMonths {
   currentMonth: RoadmapMonths['months'][number] | null;
   goalDone: number;        // currentMonth の done 目標数
   goalTotal: number;       // currentMonth の目標総数
+  contract: ContractGrade | null; // Foedus 連結レビュー結果 (未生成なら null)
 }
 
 export interface RoadmapAggregate {
@@ -97,6 +105,14 @@ export function aggregateRoadmaps(root = ludiarsRoot()): RoadmapAggregate {
       const months = roadmap.months ?? [];
       const currentMonth = months.find((m) => m.month === curKey) ?? months[months.length - 1] ?? null;
       const goals = currentMonth?.goals ?? [];
+      const contractPath = join(root, repo, 'data', 'contract.json');
+      let contract: ContractGrade | null = null;
+      if (existsSync(contractPath)) {
+        try {
+          const raw = JSON.parse(readFileSync(contractPath, 'utf8'));
+          contract = { grade: raw.grade, summary: raw.summary, global: raw.global, generated: raw.generated };
+        } catch { /* contract は任意 — 破損しても他データへ影響させない */ }
+      }
       lines.push({
         repo,
         line: services.line,
@@ -108,6 +124,7 @@ export function aggregateRoadmaps(root = ludiarsRoot()): RoadmapAggregate {
         currentMonth,
         goalDone: goals.filter((g) => g.done === true).length,
         goalTotal: goals.length,
+        contract,
       });
     } catch (e) {
       errors.push({ repo, message: e instanceof Error ? e.message : String(e) });
