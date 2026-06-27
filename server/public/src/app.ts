@@ -6957,7 +6957,7 @@ function taskCardHtml(t) {
   return `
     <article class="task-card${isGoal ? ' task-card--goal' : ''}" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
-        <strong>${escapeHtml(t.title)}</strong>
+        <strong><span class="task-id" title="タスク番号 (Concordia 等の #${t.id} 参照と対応)">#${t.id}</span> ${escapeHtml(t.title)}</strong>
         ${kindBadge}${aiBadge}${catBadges}
       </div>
       <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
@@ -7606,7 +7606,7 @@ function openTaskEditor(task = null) {
   if (!$('taskEditorModal')) return;
   const kind = task?.kind === 'goal' ? 'goal' : 'task';
   const noun = kind === 'goal' ? '目標' : 'タスク';
-  $('taskEditorHeading').textContent = isEdit ? `${noun}を変更` : `${noun}を追加`;
+  $('taskEditorHeading').textContent = isEdit ? `${noun}を変更 #${task.id}` : `${noun}を追加`;
   if ($('taskEditorKind')) $('taskEditorKind').value = kind;
   $('taskEditorTitle').value = task?.title || '';
   $('taskEditorDue').value = task?.due_at ? String(task.due_at).slice(0, 16) : '';
@@ -7638,7 +7638,7 @@ function openTaskEditor(task = null) {
   if (kindEl) {
     kindEl.onchange = () => {
       const k = kindEl.value === 'goal' ? '目標' : 'タスク';
-      $('taskEditorHeading').textContent = isEdit ? `${k}を変更` : `${k}を追加`;
+      $('taskEditorHeading').textContent = isEdit ? `${k}を変更 #${task.id}` : `${k}を追加`;
     };
   }
   showModal('taskEditorModal');
