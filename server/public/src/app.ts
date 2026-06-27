@@ -7660,14 +7660,14 @@ function renderTaskCategoryMenu() {
     for (const c of parseTaskCategories(t.category)) fromTasks.add(c);
   }
   const merged = new Set([...(_taskCategoriesCache || []), ...fromTasks]);
-  // アクティブタスクが 0 件のカテゴリはパネルに表示しない
-  const cats = [...merged].filter(c => (counts[c] || 0) > 0).sort((a, b) => a.localeCompare(b));
   const counts = { __none__: 0 };
   for (const t of activeTasks) {
     const cs = parseTaskCategories(t.category);
     if (!cs.length) counts.__none__ += 1;
     for (const c of cs) counts[c] = (counts[c] || 0) + 1;
   }
+  // アクティブタスクが 0 件のカテゴリはパネルに表示しない
+  const cats = [...merged].filter(c => (counts[c] || 0) > 0).sort((a, b) => a.localeCompare(b));
   const buttons = [
     `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${activeTasks.length}</span></button>`,
   ];
