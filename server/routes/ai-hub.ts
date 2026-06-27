@@ -11,7 +11,7 @@ import {
   latestAiAdvice,
   insertNote, insertBlock, getNote,
 } from '../db.js';
-import { runDigest, requestSeed, runAdvice, generateArticleTags, repairArticleBody } from '../ai-hub/index.js';
+import { runDigest, requestSeed, runAdvice, generateArticleTags, repairArticleBody, articleToMarkdown } from '../ai-hub/index.js';
 import type { ArticleTag } from '../ai-hub/types.js';
 import { yesterdayLocal, formatLocalDate } from '../diary.js';
 
@@ -103,6 +103,24 @@ export function makeAiHubRouter(deps: AiHubRouterDeps): Hono {
     const article = getAiArticle(db, id);
     if (!article) return c.json({ error: 'not found' }, 404);
     return c.json({ article });
+  });
+
+  // 記事を Markdown ファイル (.md) として書き出す (frontmatter + 本文 + 出所)。
+  // ブラウザにダウンロードさせるため Content-Disposition: attachment を付ける。
+  // 日本語ファイル名は RFC 5987 (filename*) で渡し、 ascii fallback も併記する。
+  r.get('/api/ai/articles/:id/export.md', (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
+    const article = getAiArticle(db, id);
+    if (!article) return c.json({ error: 'not found' }, 404);
+    const { filename, content } = articleToMarkdown(article);
+    const asciiFallback = `ai-article-${article.id}.md`;
+    c.header('Content-Type', 'text/markdown; charset=utf-8');
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+    return c.body(content);
   });
 
   // 記事から note を作成し、 ai_articles.note_id を更新する。

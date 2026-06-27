@@ -6,5 +6,6 @@ export { readSessionLog } from './session-log.js';
 export { buildDayContext } from './collect.js';
 export { writeArticle, generateArticleTags, repairArticleBody, ARTICLE_STYLE } from './generator.js';
 export { runDigest, requestSeed } from './digest.js';
+export { articleToMarkdown, type MarkdownExport } from './markdown.js';
 export { runAdvice } from './advice.js';
 export { startAiHubSchedulers } from './scheduler.js';
