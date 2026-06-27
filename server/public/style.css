@@ -4491,6 +4491,14 @@ dialog.meal-modal[open] {
   align-items: center;
   gap: 8px;
 }
+/* タスク番号 (#id)。 Concordia 等の「#xxx のタスク」 参照と突き合わせるために表示。 */
+.task-id {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  margin-right: 2px;
+}
 .task-origin {
   display: inline-flex;
   align-items: center;
