@@ -329,6 +329,9 @@
           <button class="tab" data-tab="goals">
             <span class="tab-label" data-full="🎯 今月の目標" data-short="🎯 目標">🎯 今月の目標</span>
           </button>
+          <button class="tab" data-tab="userapps">
+            <span class="tab-label" data-full="🧩 ユーザーアプリ" data-short="🧩 アプリ">🧩 ユーザーアプリ</span>
+          </button>
           <!-- マルチビューはトップバーのマルチスイッチからのみアクセス。
                機能タブからは外す (PC/スマホ共通)。 -->
         </div>
@@ -380,6 +383,10 @@
 
       <div id="goalsView" class="hidden">
         <div id="goalsRoot"></div>
+      </div>
+
+      <div id="userappsView" class="hidden">
+        <div id="userappsRoot"></div>
       </div>
 
       <!-- 🤖 AI タブ。 サブビュー (recommendView / aiArticlesView / aiAdviceView) は

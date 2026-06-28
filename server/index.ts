@@ -55,6 +55,7 @@ import { makeActivityRouter } from './routes/activity.js';
 import { configureActivitySamplers } from './lib/activity-sampler.js';
 import { makeImplRouter } from './routes/impl.js';
 import { makePushRouter } from './routes/push.js';
+import { makePluginsRouter } from './routes/plugins.js';
 import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
@@ -264,6 +265,7 @@ app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
+app.route('/', makePluginsRouter({ db }));
 app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
