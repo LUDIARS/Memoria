@@ -76,6 +76,7 @@ import { makeBriefingRouter } from './routes/briefing.js';
 import { makeGoalEvalRouter } from './goals/router.js';
 import { makeRoadmapRouter } from './roadmap/router.js';
 import { makeAiHubRouter } from './routes/ai-hub.js';
+import { makeTaskReviewRouter } from './routes/task-review.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -254,6 +255,7 @@ app.route('/', makeDiaryRouter({
   enqueueWeekly: queues.enqueueWeekly,
 }));
 app.route('/', makeTaskRouter({ db }));
+app.route('/', makeTaskReviewRouter({ db }));
 app.route('/', makeMetricsRouter());
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
