@@ -33,6 +33,12 @@ interface RoadmapMember {
   status: string; statusLabel?: string;
   completion: number | null; note?: string; lines?: string[];
 }
+interface ContractGrade {
+  grade: string;
+  summary: { violations: number; skipped: number };
+  global: { grade: string; violations: number };
+  generated: string;
+}
 interface RoadmapLine {
   repo: string;
   line: {
@@ -48,6 +54,7 @@ interface RoadmapLine {
   currentMonth: RoadmapMonth | null;
   goalDone: number;
   goalTotal: number;
+  contract: ContractGrade | null;
 }
 interface RoadmapAggregate {
   generated: string;
@@ -101,6 +108,17 @@ function renderDotRow(logs: GoalEvalLog[]): string {
 
 // ── ロードマップ (事業ライン進捗) ─────────────────────────────────────────────
 
+function contractGradeBadge(c: ContractGrade | null): string {
+  if (!c) return '';
+  const cls = c.grade === 'A' ? 'rm-contract-a'
+    : c.grade === 'B' ? 'rm-contract-b'
+    : c.grade === 'C' ? 'rm-contract-c'
+    : 'rm-contract-d';
+  const v = c.summary.violations;
+  const tip = `連結グレード ${c.grade} (違反 ${v} 件・${c.generated})`;
+  return `<span class="rm-contract ${cls}" title="${esc(tip)}">連結 ${esc(c.grade)}</span>`;
+}
+
 function achBadge(month: RoadmapMonth | null): string {
   if (!month) return '';
   if (month.achievement == null) {
@@ -141,6 +159,7 @@ function renderRoadmapLine(ln: RoadmapLine): string {
         <span class="rm-vis">${esc(ln.line.visibility)}</span>
         <span class="rm-sub muted">${esc(ln.line.subtitle)}</span>
         <span class="rm-maturity" title="構成リポの重み付き平均成熟度 (主観・参考値)">参考成熟度 ${ln.refMaturity == null ? '—' : ln.refMaturity + '%'}</span>
+        ${contractGradeBadge(ln.contract)}
       </div>
       <div class="rm-month">
         <span class="rm-month-key">${cur ? esc(cur.month) : '—'}</span>
