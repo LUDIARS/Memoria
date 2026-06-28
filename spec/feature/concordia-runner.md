@@ -35,24 +35,30 @@
 - 既存 `POST /api/tasks/:id/agent-run` / `POST /api/agent-runs` の payload はそのまま、 内部で settings を見て分岐する
 - `cancelAgentRun` は **concordia モードでは no-op + 警告**: wt タブを Memoria から殺すと Lictor のクリーンアップに副作用がある可能性があるため、 ユーザに wt 側で `/exit` するよう促す
 
-## Concordia 側に依存するエンドポイント (既存)
+## Concordia モジュールの契約 (動的 import)
 
-- `GET /v1/spawn/info` (no auth) — token_path を返す
-- `POST /v1/spawn` (Bearer token) — `{ provider: 'claude'|'codex'|'gemini', mode: 'tab', cwd, args, title? }` で wt タブ起動
-- `GET /v1/sessions?status=active&provider=...` — Memoria 側で `repo_path` + `started_at > spawnTs` を client-side filter で session を特定
-- `POST /v1/sessions/:id/inject` — Lictor の WS reactor 経由で pty に prompt を流し込む
+`llm.concordia.module_path` で指定したモジュールは次を満たすこと。 ロード/検証は
+`server/concordia-spawn-loader.ts` (`loadConcordiaSpawn`) が行い、 契約違反は明示 Error を投げる
+(無言フォールバック禁止)。
 
-Concordia 側 (主に `/v1/sessions` の filter) には今回は変更入れない。 必要なら別 PR で `repo_path` filter を追加する。
+- export `createConcordiaSpawn(options?)` (named。 default export の factory も可) を持つ。
+- factory は `ConcordiaSpawnApi` (`server/concordia-spawn-client.ts`) を返す:
+  - `spawn(input)` — wt タブ等で lictor-wrapped セッションを起動 → `{ ok, id, pid, command }`
+  - `waitForSession(input)` — 起動した session の id を解決 (見つからなければ null)
+  - `inject(input)` — 起動 session に prompt を流し込む
+- 既存の HTTP 実装 `ConcordiaSpawnClient` も同じ `ConcordiaSpawnApi` を満たす (構造的に互換)。
+
+> Concordia 本体の実装 (この契約を満たす export の用意) は **Concordia 側スレで対応**する。
+> Memoria 側 (本 spec) はモジュールを動的 import して呼ぶところまで。
 
 ## 失敗時の振舞い (= 選択式の徹底)
 
 | 失敗ポイント | 振舞い | 理由 |
 |---|---|---|
-| `GET /v1/spawn/info` 接続失敗 | `agent_runs.status = 'failed'`、 summary に `concordia unreachable: ...` を記録。 **local fallback はしない** | 「選択式」 = ユーザが明示的に concordia を選んだ意図を尊重。 silent fallback だと「Concordia 死んでるのに気付かない」 リスク |
-| token 読み込み失敗 | 同上、 summary に `spawn token unreadable: <path>` を記録 | Concordia 起動 user と Memoria 起動 user が違うとパーミッションで詰まる |
-| `POST /v1/spawn` が 4xx/5xx | 同上、 response body を summary に記録 | Concordia の log を見るための breadcrumb |
+| モジュール未設定 / import 失敗 / 契約違反 | `agent_runs.status = 'failed'`、 summary に `concordia module load failed: ...` を記録。 **local fallback はしない** | 「選択式」 = ユーザが明示的に concordia を選んだ意図を尊重。 host URL fallback も silent fallback もしない |
+| `spawn(...)` が throw | 同上、 summary に message を記録 | モジュール側 (spawn 起動) の失敗を可視化 |
 | 30s 経っても session 検出できず | `status = 'failed'`、 summary に `session not detected within 30s` | wt 起動には数秒かかるが 30s で出ないなら何かおかしい |
-| `POST /v1/sessions/:id/inject` が 4xx/5xx | session_id は記録、 status = 'failed'、 summary に response | wt タブは残るので、 ユーザが手で prompt 貼れば運用継続可能 |
+| `inject(...)` が throw | session_id は記録、 status = 'failed'、 summary に message | wt タブは残るので、 ユーザが手で prompt 貼れば運用継続可能 |
 
 local fallback したい場合は `llm.task_runner` を `local` に戻すか、 後続 PR で `llm.task_runner = auto` (= concordia 優先、 unreachable なら local fallback) を導入する余地は残す。
 
@@ -62,7 +68,7 @@ local fallback したい場合は `llm.task_runner` を `local` に戻すか、 
 
 ## プライバシー観点
 
-- **Memoria → Concordia 間**: prompt 本体が `POST /v1/sessions/:id/inject` で loopback HTTP を通る。 Concordia は SQLite に inject イベントとして payload を記録する ([Concordia: events table](../../../Concordia/spec/db.md))。
+- **Memoria → Concordia 間**: prompt 本体は動的 import した Concordia モジュールの `inject(...)` に in-process で渡る (host URL は経由しない)。 Concordia は SQLite に inject イベントとして payload を記録する ([Concordia: events table](../../../Concordia/spec/db.md))。
 - **wt タブで起動した CLI**: ユーザの API key で claude/codex/gemini API に prompt を送る。 LLM 提供者には agent.md と同じ範囲の情報が出る。
 - **個人データ保管禁止ルール ([project_personal_data_rule])**: 該当なし (実装ログ + spawn メタのみ)。
 
@@ -71,6 +77,6 @@ local fallback したい場合は `llm.task_runner` を `local` に戻すか、 
 | key | 既定値 | 説明 |
 |---|---|---|
 | `llm.task_runner` | `local` | `local` (現行)、 `concordia` (本機能) |
-| `llm.concordia.url` | `http://127.0.0.1:17330` | Concordia loopback URL |
+| `llm.concordia.module_path` | (なし) | Concordia の spawn 実装モジュールへの **ファイルパス**。 ここから動的 import する。 未設定だと concordia モードは fail (host URL fallback はしない)。 |
 
-`llm.concordia.token_path` は持たない (毎回 `/v1/spawn/info` から取得する。 token rotation に追従するため)。
+> **host URL → 動的モジュールロード移行 (2026-06-28)**: 旧 `llm.concordia.url`(`http://127.0.0.1:17330`) を廃し、 Concordia の spawn 実装を **フォルダから動的 import** する方式へ変更した。 host URL は環境次第で存在しないため。 ロードは `server/concordia-spawn-loader.ts` の `loadConcordiaSpawn(path)` に隔離。

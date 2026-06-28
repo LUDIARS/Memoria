@@ -254,6 +254,14 @@ export class ConcordiaSpawnClient {
 }
 
 /**
+ * runConcordiaFlow が必要とする最小インターフェース。 HTTP 実装 (ConcordiaSpawnClient)
+ * と、 設定パスからフォルダ越しに動的 import される Concordia モジュール実装の両方が
+ * これを満たす。 動的モジュール側は createConcordiaSpawn(options) でこの形を返す。
+ */
+export type ConcordiaSpawnApi =
+  Pick<ConcordiaSpawnClient, 'spawn' | 'waitForSession' | 'inject'> & { baseUrl?: string };
+
+/**
  * Concordia は provider 名として `claude-code` / `codex-cli` / `gemini-cli` を
  * 期待する (Lictor `provider.concordiaProvider` 由来)。 Memoria の AgentKind
  * (`claude_code` / `codex` / `gemini`) → Concordia の `provider` フィルタ値に

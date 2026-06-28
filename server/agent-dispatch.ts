@@ -17,7 +17,8 @@ import {
 import type { AgentKind, AgentRunRow } from './db/types/agent.js';
 import type { TaskRow } from './db/types/task.js';
 import type { AgentProjectRow } from './db/types/agent.js';
-import { ConcordiaSpawnClient, type ConcordiaProvider } from './concordia-spawn-client.js';
+import type { ConcordiaProvider, ConcordiaSpawnApi } from './concordia-spawn-client.js';
+import { loadConcordiaSpawn } from './concordia-spawn-loader.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -289,7 +290,8 @@ export function startConcordiaRun(
   const logPath = join(logDir, logFile);
   const prompt = buildPrompt({ task, project });
   const effectiveModel = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[agent] || '';
-  const concordiaUrl = (settings['llm.concordia.url'] || 'http://127.0.0.1:17330').trim();
+  // host URL を叩く代わりに、 設定パスの Concordia モジュールをフォルダから動的 import する。
+  const concordiaModulePath = (settings['llm.concordia.module_path'] || '').trim();
 
   const runId = insertAgentRun(db, {
     task_id: task.id,
@@ -305,7 +307,7 @@ export function startConcordiaRun(
   const stream = createWriteStream(logPath, { flags: 'a' });
   stream.write(
     `# mode: concordia\n# agent: ${agent}\n# model: ${effectiveModel || '(default)'}\n` +
-    `# concordia: ${concordiaUrl}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n` +
+    `# concordia module: ${concordiaModulePath || '(unset)'}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n` +
     `# task: ${task.title}\n\n----- prompt (will be injected) -----\n${prompt}\n----- events -----\n`,
   );
 
@@ -319,7 +321,7 @@ export function startConcordiaRun(
   });
 
   // fire-and-forget. errors land in the log + agent_runs row.
-  void runConcordiaFlow({ runId, agent, project, prompt, concordiaUrl, stream, task })
+  void runConcordiaFlow({ runId, agent, project, prompt, concordiaModulePath, stream, task })
     .catch((err: Error) => {
       stream.write(`\n----- unhandled error -----\n${err.message}\n${err.stack ?? ''}\n`);
       stream.end();
@@ -335,17 +337,32 @@ export function startConcordiaRun(
     agent: AgentKind;
     project: AgentProjectRow;
     prompt: string;
-    concordiaUrl: string;
+    concordiaModulePath: string;
     stream: ReturnType<typeof createWriteStream>;
     task: TaskRow;
   }): Promise<void> {
-    const { runId, agent, project, prompt, concordiaUrl, stream, task } = input;
-    const client = new ConcordiaSpawnClient({ url: concordiaUrl });
+    const { runId, agent, project, prompt, concordiaModulePath, stream, task } = input;
+
+    // 1. Concordia の spawn 実装を設定パスのフォルダから動的 import する (host URL 不使用)。
+    let client: ConcordiaSpawnApi;
+    try {
+      client = await loadConcordiaSpawn(concordiaModulePath);
+    } catch (e) {
+      const msg = (e as Error).message;
+      stream.write(`[concordia module load error] ${msg}\n`);
+      stream.end();
+      updateAgentRun(db, runId, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        summary: `concordia module load failed: ${msg}`.slice(0, 600),
+      });
+      return;
+    }
     const concordiaProvider = agentKindToConcordiaProvider(agent);
     const spawnStartedAtSec = Math.floor(Date.now() / 1000) - 2; // -2s grace for clock skew
 
     // 2. spawn
-    stream.write(`[${new Date().toISOString()}] spawn → ${client.baseUrl}/v1/spawn\n`);
+    stream.write(`[${new Date().toISOString()}] spawn (module=${concordiaModulePath})\n`);
     let spawnResult;
     try {
       spawnResult = await client.spawn({
