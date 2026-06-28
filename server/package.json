@@ -13,7 +13,7 @@
     "build:frontend": "esbuild public/src/app.ts --bundle --outfile=public/app.js --target=es2020 --sourcemap --minify",
     "watch:frontend": "esbuild public/src/app.ts --bundle --outfile=public/app.js --target=es2020 --sourcemap --watch",
     "typecheck": "npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.6 @types/node@20 @types/better-sqlite3@7 @types/web-push@3 && npx tsc --noEmit -p tsconfig.json && npx tsc --noEmit -p tsconfig.frontend.json",
-    "test": "node --import tsx --test rss/url-guard.test.ts ai-hub/markdown.test.ts task-review/apply.test.ts",
+    "test": "node --import tsx --test rss/url-guard.test.ts ai-hub/markdown.test.ts task-review/apply.test.ts concordia-spawn-loader.test.ts",
     "lint": "npm install --no-save --no-package-lock --no-audit --no-fund eslint@9 typescript-eslint@8 typescript@5.6 && npx eslint --max-warnings 0 \"**/*.ts\"",
     "env:setup": "npx tsx ../../Cernere/packages/env-cli/src/cli.ts setup",
     "env:test": "npx tsx ../../Cernere/packages/env-cli/src/cli.ts test",
