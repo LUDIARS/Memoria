@@ -168,6 +168,7 @@ import { initHelpDrawer, openHelpFor } from './help-drawer.js';
 import { silentGetPosition, requestPosition, type PositionLike } from './geo.js';
 import { loadRssView } from './rss-view.js';
 import { loadGoalsView } from './goals-view.js';
+import { loadUserApps } from './userapps-view.js';
 import {
   loadAiArticlesView,
   loadAiAdviceView,
@@ -1212,6 +1213,7 @@ function switchTab(tab) {
   $('packetmonView')?.classList.toggle('hidden', tab !== 'packetmon');
   $('rssView')?.classList.toggle('hidden', tab !== 'rss');
   $('goalsView')?.classList.toggle('hidden', tab !== 'goals');
+  $('userappsView')?.classList.toggle('hidden', tab !== 'userapps');
   // 🛡 パケット監視 タブから離れたら 60s auto-refresh を止める。
   if (tab !== 'packetmon') stopPacketmonAutoRefresh();
   if (tab === 'database') {
@@ -1238,6 +1240,7 @@ function switchTab(tab) {
   if (tab === 'packetmon') { loadPacketMonitor(); void loadPacketmonProcesses(); }
   if (tab === 'rss') loadRssView();
   if (tab === 'goals') void loadGoalsView();
+  if (tab === 'userapps') void loadUserApps();
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();

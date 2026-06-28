@@ -1,0 +1,45 @@
+// プラグイン雛形。 ホストリポの plugins/<id>/plugin.ts にコピーして実装する。
+// import パスはホストリポの host/ からの相対に直すこと。
+
+import type { Hono } from 'hono';
+import type { MemoriaPlugin, PluginContext } from '../../host/types';
+
+function registerRoutes(r: Hono, ctx: PluginContext): void {
+  // UI ("/") — Memoria の iframe がここを開く。
+  r.get('/', (c) =>
+    c.html(`<!doctype html><meta charset="utf-8" />
+      <h1>サンプルプラグイン</h1>
+      <button onclick="fetch('${ctx.basePath}/api/ping').then(r=>r.json()).then(j=>alert(j.msg))">ping</button>`),
+  );
+
+  // API ("/api/...")
+  r.get('/api/ping', (c) => c.json({ msg: 'pong' }));
+
+  // 設定の読み書き例 (secret 含む。 応答ではマスクする)。
+  r.post('/api/settings', async (c) => {
+    const body = (await c.req.json()) as Record<string, unknown>;
+    ctx.settings.set(body);
+    return c.json({ ok: true });
+  });
+}
+
+// 定期ジョブ例: run 内で時間帯/条件を判定し、 条件成立で Memoria に通知。
+async function exampleJob(ctx: PluginContext): Promise<void> {
+  // ここで外部サービスを叩いたり距離計算したり…
+  const shouldNotify = false; // 例
+  if (shouldNotify) {
+    await ctx.memoria.announce('サンプル通知');
+    ctx.log('announce 送信');
+  }
+}
+
+const plugin: MemoriaPlugin = {
+  id: 'sample',
+  name: 'サンプル',
+  icon: '🧩',
+  description: 'テンプレートからコピーして使う雛形',
+  routes: registerRoutes,
+  jobs: [{ id: 'example', intervalMs: 60_000, run: exampleJob }],
+};
+
+export default plugin;
