@@ -27,8 +27,11 @@ Memoria (5180)
 
 1. ホストリポの `plugins/<your-id>/` に `plugin.ts` を作り、 `MemoriaPlugin` を
    default export する (`plugin.ts.template` 参照)。
-2. ホストの `src/index.ts` の `plugins` 配列に足す。
-3. Memoria の「ユーザーアプリ」 タブを開くと manifest 経由で子として現れる。
+2. Memoria の「ユーザーアプリ」 タブを開くと manifest 経由で子として現れる。
+
+ホストは起動時に `plugins/` を動的 import で自動探索する (Concordia の library
+scanner と同じディレクトリ走査)。 登録配列の編集は不要で、 フォルダを置くだけでよい
+(`.` / `_` 始まりのフォルダは除外)。
 
 ## 契約 (host/types.ts)
 
