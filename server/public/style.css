@@ -4499,6 +4499,35 @@ dialog.meal-modal[open] {
   font-variant-numeric: tabular-nums;
   margin-right: 2px;
 }
+
+/* 🔁 タスク確認キュー (朝の Sonnet 棚卸し提案) */
+.task-review-panel:empty { display: none; }
+.task-review-bar {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 0 6px;
+}
+.task-review-bar .grow { flex: 1; }
+.task-review-empty { padding: 6px 2px; font-size: 13px; }
+.task-review-list { display: flex; flex-direction: column; gap: 8px; }
+.task-review-card {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; background: rgba(0,0,0,0.015);
+}
+.task-review-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.task-review-badge {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px;
+  border-radius: 10px; font-size: 12px; border: 1px solid var(--border);
+}
+.task-review-badge.cluster { border-color: #1f56c0; color: #1f56c0; background: #eaf1ff; }
+.task-review-badge.completed { border-color: #1f8a4c; color: #1f8a4c; background: #e7f6ec; }
+.task-review-proj { font-size: 12px; color: var(--muted); }
+.task-review-tasks { list-style: none; margin: 4px 0; padding: 0; }
+.task-review-tasks li { padding: 2px 0; font-size: 13px; }
+.task-review-tasks li.is-primary { font-weight: 600; }
+.task-review-id { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 4px; }
+.task-review-primary-tag { color: #1f56c0; font-size: 11px; }
+.task-review-reason { font-size: 12px; margin: 4px 0 8px; }
+.task-review-actions { display: flex; gap: 8px; }
 .task-origin {
   display: inline-flex;
   align-items: center;

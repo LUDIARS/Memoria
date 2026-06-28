@@ -174,6 +174,11 @@ import {
   loadAiSeedsView,
   setAiToast,
 } from './ai-view.js';
+import {
+  loadTaskReviewView,
+  setTaskReviewToast,
+  setTaskReviewOnChange,
+} from './task-review-view.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
@@ -7885,6 +7890,7 @@ ensureMemoriaFeatureViews = function () {
           <h3>🎯 目標</h3>
           <div id="tasksGoalsList" class="simple-list"></div>
         </section>
+        <div id="taskReviewPanel" class="task-review-panel"></div>
         <div class="tasks-three-pane">
           <aside id="tasksMenu" class="tasks-menu">
             <div class="tasks-menu-section">
@@ -8016,6 +8022,7 @@ loadTasks = async function () {
   }
   renderTaskBoard();
   renderTaskDetail();
+  void loadTaskReviewView();
 };
 
 addTaskFromForm = async function () {
@@ -8522,6 +8529,9 @@ document.querySelectorAll('#aiSubtabs [data-ai-sub]').forEach(btn => {
 switchTab(state.tab as string);
 // ai-view.ts のトーストを app.ts の flashToast に接続。
 setAiToast((msg) => flashToast(msg));
+// task-review-view.ts のトースト + 変更時タスク再読込を接続。
+setTaskReviewToast((msg) => flashToast(msg));
+setTaskReviewOnChange(() => { void loadTasks(); });
 $('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
 
 function switchWorklogSub(sub) {
