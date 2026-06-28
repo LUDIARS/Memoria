@@ -30,6 +30,7 @@ import type {
 } from './db/types/note.js';
 import { NOTE_BLOCK_TYPES } from './db/types/note.js';
 import type { AiArticle, AiSeed, AiAdvice, SourceRef, ArticleTag, AiArticleFilter, ArticleTagCount } from './ai-hub/types.js';
+import type { TaskReview, InsertTaskReviewInput, TaskReviewStatus, TaskSnapshotEntry } from './task-review/types.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -924,6 +925,24 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_ai_articles_created ON ai_articles(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_ai_seeds_status ON ai_article_seeds(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
+
+    -- タスク確認 (朝の Sonnet タスク棚卸し)。 同一プロジェクトの近いタスクの統合提案
+    -- (cluster) と完了していそうなタスクのクローズ提案 (completed) を pending で積む。
+    -- Spec: spec/feature/task-review.md
+    CREATE TABLE IF NOT EXISTS task_reviews (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind        TEXT NOT NULL,                  -- 'cluster' | 'completed'
+      project     TEXT,                           -- 所属プロジェクト(category)。cluster 用
+      task_ids    TEXT NOT NULL,                  -- JSON number[]: 対象タスク id
+      primary_id  INTEGER,                        -- cluster: 統合先 (代表) タスク id
+      reason      TEXT NOT NULL,                  -- 提案理由 (人間向け短文)
+      snapshot    TEXT NOT NULL,                  -- JSON [{id,title,status}]: 生成時スナップショット
+      status      TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'applied' | 'dismissed'
+      for_date    TEXT,                           -- 生成対象日 YYYY-MM-DD
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      applied_at  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_reviews_status ON task_reviews(status, created_at DESC);
   `);
 
   // notes rev1 → rev2: 旧 INTEGER 行を UUID で再挿入
@@ -6064,6 +6083,107 @@ export function getAiArticle(db: Db, id: number): AiArticle | null {
     FROM ai_articles WHERE id = ?
   `).get(id) as AiArticleDbRow | undefined;
   return row ? rowToAiArticle(row) : null;
+}
+
+// ── task_reviews (タスク確認キュー) ──────────────────────────────────────────
+
+interface TaskReviewDbRow {
+  id: number;
+  kind: string;
+  project: string | null;
+  task_ids: string;
+  primary_id: number | null;
+  reason: string;
+  snapshot: string;
+  status: string;
+  for_date: string | null;
+  created_at: string;
+  applied_at: string | null;
+}
+
+function parseNumberArray(json: string | null): number[] {
+  if (!json) return [];
+  try {
+    const v: unknown = JSON.parse(json);
+    return Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseSnapshot(json: string | null): TaskSnapshotEntry[] {
+  if (!json) return [];
+  try {
+    const v: unknown = JSON.parse(json);
+    if (!Array.isArray(v)) return [];
+    return v
+      .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+      .map((e) => ({ id: Number(e.id), title: String(e.title ?? ''), status: String(e.status ?? '') }))
+      .filter((e) => Number.isFinite(e.id));
+  } catch {
+    return [];
+  }
+}
+
+function rowToTaskReview(r: TaskReviewDbRow): TaskReview {
+  return {
+    id: r.id,
+    kind: r.kind === 'cluster' ? 'cluster' : 'completed',
+    project: r.project,
+    task_ids: parseNumberArray(r.task_ids),
+    primary_id: r.primary_id,
+    reason: r.reason,
+    snapshot: parseSnapshot(r.snapshot),
+    status: (['pending', 'applied', 'dismissed'] as const).includes(r.status as TaskReviewStatus)
+      ? (r.status as TaskReviewStatus)
+      : 'pending',
+    for_date: r.for_date,
+    created_at: r.created_at,
+    applied_at: r.applied_at,
+  };
+}
+
+const TASK_REVIEW_COLS =
+  'id, kind, project, task_ids, primary_id, reason, snapshot, status, for_date, created_at, applied_at';
+
+export function insertTaskReview(db: Db, input: InsertTaskReviewInput): number {
+  const res = db.prepare(`
+    INSERT INTO task_reviews (kind, project, task_ids, primary_id, reason, snapshot, for_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.kind,
+    input.project ?? null,
+    JSON.stringify(input.task_ids),
+    input.primary_id ?? null,
+    input.reason,
+    JSON.stringify(input.snapshot),
+    input.for_date ?? null,
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function listTaskReviews(db: Db, opts: { status?: TaskReviewStatus | 'all' } = {}): TaskReview[] {
+  const status = opts.status ?? 'pending';
+  const rows = status === 'all'
+    ? db.prepare(`SELECT ${TASK_REVIEW_COLS} FROM task_reviews ORDER BY created_at DESC LIMIT 200`).all() as TaskReviewDbRow[]
+    : db.prepare(`SELECT ${TASK_REVIEW_COLS} FROM task_reviews WHERE status = ? ORDER BY created_at DESC LIMIT 200`).all(status) as TaskReviewDbRow[];
+  return rows.map(rowToTaskReview);
+}
+
+export function getTaskReview(db: Db, id: number): TaskReview | null {
+  const row = db.prepare(`SELECT ${TASK_REVIEW_COLS} FROM task_reviews WHERE id = ?`).get(id) as TaskReviewDbRow | undefined;
+  return row ? rowToTaskReview(row) : null;
+}
+
+export function setTaskReviewStatus(db: Db, id: number, status: TaskReviewStatus, appliedAt?: string | null): void {
+  db.prepare(`UPDATE task_reviews SET status = ?, applied_at = COALESCE(?, applied_at) WHERE id = ?`)
+    .run(status, appliedAt ?? null, id);
+}
+
+/** 再解析の前に pending を一掃する (毎朝のスナップショットを作り直すため)。 applied/dismissed は履歴として残す。 */
+export function deletePendingTaskReviews(db: Db): number {
+  const r = db.prepare(`DELETE FROM task_reviews WHERE status = 'pending'`).run();
+  return Number(r.changes ?? 0);
 }
 
 /** 全記事のタグを category+value で集計する (フィルタ chips 用)。 件数降順。 */
