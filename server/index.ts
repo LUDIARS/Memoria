@@ -56,6 +56,7 @@ import { configureActivitySamplers } from './lib/activity-sampler.js';
 import { makeImplRouter } from './routes/impl.js';
 import { makePushRouter } from './routes/push.js';
 import { makePluginsRouter } from './routes/plugins.js';
+import { mountUserApps } from './plugins/host.js';
 import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
@@ -265,7 +266,11 @@ app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
-app.route('/', makePluginsRouter({ db }));
+// ユーザーアプリ (プラグイン) を本体プロセスに in-process マウント
+// (submodule server/plugins/memoria-plugin)。 /plugins/<id> を static catch-all
+// より前に登録する必要があるためここで mount し、 manifest を /api/plugins に渡す。
+const userAppsManifest = await mountUserApps(app, { db, dataDir: DATA_DIR });
+app.route('/', makePluginsRouter({ manifest: userAppsManifest }));
 app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
