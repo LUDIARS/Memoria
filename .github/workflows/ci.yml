@@ -14,7 +14,12 @@ jobs:
     name: lint + smoke
     runs-on: ubuntu-latest
     steps:
+      # プラグイン実体は private submodule (server/plugins/memoria-plugin =
+      # LUDIARS/MemoriaPlugin)。 本体は tsx でソース import するため fetch のみ必要
+      # (ビルド不要)。 Concordia の RWF submodule と同じく submodules: true。
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-node@v4
         with:
