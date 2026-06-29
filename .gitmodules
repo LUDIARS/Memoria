@@ -1,0 +1,3 @@
+[submodule "server/plugins/memoria-plugin"]
+	path = server/plugins/memoria-plugin
+	url = https://github.com/LUDIARS/MemoriaPlugin.git

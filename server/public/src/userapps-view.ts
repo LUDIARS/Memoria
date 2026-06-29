@@ -1,9 +1,9 @@
 // 「ユーザーアプリ」タブ。
 //
-// MemoriaPlugin (別 git 管理のサイドカー) の manifest を読み、 登録プラグインを
-// 子として一覧表示する。 選択するとそのプラグイン UI を iframe で開く。
-// 接続先 (ホスト URL) と announce 用トークンはここで設定する。
-// プラグイン実体は Memoria リポには含めない (タブ + 接続機構 + テンプレのみ本体)。
+// プラグインは Memoria 本体プロセスに in-process マウントされている
+// (git submodule server/plugins/memoria-plugin)。 /api/plugins から manifest を読み、
+// 登録プラグインを一覧表示する。 選択するとそのプラグイン UI を iframe で開く。
+// url は同一オリジンの相対パス (/plugins/<id>) なので接続設定 (URL/トークン) は不要。
 
 interface PluginEntry {
   id: string;
@@ -14,15 +14,9 @@ interface PluginEntry {
 }
 
 interface PluginsResponse {
-  host_url: string;
   ok: boolean;
   plugins: PluginEntry[];
   error?: string;
-}
-
-interface PluginConfig {
-  host_url: string;
-  api_token_set: boolean;
 }
 
 function esc(s: string): string {
@@ -33,32 +27,9 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function renderConfig(cfg: PluginConfig): string {
-  return `
-    <details class="userapps-config">
-      <summary>⚙ 接続設定</summary>
-      <div class="userapps-config-body">
-        <label>ホスト URL
-          <input id="userappsHostUrl" type="url" class="foundation-form"
-                 placeholder="http://localhost:5191" value="${esc(cfg.host_url)}" />
-        </label>
-        <label>API トークン
-          <input id="userappsToken" type="password" class="foundation-form"
-                 placeholder="${cfg.api_token_set ? '(設定済 — 変更時のみ)' : '(未設定)'}" />
-        </label>
-        <button id="userappsSaveCfg" type="button">保存</button>
-        <span id="userappsCfgStatus" class="muted"></span>
-        <p class="muted" style="font-size:11px">
-          プラグインからの通知 (announce) を許可するトークン。 MemoriaPlugin 側の
-          <code>MEMORIA_PLUGIN_TOKEN</code> と一致させる。
-        </p>
-      </div>
-    </details>`;
-}
-
 function renderList(plugins: PluginEntry[]): string {
   if (!plugins.length) {
-    return '<div class="muted userapps-empty">登録プラグインがありません。接続設定とホストの起動を確認してください。</div>';
+    return '<div class="muted userapps-empty">登録プラグインがありません。</div>';
   }
   return `<ul class="userapps-list">${plugins
     .map(
@@ -69,23 +40,6 @@ function renderList(plugins: PluginEntry[]): string {
          </button></li>`,
     )
     .join('')}</ul>`;
-}
-
-function wireConfig(): void {
-  const btn = document.getElementById('userappsSaveCfg');
-  btn?.addEventListener('click', async () => {
-    const hostUrl = (document.getElementById('userappsHostUrl') as HTMLInputElement | null)?.value ?? '';
-    const apiToken = (document.getElementById('userappsToken') as HTMLInputElement | null)?.value ?? '';
-    const status = document.getElementById('userappsCfgStatus');
-    if (status) status.textContent = '保存中…';
-    const res = await fetch('/api/plugins/config', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ host_url: hostUrl, api_token: apiToken }),
-    }).catch(() => null);
-    if (status) status.textContent = res && res.ok ? '保存しました。再読込します…' : '保存に失敗しました';
-    if (res && res.ok) void loadUserApps();
-  });
 }
 
 function wireList(): void {
@@ -109,24 +63,15 @@ export async function loadUserApps(): Promise<void> {
   if (!root) return;
   root.innerHTML = '<div class="muted">読み込み中…</div>';
 
-  const [cfgRes, listRes] = await Promise.all([
-    fetch('/api/plugins/config').catch(() => null),
-    fetch('/api/plugins').catch(() => null),
-  ]);
-
-  const cfg: PluginConfig =
-    cfgRes && cfgRes.ok ? ((await cfgRes.json()) as PluginConfig) : { host_url: '', api_token_set: false };
+  const listRes = await fetch('/api/plugins').catch(() => null);
   const data: PluginsResponse =
     listRes && listRes.ok
       ? ((await listRes.json()) as PluginsResponse)
-      : { host_url: '', ok: false, plugins: [], error: 'サーバに接続できません' };
+      : { ok: false, plugins: [], error: 'サーバに接続できません' };
 
-  const errBanner = data.error
-    ? `<div class="userapps-error">⚠ ${esc(data.error)}</div>`
-    : '';
+  const errBanner = data.error ? `<div class="userapps-error">⚠ ${esc(data.error)}</div>` : '';
 
   root.innerHTML = `
-    ${renderConfig(cfg)}
     ${errBanner}
     <div class="userapps-layout">
       <aside class="userapps-sidebar">${renderList(data.plugins)}</aside>
@@ -135,6 +80,5 @@ export async function loadUserApps(): Promise<void> {
       </div>
     </div>`;
 
-  wireConfig();
   wireList();
 }
