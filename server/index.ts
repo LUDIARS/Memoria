@@ -269,8 +269,8 @@ app.route('/', makePushRouter({ db }));
 // ユーザーアプリ (プラグイン) を本体プロセスに in-process マウント
 // (submodule server/plugins/memoria-plugin)。 /plugins/<id> を static catch-all
 // より前に登録する必要があるためここで mount し、 manifest を /api/plugins に渡す。
-const userAppsManifest = await mountUserApps(app, { db, dataDir: DATA_DIR });
-app.route('/', makePluginsRouter({ manifest: userAppsManifest }));
+const userApps = await mountUserApps(app, { db, dataDir: DATA_DIR });
+app.route('/', makePluginsRouter({ db, registry: userApps.registry }));
 app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,

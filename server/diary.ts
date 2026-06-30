@@ -13,6 +13,7 @@ import {
 } from './db.js';
 import type { AppUsageRow, GameUsageRow } from './db.js';
 import { runLlm } from './llm.js';
+import { listPluginDiaryEntries } from './plugins/framework-store.js';
 import type { VisitEventRow } from './db/types/visit.js';
 import type { ActivityKind } from './db/types/activity.js';
 import type { DomainCatalogRow } from './db/types/page.js';
@@ -1214,9 +1215,10 @@ interface WorkContentPromptArgs {
   activityCounts: string | null;
   appsBlock: string;
   gamesBlock: string;
+  pluginBlock: string;
 }
 
-const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts, appsBlock, gamesBlock }: WorkContentPromptArgs): string => [
+const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, totalDomains, activityCounts, appsBlock, gamesBlock, pluginBlock }: WorkContentPromptArgs): string => [
   `あなたは ${dateStr} の「作業内容」セクションを書きます。`,
   'ブラウザ閲覧履歴 (URL + 時刻) と開発活動 (git commit / Claude Code への指示) を両方読み、',
   '**大まかな時間帯**で何をしていたかを 1 文でまとめ、',
@@ -1289,7 +1291,22 @@ const WORK_CONTENT_PROMPT = ({ dateStr, urlList, activityList, totalEvents, tota
   '  - 💼 仕事 / 🎨 クリエイティブ系アプリの時間 → 作業として扱う (URL の薄い日でも作業時間として認める)',
   '  - 「主な作業」 に具体アプリ名 (VSCode / Photoshop / 特定ゲーム名) を入れて良い',
   '  - WORK_MINUTES の見積もりにアプリ入力アクティブ秒も考慮する (= 仕事系アプリの active_min は作業時間)。 ゲームは作業に含めない。',
+  '',
+  'プラグインからの寄稿 (ユーザーアプリが記録した出来事。 内容に応じて時間帯まとめへ織り込む):',
+  pluginBlock,
 ].join('\n');
+
+/** その日のプラグイン日記寄稿を prompt 用のブロック文字列に整形する。 */
+function formatPluginContributions(db: Db, dateStr: string): string {
+  const entries = listPluginDiaryEntries(db, dateStr);
+  if (!entries.length) return '(なし)';
+  return entries
+    .map((e) => {
+      const data = e.data_json ? ` ${e.data_json}` : '';
+      return `・[${e.plugin_id}] ${e.summary}${data}`;
+    })
+    .join('\n');
+}
 
 export interface WorkMinutesExtraction {
   content: string;
@@ -1605,6 +1622,7 @@ export async function generateWorkContent({
     activityCounts,
     appsBlock: formatAppsBlock(metrics.apps),
     gamesBlock: formatGamesBlock(metrics.games),
+    pluginBlock: formatPluginContributions(db, dateStr),
   });
   const prompt = appendMemoAndImprove(base, { globalMemo, improve });
   const raw = await runLlm({ task: 'diary_work', prompt, timeoutMs });
