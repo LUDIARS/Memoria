@@ -7,8 +7,8 @@
 // 「論理化可能なら」 Condition 形式のルール候補 (proposedRule) を返す。
 // → 人間 OK でルールが有効化され、 やがて LLM 無しで動く (= 成長)。
 
-import type { BlackBoxEngine, FeatureMap, LlmJudgement } from '../blackbox/index.js';
-import { validateCondition } from '../blackbox/index.js';
+import type { BlackBoxEngine, FeatureMap, LlmJudgement } from '@ludiars/blackbox';
+import { validateCondition } from '@ludiars/blackbox';
 import { runLlm } from '../llm.js';
 import type { EnsembleHour } from './ensemble.js';
 import { rainOnset } from './ensemble.js';
@@ -36,7 +36,6 @@ function parseProposedRule(raw: unknown, output: unknown): LlmJudgement['propose
       when,
       output: r.output ?? output,
       confidence: typeof r.confidence === 'number' ? r.confidence : 0.7,
-      enabled: false,
     };
   } catch { return undefined; }
 }

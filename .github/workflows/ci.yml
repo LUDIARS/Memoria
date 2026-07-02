@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   test:
@@ -21,15 +22,22 @@ jobs:
         with:
           submodules: true
 
+      # @ludiars scope (GitHub Packages) の認証。 registry-url + scope 指定で
+      # runner の .npmrc に scoped registry と ${NODE_AUTH_TOKEN} 参照が書かれる。
+      # 組織内パッケージ @ludiars/blackbox はビルトイン GITHUB_TOKEN (packages:read) で取得。
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
           cache-dependency-path: server/package-lock.json
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@ludiars'
 
       - name: Install server deps
         working-directory: server
         run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install mcp-server deps
         working-directory: mcp-server
@@ -51,6 +59,8 @@ jobs:
           npm install --no-save --no-package-lock --no-audit --no-fund \
             typescript@5.6 @types/node@20 @types/better-sqlite3@7
           npx tsc --noEmit -p tsconfig.json
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Unit tests (server)
         working-directory: server
@@ -62,6 +72,8 @@ jobs:
           npm install --no-save --no-package-lock --no-audit --no-fund \
             eslint@9 typescript-eslint@8 typescript@5.6
           npx eslint --max-warnings 0 "**/*.ts"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build frontend (esbuild bundle public/src/app.ts -> public/app.js)
         working-directory: server

@@ -6,7 +6,7 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings } from '../db.js';
-import type { BlackBoxEngine } from '../blackbox/index.js';
+import type { BlackBoxEngine } from '@ludiars/blackbox';
 import { decideLikelyPlaces, type PlaceStat } from './domains.js';
 
 type Db = BetterSqlite3.Database;

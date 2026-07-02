@@ -2,7 +2,7 @@
 // weather.will_rain で検証し、 通知メッセージを組み立てる。 送信判断は scheduler。
 
 import type BetterSqlite3 from 'better-sqlite3';
-import type { BlackBoxEngine } from '../blackbox/index.js';
+import type { BlackBoxEngine } from '@ludiars/blackbox';
 import { getWeatherConfig } from './config.js';
 import { hoursForDay, type EnsembleHour } from './ensemble.js';
 import { runAndStoreEnsemble } from './ensemble-service.js';

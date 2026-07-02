@@ -1,6 +1,14 @@
 # 成長型ブラックボックス (Growth Black Box) — 汎用ルールエンジン
 
-`server/blackbox/` ドメイン。 **ドメイン非依存** の判断エンジン。 最初は LLM が下した
+> **移管済 (2026-07-02)**: エンジン実装は共通ライブラリ **`@ludiars/blackbox`**
+> (LUDIARS/Lapilli `packages/blackbox`) に移った。設計正本もそちらの `DESIGN.md`。
+> `server/blackbox/` は撤去し、Memoria はパッケージ利用者 (weather ドメイン) になった。
+> 本ファイルは Memoria 側の使い方 (§4 以降のドメイン束ね / API / UI) の記述として残す。
+> 以下 §1-3 の中核概念は v2 でも同じだが、ライフサイクルは enabled boolean から
+> candidate → trial → auto / retired の状態機械 + 影評価 (人間クリック無しでも
+> LLM を教師に昇格が進む) に拡張されている。
+
+**ドメイン非依存** の判断エンジン。 最初は LLM が下した
 判断を記録し、 「論理的に判断可能」 な事象をルール (アルゴリズム) に昇格させ、 徐々に
 LLM 無しで動くようにする。 天気はこのエンジンの最初の適用例。 ゲーム (敵 AI / ドロップ
 抽選 / イベント分岐) にも転用できるよう、 Memoria 固有の型・DB に一切依存しない。
@@ -10,9 +18,10 @@ LLM 無しで動くようにする。 天気はこのエンジンの最初の適
 
 ## 0. 切り出し境界
 
-`server/blackbox/` 配下は Memoria 固有 path / schema に直結しない。 永続化は
-`RuleStore` / `DecisionLedger` interface 越し (DB 実装は `store.ts` に隔離)。 LLM 呼び出しは
-`LlmFallback` 関数注入。 → `mv server/blackbox/ ../blackbox/` で他サービス・ゲームに移植可能。
+切り出しは完了し、実体は `@ludiars/blackbox`。 永続化は
+`RuleStore` / `DecisionLedger` interface 越し (SQLite 実装はパッケージ同梱、
+better-sqlite3 / node:sqlite 両対応)。 LLM 呼び出しは `LlmFallback` 関数注入。
+テーブル作成と旧 schema (enabled 列) からの migration は `ensureBlackboxSchema()` が行う。
 
 ## 1. 中核概念
 

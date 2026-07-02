@@ -14,7 +14,7 @@ import {
 } from './weather.js';
 import { runDetection as runTransitDetection } from './transit-detect.js';
 import { pollAllFeeds, getRssConfig } from '../rss/index.js';
-import type { BlackBoxEngine } from '../blackbox/index.js';
+import type { BlackBoxEngine } from '@ludiars/blackbox';
 import { getWeatherConfig } from '../weather/config.js';
 import { buildBriefing, formatBriefingPush } from '../weather/briefing.js';
 import { startBriefingScheduler } from '../briefing/index.js';

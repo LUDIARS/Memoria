@@ -26,7 +26,7 @@ import {
 } from '../lib/weather.js';
 import { getAppSettings, setAppSettings } from '../db.js';
 import { featureEnabled } from '../lib/privacy.js';
-import type { BlackBoxEngine } from '../blackbox/index.js';
+import type { BlackBoxEngine } from '@ludiars/blackbox';
 import { getWeatherConfig } from '../weather/config.js';
 import { ALL_SOURCES } from '../weather/sources/index.js';
 import { hoursForDay } from '../weather/ensemble.js';

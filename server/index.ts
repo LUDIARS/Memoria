@@ -69,7 +69,7 @@ import { makeMetricsRouter } from './routes/metrics.js';
 import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
 import { makeWeatherRouter } from './routes/weather.js';
 import { makeBlackBoxRouter } from './routes/blackbox.js';
-import { makeBlackBoxEngine } from './blackbox/index.js';
+import { makeSqliteBlackBox } from '@ludiars/blackbox';
 import { DOMAIN_WILL_RAIN, DOMAIN_LIKELY_PLACE } from './weather/domains.js';
 import { makeTransitRouter } from './routes/transit.js';
 import { makeStalenessRouter } from './routes/staleness.js';
@@ -217,7 +217,8 @@ app.use('/api/*', makeMultiProxyMiddleware(db));
 const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSummary };
 
 // 成長型ブラックボックス engine (天気の雨判定 / 行きがち場所推定 + 将来の汎用ルール)。
-const blackbox = makeBlackBoxEngine(db);
+// 実体は @ludiars/blackbox (Lapilli)。schema 保証 + 旧テーブルからの migration も内蔵。
+const blackbox = makeSqliteBlackBox(db);
 
 app.route('/', makeBookmarkRouter({
   db, htmlDir: HTML_DIR,
