@@ -105,6 +105,8 @@ export function startRecommendScheduler(client: Client, db: Db): void {
       setAppSettings(db, { 'features.discord.recommend_last_sent': today });
       void postMorningRecommend(client, db).then((r) => {
         console.log(`[discord recommend] morning post: ok=${r.ok} count=${r.count}`);
+      }).catch((e: unknown) => {
+        console.warn('[discord recommend] morning post failed:', e instanceof Error ? e.message : String(e));
       });
     } catch (e: unknown) {
       console.warn('[discord recommend] tick failed:', e instanceof Error ? e.message : String(e));

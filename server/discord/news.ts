@@ -85,6 +85,8 @@ export function startNewsScheduler(client: Client, db: Db): void {
       setAppSettings(db, { 'features.discord.news_last_sent': today });
       void postRssNews(client, db).then((r) => {
         console.log(`[discord news] posted: digest=${r.digestPosted}`);
+      }).catch((e: unknown) => {
+        console.warn('[discord news] post failed:', e instanceof Error ? e.message : String(e));
       });
     } catch (e: unknown) {
       console.warn('[discord news] tick failed:', e instanceof Error ? e.message : String(e));

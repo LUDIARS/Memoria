@@ -126,9 +126,12 @@ async function gpsTick(client: Client, db: Db): Promise<void> {
 }
 
 export function startNotifyScheduler(client: Client, db: Db): void {
-  setInterval(() => { void minuteTick(client, db); }, 60_000).unref?.();
-  setTimeout(() => { void gpsTick(client, db); }, 25_000).unref?.();
-  setInterval(() => { void gpsTick(client, db); }, 5 * 60_000).unref?.();
+  const onError = (label: string) => (e: unknown) => {
+    console.warn(`[notify] ${label} failed: ${e instanceof Error ? e.message : String(e)}`);
+  };
+  setInterval(() => { void minuteTick(client, db).catch(onError('minute tick')); }, 60_000).unref?.();
+  setTimeout(() => { void gpsTick(client, db).catch(onError('gps tick')); }, 25_000).unref?.();
+  setInterval(() => { void gpsTick(client, db).catch(onError('gps tick')); }, 5 * 60_000).unref?.();
   console.log('[notify] task-notify scheduler started');
 }
 

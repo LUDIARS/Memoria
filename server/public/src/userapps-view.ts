@@ -40,6 +40,8 @@ interface TrendsResponse {
   points: TrendPoint[];
 }
 
+let userappsEscHandlerWired = false;
+
 function esc(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -123,6 +125,27 @@ async function loadTrends(pluginId: string): Promise<void> {
   panel.innerHTML = renderTrendChart(data.points);
 }
 
+function closeMobileMenu(): void {
+  const root = document.getElementById('userappsRoot');
+  if (!root) return;
+  root.classList.remove('userapps-menu-open');
+  document.getElementById('userappsMenuBtn')?.setAttribute('aria-expanded', 'false');
+}
+
+function openMobileMenu(): void {
+  const root = document.getElementById('userappsRoot');
+  if (!root) return;
+  root.classList.add('userapps-menu-open');
+  document.getElementById('userappsMenuBtn')?.setAttribute('aria-expanded', 'true');
+}
+
+function toggleMobileMenu(): void {
+  const root = document.getElementById('userappsRoot');
+  if (!root) return;
+  if (root.classList.contains('userapps-menu-open')) closeMobileMenu();
+  else openMobileMenu();
+}
+
 function selectPlugin(el: HTMLElement, frame: HTMLIFrameElement): void {
   const url = el.dataset.url;
   const id = el.dataset.id;
@@ -131,11 +154,20 @@ function selectPlugin(el: HTMLElement, frame: HTMLIFrameElement): void {
   el.classList.add('active');
   frame.src = url;
   if (id) void loadTrends(id);
+  closeMobileMenu();
 }
 
 function wireList(): void {
   const frame = document.getElementById('userappsFrame') as HTMLIFrameElement | null;
   if (!frame) return;
+  document.getElementById('userappsMenuBtn')?.addEventListener('click', toggleMobileMenu);
+  document.getElementById('userappsMenuOverlay')?.addEventListener('click', closeMobileMenu);
+  if (!userappsEscHandlerWired) {
+    userappsEscHandlerWired = true;
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') closeMobileMenu();
+    });
+  }
   document.querySelectorAll('.userapps-item').forEach((el) => {
     el.addEventListener('click', () => selectPlugin(el as HTMLElement, frame));
   });
@@ -172,9 +204,14 @@ export async function loadUserApps(): Promise<void> {
   const errBanner = data.error ? `<div class="userapps-error">⚠ ${esc(data.error)}</div>` : '';
 
   root.innerHTML = `
+    <button type="button" id="userappsMenuBtn" class="userapps-menu-btn" aria-controls="userappsSidebar" aria-expanded="false">
+      <span aria-hidden="true">☰</span>
+      <span>アプリ</span>
+    </button>
     ${errBanner}
+    <div id="userappsMenuOverlay" class="userapps-menu-overlay" aria-hidden="true"></div>
     <div class="userapps-layout">
-      <aside class="userapps-sidebar">${renderList(data.plugins)}</aside>
+      <aside id="userappsSidebar" class="userapps-sidebar">${renderList(data.plugins)}</aside>
       <div class="userapps-content">
         <iframe id="userappsFrame" class="userapps-frame" title="ユーザーアプリ"></iframe>
         <div id="userappsTrends" class="userapps-trends-panel"></div>
