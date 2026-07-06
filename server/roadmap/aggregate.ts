@@ -53,9 +53,16 @@ export interface RoadmapLine extends RoadmapServices, RoadmapMonths {
 export interface RoadmapAggregate {
   generated: string;
   root: string;
+  month: string;
+  calendarMonth: string;
+  availableMonths: string[];
   count: number;
   lines: RoadmapLine[];
   errors: Array<{ repo: string; message: string }>;
+}
+
+export interface RoadmapAggregateOptions {
+  month?: string | null;
 }
 
 export function ludiarsRoot(): string {
@@ -69,6 +76,14 @@ function currentMonthKey(): string {
   return `${y}-${m}`;
 }
 
+function normalizeMonthKey(month: string | null | undefined): string {
+  if (!month) return currentMonthKey();
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    throw new Error(`invalid roadmap month: ${month}`);
+  }
+  return month;
+}
+
 function weightedMaturity(members: RoadmapServices['members']): number | null {
   const scored = members.filter((m) => typeof m.completion === 'number');
   const wsum = scored.reduce((a, m) => a + m.importance, 0);
@@ -77,13 +92,15 @@ function weightedMaturity(members: RoadmapServices['members']): number | null {
 }
 
 /** LUDIARS_ROOT 配下の roadmap-* を走査して consolidated 進捗を返す。 */
-export function aggregateRoadmaps(root = ludiarsRoot()): RoadmapAggregate {
+export function aggregateRoadmaps(root = ludiarsRoot(), opts: RoadmapAggregateOptions = {}): RoadmapAggregate {
   if (!existsSync(root)) {
     throw new Error(`LUDIARS_ROOT が存在しません: ${root} (env LUDIARS_ROOT で上書き可)`);
   }
-  const curKey = currentMonthKey();
+  const calendarMonth = currentMonthKey();
+  const selectedMonth = normalizeMonthKey(opts.month);
   const lines: RoadmapLine[] = [];
   const errors: Array<{ repo: string; message: string }> = [];
+  const availableMonthSet = new Set<string>();
 
   const dirs = readdirSync(root)
     .filter((name) => /^roadmap-/.test(name))
@@ -103,7 +120,10 @@ export function aggregateRoadmaps(root = ludiarsRoot()): RoadmapAggregate {
       const services = JSON.parse(readFileSync(svcPath, 'utf8')) as RoadmapServices;
       const roadmap = JSON.parse(readFileSync(rmPath, 'utf8')) as RoadmapMonths;
       const months = roadmap.months ?? [];
-      const currentMonth = months.find((m) => m.month === curKey) ?? months[months.length - 1] ?? null;
+      for (const month of months) {
+        if (/^\d{4}-\d{2}$/.test(month.month)) availableMonthSet.add(month.month);
+      }
+      const currentMonth = months.find((m) => m.month === selectedMonth) ?? null;
       const goals = currentMonth?.goals ?? [];
       const contractPath = join(root, repo, 'data', 'contract.json');
       let contract: ContractGrade | null = null;
@@ -137,6 +157,9 @@ export function aggregateRoadmaps(root = ludiarsRoot()): RoadmapAggregate {
   return {
     generated: new Date().toISOString().slice(0, 10),
     root,
+    month: selectedMonth,
+    calendarMonth,
+    availableMonths: [...availableMonthSet].sort((a, b) => b.localeCompare(a)),
     count: lines.length,
     lines,
     errors,

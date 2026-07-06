@@ -1,8 +1,8 @@
 // 「目標」タブ。
 //
-// 主役 = 事業ライン別 private ロードマップ (/api/roadmaps) の今月進捗。
+// 主役 = 事業ライン別 private ロードマップ (/api/roadmaps) の月次進捗。
 // 7 事業ライン (LUDELLUS / BACK-OFFICE / PERSONAL-AI / PrivateGame /
-// MUSA / DX-WORKFLOW / SCHOOL-HUB) それぞれの構成リポ・現状・今月の目標 +
+// MUSA / DX-WORKFLOW / SCHOOL-HUB) それぞれの構成リポ・現状・選択月の目標 +
 // 達成率を一覧する。 正本は LUDIARS_ROOT/roadmap-*/data/*.json。
 //
 // 従属 = 旧来の個別目標タスク (kind='goal') + 毎朝 7 時の評価ドット。 こちらは
@@ -59,10 +59,15 @@ interface RoadmapLine {
 interface RoadmapAggregate {
   generated: string;
   root: string;
+  month: string;
+  calendarMonth: string;
+  availableMonths: string[];
   count: number;
   lines: RoadmapLine[];
   errors: Array<{ repo: string; message: string }>;
 }
+
+let selectedRoadmapMonth: string | null = null;
 
 function esc(s: string): string {
   return s
@@ -92,6 +97,11 @@ function currentMonth(): string {
 function monthLabel(m: string): string {
   const [y, mo] = m.split('-');
   return `${y}年${Number(mo)}月の目標`;
+}
+
+function shortMonthLabel(m: string): string {
+  const [y, mo] = m.split('-');
+  return `${y}年${Number(mo)}月`;
 }
 
 function renderDotRow(logs: GoalEvalLog[]): string {
@@ -130,7 +140,7 @@ function achBadge(month: RoadmapMonth | null): string {
 
 function renderRoadmapGoals(month: RoadmapMonth | null): string {
   if (!month || !month.goals.length) {
-    return '<div class="rm-goal-empty muted">今月の目標は未設定 (前月末/月初に作成)</div>';
+    return '<div class="rm-goal-empty muted">選択月の目標は未設定です</div>';
   }
   const items = month.goals.map(g => {
     const cls = g.done === true ? 'rm-goal-done' : g.done === false ? 'rm-goal-miss' : 'rm-goal-open';
@@ -148,7 +158,7 @@ function renderMembers(members: RoadmapMember[]): string {
   return `<div class="rm-members">${chips}</div>`;
 }
 
-function renderRoadmapLine(ln: RoadmapLine): string {
+function renderRoadmapLine(ln: RoadmapLine, selectedMonth: string): string {
   const cur = ln.currentMonth;
   const prog = ln.goalTotal ? Math.round((ln.goalDone / ln.goalTotal) * 100) : 0;
   return `
@@ -162,7 +172,7 @@ function renderRoadmapLine(ln: RoadmapLine): string {
         ${contractGradeBadge(ln.contract)}
       </div>
       <div class="rm-month">
-        <span class="rm-month-key">${cur ? esc(cur.month) : '—'}</span>
+        <span class="rm-month-key">${cur ? esc(cur.month) : esc(selectedMonth)}</span>
         <span class="rm-theme">${cur ? esc(cur.theme) : '計画未作成'}</span>
         ${achBadge(cur)}
         <span class="rm-goalprog muted">目標 ${ln.goalDone}/${ln.goalTotal}</span>
@@ -177,6 +187,21 @@ function renderRoadmapLine(ln: RoadmapLine): string {
     </div>`;
 }
 
+function renderRoadmapMonthPicker(agg: RoadmapAggregate): string {
+  const months = [...agg.availableMonths];
+  if (!months.includes(agg.month)) months.unshift(agg.month);
+  if (!months.length) months.push(agg.month);
+  const options = months.map((m) => {
+    const selected = m === agg.month ? ' selected' : '';
+    return `<option value="${esc(m)}"${selected}>${esc(shortMonthLabel(m))}</option>`;
+  }).join('');
+  return `
+    <label class="rm-month-picker">
+      <span class="muted">表示月</span>
+      <select id="roadmapMonthSelect" aria-label="ロードマップ表示月">${options}</select>
+    </label>`;
+}
+
 function renderRoadmapSection(agg: RoadmapAggregate | null, err: string | null): string {
   const head = '<div class="rm-section-head"><span class="rm-section-title">🗺 事業ロードマップ進捗</span>'
     + '<button id="goalsRefreshBtn" type="button" class="ghost goals-refresh-btn">↻ 更新</button></div>';
@@ -189,19 +214,19 @@ function renderRoadmapSection(agg: RoadmapAggregate | null, err: string | null):
   }
   const totalDone = agg.lines.reduce((a, l) => a + l.goalDone, 0);
   const totalGoals = agg.lines.reduce((a, l) => a + l.goalTotal, 0);
-  const summary = `<div class="rm-summary muted">${agg.count} 事業ライン ・ 今月の目標 ${totalDone}/${totalGoals} 達成 ・ 更新 ${esc(agg.generated)}</div>`;
+  const picker = renderRoadmapMonthPicker(agg);
+  const summary = `<div class="rm-summary muted">${agg.count} 事業ライン ・ ${esc(monthLabel(agg.month))} ${totalDone}/${totalGoals} 達成 ・ 更新 ${esc(agg.generated)}</div>`;
   const errNote = agg.errors.length
     ? `<div class="rm-error muted">読み込みエラー ${agg.errors.length} 件: ${esc(agg.errors.map(e => e.repo).join(', '))}</div>`
     : '';
-  const lines = agg.lines.map(renderRoadmapLine).join('');
-  return head + summary + errNote + `<div class="rm-lines">${lines}</div>`;
+  const lines = agg.lines.map((line) => renderRoadmapLine(line, agg.month)).join('');
+  return head + picker + summary + errNote + `<div class="rm-lines">${lines}</div>`;
 }
 
 // ── 旧来の個別目標タスク (従属表示) ───────────────────────────────────────────
 
-function renderLegacyGoals(goals: GoalTask[], evalByGoal: Map<number, GoalEvalLog[]>): string {
+function renderLegacyGoals(goals: GoalTask[], evalByGoal: Map<number, GoalEvalLog[]>, month: string): string {
   if (!goals.length) return ''; // 個別目標タスクが無ければセクションごと出さない
-  const month = currentMonth();
   const header = `
     <div class="goals-header goals-legacy-head">
       <span class="goals-month-label">${monthLabel(month)}</span>
@@ -231,9 +256,10 @@ export async function loadGoalsView(): Promise<void> {
 
   root.innerHTML = '<div class="muted goals-loading">読み込み中…</div>';
 
-  const month = currentMonth();
+  const month = selectedRoadmapMonth ?? currentMonth();
+  selectedRoadmapMonth = month;
   const [roadmapRes, goalsRes, evalsRes] = await Promise.all([
-    fetch('/api/roadmaps').catch(() => null),
+    fetch(`/api/roadmaps?month=${encodeURIComponent(month)}`).catch(() => null),
     fetch('/api/tasks?kind=goal&limit=200').catch(() => null),
     fetch(`/api/goal-evals?month=${month}`).catch(() => null),
   ]);
@@ -257,6 +283,12 @@ export async function loadGoalsView(): Promise<void> {
     evalByGoal.get(e.goal_id)!.push(e);
   }
 
-  root.innerHTML = renderRoadmapSection(agg, roadmapErr) + renderLegacyGoals(goals, evalByGoal);
+  root.innerHTML = renderRoadmapSection(agg, roadmapErr) + renderLegacyGoals(goals, evalByGoal, month);
   root.querySelector('#goalsRefreshBtn')?.addEventListener('click', () => void loadGoalsView());
+  root.querySelector('#roadmapMonthSelect')?.addEventListener('change', (event) => {
+    const nextMonth = event.target instanceof HTMLSelectElement ? event.target.value : null;
+    if (!nextMonth || nextMonth === selectedRoadmapMonth) return;
+    selectedRoadmapMonth = nextMonth;
+    void loadGoalsView();
+  });
 }
