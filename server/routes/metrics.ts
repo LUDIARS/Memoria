@@ -12,6 +12,13 @@ import { Hono, type Context } from 'hono';
 export function makeMetricsRouter(): Hono {
   const r = new Hono();
 
+  r.get('/api/health', (c: Context) => {
+    return c.json({
+      status: 'ok',
+      service: 'memoria-server',
+    });
+  });
+
   r.get('/api/metrics/memory', (c: Context) => {
     const m = process.memoryUsage();
     return c.json({
