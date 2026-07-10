@@ -38,6 +38,12 @@ const config: EnvCliConfig = {
     // 別ドライブに退避する場合はここを上書き。
     MEMORIA_DATA: "",
 
+    // ─── Amazon Echo / Alexa Custom Skill ──────────────────────────────────
+    MEMORIA_ALEXA_SKILL_ID: "",
+    MEMORIA_ALEXA_CLIENT_ID: "",
+    MEMORIA_ALEXA_CLIENT_SECRET: "",
+    MEMORIA_ALEXA_PROACTIVE_STAGE: "development",
+
     // ─── claude CLI 経路 ─────────────────────────────────────
     MEMORIA_CLAUDE_BIN: "claude",
 

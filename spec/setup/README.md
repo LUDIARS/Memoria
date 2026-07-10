@@ -16,6 +16,7 @@ WebPush + Hub 共有 + Electron) なので、 **「何をしたいか」 から�
 | とにかくローカルで動かす | [`local-startup.md`](./local-startup.md) | `MEMORIA_PORT` / `MEMORIA_DATA` / `MEMORIA_CLAUDE_BIN` / `CLAUDE_CODE_GIT_BASH_PATH` |
 | 要約 / Dig / 日記の AI を選ぶ | [`llm-providers.md`](./llm-providers.md) | `llm.<task>.provider` / `llm.openai.api_key` (app_settings) |
 | スマホへ通知を飛ばす | [`webpush.md`](./webpush.md) | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (既定は自動生成) |
+| Echoで通知を受け、音声でタスクを登録する | [`amazon-echo.md`](./amazon-echo.md) | `MEMORIA_ALEXA_SKILL_ID` / `MEMORIA_ALEXA_CLIENT_ID` / `MEMORIA_ALEXA_CLIENT_SECRET` |
 | GPS 軌跡 / 作業場所を取り込む | [`location-tracking.md`](./location-tracking.md) | `MEMORIA_MQTT_BROKER*` / `LOCATIONS_INGEST_KEY` / `maps.api_key` (app_settings) / `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` |
 | 複数ユーザで辞書 / dig / ブクマを共有 (Hub) | [`hub.md`](./hub.md) | `CERNERE_*` / `MEMORIA_PG_URL` / `MEMORIA_HUB_*` (server/multi/) |
 

@@ -6302,6 +6302,18 @@ document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
 // ---- Tasks / implementation notes / setup docs / privacy ------------------
 
 // `let` 形式 (元 JS は後段で上書き再定義あり)
+let requestedSetupDocKey: string | null = null;
+
+function openSetupDoc(key: string): void {
+  requestedSetupDocKey = key;
+  const setupTab = document.querySelector('.settings-tab[data-stab="setup"]') as HTMLButtonElement | null;
+  if (setupTab && !setupTab.classList.contains('active')) {
+    setupTab.click();
+    return;
+  }
+  void loadSetupDocs();
+}
+
 let ensureMemoriaFeatureViews = function () {
   const tabs = document.querySelector('.tabs-scroll');
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
@@ -6477,6 +6489,12 @@ let ensureMemoriaFeatureViews = function () {
       </label>
       <label class="check-inline"><input id="taskReminderNuntiusEnabled" type="checkbox" /> Nuntius にも送る</label>
       <label>Nuntius URL: <input id="taskReminderNuntiusUrl" type="text" placeholder="https://nuntius.example.com/notify" /></label>
+      <h4 style="margin-top:12px">Amazon Echo / Alexa</h4>
+      <p class="diary-settings-help">
+        Memoriaの通知をEchoへ送り、Echoから音声でタスクを登録できます。
+        Alexa Developer ConsoleでCustom Skill、公開HTTPS endpoint、通知権限、LWA資格情報の設定が必要です。
+      </p>
+      <button id="alexaSetupHelpBtn" type="button" class="ghost">📖 Amazon側の設定手順を開く</button>
       <h4 style="margin-top:12px">MCP サーバ</h4>
       <label class="check-inline"><input id="mcpAutostartEnabled" type="checkbox" /> Memoria 起動時に MCP サーバを同時起動する (任意)</label>
       <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
@@ -6547,6 +6565,8 @@ let ensureMemoriaFeatureViews = function () {
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
     footer.parentNode.insertBefore(sec, footer);
   }
+  const alexaSetupHelpBtn = $('alexaSetupHelpBtn') as HTMLButtonElement | null;
+  if (alexaSetupHelpBtn) alexaSetupHelpBtn.onclick = () => openSetupDoc('alexa');
   // 「AI 実装プロジェクト」 タブは廃止 (タスクの 🤖 AI実装 機能と共に休止)。
 
   upgradeTaskFormMarkup();
@@ -6775,7 +6795,13 @@ async function loadSetupDocs() {
       $('setupDocBody').textContent = doc.body || '';
     });
   });
-  if ((r.docs || [])[0]) root.querySelector('button[data-doc]')?.click();
+  const requested = requestedSetupDocKey;
+  requestedSetupDocKey = null;
+  const requestedButton = requested
+    ? [...root.querySelectorAll<HTMLButtonElement>('button[data-doc]')]
+      .find((button) => button.dataset.doc === requested)
+    : null;
+  (requestedButton ?? root.querySelector<HTMLButtonElement>('button[data-doc]'))?.click();
 }
 
 // `let` 形式 (元 JS は後段で上書き再定義あり)

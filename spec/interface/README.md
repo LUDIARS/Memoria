@@ -45,6 +45,7 @@ spec/api/
 | 設定 | [config.md](config.md) | `/api/privacy/settings`, `/api/llm/config`, `/api/setup-docs*`, `/api/tracks/settings` |
 | マルチ | [multi.md](multi.md) | `/api/multi/*` |
 | Push | [push.md](push.md) | `/api/push/*` |
+| Amazon Echo / Alexa | [alexa.md](alexa.md) | `/api/alexa/skill` |
 | 傾向 / ログ | [misc.md](misc.md) | `/api/trends/*`, `/api/events`, `/api/uptime`, `/api/recommendations*` |
 | ノート | [note.md](note.md) | `/api/notes*`, `/api/notes/from-chat` |
 | 拡張ルール | [misc.md](misc.md) | `/api/extension/rules` (拡張 dispatch 設定) |

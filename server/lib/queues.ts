@@ -42,7 +42,7 @@ import {
   summarizeGithubByRepo,
   weekRangeFor, weekOfMonth,
 } from '../diary.js';
-import { sendPushToAll } from '../push.js';
+import { sendNotificationToAll } from '../notifications.js';
 import type { GithubByRepo, AggregatedDay } from '../diary.js';
 import {
   getLatestSnapshotForDate, rowToForecast, describeCode, type Forecast,
@@ -75,7 +75,7 @@ function makeBookmarkPusher(db: Db) {
     }
     const titleLines = items.slice(0, 5).map((it) => `・${(it.title || '').slice(0, 60)}`).join('\n');
     const more = items.length > 5 ? `\n…他 ${items.length - 5} 件` : '';
-    sendPushToAll(db, {
+    sendNotificationToAll(db, {
       title: `📚 AI 要約完了 (${items.length} 件)`,
       body: titleLines + more,
       url: '/?tab=bookmarks',
@@ -449,7 +449,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
         const result = await runDig({ query, searchEngine, theme, themeContext: themeCtx });
         setDigResult(db, id, { status: 'done', result });
         // Dig 完了で push 通知 (登録済端末のみ)。 失敗は本体に影響させない。
-        sendPushToAll(db, {
+        sendNotificationToAll(db, {
           title: `🔍 ディグ完了: ${query.slice(0, 40)}`,
           body: theme ? `テーマ: ${theme}` : 'AI 分析が出揃いました',
           url: `/?tab=dig&dig=${id}`,
@@ -619,7 +619,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
           error: null,
         });
         // 日記が完成したら登録済端末に push 通知。 失敗しても本体には影響させない。
-        sendPushToAll(db, {
+        sendNotificationToAll(db, {
           title: `📝 ${dateStr} の日記が完成しました`,
           body: ctx.highlights ? ctx.highlights.split('\n').slice(0, 2).join(' ').slice(0, 140) : '作業内容とハイライトが揃いました',
           url: `/?tab=diary&date=${encodeURIComponent(dateStr)}`,

@@ -6,7 +6,7 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import { yesterdayLocal, formatLocalDate, weekRangeFor } from '../diary.js';
 import { listTasks, getAppSettings, setAppSettings } from '../db.js';
-import { sendPushToAll } from '../push.js';
+import { sendNotificationToAll } from '../notifications.js';
 import { featureEnabled } from './privacy.js';
 import {
   fetchForecast, insertWeatherSnapshot, readLatestGpsLatLon,
@@ -79,7 +79,7 @@ function startWeatherMorningBriefingInterval(deps: SchedulerDeps): void {
         console.log(`[weather briefing] ${today}: 雨なし — 送信スキップ`);
         return;
       }
-      await sendPushToAll(deps.db, {
+      await sendNotificationToAll(deps.db, {
         title: payload.title, body: payload.body,
         tag: `memoria-weather-briefing-${today}`, url: '/?tab=weather',
       }).catch((e: unknown) => console.error('[weather briefing] push failed:', e instanceof Error ? e.message : String(e)));
@@ -201,7 +201,7 @@ function startTaskReminderInterval(deps: SchedulerDeps): void {
       const more = tasks.length > 5 ? `\n…他 ${tasks.length - 5} 件` : '';
       const pushBody = `todo: ${todoCount} 件, 進行中: ${doingCount} 件\n${preview}${more}`;
 
-      await sendPushToAll(deps.db, { title: '📋 本日のタスクリマインド', body: pushBody })
+      await sendNotificationToAll(deps.db, { title: '📋 本日のタスクリマインド', body: pushBody })
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
           console.error('[reminder] push failed:', msg);
@@ -296,7 +296,7 @@ function startWeatherRainAlertInterval(deps: SchedulerDeps): void {
         return;   // 今日は雨無し
       }
 
-      await sendPushToAll(deps.db, {
+      await sendNotificationToAll(deps.db, {
         title,
         body,
         tag: `memoria-weather-rain-${today}`,

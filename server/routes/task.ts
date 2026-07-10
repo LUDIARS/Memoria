@@ -5,7 +5,7 @@ import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   listTasks, listTaskCategories, registerTaskCategory, unregisterTaskCategory,
-  getTask, insertTask, updateTask, deleteTask,
+  getTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
   getDiary, upsertDiary, recordActivityEvent,
   listRepoWatch,
@@ -13,6 +13,7 @@ import {
 import { formatLocalDate } from '../diary.js';
 import { privacySettings } from '../lib/privacy.js';
 import { postTaskToDiscord } from '../discord/index.js';
+import { registerTask } from '../shared/task-registration.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -104,7 +105,7 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
       ? body.status as 'todo' | 'doing' | 'done'
       : 'todo';
     const kind: 'task' | 'goal' = body.kind === 'goal' ? 'goal' : 'task';
-    const id = insertTask(db, {
+    const created = registerTask(db, {
       title,
       details: String(body.details ?? '').trim(),
       status,
@@ -113,15 +114,6 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
       due_at: typeof body.due_at === 'string' ? body.due_at : null,
       share_actio: !!body.share_actio,
       category: typeof body.category === 'string' ? body.category.trim() : null,
-    });
-    const created = getTask(db, id);
-    if (!created) return c.json({ error: 'failed to read inserted task' }, 500);
-    const label = kind === 'goal' ? '目標発行' : 'タスク発行';
-    appendTaskDiaryLog(`${label}: ${created.title}${created.due_at ? ` (期日: ${created.due_at})` : ''}`);
-    recordActivityEvent(db, {
-      kind: kind === 'goal' ? 'goal_created' : 'task_created',
-      content: created.title,
-      metadata: created.due_at ? { due_at: created.due_at } : undefined,
     });
     if (!body._skip_discord_notify) {
       void postTaskToDiscord(db, created).catch(() => {});

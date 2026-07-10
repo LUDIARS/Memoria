@@ -35,6 +35,7 @@ import { makeMcpServer } from './lib/mcp-server.js';
 import { startLegatusSubscriber } from './lib/legatus-subscriber.js';
 import { startMqttBroker } from './mqtt/broker.js';
 import { startDiscordBot } from './discord/index.js';
+import { loadAlexaConfig } from './alexa/config.js';
 import { startWifiLocation } from './wifi-location.js';
 import { fetchPageHtml } from './lib/fetch-page.js';
 import { privacySettings } from './lib/privacy.js';
@@ -79,6 +80,7 @@ import { makeGoalEvalRouter } from './goals/router.js';
 import { makeRoadmapRouter } from './roadmap/router.js';
 import { makeAiHubRouter } from './routes/ai-hub.js';
 import { makeTaskReviewRouter } from './routes/task-review.js';
+import { makeAlexaRouter } from './routes/alexa.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -87,6 +89,7 @@ const HTML_DIR = join(DATA_DIR, 'html');
 const MEAL_DIR = join(DATA_DIR, 'meals');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
+const ALEXA_CONFIG = loadAlexaConfig();
 
 mkdirSync(HTML_DIR, { recursive: true });
 mkdirSync(MEAL_DIR, { recursive: true });
@@ -267,6 +270,7 @@ app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
+app.route('/', makeAlexaRouter({ db, config: ALEXA_CONFIG }));
 // ユーザーアプリ (プラグイン) を本体プロセスに in-process マウント
 // (submodule server/plugins/memoria-plugin)。 /plugins/<id> を static catch-all
 // より前に登録する必要があるためここで mount し、 manifest を /api/plugins に渡す。

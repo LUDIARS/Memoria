@@ -61,6 +61,21 @@ task 一覧: `server/llm.ts:8-27`。 provider 一覧: `server/llm.ts:54-60`。
 
 ---
 
+## Amazon Echo / Alexa
+
+詳細は [`amazon-echo.md`](./amazon-echo.md) を参照。
+
+| キー | env | 既定 | 説明 | 根拠 |
+|---|---|---|---|---|
+| `MEMORIA_ALEXA_SKILL_ID` | 任意 | （無効） | Custom Skill application ID。設定時だけ受信endpointを有効化 | `server/alexa/config.ts` |
+| `MEMORIA_ALEXA_CLIENT_ID` | 送信時 | （無効） | Proactive Events用LWA client ID | `server/alexa/config.ts` |
+| `MEMORIA_ALEXA_CLIENT_SECRET` | 送信時 | （無効） | Proactive Events用LWA client secret | `server/alexa/config.ts` |
+| `MEMORIA_ALEXA_PROACTIVE_STAGE` | 任意 | `development` | `development` または `live` | `server/alexa/config.ts` |
+
+client IDとsecretは必ずペアで設定する。片方だけの場合は起動時にエラーとし、暗黙に通知を無効化しない。
+
+---
+
 ## 位置情報 (GPS / MQTT / WiFi)
 
 詳細は [`location-tracking.md`](./location-tracking.md)。

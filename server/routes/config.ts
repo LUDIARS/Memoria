@@ -19,7 +19,7 @@ import type { FifoQueue } from '../queue.js';
 
 type Db = BetterSqlite3.Database;
 
-const SETUP_DOCS: Record<string, { title: string; body: string }> = {
+export const SETUP_DOCS: Record<string, { title: string; body: string }> = {
   tailscale: {
     title: 'Tailscale を使用した VPN 構築方法',
     body: '# Tailscale を使用した VPN 構築方法\n\n1. Memoria を動かす PC と、接続したい端末に Tailscale をインストールします。\n2. すべて同じ tailnet にログインします。\n3. Memoria 側の PC で `tailscale ip -4` を実行し、Tailscale IP を確認します。\n4. 端末側から `http://<tailscale-ip>:5180` を開きます。\n5. OwnTracks や Legatus を使う場合も、接続先はこの Tailscale IP にします。\n6. 外部公開が必要ない場合は、インターネットへ直接公開しないでください。',
@@ -27,6 +27,41 @@ const SETUP_DOCS: Record<string, { title: string; body: string }> = {
   cloudflare: {
     title: 'Cloudflare Tunnel を使用した公開方法',
     body: '# Cloudflare Tunnel を使用した公開方法\n\n1. Memoria を動かす PC に `cloudflared` をインストールします。\n2. `cloudflared tunnel login` を実行し、Tunnel を作成します。\n3. 公開ホスト名の転送先を `http://localhost:5180` に設定します。\n4. 個人データを扱うため、Cloudflare Access などで認証を必ず設定します。\n5. tailnet 外のネットワークから Web UI と `/share` が動くことを確認します。\n6. 認証なしで Memoria を直接公開しないでください。',
+  },
+  alexa: {
+    title: 'Amazon Echo / Alexa の設定方法',
+    body: [
+      '# Amazon Echo / Alexa の設定方法',
+      '',
+      '## Amazon側の設定',
+      '1. Alexa Developer Consoleで **Custom Skill** を作成し、言語を「日本語（日本）」にします。',
+      '2. Interaction ModelのJSON Editorへ `config/alexa/interaction-model.ja-JP.json` を読み込み、モデルをビルドします。',
+      '3. Custom endpointを `https://<Memoriaの公開ホスト>/api/alexa/skill` に設定します。Amazonから到達できるHTTPS/443と、信頼されたCAの証明書が必要です。',
+      '4. Skill manifestのpermissionsへ `alexa::devices:all:notifications:write` を追加します。',
+      '5. events.publicationsへ `AMAZON.MessageAlert.Activated`、events.subscriptionsへ `SKILL_PROACTIVE_SUBSCRIPTION_CHANGED` を追加します。events endpointも同じMemoria URLにします。',
+      '6. Alexaアプリで作成したSkillを有効にし、Skillの「通知」を許可します。',
+      '',
+      '## Memoria側の設定',
+      '`server/.env.secrets` またはInfisical/env-cliへ次を設定してMemoriaを再起動します。値はGitへコミットしないでください。',
+      '',
+      '```dotenv',
+      'MEMORIA_ALEXA_SKILL_ID=amzn1.ask.skill.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+      'MEMORIA_ALEXA_CLIENT_ID=amzn1.application-oa2-client.xxxxxxxxxxxxxxxxxxxxxxxx',
+      'MEMORIA_ALEXA_CLIENT_SECRET=...',
+      'MEMORIA_ALEXA_PROACTIVE_STAGE=development',
+      '```',
+      '',
+      '開発中は `development`、Skillの認定・公開後だけ `live` を使用します。client IDとsecretは必ず両方設定してください。',
+      '',
+      '## 動作確認',
+      '- 「アレクサ、メモリアを開いて」',
+      '- 「アレクサ、メモリアで牛乳を買うをタスクに追加」',
+      '- Memoriaで通知を発生させた後、「アレクサ、メモリアで通知を読んで」',
+      '',
+      '> Alexa Proactive Eventsは自由文の即時アナウンスではありません。EchoへはAmazon定型の新着通知が届き、本文はMemoria Skillを開いたときに読み上げます。',
+      '',
+      '詳しいmanifest例とトラブルシュートは `spec/setup/amazon-echo.md` を参照してください。',
+    ].join('\n'),
   },
   legatus: {
     title: 'Legatus の起動方法',

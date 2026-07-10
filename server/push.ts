@@ -22,7 +22,7 @@ import type { PushSubscriptionRow } from './db/types/push.js';
 
 type Db = BetterSqlite3.Database;
 
-interface PushPayload {
+export interface PushPayload {
   title?: string;
   body?: string;
   url?: string;
@@ -30,7 +30,7 @@ interface PushPayload {
   [key: string]: unknown;
 }
 
-interface PushSendResult {
+export interface PushSendResult {
   sent: number;
   revoked: number;
   errors: { id?: number; status?: number; message: string }[];

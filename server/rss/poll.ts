@@ -4,7 +4,7 @@
 // 多重起動を防ぐため pollAllFeeds は in-flight guard を持つ。
 
 import type BetterSqlite3 from 'better-sqlite3';
-import { sendPushToAll } from '../push.js';
+import { sendNotificationToAll } from '../notifications.js';
 import { fetchFeedXml } from './sources.js';
 import { parseFeedXml } from './parse.js';
 import { scoreArticle } from './score.js';
@@ -78,7 +78,7 @@ export async function notifyTopArticles(db: Db): Promise<number> {
 
   const body = top.slice(0, 3).map(a => `・${a.title.slice(0, 50)}`).join('\n')
     + (top.length > 3 ? `\n…他 ${top.length - 3} 件` : '');
-  await sendPushToAll(db, {
+  await sendNotificationToAll(db, {
     title: '📡 あなた好みの記事が見つかりました',
     body,
     tag: 'memoria-rss-discover',
