@@ -17,7 +17,8 @@ export type LlmTaskName =
   | 'rss_score' | 'rss_summarize' | 'rss_digest'
   | 'weather_rain_verify' | 'weather_likely_place'
   | 'article_topics' | 'article_write' | 'article_tags' | 'ai_advice'
-  | 'task_review';
+  | 'task_review'
+  | 'plugin_llm';
 
 export const TASKS: LlmTaskName[] = [
   'summarize', 'dig', 'dig_preview', 'cloud_extract', 'cloud_validate',
@@ -32,6 +33,7 @@ export const TASKS: LlmTaskName[] = [
   'weather_rain_verify', 'weather_likely_place',
   'article_topics', 'article_write', 'article_tags', 'ai_advice',
   'task_review',
+  'plugin_llm',
 ];
 
 const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
@@ -56,6 +58,7 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   article_tags: 'haiku',             // 完成記事から分類タグ (言語/技術領域 等) を抽出。 短文・安価。
   ai_advice: 'sonnet',               // 週次データから助言 (Markdown)。
   task_review: 'sonnet',             // todo/doing タスクから統合候補・完了候補を JSON 抽出。
+  plugin_llm: 'sonnet',               // 「ユーザーアプリ」プラグイン共通の汎用 LLM 呼び出し (ctx.memoria.llm)。
 };
 
 // gamma = ローカル LLM レーン。 OpenAI 互換エンドポイント (既定 Ollama

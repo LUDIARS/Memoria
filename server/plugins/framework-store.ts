@@ -1,7 +1,7 @@
 // プラグインフレームワークの本体側ストア。
 //
-// プラグインが参照する host 機能 (Discord通知 / GPS / 日記出力 / 傾向出力) を
-// Memoria 本体の SQLite + Discord に結線する。 ここが「capability の実装」 で、
+// プラグインが参照する host 機能 (Discord通知 / GPS / 日記出力 / 傾向出力 / LLM呼出) を
+// Memoria 本体の SQLite + Discord + runLlm に結線する。 ここが「capability の実装」 で、
 // submodule 側 (host/capabilities.ts) はインターフェースのみを定義する。
 //
 //  - 日記出力 (recordDiary): plugin_diary_entries に日付付きで貯める。
@@ -10,6 +10,7 @@
 //    取り出し UI がグラフ化する。
 //  - GPS (latestGps): gps_locations の最新行。
 //  - announce: 本体 discord notifier (announceToDiscord)。
+//  - LLM (askLlm): 本体 runLlm の 'plugin_llm' タスク経由 (全プラグイン共通の汎用呼び出し)。
 
 import type BetterSqlite3 from 'better-sqlite3';
 import type {
@@ -19,6 +20,7 @@ import type {
   TrendPoint,
 } from './memoria-plugin/host/capabilities.js';
 import { announceToDiscord } from '../discord/index.js';
+import { runLlm } from '../llm.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -104,6 +106,8 @@ export function createCapabilityProviders(db: Db): CapabilityProviders {
     recordTrend: (pluginId: string, p: TrendPoint): void => {
       insertTrend.run(pluginId, p.series, p.value, p.unit ?? null, p.at ?? nowIso());
     },
+    askLlm: (pluginId: string, prompt: string): Promise<string> =>
+      runLlm({ task: 'plugin_llm', prompt: `[plugin:${pluginId}]\n${prompt}` }),
   };
 }
 

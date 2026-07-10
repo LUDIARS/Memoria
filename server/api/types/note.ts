@@ -204,11 +204,18 @@ export interface ExtensionNotionDomain {
   enabled: boolean;
 }
 
+export interface ExtensionFurusatoDomain {
+  host: string;
+  label: string;
+  enabled: boolean;
+}
+
 export interface ExtensionRules {
   chat_domains: ExtensionChatDomain[];
   impl_rules: ExtensionImplRule[];
   shopping_domains: ExtensionShoppingDomain[];
   notion_domains: ExtensionNotionDomain[];
+  furusato_domains: ExtensionFurusatoDomain[];
 }
 
 export type ExtensionRulesUpdateRequest = Partial<ExtensionRules>;

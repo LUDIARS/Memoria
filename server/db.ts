@@ -5519,11 +5519,18 @@ export interface ExtensionNotionDomain {
   enabled: boolean;
 }
 
+export interface ExtensionFurusatoDomain {
+  host: string;
+  label: string;
+  enabled: boolean;
+}
+
 export interface ExtensionRules {
   chat_domains: ExtensionChatDomain[];
   impl_rules: ExtensionImplRule[];
   shopping_domains: ExtensionShoppingDomain[];
   notion_domains: ExtensionNotionDomain[];
+  furusato_domains: ExtensionFurusatoDomain[];
 }
 
 const DEFAULT_EXTENSION_RULES: ExtensionRules = {
@@ -5546,6 +5553,13 @@ const DEFAULT_EXTENSION_RULES: ExtensionRules = {
     { host: 'www.notion.so', enabled: true },
     { host: 'notion.site', enabled: true },
   ],
+  furusato_domains: [
+    { host: 'satofull.jp', label: 'さとふる', enabled: true },
+    { host: 'furunavi.jp', label: 'ふるなび', enabled: true },
+    { host: 'furusato-tax.jp', label: 'ふるさとチョイス', enabled: true },
+    { host: 'furusato.au.com', label: 'au PAY ふるさと納税', enabled: true },
+    { host: 'furusato.ana.co.jp', label: 'ANAのふるさと納税', enabled: true },
+  ],
 };
 
 export function getExtensionRules(db: Db): ExtensionRules {
@@ -5561,6 +5575,7 @@ export function getExtensionRules(db: Db): ExtensionRules {
       impl_rules: parsed.impl_rules ?? DEFAULT_EXTENSION_RULES.impl_rules,
       shopping_domains: parsed.shopping_domains ?? DEFAULT_EXTENSION_RULES.shopping_domains,
       notion_domains: parsed.notion_domains ?? DEFAULT_EXTENSION_RULES.notion_domains,
+      furusato_domains: parsed.furusato_domains ?? DEFAULT_EXTENSION_RULES.furusato_domains,
     };
   } catch {
     return DEFAULT_EXTENSION_RULES;

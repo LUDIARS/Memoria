@@ -165,6 +165,24 @@
     return blocks;
   }
 
+  // ── furusato-nozei ページの best-effort 抽出 (サイトごとの DOM 差異が大きいため
+  // og:title/og:image + 本文中の金額表記だけを見る。 精密な自治体名抽出はしない —
+  // 使う側 (Memoria の furusato-nozei プラグイン UI) で後から編集できる。) ──
+
+  function extractFurusatoItem() {
+    const ogTitle = document.querySelector('meta[property="og:title"]')?.content;
+    const ogImage = document.querySelector('meta[property="og:image"]')?.content;
+    const title = (ogTitle || document.title || '').trim().slice(0, 200);
+    const bodyText = (document.body?.innerText || '').slice(0, 20000);
+    const priceMatch = bodyText.match(/([0-9][0-9,]{3,})\s*円/);
+    const amountYen = priceMatch ? Number(priceMatch[1].replace(/,/g, '')) : null;
+    return {
+      title,
+      imageUrl: ogImage || null,
+      amountYen: Number.isFinite(amountYen) && amountYen > 0 ? amountYen : null,
+    };
+  }
+
   // ── dispatch detection (asks background for current rules + match) ──
 
   async function detectDispatch() {
@@ -232,6 +250,7 @@
         .btn.notion { background: #1d2230; }
         .btn.impl { background: #f6b73c; color: #1d2230; }
         .btn.shopping { background: #3ac26a; }
+        .btn.furusato { background: #d4622a; }
         .btn svg { width: 20px; height: 20px; pointer-events: none; }
         .close {
           position: absolute; top: -6px; right: -6px;
@@ -361,6 +380,8 @@
         addDispatchButton('impl', '🚀', `実装自慢として展開 (${d.label})`, () => expandImpl());
       } else if (d.kind === 'shopping') {
         addDispatchButton('shopping', '🛒', `${d.label || d.host}: タスクに追加 (買い物)`, () => addWishlist());
+      } else if (d.kind === 'furusato') {
+        addDispatchButton('furusato', '🎁', `${d.label || d.host}: 気になるリストに追加`, () => addFurusatoBookmark(d.label || d.host));
       }
     }
 
@@ -493,6 +514,22 @@
         },
       });
       if (res?.ok) showToast(`「買い物」 タスクに追加 (id=${res.id})`, 'ok');
+      else showToast(`エラー: ${res?.error ?? '不明'}`, 'err');
+    }
+
+    async function addFurusatoBookmark(siteLabel) {
+      const item = extractFurusatoItem();
+      const res = await chrome.runtime.sendMessage({
+        type: 'memoria.addFurusatoBookmark',
+        payload: {
+          site: siteLabel || location.host,
+          product_name: item.title,
+          amount_yen: item.amountYen,
+          url: location.href,
+          image_url: item.imageUrl,
+        },
+      });
+      if (res?.ok) showToast(res.bookmark ? '気になるリストに追加しました' : '登録しました', 'ok');
       else showToast(`エラー: ${res?.error ?? '不明'}`, 'err');
     }
 
