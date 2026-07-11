@@ -36,7 +36,16 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     upsertDiary(db, { date, notes: next, status: row?.status ?? 'pending' });
   }
 
-  async function shareTaskToActio(task: { id: number; title: string; details?: string | null; status: string; due_at?: string | null }) {
+  async function shareTaskToActio(task: {
+    id: number;
+    title: string;
+    details?: string | null;
+    status: string;
+    kind: 'task' | 'goal';
+    category?: string | null;
+    creator_type: 'human' | 'ai';
+    due_at?: string | null;
+  }) {
     const settings = privacySettings(db);
     if (!settings.tasks_actio_share_enabled) throw new Error('Actio task sharing is disabled');
     if (!settings.actio_share_url) throw new Error('actio_share_url is not configured');
@@ -49,6 +58,9 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
         title: task.title,
         details: task.details ?? '',
         status: task.status,
+        kind: task.kind,
+        category: task.category ?? null,
+        creator_type: task.creator_type,
         due_at: task.due_at ?? null,
       }),
     });
