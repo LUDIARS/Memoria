@@ -14,12 +14,12 @@
 - `agent-projects` 一覧画面でプロジェクト追加 (パス + 名前 + rules + default_agent)
 
 ## データ
-- [agent_projects](../db/agent.md) — name / path (絶対パス) / rules (Markdown) / default_agent
-- [agent_runs](../db/agent.md) — task_id / project_id / agent / model / prompt / status (pending/running/done/failed/cancelled) / pid / log_path / summary
+- [agent_projects](../data/agent.md) — name / path (絶対パス) / rules (Markdown) / default_agent
+- [agent_runs](../data/agent.md) — task_id / project_id / agent / model / prompt / status (pending/running/done/failed/cancelled) / pid / log_path / summary
 - ログ本体: `<DATA>/agent_logs/<file>` に stdout/stderr を tee
 
 ## API
-- [agent.md](../api/agent.md) — `/api/agent-projects*` (CRUD) / `/api/agent-runs*` (一覧 / 詳細 / log / cancel) / `/api/tasks/:id/agent-run` (起動)
+- [agent.md](../interface/agent.md) — `/api/agent-projects*` (CRUD) / `/api/agent-runs*` (一覧 / 詳細 / log / cancel) / `/api/tasks/:id/agent-run` (起動)
 
 ## シェア可能か
 **local-only**

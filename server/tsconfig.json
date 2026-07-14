@@ -23,6 +23,11 @@
     "node_modules",
     "multi/node_modules",
     "public/**/*",
-    "data/**/*"
+    "data/**/*",
+    "env-cli.config.ts",
+    "multi/env-cli.config.ts",
+    "plugins/memoria-plugin/node_modules",
+    "plugins/memoria-plugin/src",
+    "plugins/memoria-plugin/scripts"
   ]
 }

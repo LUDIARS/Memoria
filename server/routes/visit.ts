@@ -3,7 +3,7 @@
 // /api/external/stats
 //
 // 「ブラウザ訪問 + 集計」 系の router。
-// Spec: spec/api/visit.md
+// Spec: spec/interface/visit.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -15,16 +15,19 @@ import {
   recordAccess, findBookmarkByUrl,
   listAllCategories,
   getDomainCatalogMap, getPageMetadataMap,
-  getAppSettings,
+  getAppSettings, diaryRepos,
   recordActivityEvent, listActivityEvents, activityEventsPage,
   pageVisitsForDate, revisitedBookmarksForDate, browsingDomainStatsForDate,
   listServerEvents, listServerEventsForDate,
+  getLatestRecommendationRun, getRecommendationRun, listRecommendationRuns,
 } from '../db.js';
 import { shouldSkipDomain } from '../domain-catalog.js';
 import { featureEnabled } from '../lib/privacy.js';
 import {
-  recommendationsFor, dismissRecommendation, clearDismissals,
-} from '../recommendations.js';
+  runAiRecommendations, isAiRecommendationsAvailable, isRecommendationsRunning,
+  cancelAiRecommendations,
+  type RecResultItem, type RecAgentLogBundle,
+} from '../recommendations-ai.js';
 import { fetchGithubRange } from '../diary.js';
 import { readHeartbeat, DOWNTIME_THRESHOLD_MS } from '../local/uptime.js';
 import { bulkSaveUrls } from '../lib/bulk-save.js';
@@ -41,8 +44,15 @@ export interface VisitRouterDeps {
   bulkSaveDeps: BulkSaveDeps;
 }
 
+function safeParseArray(s: string): unknown[] {
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function safeParseObject(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 export function makeVisitRouter(deps: VisitRouterDeps): Hono {
-  const { db, htmlDir, heartbeatFile, maybeQueuePageMetadata, maybeQueueDomain, bulkSaveDeps } = deps;
+  const { db, heartbeatFile, maybeQueuePageMetadata, maybeQueueDomain, bulkSaveDeps } = deps;
   const r = new Hono();
 
   // ---- trends ---------------------------------------------------------------
@@ -107,9 +117,8 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     return {
       github_token: s['diary.github_token'] || process.env.MEMORIA_GH_TOKEN || '',
       github_user: s['diary.github_user'] || process.env.MEMORIA_GH_USER || '',
-      github_repos: s['diary.github_repos']
-        ? String(s['diary.github_repos']).split(',').map((x) => x.trim()).filter(Boolean)
-        : [] as string[],
+      // 集計対象リポは `📋 作業一覧` (repo_watch) から導出。
+      github_repos: diaryRepos(db),
     };
   }
 
@@ -163,23 +172,76 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
     }
   });
 
-  // ---- recommendations ------------------------------------------------------
+  // ---- recommendations (AI 主導) -------------------------------------------
+  //
+  // 旧アルゴリズム版 (HTML リンク + 訪問ドメイン + word cloud) は廃止。
+  // 6 領域 agent (Sonnet 並列) + 1 統合 (Opus) で 直近 1 週間のログを
+  // 多角的に分析し、 「いま読むと打開につながる」 リソースを提示する。
+  // AI が未設定の場合は available=false を返し、 UI 側でプレースホルダ表示。
 
+  // 最新 done run + 進行中 run の状態を返す。 force=1 が来たら新規 run を蹴る。
   r.get('/api/recommendations', (c: Context) => {
-    const force = c.req.query('force') === '1';
-    return c.json({ items: recommendationsFor(db, htmlDir, { force }) });
+    const avail = isAiRecommendationsAvailable();
+    if (!avail.available) {
+      return c.json({ available: false, reason: avail.reason, run: null });
+    }
+    const latest = getLatestRecommendationRun(db, 'done');
+    const items = latest?.results_json ? safeParseArray(latest.results_json) as RecResultItem[] : [];
+    return c.json({
+      available: true,
+      running: isRecommendationsRunning(db),
+      run: latest ? {
+        id: latest.id,
+        started_at: latest.started_at,
+        finished_at: latest.finished_at,
+        result_count: latest.result_count,
+        duration_ms: latest.duration_ms,
+        model_sonnet: latest.model_sonnet,
+        model_opus: latest.model_opus,
+      } : null,
+      items,
+    });
   });
 
-  r.post('/api/recommendations/dismiss', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
-    if (!body?.url || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
-    dismissRecommendation(db, body.url);
-    return c.json({ ok: true });
+  r.post('/api/recommendations/run', async (c: Context) => {
+    const avail = isAiRecommendationsAvailable();
+    if (!avail.available) return c.json({ error: avail.reason }, 400);
+    // body.force=true で既存のキューを cancel して新規実行を開始する。
+    // (= キューが詰まって動かなくなった時に再実行で上書きするための逃げ道)
+    let force = false;
+    try {
+      const body = await c.req.json().catch(() => null);
+      force = !!(body && (body.force === true || body.force === 'true' || body.force === 1));
+    } catch { /* 空 body は OK */ }
+    if (!force && isRecommendationsRunning(db)) return c.json({ error: 'already_running' }, 409);
+    // Fire-and-forget。 ユーザは status を polling する。
+    void runAiRecommendations(db, { force }).catch(err => {
+      console.error('[recommendations] run failed:', err instanceof Error ? err.message : err);
+    });
+    return c.json({ ok: true, started: true, forced: force });
   });
 
-  r.delete('/api/recommendations/dismissals', (c: Context) => {
-    clearDismissals(db);
-    return c.json({ ok: true });
+  // 詰まったキューを掃除する明示的なエンドポイント。
+  // - in-memory inFlight ハンドルをクリア
+  // - DB の 'running' 行を 'cancelled' に更新
+  r.post('/api/recommendations/cancel', (c: Context) => {
+    const r2 = cancelAiRecommendations(db, 'user_cancelled');
+    return c.json({ ok: true, ...r2 });
+  });
+
+  r.get('/api/recommendations/runs', (c: Context) => {
+    const limit = Number(c.req.query('limit')) || 30;
+    return c.json({ items: listRecommendationRuns(db, limit) });
+  });
+
+  r.get('/api/recommendations/runs/:id', (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isFinite(id) || id <= 0) return c.json({ error: 'invalid id' }, 400);
+    const run = getRecommendationRun(db, id);
+    if (!run) return c.json({ error: 'not_found' }, 404);
+    const items = run.results_json ? safeParseArray(run.results_json) as RecResultItem[] : [];
+    const logs = run.agent_logs_json ? safeParseObject(run.agent_logs_json) as RecAgentLogBundle : null;
+    return c.json({ run, items, logs });
   });
 
   // ---- categories ------------------------------------------------------------
@@ -495,8 +557,8 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
   r.get('/api/activity/events', (c: Context) => {
     const date = c.req.query('date');
     const kindQ = c.req.query('kind');
-    const allowedKinds = new Set<string>(['git_commit', 'claude_code_prompt', 'gemini_prompt', 'codex_prompt', 'task_created', 'task_done', 'task_updated']);
-    type ActivityKindLocal = 'git_commit' | 'claude_code_prompt' | 'gemini_prompt' | 'codex_prompt' | 'task_created' | 'task_done' | 'task_updated';
+    const allowedKinds = new Set<string>(['git_commit', 'claude_code_prompt', 'gemini_prompt', 'codex_prompt', 'task_created', 'task_done', 'task_updated', 'discord_message', 'discord_presence', 'discord_voice', 'discord_reaction']);
+    type ActivityKindLocal = 'git_commit' | 'claude_code_prompt' | 'gemini_prompt' | 'codex_prompt' | 'task_created' | 'task_done' | 'task_updated' | 'discord_message' | 'discord_presence' | 'discord_voice' | 'discord_reaction';
     const kind: ActivityKindLocal | null = kindQ && allowedKinds.has(kindQ) ? kindQ as ActivityKindLocal : null;
     if (date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.json({ error: 'invalid date' }, 400);

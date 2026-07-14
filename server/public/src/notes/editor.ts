@@ -503,7 +503,7 @@ function buildContentEditable(block: NoteBlockRow): HTMLElement {
   el.className = 'note-block-content';
   el.contentEditable = 'true';
   el.dataset.placeholder = placeholderFor(block.block_type);
-  el.innerHTML = renderInline(block.text);
+  el.innerHTML = renderNoteText(block.text);
   attachAutoSave(el, block);
   return el;
 }
@@ -528,7 +528,7 @@ function buildListBlock(block: NoteBlockRow): HTMLElement {
   const li = document.createElement('li');
   li.contentEditable = 'true';
   li.className = 'note-block-content';
-  li.innerHTML = renderInline(block.text);
+  li.innerHTML = renderNoteText(block.text);
   list.appendChild(li);
   attachAutoSave(li, block);
   return list;
@@ -547,7 +547,7 @@ function buildTodoBlock(block: NoteBlockRow): HTMLElement {
   const span = document.createElement('div');
   span.className = 'note-block-content';
   span.contentEditable = 'true';
-  span.innerHTML = renderInline(block.text);
+  span.innerHTML = renderNoteText(block.text);
   attachAutoSave(span, block);
   wrap.append(cb, span);
   return wrap;
@@ -1007,6 +1007,10 @@ function parseData(block: NoteBlockRow): BlockData {
   try { return JSON.parse(block.data_json) as BlockData; } catch { return {}; }
 }
 
+function renderNoteText(text: string): string {
+  return renderInline(text).replace(/\r\n|\r|\n/g, '<br>');
+}
+
 // ── Auto-save ──────────────────────────────────────────────────────────────
 
 function attachAutoSave(
@@ -1078,7 +1082,9 @@ function siblingBlockUuid(currentUuid: string, direction: -1 | 1): string | null
 }
 
 function htmlToStorageText(el: HTMLElement): string {
-  return sanitizeInlineHtml(el.innerHTML);
+  return sanitizeInlineHtml(el.innerHTML)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/\r\n|\r/g, '\n');
 }
 
 async function saveBlockData(block: NoteBlockRow, data: BlockData): Promise<void> {

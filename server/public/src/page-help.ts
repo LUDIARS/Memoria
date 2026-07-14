@@ -30,6 +30,14 @@ export const PAGE_HELP: Record<string, PageHelpEntry> = {
         <li>左の「☰ カテゴリ」 で AI 分類で絞り込み</li>
         <li>各エントリの「再要約」 ボタンで手動再生成</li>
       </ul>
+      <h4>📌 スマホでブックマークしたい</h4>
+      <p>スマホは Chrome 拡張が使えないので、 Memoria を <b>PWA</b> としてインストールしてから OS の共有メニューで送ります。</p>
+      <ol>
+        <li>Memoria の URL を開いた状態でブラウザのメニュー → <b>「ホーム画面に追加」</b> または <b>「アプリをインストール」</b></li>
+        <li>シェアしたいページで <b>共有</b> ボタンを押す</li>
+        <li>共有先のリストから <b>Memoria</b> を選ぶと自動で保存キューに入ります</li>
+      </ol>
+      <p>iOS Safari は Web Share Target に対応しないので、 <a href="https://github.com/LUDIARS/Memoria/blob/main/docs/mobile-share.md" target="_blank" rel="noreferrer">iOS Shortcut テンプレート</a> を使ってください。</p>
     `,
   },
   notes: {

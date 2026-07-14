@@ -9,6 +9,7 @@ Memoria には来ないデータ」 を 1 箇所にまとめる。
 | **GitHub commits** | Personal Access Token (classic 推奨) | 設定 → 📝 日記 → GitHub 連携 | 日記 / 週報の commit 集計 |
 | **git ローカル post-commit** | hook の install ([git-hooks.md](./git-hooks.md)) | global core.hooksPath or per-repo | ローカル commit (= push 前) を活動として記録 |
 | **Claude Code prompt** | UserPromptSubmit hook ([claude-code-prompt.mjs](../../server/hooks/claude-code-prompt.mjs)) | `~/.claude/settings.json` の hooks | Claude Code への指示を「開発活動」 として記録 |
+| **Codex CLI prompt** | UserPromptSubmit hook ([codex-prompt.mjs](../../server/hooks/codex-prompt.mjs)) | `~/.codex/hooks.json` の `UserPromptSubmit` | Codex CLI への指示を「開発活動」(kind=codex_prompt) として記録 |
 | **OwnTracks GPS 軌跡** | iPhone OwnTracks → MQTT key | 軌跡タブ → 🔑 key → OwnTracks の設定 | 移動軌跡 / 作業場所自動判定 |
 | **Steam ゲームプレイ** | Steam ID (+ optional Web API key) | 設定 → 🔌 連携 → Steam | ゲームタイトル + playtime 自動取得 |
 | **Google Geolocation API** | API key | 環境変数 `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` | PC の WiFi スキャン → 概略位置 |
@@ -32,6 +33,8 @@ Memoria には来ないデータ」 を 1 箇所にまとめる。
 4. 設定 → 🔌 連携 → GitHub PAT / Steam ID を入れる
 5. `node server/hooks/setup.mjs` で git post-commit hook 導入 ([git-hooks.md](./git-hooks.md))
 6. `~/.claude/settings.json` に Claude Code hook を追加
+   - (任意) Codex CLI を使うなら `~/.codex/hooks.json` の `UserPromptSubmit` に
+     `node .../server/hooks/codex-prompt.mjs` も追加し、 codex 側で `/hooks` を trust
 7. (任意) Cernere ログイン → マルチサーバ接続
 8. (任意) iOS で「ホーム画面に追加」 → 通知許可
 9. (任意) OwnTracks 設定 → GPS 軌跡

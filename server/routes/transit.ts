@@ -46,8 +46,7 @@ interface TransitRideRow {
 }
 
 function loadGoogleConfig(db: Db): GoogleTransitConfig {
-  const env = process.env.MEMORIA_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
-  if (env) return { apiKey: env };
+  // key は設定 UI の app_settings `maps.api_key` を単一の情報源とする (env からは読まない)。
   const s = getAppSettings(db);
   return { apiKey: s['maps.api_key'] || '' };
 }

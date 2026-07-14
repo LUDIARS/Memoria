@@ -1,5 +1,5 @@
 // misc (trends / recommend / events / activity / external-chat) API types
-// Spec: spec/api/misc.md
+// Spec: spec/interface/misc.md
 
 import type { ServerEventRow, ActivityEventRow, ActivityKind } from '../../db/types/activity.js';
 import type { ExternalChatMessageRow } from '../../db/types/chat.js';

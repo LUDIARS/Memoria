@@ -7,7 +7,7 @@
  *   3. Reverse Geocoding (language=ja) → 住所だけ
  *   4. 全部失敗 → place_source='failed' で記録 (= 24h は再試行しない)
  *
- * - API key は app_settings の `maps.api_key` か env GOOGLE_MAPS_API_KEY.
+ * - API key は設定 UI / app_settings の `maps.api_key` を単一の情報源とする (env からは読まない).
  *   key がなければ全件 'failed' で帰す (静かに skip).
  * - server-side 呼び出しなので referrer 制限は効かない. Google Cloud Console で
  *   "Places API (New / Legacy)" + "Geocoding API" を有効化すること.
@@ -87,19 +87,14 @@ export function getResolverDebug(): ResolverDebug {
 
 /**
  * 場所照合に使う API key を返す.
- * 優先順位:
- *   1. env `MEMORIA_PLACES_API_KEY`  ← server-side 専用 (Referer 制限なし) を入れる場所
- *   2. env `GOOGLE_MAPS_API_KEY`
- *   3. app_settings の `maps.api_key`  ← 通常 Maps JS 用 (Referer 制限あり) なので
- *      Geocoding/Places を呼ぶと REQUEST_DENIED になる. Cloud Console で:
- *        - "Places API (New)" + "Geocoding API" を有効化
- *        - 上の 2 つを許可した Referer 制限なし (or IP 制限) の Server-side key を
- *          MEMORIA_PLACES_API_KEY に入れる
- *      の 2 段階が要る.
+ * 設定 UI から登録する app_settings の `maps.api_key` を単一の情報源とする
+ * (env からは読まない). server-side 呼び出しなので, Cloud Console 側で:
+ *   - "Places API (New)" + "Geocoding API" を有効化
+ *   - Referer 制限なし (or IP 制限) の Server-side key を使う
+ * を満たした key を設定 UI に入れること. Referer 制限付きの Maps JS 用 key を
+ * 入れると "Requests from referer <empty> are blocked." (403) になる.
  */
 function readApiKey(db: Db): string {
-  const env = process.env.MEMORIA_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
-  if (env) return env;
   const settings = getAppSettings(db);
   return settings?.['maps.api_key'] || '';
 }

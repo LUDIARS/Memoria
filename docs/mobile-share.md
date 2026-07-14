@@ -8,7 +8,7 @@ Memoria は Web Share Target として登録されるので、OS の共有シー
 1. `server/public/manifest.webmanifest` で `share_target.action = /share` を宣言。
 2. ユーザーが Memoria を PWA としてインストールすると、ブラウザが
    `GET /share?url=…&title=…&text=…` を送る。
-3. `server/index.js` の `app.get('/share')` が最初に見つかった http(s) URL を
+3. `server/routes/misc.ts` の `app.get('/share')` が最初に見つかった http(s) URL を
    抽出し (`url` を優先、なければ `text` / `title` から正規表現で拾う)、
    `bulkSaveUrls([url])` を呼んで `/?share=ok&u=…` に 303 リダイレクトする。
 4. SPA が保存完了のワンショットトーストを表示する。

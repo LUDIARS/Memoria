@@ -14,12 +14,12 @@
 - 手動再生成 `POST /api/weekly/:weekStart/generate`
 
 ## データ
-- [weekly_reports](../db/diary.md) — week_start (PK) / week_end / month / week_in_month / summary / github_summary_json / status
+- [weekly_reports](../data/diary.md) — week_start (PK) / week_end / month / week_in_month / summary / github_summary_json / status
 - 集計参照:
-  - [diary_entries](../db/diary.md) (`work_minutes` の合計を週作業時間として記載)
-  - [bookmarks](../db/bookmark.md) (`created_at` を週で count)
-  - [visit_events](../db/visit.md) (`visited_at` を週で count)
-  - [activity_events](../db/activity.md) (`kind='git_commit'` のローカル commit hook 件数 + `kind='claude_code_prompt'` の指示件数を week で count)
+  - [diary_entries](../data/diary.md) (`work_minutes` の合計を週作業時間として記載)
+  - [bookmarks](../data/bookmark.md) (`created_at` を週で count)
+  - [visit_events](../data/visit.md) (`visited_at` を週で count)
+  - [activity_events](../data/activity.md) (`kind='git_commit'` のローカル commit hook 件数 + `kind='claude_code_prompt'` の指示件数を week で count)
   - GitHub API (per-repo commits API、 `diary_settings.github_repos` で対象を絞る)
 
 ## 出力フォーマット (rev2)
@@ -52,7 +52,7 @@
 **冒頭の「今週の定量サマリ」 は決定論的に生成**(server/diary.ts の `formatTotalsHeader`)、 LLM が触れることはない。 LLM はそれ以下の 4 セクションを書くが、 各成果行に commit 数を埋め込ませるためプロンプトで定量サマリを文脈として渡している。 全体で 300-500 字程度に収める指示を含む。
 
 ## API
-- [diary.md](../api/diary.md) — `/api/weekly` (月一覧) / `/api/weekly/:weekStart` / `/api/weekly/:weekStart/generate` / `DELETE /api/weekly/:weekStart`
+- [diary.md](../interface/diary.md) — `/api/weekly` (月一覧) / `/api/weekly/:weekStart` / `/api/weekly/:weekStart/generate` / `DELETE /api/weekly/:weekStart`
 
 ## シェア可能か
 **local-only**

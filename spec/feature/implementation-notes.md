@@ -13,11 +13,11 @@
 - 編集モーダル: paste / drop で attachment_type を自動分類 (画像→`screenshot`, github URL→`github` 等)
 
 ## データ
-- [implementation_notes](../db/impl.md) — product / title / good_points / bad_points / attachment_type / attachment_value / shareable / shared_at
+- [implementation_notes](../data/impl.md) — product / title / good_points / bad_points / attachment_type / attachment_value / shareable / shared_at
 
 ## API
-- [impl.md](../api/impl.md) — `/api/implementation-notes*` (CRUD) / `/api/implementation-notes/:id/share` (ローカル shareable 印付け)
-- 関連: [multi.md](../api/multi.md) `/api/multi/share` (kind=implementation_note)
+- [impl.md](../interface/impl.md) — `/api/implementation-notes*` (CRUD) / `/api/implementation-notes/:id/share` (ローカル shareable 印付け)
+- 関連: [multi.md](../interface/multi.md) `/api/multi/share` (kind=implementation_note)
 
 ## シェア可能か
 **Hub-shareable** (`shareable=1` 必須)

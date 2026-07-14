@@ -1,5 +1,5 @@
 // dig domain — dig_sessions / recommendation_dismissals
-// Spec: spec/db/dig.md
+// Spec: spec/data/dig.md
 
 export type DigStatus = 'pending' | 'done' | 'error';
 

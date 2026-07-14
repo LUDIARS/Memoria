@@ -3,13 +3,13 @@ name: Desktop Publish (electron-builder)
 # electron-builder の `--publish=always` を使い、 .exe / .dmg / AppImage と
 # auto-updater 用の `latest*.yml` を GitHub Release に直接アップする。
 #
-# `desktop-release.yml` (zip ラッパー版) と並列実装。 こちらは:
-#   - 解凍不要でクリック実行可能な .exe / .dmg / AppImage が Release に並ぶ
-#   - electron-updater (将来導入) の差分配信に必要な latest.yml が同梱される
+# **これが正規 release path** (v1.0.1 以降)。 zip 包みの旧 `desktop-release.yml`
+# は廃止済。 install 後の Memoria は package.json の build.publish (github
+# provider) を読み、 ここで作られた latest.yml を見て自動更新する。
 #
 # Trigger:
-#   - Push a tag matching v*
-#   - workflow_dispatch (任意の tag を入力)
+#   - Push a tag matching v* → 自動 publish
+#   - workflow_dispatch       → 既存 tag を再 publish (リトライ用途)
 #
 # Outputs (Release attachments):
 #   Memoria Setup <version>.exe         + latest.yml          (Windows)
@@ -17,14 +17,12 @@ name: Desktop Publish (electron-builder)
 #   Memoria-<version>.AppImage / .deb   + latest-linux.yml    (Linux)
 
 on:
-  # 既存 desktop-release.yml (zip ラッパー) と同じ tag で動かすと GitHub
-  # Release のアセット衝突が起きるので、 こちらは **workflow_dispatch のみ**。
-  # 「電子署名つきネイティブ publish + auto-update メタ込みで配りたい」 と
-  # きにユーザが手動でトリガする想定。
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (例: v0.1.0). 既存 Release があれば追記、 なければ作成。'
+        description: 'Release tag (例: v1.0.1). 既存 Release があれば追記、 なければ作成。'
         required: true
         default: 'v0.0.0-dev'
 
@@ -83,7 +81,13 @@ jobs:
         shell: bash
         env:
           TAG_INPUT: ${{ github.event.inputs.tag }}
-        run: echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "$TAG_INPUT" ]; then
+            echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            # tag push trigger: GITHUB_REF = refs/tags/v1.0.1
+            echo "tag=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Ensure tag exists
         env:

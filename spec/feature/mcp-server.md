@@ -18,7 +18,7 @@ Memoria 同梱の MCP server (`mcp-server/index.js`) を Memoria 子プロセス
 - セットアップガイド: `/api/setup-docs/mcp` で Markdown を返す (Claude Desktop / Code config 例)
 
 ## API
-- [config.md](../api/config.md) — `/api/privacy/settings` PATCH `mcp_autostart_enabled` / `/api/setup-docs/mcp`
+- [config.md](../interface/config.md) — `/api/privacy/settings` PATCH `mcp_autostart_enabled` / `/api/setup-docs/mcp`
 - 子プロセスへの env: `MEMORIA_URL=http://127.0.0.1:<port>` を渡す
 
 ## シェア可能か

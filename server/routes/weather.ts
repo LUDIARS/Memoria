@@ -26,10 +26,18 @@ import {
 } from '../lib/weather.js';
 import { getAppSettings, setAppSettings } from '../db.js';
 import { featureEnabled } from '../lib/privacy.js';
+import type { BlackBoxEngine } from '@ludiars/blackbox';
+import { getWeatherConfig } from '../weather/config.js';
+import { ALL_SOURCES } from '../weather/sources/index.js';
+import { hoursForDay } from '../weather/ensemble.js';
+import { runAndStoreEnsemble } from '../weather/ensemble-service.js';
+import { listEnsembleSnapshots, getEnsembleSnapshot } from '../weather/ensemble-store.js';
+import { resolveTargets } from '../weather/targets.js';
+import { buildBriefing } from '../weather/briefing.js';
 
 type Db = BetterSqlite3.Database;
 
-export interface WeatherRouterDeps { db: Db }
+export interface WeatherRouterDeps { db: Db; engine: BlackBoxEngine }
 
 /** 「今日」 の YYYY-MM-DD (server local TZ)。 weather snapshot の date キーに使う。 */
 function todayLocal(): string {
@@ -56,7 +64,7 @@ function resolveLocation(db: Db, c: Context): { lat: number; lon: number; source
 }
 
 export function makeWeatherRouter(deps: WeatherRouterDeps): Hono {
-  const { db } = deps;
+  const { db, engine } = deps;
   const r = new Hono();
 
   /** その日の天気 (= 「天気カード」 用)。 lat/lon 不問 (内部解決)。
@@ -174,6 +182,101 @@ export function makeWeatherRouter(deps: WeatherRouterDeps): Hono {
       date: row.date, lat: row.lat, lon: row.lon, fetched_at: row.fetched_at,
       forecast: f, summary: summarize(f, row.date),
     });
+  });
+
+  // ── マルチソース ──────────────────────────────────────────────────────
+
+  /** 1 地点を全ソースで取得してアンサンブル → DB 保存して返す。
+   *  hours = 今日のこれから / hours_all = 保存した全時間帯 (今日 + 明日)。 */
+  r.get('/api/weather/ensemble', async (c: Context) => {
+    if (!featureEnabled(db, 'weather_enabled')) return c.json({ error: 'weather feature disabled' }, 404);
+    const loc = resolveLocation(db, c);
+    if (!loc) return c.json({ error: 'no location available' }, 400);
+    const url = new URL(c.req.url);
+    const label = url.searchParams.get('label');
+    try {
+      const res = await runAndStoreEnsemble(db, loc.lat, loc.lon, label);
+      return c.json({
+        snapshot_id: res.snapshotId,
+        date: res.date,
+        lat: res.lat, lon: res.lon, source: loc.source,
+        agreement_threshold: res.agreementThreshold,
+        sources: res.sources,
+        hours: hoursForDay(res.hours, res.date),
+        hours_all: res.hours,
+      });
+    } catch (e: unknown) {
+      return c.json({ error: `ensemble failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
+    }
+  });
+
+  /** 保存済みアンサンブルの一覧 (新しい順、 各 hours 込み)。 DB 表示用。 */
+  r.get('/api/weather/ensemble/snapshots', (c: Context) => {
+    const url = new URL(c.req.url);
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+    return c.json({ snapshots: listEnsembleSnapshots(db, limit) });
+  });
+
+  /** 保存済みアンサンブル 1 件。 */
+  r.get('/api/weather/ensemble/snapshot/:id', (c: Context) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id)) return c.json({ error: 'invalid id' }, 400);
+    const snap = getEnsembleSnapshot(db, id);
+    if (!snap) return c.json({ error: 'not found' }, 404);
+    return c.json(snap);
+  });
+
+  /** 今日の対象地点 (自宅 + 行きがちな場所)。 likely 判定は blackbox 由来。 */
+  r.get('/api/weather/targets', async (c: Context) => {
+    if (!featureEnabled(db, 'weather_enabled')) return c.json({ error: 'weather feature disabled' }, 404);
+    const targets = await resolveTargets(db, engine);
+    return c.json({ targets });
+  });
+
+  /** 今日の雨ブリーフィングを即時生成 (送信せず返す)。 */
+  r.get('/api/weather/briefing', async (c: Context) => {
+    if (!featureEnabled(db, 'weather_enabled')) return c.json({ error: 'weather feature disabled' }, 404);
+    try {
+      const briefing = await buildBriefing(db, engine);
+      return c.json(briefing);
+    } catch (e: unknown) {
+      return c.json({ error: `briefing failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
+    }
+  });
+
+  /** ソースの有効/無効 + API キーの設定状況。 キー値そのものは返さない。 */
+  r.get('/api/weather/sources', (c: Context) => {
+    const cfg = getWeatherConfig(db);
+    const enabled = new Set(cfg.enabledSourceIds);
+    return c.json({
+      sources: ALL_SOURCES.map((s) => ({
+        id: s.id, label: s.label,
+        enabled: enabled.has(s.id),
+        available: s.isAvailable(cfg.ctx),
+      })),
+      has_openweathermap_key: !!cfg.ctx.openweathermapApiKey,
+      has_weatherapi_key: !!cfg.ctx.weatherapiApiKey,
+      agreement_threshold: cfg.agreementThreshold,
+      briefing: cfg.briefing,
+    });
+  });
+
+  r.patch('/api/weather/sources', async (c: Context) => {
+    const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const patch: Record<string, string> = {};
+    if (Array.isArray(body.enabled)) {
+      const valid = new Set(ALL_SOURCES.map((s) => s.id));
+      patch['weather.sources.enabled'] = body.enabled.filter((x): x is string => typeof x === 'string' && valid.has(x)).join(',');
+    }
+    if (typeof body.openweathermap_api_key === 'string') patch['weather.sources.openweathermap.api_key'] = body.openweathermap_api_key.trim();
+    if (typeof body.weatherapi_api_key === 'string') patch['weather.sources.weatherapi.api_key'] = body.weatherapi_api_key.trim();
+    if (typeof body.agreement_threshold === 'number') patch['weather.agreement_threshold'] = String(body.agreement_threshold);
+    if (typeof body.briefing_hour === 'number') patch['weather.morning_briefing.hour'] = String(Math.round(body.briefing_hour));
+    if (typeof body.briefing_enabled === 'boolean') patch['weather.morning_briefing.enabled'] = String(body.briefing_enabled);
+    if (typeof body.notify_when_clear === 'boolean') patch['weather.morning_briefing.notify_when_clear'] = String(body.notify_when_clear);
+    if (Object.keys(patch).length === 0) return c.json({ error: 'nothing to update' }, 400);
+    setAppSettings(db, patch);
+    return c.json({ ok: true });
   });
 
   return r;

@@ -166,6 +166,20 @@ import { initHelpDrawer, openHelpFor } from './help-drawer.js';
 // 位置情報の silent / interactive 取得を分けるヘルパ。 silent は permission='granted'
 // のときだけ叩いてダイアログを出さない。 詳細は geo.ts 参照。
 import { silentGetPosition, requestPosition, type PositionLike } from './geo.js';
+import { loadRssView } from './rss-view.js';
+import { loadGoalsView } from './goals-view.js';
+import { loadUserApps } from './userapps-view.js';
+import {
+  loadAiArticlesView,
+  loadAiAdviceView,
+  loadAiSeedsView,
+  setAiToast,
+} from './ai-view.js';
+import {
+  loadTaskReviewView,
+  setTaskReviewToast,
+  setTaskReviewOnChange,
+} from './task-review-view.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
@@ -269,8 +283,8 @@ const state: State = {
   visits: [],
   visitsSelected: new Set<unknown>(),
   visitsRange: '7',
-  trendsRange: '30',
-  recommendations: [],
+  trendsRange: '7',
+  recommendations: { available: true, running: false, items: [], run: null, reason: '' },
   digSession: null,
   digHistory: [],
   digSelected: new Set<unknown>(),
@@ -300,7 +314,25 @@ const state: State = {
   domainEntries: [],
   domainDetail: null,
   domainSearch: '',
+  // 二層設計: データソース (Local / 特定 Hub)。 ログ下のスイッチャで排他切替。
+  dataSource: { mode: 'local', hubUrl: null },
+  // Multi モードで Local + Hub データを mix 表示する時の絞り込み:
+  //   'all'        — 全件表示
+  //   'unshared'   — Local item で shared_at が null
+  //   'user:<uid>' — その owner_user_id の item のみ
+  multiFilter: 'all' as string,
 };
+
+// Multi モードで触れないタブ (= 個人ログ系。 [個人データ保管禁止])。
+// Multi 対応は database (bookmark/dict/domain/impl) / dig / notes のみ。
+// 以下は Hub に対応データ source が無いため Multi モードで非活性:
+//   worklog   📝 ログ (アクティビティ / アプリ / GPS 等の個人ログ)
+//   worklist  📋 作業一覧 (タスク + repo 監視ダッシュボード)
+//   queue     ⚙ キュー (ローカル AI / 取り込みジョブの待ち行列)
+const LOCAL_ONLY_TABS = new Set([
+  'diary', 'meals', 'recommend', 'review', 'transit', 'trends',
+  'worklog', 'worklist', 'queue',
+]);
 
 // `$()` は永らく document.getElementById のショートハンド。
 //
@@ -437,64 +469,65 @@ interface ApiResp extends Loose {
 
 // ── グローバル読み込みインジケータ ───────────────────────────────────────
 //
-// api() 経由の fetch が in-flight のあいだ、 画面上部に非ブロッキングな
-// 「⏳ 読み込み中…」 pill を出す。 pointer-events:none なので他の操作は
-// 一切妨げない。
+// api() 経由の fetch が in-flight のあいだ、 ロゴ (`.brand`) の横に小さな
+// スピナーを表示する。 pointer-events:none なので他の操作は一切妨げない。
 //
-// 250ms の遅延を入れてあるので:
-//   - 2 秒ごとの queue/visits poll や staleness ping のような速い fetch は
-//     出さない (= チラつかない)
-//   - diary 生成 / review file / transit 検索 等の重い読み込みだけ出る
+// `opts.silent: true` を渡すと表示しない (= 2 秒ごとの queue/visits poll や
+// staleness ping、 各種 setInterval ベースの定期 fetch 用 — ユーザに「定期
+// 自動読み込みで青い帯が点滅する」 ノイズを与えない)。
 let _apiInflight = 0;
-let _apiLoadingTimer: ReturnType<typeof setTimeout> | null = null;
 
-function showLoadingPill() {
-  let el = document.getElementById('memLoading');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'memLoading';
-    el.className = 'mem-loading';
-    el.textContent = '⏳ 読み込み中…';
-    document.body.appendChild(el);
+function showLogoSpinner() {
+  const brand = document.querySelector('.brand');
+  if (!brand) return;
+  let sp = document.getElementById('brandSpinner');
+  if (!sp) {
+    sp = document.createElement('span');
+    sp.id = 'brandSpinner';
+    sp.className = 'brand-spinner';
+    sp.setAttribute('aria-hidden', 'true');
+    brand.appendChild(sp);
   }
-  el.classList.add('show');
+  sp.classList.add('show');
 }
-function hideLoadingPill() {
-  document.getElementById('memLoading')?.classList.remove('show');
+function hideLogoSpinner() {
+  document.getElementById('brandSpinner')?.classList.remove('show');
 }
 function apiInflightStart() {
   _apiInflight++;
-  if (_apiInflight === 1 && _apiLoadingTimer == null) {
-    _apiLoadingTimer = setTimeout(() => {
-      _apiLoadingTimer = null;
-      if (_apiInflight > 0) showLoadingPill();
-    }, 250);
-  }
+  if (_apiInflight === 1) showLogoSpinner();
 }
 function apiInflightEnd() {
   _apiInflight = Math.max(0, _apiInflight - 1);
-  if (_apiInflight === 0) {
-    if (_apiLoadingTimer != null) { clearTimeout(_apiLoadingTimer); _apiLoadingTimer = null; }
-    hideLoadingPill();
-  }
+  if (_apiInflight === 0) hideLogoSpinner();
 }
 
-async function api<T = ApiResp>(path: string, opts?: RequestInit): Promise<T> {
-  apiInflightStart();
+type ApiOpts = RequestInit & { silent?: boolean };
+async function api<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
+  const silent = !!opts?.silent;
+  if (!silent) apiInflightStart();
   try {
-    const res = await fetch(path, opts);
+    // RequestInit 側に silent を渡さないよう取り除く (fetch 仕様外プロパティ)
+    let fetchOpts: RequestInit | undefined = opts;
+    if (silent && opts) {
+      const { silent: _drop, ...rest } = opts;
+      fetchOpts = rest;
+    }
+    const res = await fetch(path, fetchOpts);
     if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
     return await res.json() as T;
   } finally {
-    apiInflightEnd();
+    if (!silent) apiInflightEnd();
   }
 }
 
-// 元 JS で `funcName = function () {...}` の形で宣言なしに代入 + 後段で再代入
-// される関数群は、 TS 化に当たって `let` で前置宣言する。 これらは module
-// スコープのまま、 元 JS と同じく後段の再代入 (5340/5663 行付近) を受ける。
-let upgradeImplementationFormMarkup: () => void = () => { /* placeholder, reassigned later */ };
-let setupImplementationFormKeyboard: () => void = () => { /* placeholder, reassigned later */ };
+// 定期 poll / 自動 reload 用: api() を silent=true で叩く。 旧 setInterval 群が
+// `api(path)` 直接呼び出していたので、 silent 化を一括で塗り直すための薄い
+// ラッパ。 既存 api() を残しているのは、 ユーザ操作起点の呼び出しではロゴ
+// スピナーを出したいため。
+function apiSilent<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
+  return api<T>(path, { ...(opts || {}), silent: true });
+}
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -507,6 +540,8 @@ async function load(opts: Loose = {}) {
   // 50 件ずつのページング。 「もっと表示」 で append=true、 それ以外
   // (カテゴリ切替 / ソート変更 / 検索 / 自動 refresh) は先頭から取り直す。
   const append = opts.append === true;
+  const silent = opts.silent === true;
+  const apiFn = silent ? apiSilent : api;
   const offset = append ? state.bookmarks.length : 0;
   const qs = new URLSearchParams();
   if (state.category) qs.set('category', state.category);
@@ -515,8 +550,8 @@ async function load(opts: Loose = {}) {
   qs.set('limit', String(BOOKMARKS_PAGE_SIZE));
   qs.set('offset', String(offset));
   const [bookmarksRes, categoriesRes] = await Promise.all([
-    api(`/api/bookmarks?${qs.toString()}`),
-    api('/api/categories'),
+    apiFn(`/api/bookmarks?${qs.toString()}`),
+    apiFn('/api/categories'),
   ]);
   state.bookmarks = append
     ? [...state.bookmarks, ...(bookmarksRes.items || [])]
@@ -587,7 +622,10 @@ function renderCards() {
   const empty = $('empty');
   // Search filtering now happens server-side (?q=...). The full page is
   // already what we want to render — no local re-filtering.
-  const items = state.bookmarks;
+  const rawItems = state.bookmarks as Loose[];
+  // Multi モード時のフィルタ chip を描画し、 predicate を取得して絞り込む。
+  const filter = renderMultiFilterChips($('bookmarksMultiFilter'), rawItems);
+  const items = rawItems.filter(filter);
   renderBookmarksMore();
   if (items.length === 0) {
     wrap.innerHTML = '';
@@ -600,9 +638,11 @@ function renderCards() {
     const isSel = state.selected.has(b.id);
     const statusBadge = b.status === 'pending' ? '<span class="status-pending">要約中</span>'
       : b.status === 'error' ? '<span class="status-error">要約失敗</span>' : '';
+    const usersHeader = multiUsersHeader(b);
     return `
       <div class="card ${isSel ? 'selected' : ''}" data-id="${b.id}">
         <input type="checkbox" class="check" data-id="${b.id}" ${isSel ? 'checked' : ''} />
+        ${usersHeader}
         <div class="title">${escapeHtml(b.title)}</div>
         <div class="url">${escapeHtml(b.url)}</div>
         <div class="summary">${escapeHtml(b.summary || '')}</div>
@@ -802,7 +842,7 @@ async function generateDetailCloud() {
 function pollDetailCloud(cloudId) {
   if (state.detailCloudPolling) clearInterval(state.detailCloudPolling);
   state.detailCloudPolling = setInterval(async () => {
-    const c = await api(`/api/wordcloud/${cloudId}`).catch(() => null);
+    const c = await apiSilent(`/api/wordcloud/${cloudId}`).catch(() => null);
     if (!c || c.status === 'pending') return;
     clearInterval(state.detailCloudPolling);
     state.detailCloudPolling = null;
@@ -952,7 +992,7 @@ load().catch(err => {
 
 async function refreshVisitsBadge() {
   try {
-    const r = await api('/api/visits/unsaved/count');
+    const r = await apiSilent('/api/visits/unsaved/count');
     const badge = $('tabVisitsCount');
     if (!badge) return;
     if ((r.count ?? 0) > 0) {
@@ -966,7 +1006,7 @@ async function refreshVisitsBadge() {
 
 async function refreshQueue() {
   try {
-    const snap = await api('/api/queue/items');
+    const snap = await apiSilent('/api/queue/items');
     state.queue = snap;
     // Sum depth across all groups for the top-bar badge.
     const groups = ['summary','dig','wordcloud','diary','weekly','domain','page'];
@@ -978,20 +1018,20 @@ async function refreshQueue() {
     if (totalDepth === 0) totalDepth = snap.depth || 0;
     const badge = $('queueBadge');
     const tabCount = $('tabQueueCount');
-    const dbBadge = $('dbQueueBadge');
+    const tabBadge = $('tabQueueBadge'); // queue が top-level タブに昇格 (2026-05-13)
     if (totalDepth > 0) {
       badge.classList.remove('hidden');
       tabCount?.classList.remove('hidden');
-      dbBadge?.classList.remove('hidden');
+      tabBadge?.classList.remove('hidden');
       $('queueCount').textContent = String(totalDepth);
       if (tabCount) tabCount.textContent = String(totalDepth);
-      if (dbBadge) dbBadge.textContent = String(totalDepth);
+      if (tabBadge) tabBadge.textContent = String(totalDepth);
     } else {
       badge.classList.add('hidden');
       tabCount?.classList.add('hidden');
-      dbBadge?.classList.add('hidden');
+      tabBadge?.classList.add('hidden');
     }
-    if (state.tab === 'database' && state.database?.sub === 'queue') renderQueue();
+    if (state.tab === 'queue') renderQueue();
     return totalDepth;
   } catch { return 0; }
 }
@@ -1006,14 +1046,15 @@ function fmtElapsed(ms) {
 }
 
 const QUEUE_GROUP_LABELS = {
-  summary:   '📑 ブックマーク要約',
-  dig:       '🔎 ディグ (deep research)',
-  wordcloud: '🌐 ワードクラウド',
-  diary:     '📅 日記',
-  weekly:    '📆 週報',
-  domain:    '🏷 ドメイン分類',
-  page:      '📄 ページメタ',
-  meal:      '🍽 食事解析',
+  summary:     '📑 ブックマーク要約',
+  dig:         '🔎 ディグ (deep research)',
+  wordcloud:   '🌐 ワードクラウド',
+  diary:       '📅 日記',
+  weekly:      '📆 週報',
+  domain:      '🏷 ドメイン分類',
+  page:        '📄 ページメタ',
+  meal:        '🍽 食事解析',
+  ai_analysis: '🤖 AI 分析 (接続先 / プロセス 等)',
 };
 
 function collectQueueJobs(snap) {
@@ -1113,9 +1154,17 @@ function jobLabel(item) {
 // 日付を持たない sub (queue / external) と物データ (bookmarks / dict / domain / workplace) は database 配下。
 // meals は top-level タブ。
 const WORKLOG_REDIRECT_TABS = new Set(['tracks']);
-const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'queue', 'external']);
+const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplace', 'external', 'worklist']);
+// 'recommend' は 🤖 AI タブの「✨ おすすめ」 サブへ集約 (旧トップレベルタブは廃止)。
+const AI_REDIRECT_TABS = new Set(['recommend']);
 
 function switchTab(tab) {
+  // Multi モード時、 個人ログ系タブはグレーアウト = 切替を弾く。
+  const ds = state.dataSource as { mode: string; hubUrl: string | null };
+  if (ds?.mode === 'multi' && LOCAL_ONLY_TABS.has(tab)) {
+    showShareToast('この機能は Local モード専用です');
+    return;
+  }
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
     const sub = tab;
     if (state.worklog) state.worklog.sub = sub;
@@ -1124,11 +1173,21 @@ function switchTab(tab) {
     return;
   }
   if (DATABASE_REDIRECT_TABS.has(tab)) {
-    const sub = tab;
+    // 'worklist' は database の 'projects' サブに改名・移設済み。
+    const sub = tab === 'worklist' ? 'projects' : tab;
     state.database = state.database || {};
     state.database.sub = sub;
     switchTab('database');
     switchDatabaseSub(sub);
+    return;
+  }
+  if (AI_REDIRECT_TABS.has(tab)) {
+    // 'recommend' は 🤖 AI タブの 'recommend' サブへ。
+    const sub = tab;
+    state.ai = state.ai || {};
+    state.ai.sub = sub;
+    switchTab('ai');
+    switchAiSub(sub);
     return;
   }
   state.tab = tab;
@@ -1140,33 +1199,43 @@ function switchTab(tab) {
   $('databaseView')?.classList.toggle('hidden', tab !== 'database');
   $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
-  $('recommendView').classList.toggle('hidden', tab !== 'recommend');
+  $('aiView')?.classList.toggle('hidden', tab !== 'ai');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
   $('reviewView')?.classList.toggle('hidden', tab !== 'review');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
+  $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
-  $('implView')?.classList.toggle('hidden', tab !== 'impl');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
+  $('rssView')?.classList.toggle('hidden', tab !== 'rss');
+  $('goalsView')?.classList.toggle('hidden', tab !== 'goals');
+  $('userappsView')?.classList.toggle('hidden', tab !== 'userapps');
   if (tab === 'database') {
     // Re-show whichever DB sub was last picked.
     const sub = state.database?.sub || 'bookmarks';
     switchDatabaseSub(sub);
   }
+  if (tab === 'ai') {
+    // Re-show whichever AI sub was last picked (既定 = おすすめ)。
+    const sub = state.ai?.sub || 'recommend';
+    switchAiSub(sub);
+  }
   if (tab === 'worklog') loadWorklog();
   if (tab === 'trends') loadTrends();
-  if (tab === 'recommend') loadRecommendations();
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
   if (tab === 'review') loadReviewRepos();
   if (tab === 'transit') loadTransit();
+  if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
   if (tab === 'tasks') loadTasks();
-  if (tab === 'impl') loadImplementationNotes();
   if (tab === 'multi') loadMulti();
+  if (tab === 'rss') loadRssView();
+  if (tab === 'goals') void loadGoalsView();
+  if (tab === 'userapps') void loadUserApps();
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
@@ -1206,6 +1275,8 @@ function tabsInUsageOrder() {
 // Mobile tab nav is "top 4 most-used + ⋯ More". active は必ず strip に
 // 表示される。 More から選択したタブは promote されて leftmost に来る
 // (= 旧 4 位を More に押し出す)。
+// 活性タブが 4 個以下なら全部 strip に出して More ボタンは出さない
+// (= 「5 個以上で 4-rule」のルール)。
 const TABS_VISIBLE_ON_MOBILE = 4;
 
 /// More メニューから選ばれたタブを strip の 1 番左に持ってくる。
@@ -1282,22 +1353,35 @@ function reflowTabsForViewport() {
   // 上位 N 件 (使用回数 + default priority) を strip に残す。 active は必ず
   // 含めるが、 圏外なら N 件目を 1 件抜いて active と入れ替える。
   // → strip 内のタブは常に最大 N 件で、 「More」 を押せば残りが見える。
+  //
+  // hidden なタブ (Multi モードで非活性化された LOCAL_ONLY_TABS 等) は
+  // ordered からも全 loop からも除外して strip / More メニューどちらにも
+  // 出さない。 活性タブが 4 個以下なら More ボタンも出さない。
   const active = state.tab;
   const ordered = tabsInUsageOrder()
     .filter(t => !t.hidden);          // skip hidden tabs (e.g. multi)
-  const top = ordered.slice(0, TABS_VISIBLE_ON_MOBILE);
-  const visible = new Set(top.map(t => t.dataset.tab));
-  if (active && !visible.has(active)) {
-    if (top.length >= TABS_VISIBLE_ON_MOBILE) {
-      visible.delete(top[top.length - 1].dataset.tab);
+  const activeTabs = allTabs.filter(t => !t.hidden);
+  const useFourRule = ordered.length >= TABS_VISIBLE_ON_MOBILE + 1;  // 5 個以上で 4-rule
+  const visible = new Set<string>();
+  if (useFourRule) {
+    const top = ordered.slice(0, TABS_VISIBLE_ON_MOBILE);
+    for (const t of top) visible.add(t.dataset.tab);
+    if (active && !visible.has(active)) {
+      if (top.length >= TABS_VISIBLE_ON_MOBILE) {
+        visible.delete(top[top.length - 1].dataset.tab);
+      }
+      visible.add(active);
     }
-    visible.add(active);
+  } else {
+    // 活性が 4 個以下: 全部 strip に出す。
+    for (const t of activeTabs) visible.add(t.dataset.tab);
   }
 
   let overflowCount = 0;
   for (const t of allTabs) {
     if (t.hidden) {
-      // tab-multi-only stays out of both strip and menu when not connected.
+      // 非活性タブは strip からも More メニューからも完全除外。
+      // CSS の `[hidden]` で display:none になっているのでそのまま。
       continue;
     }
     if (visible.has(t.dataset.tab)) {
@@ -1486,8 +1570,6 @@ async function deleteDigSessionFromUi(id) {
     state.digSelected = new Set();
     const el = $('digResult');
     if (el) el.innerHTML = '';
-    const shareBar = $('digShareBar');
-    if (shareBar) shareBar.hidden = true;
   }
   await loadDigHistory();
   // テーマペインの件数表示も更新 (最後の 1 件を消したらテーマも消える)。
@@ -1593,7 +1675,7 @@ function pollDigSession(id) {
   loadDigSession(id);
   // Poll faster while waiting for preview, then settle.
   state.digPolling = setInterval(async () => {
-    const s = await api(`/api/dig/${id}`).catch(() => null);
+    const s = await apiSilent(`/api/dig/${id}`).catch(() => null);
     if (!s) return;
     const had = state.digSession;
     state.digSession = s;
@@ -1621,9 +1703,6 @@ async function loadDigSession(id) {
 function renderDigSession() {
   const s = state.digSession;
   const el = $('digResult');
-  const shareBar = $('digShareBar');
-  if (shareBar) shareBar.hidden = !(s && s.status === 'done' && state.multi?.connected);
-  if ($('digShareStatus')) $('digShareStatus').textContent = '';
   if (!s) { el.innerHTML = ''; return; }
   if (s.status === 'pending') {
     // Show whatever we have RIGHT NOW. Three layers in increasing latency:
@@ -2229,7 +2308,7 @@ function pollCloud(id) {
   if (state.cloudPolling) clearInterval(state.cloudPolling);
   loadCloud(id);
   state.cloudPolling = setInterval(async () => {
-    const c = await api(`/api/wordcloud/${id}`).catch(() => null);
+    const c = await apiSilent(`/api/wordcloud/${id}`).catch(() => null);
     if (!c) return;
     if (c.status !== 'pending') {
       clearInterval(state.cloudPolling);
@@ -2596,6 +2675,7 @@ function renderDictionaryList() {
   }
   ul.innerHTML = state.dictEntries.map(e => `
     <li class="dict-item ${state.dictDetail?.id === e.id ? 'selected' : ''}" data-id="${e.id}">
+      ${multiUsersHeader(e as Loose)}
       <div class="dict-term">${escapeHtml(e.term)}</div>
       <div class="dict-snippet">${escapeHtml((e.definition || e.notes || '').slice(0, 320))}</div>
       <div class="dict-meta">
@@ -2767,6 +2847,7 @@ let renderDomainList = function () {
     const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
     return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      ${multiUsersHeader(e as Loose)}
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
       <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">
@@ -3026,7 +3107,7 @@ function pollWeekly(ws) {
     if (state.weeklyDetailWeek !== ws) {
       clearInterval(state.weeklyPolling); state.weeklyPolling = null; return;
     }
-    const w = await api(`/api/weekly/${ws}`).catch(() => null);
+    const w = await apiSilent(`/api/weekly/${ws}`).catch(() => null);
     if (!w) return;
     if (w.status !== 'pending') {
       clearInterval(state.weeklyPolling); state.weeklyPolling = null;
@@ -3186,7 +3267,7 @@ function pollDiary(date) {
     if (state.diaryDetailDate !== date) {
       clearInterval(state.diaryPolling); state.diaryPolling = null; return;
     }
-    const d = await api(`/api/diary/${date}`).catch(() => null);
+    const d = await apiSilent(`/api/diary/${date}`).catch(() => null);
     if (!d) return;
     if (d.status !== 'pending') {
       clearInterval(state.diaryPolling); state.diaryPolling = null;
@@ -3816,14 +3897,16 @@ async function saveDiaryNotes() {
   }
 }
 
-async function openDiarySettings() {
-  $('diarySettingsPanel').classList.remove('hidden');
+// GitHub 設定 (user / repos / PAT) は ⚙ 設定 → 🔌 連携 / API key 配下に統合。
+// 日記・「📋 作業一覧」 など複数機能で参照するため、 単一フィールドを共有する。
+async function loadGithubSettings() {
+  if (!$('diaryGhUser')) return;  // settings panel が DOM に未注入の旧 HTML 互換
   try {
     const s = await api('/api/diary/settings');
     $('diaryGhUser').value = s.github_user || '';
-    $('diaryGhRepos').value = s.github_repos || '';
     setTokenPlaceholder('diaryGhToken', !!s.github_token_set, 'ghp_...');
     $('diaryGhTokenStatus').textContent = s.github_token_set ? '✓ token 設定済み (再入力で上書き)' : '(未設定)';
+    // github_repos は repo_watch から導出される (UI 上は編集不可)。
   } catch (e) { console.error(e); }
 }
 
@@ -3864,58 +3947,170 @@ async function saveDiarySettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         github_user: $('diaryGhUser').value.trim(),
-        github_repos: $('diaryGhRepos').value.trim(),
         github_token: $('diaryGhToken').value,
+        // github_repos は repo_watch (📋 作業一覧) で管理。 ここでは送らない。
       }),
     });
     $('diaryGhToken').value = '';
     flashToast('GitHub 設定を保存しました');
-    openDiarySettings();
+    void loadGithubSettings();
   } catch (e) {
     alert(`保存失敗: ${e.message}`);
   }
 }
 
-async function loadRecommendations(force = false) {
+// AI 主導おすすめ。 GET で latest run の結果 + AI availability を取り、
+// 「いま生成」 ボタンで POST /api/recommendations/run を蹴る。 進行中は 5 秒
+// 毎に polling して done になったら再 fetch + render。
+const REC_AGENT_LABELS = {
+  browser_history: 'ブラウザ',
+  bookmarks: 'ブクマ',
+  git_commits: 'git',
+  claude_prompts: 'Claude',
+  games_apps: 'ゲーム/アプリ',
+  notes_digs: 'ノート+Dig',
+  news: 'ニュース',
+  ai_articles: 'AI記事',
+};
+
+// おすすめの評価軸ラベル (停滞打開 / 不足補間)。
+const REC_AXIS_LABELS = {
+  stagnation: '停滞打開',
+  news_antenna: '不足補間',
+};
+
+let recPollTimer = null;
+
+async function loadRecommendations(opts: { silent?: boolean } = {}) {
   try {
-    const url = '/api/recommendations' + (force ? '?force=1' : '');
-    const { items } = await api(url);
-    state.recommendations = items;
+    const data = await (opts.silent ? apiSilent : api)('/api/recommendations');
+    state.recommendations = {
+      available: !!data.available,
+      running: !!data.running,
+      items: data.items || [],
+      run: data.run || null,
+      reason: data.reason || '',
+    };
     renderRecommendations();
+    if (state.recommendations.running) startRecPolling();
+    else stopRecPolling();
   } catch (e) {
     console.error('rec load failed', e);
   }
 }
 
+function startRecPolling() {
+  if (recPollTimer) return;
+  recPollTimer = setInterval(() => {
+    loadRecommendations({ silent: true }).catch(() => { /* ignore — next tick retries */ });
+  }, 5000);
+}
+
+function stopRecPolling() {
+  if (recPollTimer) { clearInterval(recPollTimer); recPollTimer = null; }
+}
+
+async function triggerRecommendationRun() {
+  const btn = $('recRunNow');
+  if (!btn) return;
+  btn.disabled = true;
+  // 既に running 中なら force=true で旧キューを cancel して上書き再実行する。
+  // (= キューが詰まって動かなくなった時に「再実行」 で抜け出せるようにする)
+  const force = !!state.recommendations?.running;
+  try {
+    await api('/api/recommendations/run', {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    state.recommendations.running = true;
+    renderRecommendations();
+    startRecPolling();
+  } catch (e) {
+    alert(`生成失敗: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderRecommendations() {
-  const items = state.recommendations;
+  const rec = state.recommendations;
   const list = $('recList');
   const empty = $('recEmpty');
   const badge = $('tabRecommendCount');
+  const disabled = $('recDisabled');
+  const running = $('recRunning');
+  const runBtn = $('recRunNow');
+  const runMeta = $('recRunMeta');
+  const reasonEl = $('recDisabledReason');
+
+  // AI 未設定: placeholder のみ表示
+  if (!rec.available) {
+    disabled.classList.remove('hidden');
+    if (reasonEl) reasonEl.textContent = rec.reason || '';
+    running.classList.add('hidden');
+    empty.classList.add('hidden');
+    list.innerHTML = '';
+    if (runBtn) runBtn.disabled = true;
+    badge.classList.add('hidden');
+    if (runMeta) runMeta.textContent = '';
+    return;
+  }
+  disabled.classList.add('hidden');
+  // running 中でも 「再実行」 で旧キューをキャンセル + 上書き開始できるよう
+  // 押下可能にする。 ラベルは状況に応じて切替。
+  if (runBtn) {
+    runBtn.disabled = false;
+    runBtn.textContent = rec.running ? '↻ 再実行 (キュー上書き)' : 'いま生成 (5–30 分)';
+  }
+
+  if (runMeta) {
+    runMeta.textContent = rec.run
+      ? `最終: ${formatRunMeta(rec.run)}`
+      : '';
+  }
+
+  const items = rec.items || [];
   if (items.length > 0) {
     badge.classList.remove('hidden');
     badge.textContent = String(items.length);
   } else {
     badge.classList.add('hidden');
   }
+
+  if (rec.running) {
+    running.classList.remove('hidden');
+  } else {
+    running.classList.add('hidden');
+  }
+
   if (items.length === 0) {
     list.innerHTML = '';
-    empty.classList.remove('hidden');
+    if (!rec.running) empty.classList.remove('hidden');
+    else empty.classList.add('hidden');
     return;
   }
   empty.classList.add('hidden');
   list.innerHTML = items.map(r => {
-    const sources = (r.sources || []).map(s => escapeHtml(s.title)).slice(0, 3).join(' / ');
+    const kinds = (r.agent_kinds || [])
+      .map(k => `<span class="rec-tag">${escapeHtml(REC_AGENT_LABELS[k] || k)}</span>`)
+      .join('');
+    const axisLabel = REC_AXIS_LABELS[r.axis];
+    const axisBadge = axisLabel
+      ? `<span class="rec-axis rec-axis-${escapeHtml(r.axis)}">${escapeHtml(axisLabel)}</span>`
+      : '';
     return `
       <div class="rec-card" data-url="${escapeHtml(r.url)}">
-        <div class="domain">${escapeHtml(r.domain)}<span class="rec-score">${r.source_count} 件の記事から</span></div>
-        <div class="anchor">${escapeHtml(r.anchor || r.url)}</div>
-        <div class="url">${escapeHtml(r.url)}</div>
-        <div class="why">参照元: ${sources}${(r.sources || []).length > 3 ? ' …' : ''}</div>
+        <div class="rec-head">
+          <div class="rec-title">${axisBadge}${escapeHtml(r.title || r.url)}</div>
+          <div class="rec-kinds">${kinds}</div>
+        </div>
+        <div class="url"><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.url)}</a></div>
+        ${r.why ? `<div class="why"><strong>なぜ:</strong> ${escapeHtml(r.why)}</div>` : ''}
+        ${r.expected_value ? `<div class="why"><strong>得られるもの:</strong> ${escapeHtml(r.expected_value)}</div>` : ''}
         <div class="actions">
           <button class="rec-save">保存</button>
           <a class="ghost rec-open" href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">開く</a>
-          <button class="ghost rec-dismiss">却下</button>
         </div>
       </div>
     `;
@@ -3931,28 +4126,21 @@ function renderRecommendations() {
           body: JSON.stringify({ urls: [url] }),
         });
         card.remove();
-        state.recommendations = state.recommendations.filter(r => r.url !== url);
+        state.recommendations.items = state.recommendations.items.filter(r => r.url !== url);
         renderRecommendations();
         await refreshQueue();
       } catch (e) {
         alert(`保存失敗: ${e.message}`);
       }
     });
-    card.querySelector('.rec-dismiss').addEventListener('click', async () => {
-      try {
-        await api('/api/recommendations/dismiss', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        });
-        card.remove();
-        state.recommendations = state.recommendations.filter(r => r.url !== url);
-        renderRecommendations();
-      } catch (e) {
-        alert(`却下失敗: ${e.message}`);
-      }
-    });
   });
+}
+
+function formatRunMeta(run) {
+  const dt = (run.finished_at || run.started_at || '').slice(0, 16).replace('T', ' ');
+  const dur = run.duration_ms ? ` / ${Math.round(run.duration_ms / 60000)} 分` : '';
+  const n = typeof run.result_count === 'number' ? ` / ${run.result_count} 件` : '';
+  return `${dt}${dur}${n}`;
 }
 
 // ── trends ─────────────────────────────────────────────────────────────
@@ -4053,6 +4241,11 @@ function renderTrendKeywords(items) {
   }).join('');
 }
 
+// 小数第 2 位を切り上げて第 1 位までに丸める。 5.21 → 5.3 / 5.30 → 5.3。
+function ceilTenth(x: number): string {
+  return (Math.ceil((Number(x) || 0) * 10) / 10).toFixed(1);
+}
+
 function renderTrendWorkHours(items) {
   const el = $('trendWorkHours');
   if (!el) return;
@@ -4065,13 +4258,17 @@ function renderTrendWorkHours(items) {
     ...d,
     hours: Number(d.minutes || 0) / 60,
   }));
-  el.innerHTML = svgHorizontalBar(
+  // 週合計 = 直近 7 日 (日記未生成日は present から落ちる)
+  const last7 = presentHours.slice(-7);
+  const weeklyHours = last7.reduce((s, d) => s + (d.hours || 0), 0);
+  const weeklyLabel = `<div class="trend-weekly-summary">週合計 (直近 ${last7.length} 日): <b>${ceilTenth(weeklyHours)}時間</b></div>`;
+  el.innerHTML = weeklyLabel + svgHorizontalBar(
     presentHours,
     (d) => String(d.date || '').slice(5),
     (d) => Number(d.hours || 0),
     '時間',
     {
-      valueLabel: (v) => `${v.toFixed(1)} 時間`,
+      valueLabel: (v) => `${ceilTenth(v)}時間`,
     }
   );
 }
@@ -4091,35 +4288,130 @@ function wireTaskEditorDueShortcuts() {
 }
 
 function renderTrendGpsWalking(items) {
-  // items: [{date, distance_km, walking_minutes, travel_minutes}]
-  const distEl = $('trendWalkDistance');
-  const minsEl = $('trendWalkMinutes');
-  if (!distEl && !minsEl) return;
+  // items: [{date, distance_km, walking_minutes, travel_minutes,
+  //          home_minutes, away_minutes, away_moving_minutes,
+  //          away_places: [{name, minutes}], away_unknown_minutes}]
+  const calEl = $('trendWalkCalories');
+  const awayEl = $('trendAwayStacked');
+  if (!calEl && !awayEl) return;
 
   const list = items || [];
-  const hasAny = list.some(d => d.distance_km > 0 || d.walking_minutes > 0);
+  const hasAny = list.some(d => d.distance_km > 0 || (d.away_minutes || 0) > 0);
   if (!hasAny) {
-    if (distEl) distEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
-    if (minsEl) minsEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
+    if (calEl) calEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
+    if (awayEl) awayEl.innerHTML = '<div class="queue-empty">GPS 軌跡が記録されていません</div>';
     return;
   }
-  if (distEl) {
-    const data = list.map(d => ({ date: d.date, value: d.distance_km, raw: d }));
-    distEl.innerHTML = renderLineChartSvg(data, {
-      yLabel: (v) => `${v.toFixed(1)}km`,
-      pointLabel: (d) => `${d.date} : ${d.value.toFixed(2)} km (歩行 ${d.raw.walking_minutes} 分 / 移動 ${d.raw.travel_minutes} 分)`,
+
+  // 消費カロリー (徒歩): kcal = METs × 体重kg × 時間h で算出。
+  // 徒歩 = 3.5 METs (moderate)、 時間は walking_minutes / 60。
+  // 体重未登録は 60kg。 距離 (distance_km) は vehicle 含むので使わず、
+  // 速度フィルタ済の walking_minutes / walking_distance_km を根拠にする。
+  if (calEl) {
+    const weightKg = Number(state.config?.user_profile?.weight_kg) || 60;
+    const MET_WALK = 3.5;
+    const data = list.map(d => {
+      const hours = (d.walking_minutes || 0) / 60;
+      const kcal = MET_WALK * weightKg * hours;
+      return { date: d.date, value: kcal, raw: { ...d, weightKg } };
     });
-    attachLineChartTooltip(distEl);
+    calEl.innerHTML = renderLineChartSvg(data, {
+      yLabel: (v) => `${Math.round(v)} kcal`,
+      pointLabel: (d) => `${d.date} : ${d.value.toFixed(0)} kcal (徒歩 ${d.raw.walking_minutes} 分 / ${(d.raw.walking_distance_km || 0).toFixed(2)} km × 体重 ${d.raw.weightKg}kg × 3.5 MET)`,
+    });
+    attachLineChartTooltip(calEl);
   }
-  if (minsEl) {
-    const data = list.map(d => ({ date: d.date, value: d.walking_minutes, raw: d }));
-    minsEl.innerHTML = renderLineChartSvg(data, {
-      yLabel: (v) => `${Math.round(v)}分`,
-      pointLabel: (d) => `${d.date} : 歩行 ${d.value} 分 (距離 ${d.raw.distance_km.toFixed(2)} km / 移動 ${d.raw.travel_minutes} 分)`,
-    });
-    attachLineChartTooltip(minsEl);
+
+  if (awayEl) {
+    awayEl.innerHTML = renderAwayStackedBar(list);
   }
 }
+
+// 自宅以外にいた時間 を 面積 (積み上げ) 棒グラフ で描画する。
+// 各日 = [移動, 場所A, 場所B, ..., 不明] の積み上げ。
+// 場所は出現回数が多い上位 6 件 + 「その他」 に折り畳む。
+function renderAwayStackedBar(list: Loose[]): string {
+  if (!list.length) return '<div class="queue-empty">データなし</div>';
+  // 全期間集計で 主要 6 場所 を決める
+  const placeTotals = new Map<string, number>();
+  for (const d of list) {
+    for (const p of (d.away_places || [])) {
+      placeTotals.set(p.name, (placeTotals.get(p.name) || 0) + (p.minutes || 0));
+    }
+  }
+  const topPlaces = [...placeTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name]) => name);
+
+  // 各日の segment を [移動, 場所1, 場所2, ..., 場所N (= 上位以外+不明)] の順で並べる
+  const segments = ['移動', ...topPlaces, '不明 (場所未登録)'];
+  // 色 palette (面積棒で隣同士を区別できるよう低彩度)
+  const colors = ['#5b9bd5', '#70ad47', '#ed7d31', '#7030a0', '#ffc000', '#264478', '#9e480e', '#a5a5a5'];
+
+  // 各日 stack 値を算出
+  const stacks = list.map(d => {
+    const otherPlaceTotal = (d.away_places || [])
+      .filter(p => !topPlaces.includes(p.name))
+      .reduce((s, p) => s + (p.minutes || 0), 0);
+    const placeBuckets = topPlaces.map(name => {
+      const hit = (d.away_places || []).find(p => p.name === name);
+      return hit ? (hit.minutes || 0) : 0;
+    });
+    const values = [
+      d.away_moving_minutes || 0,
+      ...placeBuckets,
+      (d.away_unknown_minutes || 0) + otherPlaceTotal,
+    ];
+    const total = values.reduce((s, v) => s + v, 0);
+    return { date: d.date, values, total };
+  });
+  const maxTotal = Math.max(1, ...stacks.map(s => s.total));
+
+  // SVG レイアウト
+  const w = 700, padTop = 20, padBottom = 40, padLeft = 80, padRight = 16;
+  const barH = 18, barGap = 4;
+  const innerW = w - padLeft - padRight;
+  const h = padTop + padBottom + stacks.length * (barH + barGap);
+
+  const bars = stacks.map((s, i) => {
+    const y = padTop + i * (barH + barGap);
+    let x = padLeft;
+    const segs = s.values.map((v, j) => {
+      if (v <= 0) return '';
+      const len = (v / maxTotal) * innerW;
+      const seg = `<rect x="${x}" y="${y}" width="${len}" height="${barH}" fill="${colors[j % colors.length]}" data-label="${escapeHtml(`${s.date} ${segments[j]}: ${formatMinutes(v)}`)}"><title>${s.date} ${segments[j]}: ${formatMinutes(v)}</title></rect>`;
+      x += len;
+      return seg;
+    }).join('');
+    const dateLabel = String(s.date || '').slice(5);
+    const totalLabel = s.total > 0 ? formatMinutes(s.total) : '—';
+    return `
+      <g>
+        <text x="${padLeft - 8}" y="${y + barH * 0.72}" text-anchor="end" font-size="11" fill="#666">${escapeHtml(dateLabel)}</text>
+        ${segs}
+        <text x="${x + 4}" y="${y + barH * 0.72}" font-size="11" fill="#666">${escapeHtml(totalLabel)}</text>
+      </g>`;
+  }).join('');
+
+  // 凡例
+  const legend = segments.map((name, j) =>
+    `<span class="away-legend-item"><span class="away-legend-swatch" style="background:${colors[j % colors.length]}"></span>${escapeHtml(name)}</span>`
+  ).join('');
+
+  return `
+    <div class="away-legend">${legend}</div>
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet">${bars}</svg>
+  `;
+}
+
+function formatMinutes(min: number): string {
+  const m = Math.round(Number(min) || 0);
+  if (m < 60) return `${m}分`;
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm === 0 ? `${h}時間` : `${h}時間${mm}分`;
+}
+
 
 function renderTrendGithub(payload) {
   const card = $('trendGithubCard');
@@ -4154,7 +4446,7 @@ function renderTrendGithub(payload) {
 function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts: Loose = {}) {
   if (!items.length) return '<div class="queue-empty">データなし</div>';
   const max = Math.max(...items.map(valueFn), 1);
-  const rowH = 22, padTop = 4, padLeft = 130, padRight = 40, w = 460;
+  const rowH = 22, padTop = 4, padLeft = 130, padRight = 60, w = 480;
   const h = padTop * 2 + items.length * rowH;
   const rows = items.map((it, i) => {
     const v = valueFn(it);
@@ -4163,12 +4455,15 @@ function svgHorizontalBar(items, labelFn, valueFn, klass = '', opts: Loose = {})
     const label = String(labelFn(it)).slice(0, 18);
     const attr = opts.rowAttr ? opts.rowAttr(it) : '';
     const rowClass = opts.rowClass || '';
+    // opts.valueLabel(v) で表示テキストを差し替えられるようにする
+    // (= 「5.3時間」 のように単位付き / 切り上げ整形)
+    const valText = opts.valueLabel ? opts.valueLabel(v) : String(v);
     return `
       <g class="bar-row ${rowClass}" ${attr}>
         <rect class="bar-hit" x="0" y="${y}" width="${w}" height="${rowH}" fill="transparent" />
         <text class="label" x="${padLeft - 8}" y="${y + 14}" text-anchor="end">${escapeHtml(label)}</text>
         <rect class="bar ${klass}" x="${padLeft}" y="${y + 4}" width="${len}" height="14" rx="2" />
-        <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${v}</text>
+        <text class="label" x="${padLeft + len + 6}" y="${y + 14}">${escapeHtml(valText)}</text>
       </g>
     `;
   }).join('');
@@ -4555,6 +4850,19 @@ setupCategoriesDrawer();
 setupExtensionBadge();
 setupHowToBookmark();
 
+// Multi モードの filter chip が変わったら、 該当タブの list を再描画する。
+// 各 list の renderer は state.multiFilter を読んで絞り込むので、 ここでは
+// 「現在表示中のタブの再描画関数」 を呼べば良い。 起点は最小限 bookmark のみ
+// 接続。 他 6 型 (notes/dig/dict/impl/work-locations/domain-catalog) も同じ
+// パターンで wire 可能 (TODO)。
+window.addEventListener('multi-filter-changed', () => {
+  const tab = state.tab as string;
+  if (tab === 'database') {
+    // 現在の sub-view に応じて renderer を切替
+    renderCards();
+  }
+});
+
 // 💡 やり方 (スマホでブックマークする方法) — 旧 topbar の howToBookmarkBtn は
 // 廃止し、 設定 → 🔔 通知 / 端末 内の howToBookmarkBtnInSettings に移動。
 // モバイル幅でしか出さない自動表示も止め、 設定からいつでも開ける形に。
@@ -4587,7 +4895,7 @@ async function refreshExtensionBadge() {
     return;
   }
   try {
-    const s = await api('/api/extension/status');
+    const s = await apiSilent('/api/extension/status');
     badge.hidden = false;
     if (s.configured) {
       badge.className = 'ext-badge ext-ok';
@@ -4634,7 +4942,7 @@ $('trendsRange').addEventListener('change', (e) => {
   state.trendsRange = (e.target as HTMLSelectElement).value;
   loadTrends();
 });
-$('recRefresh').addEventListener('click', () => loadRecommendations(true));
+$('recRunNow')?.addEventListener('click', () => triggerRecommendationRun());
 $('digRun').addEventListener('click', () => startDig());
 $('digRunNewTheme')?.addEventListener('click', () => startDig({ forceNewTheme: true }));
 $('digPickClear')?.addEventListener('click', () => clearDigPick());
@@ -4653,6 +4961,116 @@ $('dictSearch')?.addEventListener('input', (e) => {
   state.dictSearch = (e.target as HTMLInputElement).value.trim();
   loadDictionary();
 });
+// ── さかのぼり AIノート生成 (日記タブ) ───────────────────────────────────────
+// 日記がある日について、 その日の作業ログ (activity_events + session-log) から
+// 既存 digest を走らせて AIノートを生成する。 生成物は 🤖 AI タブ「AI記事」に溜まる。
+let diaryBackfillRunning = false;
+let diaryBackfillAbort = false;
+
+function setupDiaryAiNotes() {
+  $('diaryBackfillToggle')?.addEventListener('click', () => {
+    $('diaryBackfillPanel')?.classList.toggle('hidden');
+  });
+  $('diaryWriteAiNote')?.addEventListener('click', writeAiNoteForCurrentDay);
+  $('diaryBackfillStart')?.addEventListener('click', () => void runDiaryBackfill());
+  $('diaryBackfillStop')?.addEventListener('click', () => { diaryBackfillAbort = true; });
+}
+
+async function writeAiNoteForCurrentDay() {
+  const date = state.diaryDetail?.date;
+  if (!date) { flashToast('日付が選択されていません'); return; }
+  const btn = $('diaryWriteAiNote') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  try {
+    const res = await fetch('/api/ai/digest/run-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date }),
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json() as { articles?: unknown[]; seeds?: unknown[] };
+    const na = data.articles?.length || 0;
+    const ns = data.seeds?.length || 0;
+    flashToast(`${date}: AI記事 ${na} 本 / 記事ネタ ${ns} 件を生成。🤖 AI タブで確認できます。`);
+  } catch (e) {
+    flashToast(`生成に失敗しました: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📝 AIノートを書く'; }
+  }
+}
+
+async function runDiaryBackfill() {
+  if (diaryBackfillRunning) return;
+  const from = ($('diaryBackfillFrom') as HTMLInputElement | null)?.value;
+  const to = ($('diaryBackfillTo') as HTMLInputElement | null)?.value;
+  const skipExisting = ($('diaryBackfillSkip') as HTMLInputElement | null)?.checked ?? true;
+  const statusEl = $('diaryBackfillStatus');
+  const progressEl = $('diaryBackfillProgress');
+  const logEl = $('diaryBackfillLog');
+  if (!from || !to) { flashToast('開始日・終了日を指定してください'); return; }
+  if (statusEl) statusEl.textContent = '候補日を取得中…';
+  if (logEl) logEl.innerHTML = '';
+
+  let days: { date: string; articleCount: number }[] = [];
+  try {
+    const res = await fetch(`/api/ai/digest/candidates?from=${from}&to=${to}`);
+    if (!res.ok) throw new Error(String(res.status));
+    days = (await res.json() as { days: typeof days }).days || [];
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `候補取得に失敗: ${(e as Error).message}`;
+    return;
+  }
+  // 古い順に処理する (候補は新しい順で返る)。
+  const targets = days
+    .filter(d => !skipExisting || d.articleCount === 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const skipped = days.length - targets.length;
+  if (!targets.length) {
+    if (statusEl) statusEl.textContent = `対象 0 日 (日記 ${days.length} 日中 ${skipped} 日は生成済み)。`;
+    return;
+  }
+
+  diaryBackfillRunning = true;
+  diaryBackfillAbort = false;
+  $('diaryBackfillStart')?.classList.add('hidden');
+  $('diaryBackfillStop')?.classList.remove('hidden');
+
+  let done = 0, ok = 0, failed = 0;
+  for (const t of targets) {
+    if (diaryBackfillAbort) break;
+    done++;
+    if (statusEl) statusEl.textContent = `${done}/${targets.length} 日を処理中… (生成済みスキップ ${skipped})`;
+    if (progressEl) progressEl.style.setProperty('--pct', `${Math.round((done / targets.length) * 100)}%`);
+    try {
+      const res = await fetch('/api/ai/digest/run-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: t.date }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json() as { articles?: unknown[]; seeds?: unknown[] };
+      ok++;
+      appendBackfillLog(logEl, `✅ ${t.date}: AI記事 ${data.articles?.length || 0} 本 / ネタ ${data.seeds?.length || 0} 件`);
+    } catch (e) {
+      failed++;
+      appendBackfillLog(logEl, `⚠️ ${t.date}: 失敗 (${(e as Error).message})`);
+    }
+  }
+
+  diaryBackfillRunning = false;
+  $('diaryBackfillStart')?.classList.remove('hidden');
+  $('diaryBackfillStop')?.classList.add('hidden');
+  const aborted = diaryBackfillAbort ? ' (停止)' : '';
+  if (statusEl) statusEl.textContent = `完了${aborted}: 成功 ${ok} 日 / 失敗 ${failed} 日 / スキップ ${skipped} 日。🤖 AI タブの「AI記事」で確認できます。`;
+}
+
+function appendBackfillLog(logEl: HTMLElement | null, msg: string) {
+  if (!logEl) return;
+  const li = document.createElement('li');
+  li.textContent = msg;
+  logEl.prepend(li);
+}
+
 $('diaryPrevMonth')?.addEventListener('click', () => {
   state.diaryMonth = shiftMonth(state.diaryMonth || todayMonth(), -1);
   refreshDiaryMonth();
@@ -4669,11 +5087,11 @@ $('diaryToday')?.addEventListener('click', () => {
 $('diaryGenerate')?.addEventListener('click', () => generateDiary());
 $('diaryImproveBtn')?.addEventListener('click', improveDiary);
 $('diaryDelete')?.addEventListener('click', deleteDiaryEntry);
+setupDiaryAiNotes();
 $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
-$('diarySettingsBtn')?.addEventListener('click', openDiarySettings);
+// GitHub 設定の入口は ⚙ 設定 → 🔌 連携 / API key に移動済 (openAiSettings で load)
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
 $('diarySettingsTest')?.addEventListener('click', testGithubPat);
-$('diarySettingsClose')?.addEventListener('click', () => $('diarySettingsPanel').classList.add('hidden'));
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
 $('domainSearch')?.addEventListener('input', (e) => {
@@ -4770,11 +5188,10 @@ function hideModal(panelId) {
   const appsOpen = $('appsDetail') ? !$('appsDetail').classList.contains('hidden') : false;
   const reviewTgtOpen = $('reviewTargetModal') ? !$('reviewTargetModal').classList.contains('hidden') : false;
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
-  const implOpen = $('implEditorModal') ? !$('implEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
   const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
   const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || implOpen || workOpen || apOpen || arOpen);
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -4786,7 +5203,6 @@ function closeAllModals() {
   if ($('appsDetail')) hideModal('appsDetail');
   if ($('reviewTargetModal')) hideModal('reviewTargetModal');
   hideModal('taskEditorModal');
-  hideModal('implEditorModal');
   hideModal('workplaceEditorModal');
   if ($('agentProjectEditor')) hideModal('agentProjectEditor');
   if ($('agentRunModal')) hideModal('agentRunModal');
@@ -4816,8 +5232,10 @@ $('visitsAll').addEventListener('click', (e) => {
 setInterval(async () => {
   const depth = await refreshQueue();
   await refreshVisitsBadge();
-  if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load();
-  if (state.tab === 'database' && state.database?.sub === 'queue') renderQueue();
+  // 定期 poll の流れで bookmarks を refresh するときも silent。 ユーザが手動で
+  // 並び替え / 検索したときは load() が直接呼ばれてロゴスピナーが出る。
+  if (depth > 0 || state.bookmarks.some(b => b.status === 'pending')) load({ silent: true });
+  if (state.tab === 'queue') renderQueue();
 }, 2000);
 refreshQueue();
 refreshVisitsBadge();
@@ -4845,7 +5263,7 @@ async function pingStaleness(): Promise<void> {
   if (_stalenessPingInFlight) return;
   _stalenessPingInFlight = true;
   try {
-    const r = await api('/api/staleness') as Record<string, unknown>;
+    const r = await apiSilent('/api/staleness') as Record<string, unknown>;
     for (const k of ['review', 'weather', 'transit_rides']) {
       const v = r[k];
       if (typeof v === 'string') STALE_SIGS[k] = v;
@@ -4931,9 +5349,29 @@ async function openAiSettings() {
       ];
       return opts.join('');
     }
+    // 機能名は内部キー (summarize 等) のままだとユーザに意味が伝わらないので日本語で表示。
+    // 未マップなら原文を fallback。
+    const TASK_LABELS_JA: Record<string, string> = {
+      summarize: '📚 ブックマーク要約',
+      dig: '🔎 ディグ (検索結果分析)',
+      dig_preview: '🔎 ディグ (タイトル/概要プレビュー)',
+      cloud_extract: '🌐 ワードクラウド (語句抽出)',
+      cloud_validate: '🌐 ワードクラウド (語句検証)',
+      domain_classify: '🏷 ドメイン辞書 (サイト分類)',
+      page_summary: '🔖 訪問URL要約 (kind / 短文要約)',
+      diary_work: '📓 日記 (作業内容)',
+      diary_highlights: '📓 日記 (ハイライト)',
+      diary_weekly: '📓 日記 (週報)',
+      meal_vision: '🍽 食事写真 解析',
+      meal_calorie: '🍽 食事カロリー 推定',
+      app_classify: '💻 アプリ 分類 (PC使用統計)',
+      recommendation_agent: '✨ おすすめ (候補抽出)',
+      recommendation_synthesize: '✨ おすすめ (統合)',
+      endpoint_identify: '🛡 パケット監視 (接続先 AI 識別)',
+    };
     $('aiTaskRows').innerHTML = tasks.map(t => `
       <div class="ai-task-row">
-        <label>${escapeHtml(t)}</label>
+        <label title="${escapeHtml(t)}">${escapeHtml(TASK_LABELS_JA[t] || t)}</label>
         <select data-task="${t}" class="ai-task-provider">${optionsHtml}</select>
         <select data-task="${t}" class="ai-task-model"></select>
       </div>
@@ -4974,17 +5412,22 @@ async function openAiSettings() {
     }
     if (r.runtime) {
       const rt = r.runtime;
-      $('aiRuntimeInfo').innerHTML = `
-        <div><b>port</b>: ${escapeHtml(String(rt.port))}</div>
-        <div><b>data_dir</b>: <code>${escapeHtml(rt.data_dir)}</code></div>
-        <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
-      `;
+      const rtEl = document.getElementById('aiRuntimeInfo');
+      if (rtEl) {
+        rtEl.innerHTML = `
+          <div><b>port</b>: ${escapeHtml(String(rt.port))}</div>
+          <div><b>data_dir</b>: <code>${escapeHtml(rt.data_dir)}</code></div>
+          <div><b>platform</b>: ${escapeHtml(rt.platform)}</div>
+        `;
+      }
     }
     // privacy / feature flags (Legatus 連携 ON/OFF, tracks/meals 可視化 etc.) を
     // ここで一括ロードしておく。 API タブには Legatus 連携トグルが、 privacy タブには
     // tracks/meals/tasks reminder 等のトグルが入っており、 どちらを先に開いても
     // 一度ロード済みの状態にする。
     loadPrivacySettings().catch((e) => console.warn('privacy settings load:', e));
+    // GitHub PAT / user / repos (日記 + 📋 作業一覧 で共有)
+    void loadGithubSettings();
     // Google Maps API key の現在値ステータス (実値はブラウザに渡さない方針 — masked)
     if ($('mapsApiKey')) {
       try {
@@ -5056,16 +5499,13 @@ async function refreshMultiStatus() {
         status.textContent = '未接続';
       }
     }
-    // Share buttons reflect whether ANY server is active+connected.
-    const anyConnected = !!(s.servers || []).some(x => x.active && x.connected);
-    document.querySelectorAll('#dShare, #dictShareBtn, #digShareBtn').forEach(b => {
-      b.hidden = !anyConnected;
-    });
-    if (!anyConnected && $('digShareBar')) $('digShareBar').hidden = true;
     if (typeof refreshMultiTabVisibility === 'function') refreshMultiTabVisibility();
+    // 二層モード状態を読み直してスイッチャ + タブ gating に反映。
+    void refreshDataSource();
   } catch (e) { console.error(e); }
 }
 
+// 二層設計のデータソース セレクタ。 排他選択 (= ローカル か、 特定 Hub 1 つ)。
 function renderMultiSwitch(s) {
   const root = $('multiSwitch');
   if (!root) return;
@@ -5076,46 +5516,229 @@ function renderMultiSwitch(s) {
     return;
   }
   root.hidden = false;
-  // ローカル baseline pill (always-on, just visual reminder) +
-  // one toggleable pill per registered remote.
+  const ds = state.dataSource as { mode: string; hubUrl: string | null };
+  const localActive = !ds || ds.mode !== 'multi';
   const items = [
-    `<span class="ms-pill ms-local active" title="ローカル DB は常に有効">🏠 ローカル</span>`,
+    `<button type="button" class="ms-pill ms-local ${localActive ? 'active' : ''}" data-local="1" title="ローカル SQLite を使う">🏠 ローカル</button>`,
     ...servers.map(sv => {
-      const cls = sv.active ? 'active' : '';
+      const active = ds?.mode === 'multi' && ds.hubUrl === sv.url;
       const labelTxt = sv.label || sv.url;
       const tip = sv.connected
         ? `${sv.url} (${sv.user?.name || ''})`
-        : `${sv.url} — 未認証`;
-      return `<button type="button" class="ms-pill ${cls}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
+        : `${sv.url} — 未ログイン (クリックでログイン)`;
+      return `<button type="button" class="ms-pill ${active ? 'active' : ''}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
     }),
   ];
   root.innerHTML = items.join('');
+  const localBtn = root.querySelector('.ms-pill[data-local]');
+  if (localBtn) localBtn.addEventListener('click', () => selectDataSource(null));
   root.querySelectorAll('.ms-pill[data-url]').forEach(btn => {
-    btn.addEventListener('click', () => toggleMultiActive(btn.dataset.url));
+    btn.addEventListener('click', () => selectDataSource(btn.dataset.url));
   });
 }
 
-async function toggleMultiActive(url) {
-  // Multi-select: clicking flips this server's membership in the active set.
-  const s = state.multi;
-  if (!s) return;
-  const active = (s.servers || []).filter(x => x.active).map(x => x.url);
-  const set = new Set(active);
-  if (set.has(url)) set.delete(url);
-  else set.add(url);
-  // 未認証の server を active にしようとした場合は、 Multi タブの
-  // Cernere ログインフォームに誘導する (= OAuth dance は廃止)。
-  const target = (s.servers || []).find(x => x.url === url);
-  if (target && set.has(url) && !target.connected) {
-    switchTab('multi');
-    return;
+// データソースを切り替える。 url=null で Local、 url 指定で その Hub。
+// 未ログイン Hub を選んだら Multi タブのログインフォームへ誘導する。
+async function selectDataSource(url) {
+  try {
+    const res = await fetch('/api/multi/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(url ? { mode: 'multi', url } : { mode: 'local' }),
+    });
+    const j = await res.json() as {
+      ok?: boolean; mode?: string; hubUrl?: string | null;
+      needs_login?: boolean; url?: string; error?: string;
+    };
+    if (j.needs_login) {
+      const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+      if (urlInput && j.url) urlInput.value = j.url;
+      const urlDisplay = $('multiLoginUrlDisplay');
+      if (urlDisplay && j.url) urlDisplay.textContent = j.url;
+      switchTab('multi');
+      return;
+    }
+    if (!res.ok || !j.ok) {
+      alert(`データソース切替に失敗: ${j.error || res.status}`);
+      return;
+    }
+    state.dataSource = { mode: j.mode || 'local', hubUrl: j.hubUrl ?? null };
+    applyModeGating();
+    renderMultiSwitch(state.multi);
+    // 現タブを Multi モードで触れないなら database に逃がしつつ、 データを再取得。
+    const cur = state.tab as string;
+    if (state.dataSource.mode === 'multi' && LOCAL_ONLY_TABS.has(cur)) {
+      switchTab('database');
+    } else {
+      switchTab(cur);
+    }
+  } catch (e: unknown) {
+    alert(`データソース切替に失敗: ${(e as Error).message}`);
   }
-  await api('/api/multi/active', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls: [...set] }),
+}
+
+// Multi モードで Local + Hub データを mix 表示している list 用の フィルタ chip。
+// 呼び出し側 (list renderer) は:
+//   1. fetch 後の items を渡して `renderMultiFilterChips(container, items)` を呼ぶ
+//   2. 返り値の predicate で items を filter して描画
+//   3. chip クリック時に 'multi-filter-changed' event が発火するので、 そこで再描画
+// Multi モードでない時は何もせず、 全件を通す predicate を返す。
+function renderMultiFilterChips(container: HTMLElement | null, items: Loose[]): (it: Loose) => boolean {
+  if (!container) return () => true;
+  const multi = document.body.dataset.multiMode === 'on';
+  if (!multi) {
+    container.innerHTML = '';
+    return () => true;
+  }
+  // owner_user_id → 表示名 を集計。 unshared (= local + shared_at なし) も判別。
+  const owners = new Map<string, string>();
+  let hasUnshared = false;
+  let hasMine = false;
+  for (const it of items || []) {
+    const uid = it.owner_user_id != null ? String(it.owner_user_id) : null;
+    if (uid) {
+      owners.set(uid, String(it.owner_user_name || uid));
+    } else if (it._origin === 'local') {
+      hasMine = true;
+      if (!it.shared_at) hasUnshared = true;
+    }
+  }
+  const cur = String(state.multiFilter || 'all');
+  const chip = (key: string, label: string): string =>
+    `<button class="mf-chip ${cur === key ? 'active' : ''}" data-mf="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
+  const chips: string[] = [chip('all', 'すべて')];
+  if (hasMine) chips.push(chip('mine', '自分のローカル'));
+  if (hasUnshared) chips.push(chip('unshared', '未シェア'));
+  for (const [uid, name] of owners) chips.push(chip(`user:${uid}`, name));
+
+  container.innerHTML = `<div class="multi-filter-bar"><span class="muted" style="font-size:12px;margin-right:6px">表示:</span>${chips.join('')}</div>`;
+  container.querySelectorAll('.mf-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.multiFilter = (btn as HTMLElement).dataset.mf || 'all';
+      window.dispatchEvent(new CustomEvent('multi-filter-changed', { detail: state.multiFilter }));
+    });
   });
-  await refreshMultiStatus();
+
+  // predicate
+  return (it: Loose) => {
+    if (cur === 'all') return true;
+    if (cur === 'mine') return it._origin === 'local';
+    if (cur === 'unshared') return it._origin === 'local' && !it.shared_at;
+    if (cur.startsWith('user:')) return String(it.owner_user_id ?? '') === cur.slice(5);
+    return true;
+  };
+}
+
+// Hub mode のとき、 各エントリの 「頭」 に出す関係ユーザ chip 列。
+// 「誰が書いた / 登録した / コメントしたか」 を 1 行に並べる。
+//
+// 入力フィールド:
+//   it.owner_user_id / it.owner_user_name           ─ 単一所有者 (作成・登録者)
+//   it._origin: 'hub' | 'local'                     ─ Hub から来たか自分のローカルか
+//   it.shared_at                                     ─ ローカル item が Hub に publish 済か
+//   it.contributors: Array<{                         ─ 将来の複数ユーザデータ用
+//     user_id, user_name, role: 'author'|'registrar'|'editor'|'commenter'
+//   }>
+//
+// 単一所有者しか無いデータでも chip は 1 個出る。 contributors が増えれば
+// dedup した上で並べる。 Hub mode 以外では空文字。
+type HubUserRole = 'author' | 'registrar' | 'editor' | 'commenter';
+interface HubUserChip { id: string; name: string; role: HubUserRole; self: boolean; }
+
+function collectHubUsers(it: Loose): HubUserChip[] {
+  const out: HubUserChip[] = [];
+  const seen = new Set<string>();
+
+  const push = (chip: HubUserChip) => {
+    const key = `${chip.role}:${chip.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(chip);
+  };
+
+  if (it._origin === 'hub') {
+    const id = it.owner_user_id != null ? String(it.owner_user_id) : '';
+    const name = String(it.owner_user_name || id || '他ユーザ');
+    push({ id: id || name, name, role: 'author', self: false });
+  } else if (it._origin === 'local') {
+    const shared = !!it.shared_at;
+    push({
+      id: 'self',
+      name: shared ? '自分' : '自分 (未シェア)',
+      role: 'author',
+      self: true,
+    });
+  }
+
+  // Future-ready: 別ユーザの編集・コメント・登録履歴。 現状は backend が
+  // 出さないが、 array で来るなら全部 chip 化する (重複は role+id で排除)。
+  const extras = Array.isArray(it.contributors) ? it.contributors as Array<Record<string, unknown>> : [];
+  for (const c of extras) {
+    const id = c.user_id != null ? String(c.user_id) : '';
+    const name = String(c.user_name || id || '他ユーザ');
+    const roleRaw = String(c.role || 'editor');
+    const role: HubUserRole = (['author', 'registrar', 'editor', 'commenter'].includes(roleRaw)
+      ? roleRaw
+      : 'editor') as HubUserRole;
+    push({ id: id || name, name, role, self: false });
+  }
+
+  return out;
+}
+
+function multiUsersHeader(it: Loose): string {
+  if (document.body.dataset.multiMode !== 'on') return '';
+  const users = collectHubUsers(it);
+  if (users.length === 0) return '';
+  const chips = users.map(u => {
+    const icon = u.role === 'commenter' ? '💬'
+      : u.role === 'editor'    ? '✎'
+      : u.role === 'registrar' ? '📌'
+      : '👤';
+    const tip = u.role === 'commenter' ? 'コメント'
+      : u.role === 'editor'    ? '編集'
+      : u.role === 'registrar' ? '登録'
+      : '作成・登録';
+    const cls = `mu-chip mu-chip-${u.role}${u.self ? ' mu-chip-self' : ''}`;
+    return `<span class="${cls}" title="${escapeHtml(tip)}: ${escapeHtml(u.name)}">`
+      + `<span class="mu-chip-icon">${icon}</span>`
+      + `<span class="mu-chip-name">${escapeHtml(u.name)}</span>`
+      + `</span>`;
+  }).join('');
+  return `<div class="mu-header" role="group" aria-label="関係ユーザ">${chips}</div>`;
+}
+
+// Multi モード時、 個人ログ系タブは非表示にする (旧仕様の gray-out から変更)。
+// 同時に share 系 control (= Hub に publish するチェックボックス) も、 Multi
+// モードでなければ意味が無いので非表示にする。
+function applyModeGating() {
+  const multi = (state.dataSource as { mode?: string })?.mode === 'multi';
+  document.body.dataset.multiMode = multi ? 'on' : 'off';
+  document.querySelectorAll('.tab[data-tab]').forEach(t => {
+    const el = t as HTMLElement;
+    const hide = multi && LOCAL_ONLY_TABS.has(el.dataset.tab || '');
+    el.hidden = hide;
+    // 旧 mode-locked クラスは下位互換のため残す (CSS が opacity 等で参照)
+    el.classList.toggle('mode-locked', hide);
+  });
+  // モバイル strip / More メニューはタブの活性化集合に依存するので、 mode が
+  // 切り替わったタイミングで再計算する。 でないと Hub に切り替えても古い
+  // More メニューが非活性タブを抱え続けるし、 4-rule の境界も古いまま。
+  reflowTabsForViewport();
+  // share checkbox は親 label / row 単位で hide。 CSS で
+  // body[data-multi-mode="off"] .multi-only-control { display: none; } 経由。
+}
+
+// 現在のモードを backend から読んで state に反映。 起動時 + status 更新時に呼ぶ。
+async function refreshDataSource() {
+  try {
+    const m = await api('/api/multi/mode') as { mode?: string; hubUrl?: string | null };
+    state.dataSource = { mode: m.mode || 'local', hubUrl: m.hubUrl ?? null };
+  } catch {
+    state.dataSource = { mode: 'local', hubUrl: null };
+  }
+  applyModeGating();
+  renderMultiSwitch(state.multi);
 }
 
 function renderMultiServersList(s) {
@@ -5130,10 +5753,12 @@ function renderMultiServersList(s) {
     const status = sv.connected
       ? `<span class="ms-status ok">✓ ${escapeHtml(sv.user?.name || '')} (${escapeHtml(sv.user?.role || '')})</span>`
       : '<span class="ms-status">未認証</span>';
+    const ds = state.dataSource as { mode: string; hubUrl: string | null };
+    const isCurrent = ds?.mode === 'multi' && ds.hubUrl === sv.url;
     return `<li class="multi-server-row" data-url="${escapeHtml(sv.url)}">
       <label class="ms-active-toggle">
-        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${sv.active ? 'checked' : ''} />
-        有効
+        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${isCurrent ? 'checked' : ''} />
+        使用中
       </label>
       <div class="ms-row-body">
         <div class="ms-label">${escapeHtml(sv.label)}</div>
@@ -5141,14 +5766,18 @@ function renderMultiServersList(s) {
         <div>${status}</div>
       </div>
       <div class="ms-row-actions">
-        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : '接続'}</button>
-        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>切断</button>
+        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : 'ログイン'}</button>
+        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>ログアウト</button>
         <button class="danger ghost-sm" data-action="remove" data-url="${escapeHtml(sv.url)}">削除</button>
       </div>
     </li>`;
   }).join('');
+  // チェックボックス: ON でその Hub をデータソースに、 OFF で Local に戻す。
   list.querySelectorAll('input[type=checkbox][data-url]').forEach(cb => {
-    cb.addEventListener('change', () => toggleMultiActive(cb.dataset.url));
+    cb.addEventListener('change', () => {
+      const el = cb as HTMLInputElement;
+      selectDataSource(el.checked ? el.dataset.url : null);
+    });
   });
   list.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => multiServerAction(btn.dataset.action, btn.dataset.url));
@@ -5158,20 +5787,23 @@ function renderMultiServersList(s) {
 async function multiServerAction(action, url) {
   if (action === 'connect') {
     // Cernere ログインは Multi タブのフォームで行う (= OAuth dance 廃止)。
-    // URL を pre-fill しておいてタブを切り替える。
+    // URL を hidden field と display に流して タブを切り替える。
     const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
     if (urlInput) urlInput.value = url;
+    const urlDisplay = $('multiLoginUrlDisplay');
+    if (urlDisplay) urlDisplay.textContent = url;
     switchTab('multi');
     return;
   }
   if (action === 'disconnect') {
-    if (!confirm(`「${url}」から切断しますか?`)) return;
-    await api('/api/multi/disconnect', {
+    if (!confirm(`「${url}」からログアウトしますか?`)) return;
+    await api('/api/multi/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
     await refreshMultiStatus();
+    await refreshDataSource();
     return;
   }
   if (action === 'remove') {
@@ -5200,26 +5832,6 @@ async function multiAddServer() {
   await refreshMultiStatus();
 }
 
-async function multiFinishFromUrl() {
-  const params = new URLSearchParams(location.search);
-  const jwt = params.get('memoria_hub_jwt');
-  if (!jwt) return;
-  try {
-    // Use the most-recently-touched server as target if no explicit URL.
-    const r = await api('/api/multi/finish', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jwt }),
-    });
-    showShareToast(`🌐 ${r.user.displayName} (${r.url}) として接続しました`);
-  } catch (e) {
-    alert(`マルチ接続失敗: ${e.message}`);
-  } finally {
-    history.replaceState({}, '', location.pathname);
-    await refreshMultiStatus();
-  }
-}
-
 function showShareToast(text) {
   const div = document.createElement('div');
   div.className = 'share-toast';
@@ -5228,62 +5840,8 @@ function showShareToast(text) {
   setTimeout(() => div.remove(), 4000);
 }
 
-async function shareCurrentBookmark() {
-  if (state.detailId == null) return;
-  const btn = $('dShare');
-  btn.disabled = true;
-  $('dShareStatus').textContent = '送信中…';
-  try {
-    await api('/api/multi/share', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'bookmark', id: state.detailId }),
-    });
-    $('dShareStatus').textContent = '✓ 共有しました';
-  } catch (e) {
-    $('dShareStatus').textContent = `✗ ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function shareCurrentDict() {
-  if (!state.dictDetail?.id) return;
-  const btn = $('dictShareBtn');
-  btn.disabled = true;
-  $('dictShareStatus').textContent = '送信中…';
-  try {
-    await api('/api/multi/share', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'dict', id: state.dictDetail.id }),
-    });
-    $('dictShareStatus').textContent = '✓ 共有しました';
-  } catch (e) {
-    $('dictShareStatus').textContent = `✗ ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function shareCurrentDig() {
-  if (!state.digSession?.id) return;
-  const btn = $('digShareBtn');
-  btn.disabled = true;
-  $('digShareStatus').textContent = '送信中…';
-  try {
-    await api('/api/multi/share', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'dig', id: state.digSession.id }),
-    });
-    $('digShareStatus').textContent = '✓ 共有しました';
-  } catch (e) {
-    $('digShareStatus').textContent = `✗ ${e.message}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
+// 二層設計では「Hub へ個別 share」 は廃止。 Multi モードに切り替えると
+// bookmark / dict / dig タブはそのまま Hub のデータを編集する。
 
 async function saveAiSettings() {
   const tasks = {};
@@ -5377,6 +5935,39 @@ async function saveAiSettings() {
   }
 }
 
+// 「全部」 タブで section 上に挿入する見出しラベル (stab → 表示名)。
+const SETTINGS_STAB_LABELS: Record<string, string> = {
+  ai: '🤖 AI / モデル',
+  api: '🔌 連携 / API key',
+  profile: '🧍 プロフィール',
+  data: '📦 データ / Hub',
+  privacy: '🔒 プライバシー / 表示',
+  discord: '🤖 Discord',
+};
+// 「全部」 タブで非表示にする 手順系 (= 一度しか見ない / 別 UI)。
+const SETTINGS_STAB_EXCLUDE_FROM_ALL = new Set(['setup']);
+
+function applyAllModeHeadings(panel: HTMLElement, isAll: boolean) {
+  // 既存の見出しを除去
+  panel.querySelectorAll('.settings-all-mode-heading').forEach((el) => el.remove());
+  if (!isAll) return;
+  panel.querySelectorAll('.settings-tab-body').forEach((sec) => {
+    const stab = (sec as HTMLElement).dataset.stab || '';
+    if (SETTINGS_STAB_EXCLUDE_FROM_ALL.has(stab)) return;
+    const label = SETTINGS_STAB_LABELS[stab];
+    if (!label) return;
+    // 同じ stab の複数 section に重複させない: 最初の 1 個目だけに付ける
+    const prev = sec.previousElementSibling;
+    if (prev && (prev as HTMLElement).classList.contains('settings-all-mode-heading')
+        && (prev as HTMLElement).dataset.forStab === stab) return;
+    const h = document.createElement('h3');
+    h.className = 'settings-all-mode-heading';
+    h.dataset.forStab = stab;
+    h.textContent = label;
+    sec.parentNode?.insertBefore(h, sec);
+  });
+}
+
 // ── settings 内部タブ切替 ─────────────────────────────
 document.addEventListener('click', (ev) => {
   const target = ev.target;
@@ -5387,13 +5978,25 @@ document.addEventListener('click', (ev) => {
   if (!panel || panel.classList.contains('hidden')) return;
   const stab = btn.dataset.stab;
   panel.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b === btn));
-  panel.querySelectorAll('.settings-tab-body').forEach(sec => {
-    sec.classList.toggle('hidden', sec.dataset.stab !== stab);
-  });
+  if (stab === 'all') {
+    panel.querySelectorAll('.settings-tab-body').forEach(sec => {
+      const sstab = (sec as HTMLElement).dataset.stab || '';
+      sec.classList.toggle('hidden', SETTINGS_STAB_EXCLUDE_FROM_ALL.has(sstab));
+    });
+    applyAllModeHeadings(panel, true);
+    // 全部表示時は privacy 側 (Legatus 等) もロードしておく
+    loadPrivacySettings().catch(console.warn);
+  } else {
+    applyAllModeHeadings(panel, false);
+    panel.querySelectorAll('.settings-tab-body').forEach(sec => {
+      sec.classList.toggle('hidden', sec.dataset.stab !== stab);
+    });
+  }
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
+  if (stab === 'discord') loadDiscordSettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
-  if (stab === 'agent-projects') loadAgentProjects().catch(console.warn);
+  // 'agent-projects' タブは廃止 (AI 実装プロジェクト機能を休止)
   panel.scrollTop = 0;
 });
 
@@ -5441,12 +6044,8 @@ document.getElementById('mapsApiKeyAutoBtn')?.addEventListener('click', async ()
 document.getElementById('pushSubscribeBtn')?.addEventListener('click', () => pushSubscribeFlow().catch(e => setPushStatus(e.message, true)));
 document.getElementById('pushTestBtn')?.addEventListener('click', () => pushTestSend().catch(e => setPushStatus(e.message, true)));
 document.getElementById('multiAddBtn')?.addEventListener('click', multiAddServer);
-document.getElementById('dShare')?.addEventListener('click', shareCurrentBookmark);
-document.getElementById('dictShareBtn')?.addEventListener('click', shareCurrentDict);
-document.getElementById('digShareBtn')?.addEventListener('click', shareCurrentDig);
 
-// Pull JWT out of OAuth redirect on first paint, then prime the share buttons.
-multiFinishFromUrl();
+// Hub 登録一覧 + モード状態を初期描画。
 refreshMultiStatus();
 
 // Legatus 連携の初期 ON/OFF を取得し、 watcher / 右上バッジを早期に整える。
@@ -5507,17 +6106,219 @@ function renderEvents(items) {
   }).join('');
 }
 
+// ── Discord 設定 (⚙ 設定 → 🤖 Discord タブ) ───────────────────────────────
+async function loadDiscordSettings() {
+  let r: { config?: Record<string, unknown>; token_set?: boolean; ready?: boolean; reason?: string };
+  try { r = await api('/api/discord/config') as typeof r; }
+  catch (e) { const s = $('discordStatus'); if (s) s.textContent = `設定取得失敗: ${(e as Error).message}`; return; }
+  const c = r.config || {};
+  const setChk = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.checked = v !== false; };
+  const setVal = (id: string, v: unknown) => { const el = $(id) as HTMLInputElement | null; if (el) el.value = (v as string) || ''; };
+  setChk('dcEnabled', c.enabled);
+  setVal('dcSelfUserId', c.selfUserId); setVal('dcGuildId', c.guildId);
+  const tk = $('dcBotToken') as HTMLInputElement | null;
+  if (tk) { tk.value = ''; tk.placeholder = r.token_set ? '●●●●●● (設定済み・再入力で上書き)' : 'Bot Token を入力'; }
+  setChk('dcCaptureMessage', c.captureMessage); setChk('dcCapturePresence', c.capturePresence);
+  setChk('dcCaptureVoice', c.captureVoice); setChk('dcCaptureReaction', c.captureReaction);
+  setChk('dcAiProcess', c.aiProcess); setChk('dcMentionNotify', c.mentionNotify); setChk('dcAnnounce', c.announce);
+  setChk('dcAutoTask', c.autoTask); setChk('dcAutoMemo', c.autoMemo); setChk('dcAutoBookmark', c.autoBookmark);
+  setChk('dcAutoMeal', c.autoMeal); setChk('dcAutoRecommend', c.autoRecommend);
+  const s = $('discordStatus');
+  if (s) s.textContent = `状態: ${r.ready ? '✅ 起動可能' : '⚠ ' + (r.reason || '')} ／ token: ${r.token_set ? '設定済 (env)' : '未設定 (MEMORIA_DISCORD_BOT_TOKEN)'}`;
+  const btn = $('discordSaveBtn') as HTMLButtonElement | null;
+  if (btn) btn.onclick = saveDiscordSettings;
+  const addBtn = $('dcNotifyAddBtn') as HTMLButtonElement | null;
+  if (addBtn) addBtn.onclick = () => dcAddTrigger();
+  const tSaveBtn = $('dcNotifySaveBtn') as HTMLButtonElement | null;
+  if (tSaveBtn) tSaveBtn.onclick = () => { void saveNotifyTriggers(); };
+  void loadNotifyTriggers();
+}
+
+async function saveDiscordSettings() {
+  const chk = (id: string) => !!($(id) as HTMLInputElement | null)?.checked;
+  const val = (id: string) => (($(id) as HTMLInputElement | null)?.value || '').trim();
+  const token = val('dcBotToken'); // 空欄なら据え置き (送らない)
+  const payload: Record<string, unknown> = {
+    enabled: chk('dcEnabled'), selfUserId: val('dcSelfUserId'), guildId: val('dcGuildId'),
+    ...(token ? { botToken: token } : {}),
+    captureMessage: chk('dcCaptureMessage'), capturePresence: chk('dcCapturePresence'),
+    captureVoice: chk('dcCaptureVoice'), captureReaction: chk('dcCaptureReaction'),
+    aiProcess: chk('dcAiProcess'), mentionNotify: chk('dcMentionNotify'), announce: chk('dcAnnounce'),
+    autoTask: chk('dcAutoTask'), autoMemo: chk('dcAutoMemo'), autoBookmark: chk('dcAutoBookmark'),
+    autoMeal: chk('dcAutoMeal'), autoRecommend: chk('dcAutoRecommend'),
+  };
+  try {
+    await api('/api/discord/config', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    flashToast('Discord 設定を保存しました');
+    await loadDiscordSettings();
+  } catch (e) { alert(`保存失敗: ${(e as Error).message}`); }
+}
+
+// ── Discord 通知トリガー UI ──────────────────────────────────────────────
+interface NotifyTriggerUI {
+  id: string;
+  name: string;
+  enabled: boolean;
+  trigger:
+    | { type: 'time'; at: string }
+    | { type: 'random'; window: [string, string]; count: number }
+    | { type: 'gps'; event: 'arrive' | 'depart'; radius_m: number };
+  filter: { categories: string[]; deadline: 'all' | 'due_today_or_overdue' };
+  channel: string;
+}
+let dcNotifyTriggers: NotifyTriggerUI[] = [];
+let dcNotifyChannels: string[] = ['announce', 'task'];
+
+async function loadNotifyTriggers(): Promise<void> {
+  try {
+    const r = await api('/api/discord/notify-triggers') as { triggers?: NotifyTriggerUI[]; channels?: string[] };
+    dcNotifyTriggers = Array.isArray(r.triggers) ? r.triggers : [];
+    if (Array.isArray(r.channels) && r.channels.length) dcNotifyChannels = r.channels;
+  } catch { dcNotifyTriggers = []; }
+  renderNotifyTriggers();
+}
+
+function dcAddTrigger(): void {
+  dcNotifyTriggers = collectNotifyTriggers();
+  dcNotifyTriggers.push({
+    id: '', name: '通知', enabled: true,
+    trigger: { type: 'time', at: '08:00' },
+    filter: { categories: ['all'], deadline: 'due_today_or_overdue' },
+    channel: 'announce',
+  });
+  renderNotifyTriggers();
+}
+
+function renderNotifyParams(tt: NotifyTriggerUI['trigger']): string {
+  if (tt.type === 'random') {
+    return `<input class="t-rstart" type="time" value="${escapeHtml(tt.window?.[0] || '09:00')}" /> 〜 ` +
+      `<input class="t-rend" type="time" value="${escapeHtml(tt.window?.[1] || '21:00')}" /> × ` +
+      `<input class="t-rcount" type="number" min="1" max="10" value="${tt.count || 1}" style="width:70px" /> 回/日`;
+  }
+  if (tt.type === 'gps') {
+    return `<select class="t-gevent"><option value="arrive"${tt.event !== 'depart' ? ' selected' : ''}>帰宅 (自宅に到着)</option>` +
+      `<option value="depart"${tt.event === 'depart' ? ' selected' : ''}>出発 (自宅を離れる)</option></select> ` +
+      `半径 <input class="t-radius" type="number" min="50" max="5000" value="${tt.radius_m || 200}" style="width:80px" /> m`;
+  }
+  return `時刻 <input class="t-at" type="time" value="${escapeHtml(tt.at || '08:00')}" />`;
+}
+
+function renderNotifyTriggers(): void {
+  const box = $('dcNotifyTriggers'); if (!box) return;
+  if (!dcNotifyTriggers.length) { box.innerHTML = '<p class="muted">トリガーはまだありません。「＋ トリガーを追加」で作成します。</p>'; return; }
+  const chOpts = (sel: string) => dcNotifyChannels
+    .map((c) => `<option value="${escapeHtml(c)}"${c === sel ? ' selected' : ''}>#${escapeHtml(c)}</option>`).join('');
+  box.innerHTML = dcNotifyTriggers.map((t, i) => `
+    <div class="dc-trig" data-i="${i}" style="border:1px solid #8884;border-radius:10px;padding:10px;margin-bottom:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="check-inline"><input class="t-en" type="checkbox"${t.enabled ? ' checked' : ''} /> 有効</label>
+        <input class="t-name" type="text" value="${escapeHtml(t.name)}" placeholder="名前" style="flex:1;min-width:120px" />
+        <select class="t-type">
+          <option value="time"${t.trigger.type === 'time' ? ' selected' : ''}>時刻</option>
+          <option value="random"${t.trigger.type === 'random' ? ' selected' : ''}>ランダム時刻</option>
+          <option value="gps"${t.trigger.type === 'gps' ? ' selected' : ''}>GPS 帰宅/出発</option>
+        </select>
+        <button class="t-test" type="button">テスト</button>
+        <button class="t-del" type="button">削除</button>
+      </div>
+      <div class="t-params" style="margin-top:6px">${renderNotifyParams(t.trigger)}</div>
+      <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span>カテゴリ</span><input class="t-cats" type="text" value="${escapeHtml((t.filter.categories || ['all']).join(','))}" placeholder="all または 買い物,開発" style="min-width:160px" />
+        <span>期限</span><select class="t-deadline">
+          <option value="due_today_or_overdue"${t.filter.deadline !== 'all' ? ' selected' : ''}>今日締切/超過のみ</option>
+          <option value="all"${t.filter.deadline === 'all' ? ' selected' : ''}>全て</option>
+        </select>
+        <span>送信先</span><select class="t-channel">${chOpts(t.channel)}</select>
+      </div>
+    </div>`).join('');
+  box.querySelectorAll('.dc-trig').forEach((el) => {
+    const i = Number((el as HTMLElement).dataset.i);
+    (el.querySelector('.t-type') as HTMLSelectElement | null)?.addEventListener('change', () => {
+      dcNotifyTriggers = collectNotifyTriggers();
+      renderNotifyTriggers();
+    });
+    (el.querySelector('.t-del') as HTMLButtonElement | null)?.addEventListener('click', () => {
+      dcNotifyTriggers = collectNotifyTriggers();
+      dcNotifyTriggers.splice(i, 1);
+      renderNotifyTriggers();
+    });
+    (el.querySelector('.t-test') as HTMLButtonElement | null)?.addEventListener('click', () => { void testNotifyTrigger(i); });
+  });
+}
+
+function collectNotifyTriggers(): NotifyTriggerUI[] {
+  const box = $('dcNotifyTriggers'); if (!box) return dcNotifyTriggers;
+  const out: NotifyTriggerUI[] = [];
+  box.querySelectorAll('.dc-trig').forEach((el, idx) => {
+    const val = (s: string): string => (el.querySelector(s) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '';
+    const type = val('.t-type');
+    const prev = dcNotifyTriggers[idx];
+    let trigger: NotifyTriggerUI['trigger'];
+    if (type === 'random') {
+      trigger = { type: 'random', window: [val('.t-rstart') || '09:00', val('.t-rend') || '21:00'], count: Number(val('.t-rcount')) || 1 };
+    } else if (type === 'gps') {
+      trigger = { type: 'gps', event: val('.t-gevent') === 'depart' ? 'depart' : 'arrive', radius_m: Number(val('.t-radius')) || 200 };
+    } else {
+      trigger = { type: 'time', at: val('.t-at') || '08:00' };
+    }
+    const cats = (val('.t-cats') || 'all').split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    out.push({
+      id: prev?.id || '',
+      name: val('.t-name') || '通知',
+      enabled: (el.querySelector('.t-en') as HTMLInputElement | null)?.checked ?? true,
+      trigger,
+      filter: { categories: cats.length ? cats : ['all'], deadline: val('.t-deadline') === 'all' ? 'all' : 'due_today_or_overdue' },
+      channel: val('.t-channel') || 'announce',
+    });
+  });
+  return out;
+}
+
+async function saveNotifyTriggers(): Promise<void> {
+  const triggers = collectNotifyTriggers();
+  try {
+    const r = await api('/api/discord/notify-triggers', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ triggers }),
+    }) as { triggers?: NotifyTriggerUI[] };
+    dcNotifyTriggers = Array.isArray(r.triggers) ? r.triggers : triggers;
+    renderNotifyTriggers();
+    flashToast('通知トリガーを保存しました');
+  } catch (e) { alert(`保存失敗: ${(e as Error).message}`); }
+}
+
+async function testNotifyTrigger(i: number): Promise<void> {
+  await saveNotifyTriggers(); // id 確定のため常に保存してからテスト
+  const id = dcNotifyTriggers[i]?.id;
+  if (!id) { alert('保存に失敗しました'); return; }
+  try {
+    const r = await api(`/api/discord/notify-triggers/${encodeURIComponent(id)}/test`, { method: 'POST' }) as { ok?: boolean; count?: number; reason?: string };
+    if (r.ok) flashToast(`テスト送信: ${r.count ?? 0} 件`);
+    else alert(`テスト失敗: ${r.reason === 'not_ready' ? 'Bot が起動していません' : (r.reason || '')}`);
+  } catch (e) { alert(`テスト失敗: ${(e as Error).message}`); }
+}
+
 document.getElementById('eventsRefresh')?.addEventListener('click', loadEvents);
 
 // ---- Tasks / implementation notes / setup docs / privacy ------------------
 
 // `let` 形式 (元 JS は後段で上書き再定義あり)
+let requestedSetupDocKey: string | null = null;
+
+function openSetupDoc(key: string): void {
+  requestedSetupDocKey = key;
+  const setupTab = document.querySelector('.settings-tab[data-stab="setup"]') as HTMLButtonElement | null;
+  if (setupTab && !setupTab.classList.contains('active')) {
+    setupTab.click();
+    return;
+  }
+  void loadSetupDocs();
+}
+
 let ensureMemoriaFeatureViews = function () {
   const tabs = document.querySelector('.tabs-scroll');
   if (tabs && !document.querySelector('.tab[data-tab="tasks"]')) {
     for (const spec of [
       ['tasks', '📝 タスク'],
-      ['impl', '✨ 実装自慢'],
     ]) {
       const b = document.createElement('button');
       b.className = 'tab';
@@ -5549,31 +6350,6 @@ let ensureMemoriaFeatureViews = function () {
           </div>
         </div>
         <div id="tasksList" class="simple-list"></div>
-      </div>`;
-    content.appendChild(div);
-  }
-  if (content && !$('implView')) {
-    const div = document.createElement('div');
-    div.id = 'implView';
-    div.className = 'hidden';
-    div.innerHTML = `
-      <div class="simple-panel">
-        <div class="simple-panel-head">
-          <h2>実装自慢</h2>
-          <button id="implNewBtn" type="button">+ ノートを追加</button>
-        </div>
-        <div id="implForm" class="simple-form hidden">
-          <input id="implProduct" type="text" placeholder="プロダクト名" />
-          <input id="implTitle" type="text" placeholder="短いタイトル" />
-          <textarea id="implGood" rows="4" placeholder="良かった点"></textarea>
-          <textarea id="implBad" rows="3" placeholder="悪かった点 / トレードオフ"></textarea>
-          <label class="check-inline"><input id="implShareable" type="checkbox" /> シェア可能にする</label>
-          <div class="simple-actions">
-            <button id="implAddBtn">追加</button>
-            <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
-          </div>
-        </div>
-        <div id="implList" class="simple-list"></div>
       </div>`;
     content.appendChild(div);
   }
@@ -5651,7 +6427,7 @@ let ensureMemoriaFeatureViews = function () {
             <input id="workplaceEditorRadius" type="number" min="1" max="50000" step="1" placeholder="50 (空欄: 設定の既定値を使う)" />
             <small class="muted">場所の物理的な大きさに応じて個別に設定。 例: 自宅 = 30m / 駅前広場 = 200m / 大学キャンパス = 500m。 0 や空欄なら全体設定の値 (設定 → プライバシー → 場所判定の半径) を使う。</small>
           </label>
-          <label class="simple-check-row">
+          <label class="simple-check-row multi-only-control">
             <input id="workplaceEditorShareable" type="checkbox" />
             <span>シェア可能にする</span>
           </label>
@@ -5667,10 +6443,19 @@ let ensureMemoriaFeatureViews = function () {
   const settingsTabs = document.querySelector('.settings-tabs');
   const footer = document.querySelector('.settings-footer');
   if (settingsTabs && !document.querySelector('.settings-tab[data-stab="privacy"]')) {
+    // 🌐 全部 タブは一番左に置きたいので prepend、 他は順番通り append。
+    // 「🤖 AI 実装プロジェクト」 は今回廃止。
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.className = 'settings-tab';
+    allBtn.dataset.stab = 'all';
+    allBtn.setAttribute('role', 'tab');
+    allBtn.textContent = '🌐 全部';
+    settingsTabs.insertBefore(allBtn, settingsTabs.firstChild);
     for (const spec of [
-      ['privacy', 'プライバシー / 表示'],
-      ['setup', 'セットアップ手順'],
-      ['agent-projects', 'AI 実装プロジェクト'],
+      ['privacy', '🔒 プライバシー / 表示'],
+      ['discord', '🤖 Discord'],
+      ['setup', '📚 セットアップ手順'],
     ]) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -5704,6 +6489,12 @@ let ensureMemoriaFeatureViews = function () {
       </label>
       <label class="check-inline"><input id="taskReminderNuntiusEnabled" type="checkbox" /> Nuntius にも送る</label>
       <label>Nuntius URL: <input id="taskReminderNuntiusUrl" type="text" placeholder="https://nuntius.example.com/notify" /></label>
+      <h4 style="margin-top:12px">Amazon Echo / Alexa</h4>
+      <p class="diary-settings-help">
+        Memoriaの通知をEchoへ送り、Echoから音声でタスクを登録できます。
+        Alexa Developer ConsoleでCustom Skill、公開HTTPS endpoint、通知権限、LWA資格情報の設定が必要です。
+      </p>
+      <button id="alexaSetupHelpBtn" type="button" class="ghost">📖 Amazon側の設定手順を開く</button>
       <h4 style="margin-top:12px">MCP サーバ</h4>
       <label class="check-inline"><input id="mcpAutostartEnabled" type="checkbox" /> Memoria 起動時に MCP サーバを同時起動する (任意)</label>
       <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
@@ -5720,16 +6511,47 @@ let ensureMemoriaFeatureViews = function () {
         この半径を超えた点で「離脱」と判定し、 セッションがそこで終了します。
         場所ごとに <code>radius_m</code> を個別設定すると、 そちらが優先されます (= 作業場所編集画面で入力)。
       </p>
-      <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">移動速度の閾値:
-        <input id="workplaceMaxSpeedKmh" type="number" min="0" max="200" step="1" style="width:80px" />
-        km/h
-      </label>
-      <p class="diary-settings-help" style="margin-top:6px">
-        これより速い瞬間速度 (= 直前 GPS 点との距離 / 時間差) の点は「移動中」とみなして
-        場所タグ付けの対象から外します。 通り過ぎただけの場所を誤検出しないため。
-        既定 5 km/h (= 徒歩速度の上限近辺)。 0 を入れるとフィルタ無効。
-      </p>
+      <p class="diary-settings-help" style="margin-top:6px">「移動速度の閾値」 はプロフィール タブに移動しました。</p>
       <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
+    footer.parentNode.insertBefore(sec, footer);
+  }
+  if (footer && !$('discordSettingsBody')) {
+    const sec = document.createElement('section');
+    sec.id = 'discordSettingsBody';
+    sec.className = 'settings-tab-body foundation-form hidden';
+    sec.dataset.stab = 'discord';
+    sec.innerHTML = `
+      <h4>🤖 Discord Bot</h4>
+      <p class="diary-settings-help">行動ログ取得 + 自動処理 + 通知。Bot Token は <code>MEMORIA_DISCORD_BOT_TOKEN</code> (env) に設定してください。詳細は spec/feature/discord-bot.md。</p>
+      <div id="discordStatus" class="muted" style="margin:6px 0"></div>
+      <label class="check-inline"><input id="dcEnabled" type="checkbox" /> Discord Bot を有効にする (マスタ)</label>
+      <label>Bot Token: <input id="dcBotToken" type="password" placeholder="Bot Token を入力" autocomplete="off" /></label>
+      <label>自分の Discord user id: <input id="dcSelfUserId" type="text" placeholder="123456789012345678" /></label>
+      <label>対象サーバー (guild) id: <input id="dcGuildId" type="text" placeholder="123456789012345678" /></label>
+      <h4 style="margin-top:12px">取得 (オプトアウト)</h4>
+      <label class="check-inline"><input id="dcCaptureMessage" type="checkbox" /> メッセージ本文を記録</label>
+      <label class="check-inline"><input id="dcCapturePresence" type="checkbox" /> オンライン状態 / アクティビティを記録</label>
+      <label class="check-inline"><input id="dcCaptureVoice" type="checkbox" /> ボイス入退室を記録</label>
+      <label class="check-inline"><input id="dcCaptureReaction" type="checkbox" /> リアクションを記録</label>
+      <h4 style="margin-top:12px">処理 / 通知 (オプトアウト)</h4>
+      <label class="check-inline"><input id="dcAiProcess" type="checkbox" /> AI で意図分類して自動処理する</label>
+      <label class="check-inline"><input id="dcMentionNotify" type="checkbox" /> 通知時に自分をメンションする</label>
+      <label class="check-inline"><input id="dcAnnounce" type="checkbox" /> 通知を #announce に投稿する</label>
+      <h4 style="margin-top:12px">自動処理 (オプトアウト)</h4>
+      <label class="check-inline"><input id="dcAutoTask" type="checkbox" /> タスク (リマインダー付き)</label>
+      <label class="check-inline"><input id="dcAutoMemo" type="checkbox" /> メモ</label>
+      <label class="check-inline"><input id="dcAutoBookmark" type="checkbox" /> ブックマーク (URL 検知)</label>
+      <label class="check-inline"><input id="dcAutoMeal" type="checkbox" /> 食事 (画像検知)</label>
+      <label class="check-inline"><input id="dcAutoRecommend" type="checkbox" /> おすすめ (/recommend)</label>
+      <div style="margin-top:10px"><button id="discordSaveBtn" type="button" class="primary">保存</button></div>
+      <h4 style="margin-top:16px">通知トリガー</h4>
+      <p class="diary-settings-help">時刻 / GPS(帰宅・出発) / ランダム時刻が発火すると、 条件に合うアクティブタスクを選んだチャンネルへ通知します。GPS は ⚙設定→天気 の固定座標 (自宅) を使います。</p>
+      <div id="dcNotifyTriggers"></div>
+      <div style="margin-top:8px">
+        <button id="dcNotifyAddBtn" type="button">＋ トリガーを追加</button>
+        <button id="dcNotifySaveBtn" type="button" class="primary">トリガーを保存</button>
+      </div>
+      <p class="diary-settings-help" style="margin-top:6px">設定したチャンネル/カテゴリは Bot 有効化 + 起動時に自動生成されます。反映には Memoria の再起動が必要な場合があります。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer && !$('setupDocsBody')) {
@@ -5743,52 +6565,12 @@ let ensureMemoriaFeatureViews = function () {
       <pre id="setupDocBody" class="setup-doc-body"></pre>`;
     footer.parentNode.insertBefore(sec, footer);
   }
-  if (footer && !$('agentProjectsBody')) {
-    const sec = document.createElement('section');
-    sec.id = 'agentProjectsBody';
-    sec.className = 'settings-tab-body hidden';
-    sec.dataset.stab = 'agent-projects';
-    sec.innerHTML = `
-      <h4>AI 実装プロジェクト</h4>
-      <p class="diary-settings-help">タスクに「🤖 AI実装」を依頼するときに使うプロジェクト一覧です。プロジェクトごとにルール・パス・既定エージェントを登録します。</p>
-      <div id="agentProjectsList" class="simple-list"></div>
-      <div class="simple-actions"><button id="agentProjectAddBtn" type="button">+ プロジェクト追加</button></div>
-      <section id="agentProjectEditor" class="dict-detail modal-panel hidden foundation-form">
-        <button type="button" class="modal-close" id="agentProjectEditorClose" aria-label="close">×</button>
-        <h3 id="agentProjectEditorHeading">プロジェクトを追加</h3>
-        <input type="hidden" id="agentProjectEditorId" />
-        <label class="simple-field">
-          <span>名前</span>
-          <input id="agentProjectEditorName" type="text" placeholder="例: Memoria" />
-        </label>
-        <label class="simple-field">
-          <span>パス (絶対パス)</span>
-          <input id="agentProjectEditorPath" type="text" placeholder="例: E:\\Document\\Ars\\Memoria" />
-        </label>
-        <label class="simple-field">
-          <span>既定エージェント</span>
-          <select id="agentProjectEditorAgent">
-            <option value="claude_code">Claude Code</option>
-            <option value="codex">Codex CLI</option>
-            <option value="gemini">Gemini CLI</option>
-          </select>
-        </label>
-        <label class="simple-field">
-          <span>ルール (Markdown)</span>
-          <textarea id="agentProjectEditorRules" rows="14" placeholder="技術スタック・規約・Do/Don't・完了条件 など。AI 実装時にプロンプトの先頭に貼られます。"></textarea>
-        </label>
-        <div class="simple-actions">
-          <button id="agentProjectEditorSaveBtn">保存</button>
-          <button id="agentProjectEditorCancelBtn" type="button" class="ghost">キャンセル</button>
-        </div>
-      </section>`;
-    footer.parentNode.insertBefore(sec, footer);
-  }
+  const alexaSetupHelpBtn = $('alexaSetupHelpBtn') as HTMLButtonElement | null;
+  if (alexaSetupHelpBtn) alexaSetupHelpBtn.onclick = () => openSetupDoc('alexa');
+  // 「AI 実装プロジェクト」 タブは廃止 (タスクの 🤖 AI実装 機能と共に休止)。
 
   upgradeTaskFormMarkup();
-  upgradeImplementationFormMarkup();
   setupTaskFormKeyboard();
-  setupImplementationFormKeyboard();
 
   if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
     $('taskForm')?.classList.remove('hidden');
@@ -5796,12 +6578,6 @@ let ensureMemoriaFeatureViews = function () {
   };
   if ($('taskCancelBtn')) $('taskCancelBtn').onclick = () => $('taskForm')?.classList.add('hidden');
   if ($('taskAddBtn')) $('taskAddBtn').onclick = addTaskFromForm;
-  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
-    $('implForm')?.classList.remove('hidden');
-    $('implProduct')?.focus();
-  };
-  if ($('implCancelBtn')) $('implCancelBtn').onclick = () => $('implForm')?.classList.add('hidden');
-  if ($('implAddBtn')) $('implAddBtn').onclick = addImplementationNoteFromForm;
 };
 
 function localDatetimeValue(date) {
@@ -5877,69 +6653,6 @@ function setupTaskFormKeyboard() {
     }
   };
   if (details) details.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      add?.focus();
-    }
-  };
-}
-
-upgradeImplementationFormMarkup = function () {
-  const form = $('implForm');
-  if (!form || form.dataset.upgraded === '1') return;
-  form.dataset.upgraded = '1';
-  form.innerHTML = `
-    <label class="simple-field">
-      <span>プロダクト名</span>
-      <input id="implProduct" type="text" placeholder="Memoria" />
-    </label>
-    <label class="simple-field">
-      <span>タイトル</span>
-      <input id="implTitle" type="text" placeholder="短いタイトル" />
-    </label>
-    <label class="simple-field">
-      <span>良かった点</span>
-      <textarea id="implGood" rows="5" placeholder="実装して良かった点"></textarea>
-    </label>
-    <label class="simple-field">
-      <span>悪かった点 / トレードオフ</span>
-      <textarea id="implBad" rows="4" placeholder="悪かった点、迷った点、次に直したい点"></textarea>
-    </label>
-    <label class="simple-check-row">
-      <input id="implShareable" type="checkbox" tabindex="-1" />
-      <span>シェア可能にする</span>
-    </label>
-    <div class="simple-actions">
-      <button id="implAddBtn">追加</button>
-      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
-    </div>`;
-};
-
-setupImplementationFormKeyboard = function () {
-  const product = $('implProduct');
-  const title = $('implTitle');
-  const good = $('implGood');
-  const bad = $('implBad');
-  const add = $('implAddBtn');
-  if (product) product.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      title?.focus();
-    }
-  };
-  if (title) title.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      good?.focus();
-    }
-  };
-  if (good) good.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      bad?.focus();
-    }
-  };
-  if (bad) bad.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       add?.focus();
@@ -6082,7 +6795,13 @@ async function loadSetupDocs() {
       $('setupDocBody').textContent = doc.body || '';
     });
   });
-  if ((r.docs || [])[0]) root.querySelector('button[data-doc]')?.click();
+  const requested = requestedSetupDocKey;
+  requestedSetupDocKey = null;
+  const requestedButton = requested
+    ? [...root.querySelectorAll<HTMLButtonElement>('button[data-doc]')]
+      .find((button) => button.dataset.doc === requested)
+    : null;
+  (requestedButton ?? root.querySelector<HTMLButtonElement>('button[data-doc]'))?.click();
 }
 
 // `let` 形式 (元 JS は後段で上書き再定義あり)
@@ -6155,277 +6874,6 @@ let addTaskFromForm = async function () {
   loadTasks();
 };
 
-// `let` 形式 (元 JS は後段で上書き再定義あり)
-let loadImplementationNotes = async function () {
-  ensureMemoriaFeatureViews();
-  const r = await api('/api/implementation-notes');
-  const list = $('implList');
-  const items = r.items || [];
-  if (!list) return;
-  if (!items.length) {
-    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
-    return;
-  }
-  list.innerHTML = items.map(n => `
-    <div class="simple-item" data-id="${n.id}">
-      <div class="simple-item-head"><strong>${escapeHtml(n.product)}: ${escapeHtml(n.title)}</strong></div>
-      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
-      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
-      <div class="simple-actions">
-        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
-        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
-        <button class="danger" data-impl-delete="${n.id}">削除</button>
-      </div>
-    </div>`).join('');
-  list.querySelectorAll('[data-impl-share]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        await api('/api/multi/share', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
-        });
-        showShareToast('実装自慢をシェアしました');
-      }
-      catch (e) { alert(e.message); }
-      loadImplementationNotes();
-    });
-  });
-  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
-      loadImplementationNotes();
-    });
-  });
-};
-
-// `let` 形式 (元 JS は後段で上書き再定義あり)
-let addImplementationNoteFromForm = async function () {
-  const product = $('implProduct')?.value.trim();
-  const title = $('implTitle')?.value.trim();
-  if (!product || !title) return;
-  await api('/api/implementation-notes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      product,
-      title,
-      good_points: $('implGood')?.value.trim() || '',
-      bad_points: $('implBad')?.value.trim() || '',
-      shareable: !!$('implShareable')?.checked,
-    }),
-  });
-  for (const id of ['implProduct', 'implTitle', 'implGood', 'implBad']) $(id).value = '';
-  $('implForm')?.classList.add('hidden');
-  loadImplementationNotes();
-};
-
-function implementationAttachmentLabel(type) {
-  return ({
-    github: 'GitHub のプロダクト',
-    screenshot: 'スクリーンキャプチャ',
-    video: '動画',
-    code: 'コードスニペット',
-    other: 'その他',
-  })[type] || '';
-}
-
-function renderImplementationAttachment(note) {
-  const type = note.attachment_type || '';
-  const value = note.attachment_value || '';
-  if (!type || !value) return '';
-  const label = implementationAttachmentLabel(type) || '添付';
-  if (type === 'code') {
-    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><pre><code>${escapeHtml(value)}</code></pre></div>`;
-  }
-  if (/^https?:\/\//i.test(value)) {
-    return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><a href="${escapeHtml(value)}" target="_blank" rel="noopener">${escapeHtml(value)}</a></div>`;
-  }
-  return `<div class="impl-attachment"><div class="muted">${escapeHtml(label)}</div><p>${escapeHtml(value)}</p></div>`;
-}
-
-upgradeImplementationFormMarkup = function () {
-  const form = $('implForm');
-  if (!form || form.dataset.upgraded === '2') return;
-  form.dataset.upgraded = '2';
-  form.innerHTML = `
-    <label class="simple-field">
-      <span>ドヤポイント</span>
-      <input id="implTitle" type="text" placeholder="ここを作り込んだ、ここが気持ちいい" />
-    </label>
-    <label class="simple-field">
-      <span>良かった点</span>
-      <textarea id="implGood" rows="5" placeholder="設計、実装、体験で良かった点"></textarea>
-    </label>
-    <label class="simple-field">
-      <span>悪かった点 / トレードオフ</span>
-      <textarea id="implBad" rows="4" placeholder="迷った点、直したい点、次に改善する点"></textarea>
-    </label>
-    <label class="simple-field">
-      <span>添付するもの</span>
-      <select id="implAttachmentType">
-        <option value="">なし</option>
-        <option value="github">GitHub のプロダクト</option>
-        <option value="screenshot">スクリーンキャプチャ</option>
-        <option value="video">動画</option>
-        <option value="code">コードスニペット</option>
-        <option value="other">その他</option>
-      </select>
-    </label>
-    <label class="simple-field">
-      <span>添付内容</span>
-      <textarea id="implAttachmentValue" rows="4" placeholder="URL、画像や動画のパス、コードなどを 1 つだけ記入"></textarea>
-    </label>
-    <label class="simple-check-row">
-      <input id="implShareable" type="checkbox" tabindex="-1" />
-      <span>シェア可能にする</span>
-    </label>
-    <div class="simple-actions">
-      <button id="implAddBtn">追加</button>
-      <button id="implCancelBtn" type="button" class="ghost">キャンセル</button>
-    </div>`;
-};
-
-setupImplementationFormKeyboard = function () {
-  const title = $('implTitle');
-  const good = $('implGood');
-  const bad = $('implBad');
-  const attachmentType = $('implAttachmentType');
-  const attachmentValue = $('implAttachmentValue');
-  const add = $('implAddBtn');
-  if (title) title.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      good?.focus();
-    }
-  };
-  if (good) good.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      bad?.focus();
-    }
-  };
-  if (bad) bad.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      attachmentType?.focus();
-    }
-  };
-  if (attachmentType) attachmentType.onkeydown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      attachmentValue?.focus();
-    }
-  };
-  if (attachmentValue) attachmentValue.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      add?.focus();
-    }
-  };
-};
-
-loadImplementationNotes = async function () {
-  ensureMemoriaFeatureViews();
-  const r = await api('/api/implementation-notes');
-  const list = $('implList');
-  const items = r.items || [];
-  if (!list) return;
-  if (!items.length) {
-    list.innerHTML = '<div class="queue-empty">実装自慢はまだありません。</div>';
-    return;
-  }
-  list.innerHTML = items.map(n => `
-    <div class="simple-item" data-id="${n.id}" data-impl-open="${n.id}">
-      <div class="simple-item-head"><strong>${escapeHtml(n.title)}</strong></div>
-      <h4>良かった点</h4><p>${escapeHtml(n.good_points || '')}</p>
-      <h4>悪かった点 / トレードオフ</h4><p>${escapeHtml(n.bad_points || '')}</p>
-      ${renderImplementationAttachment(n)}
-      <div class="simple-actions">
-        <span class="muted">${n.shared_at ? `シェア済み: ${escapeHtml(fmtDate(n.shared_at))}` : (n.shareable ? 'シェア可能' : '非公開')}</span>
-        <button class="ghost" data-impl-share="${n.id}" ${n.shared_at ? 'disabled' : ''}>シェア</button>
-        <button class="danger" data-impl-delete="${n.id}">削除</button>
-      </div>
-    </div>`).join('');
-  list.querySelectorAll('[data-impl-share]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      try {
-        await api('/api/multi/share', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'implementation_note', id: Number(btn.dataset.implShare) }),
-        });
-        showShareToast('実装自慢をシェアしました');
-      }
-      catch (e) { alert(e.message); }
-      loadImplementationNotes();
-    });
-  });
-  list.querySelectorAll('[data-impl-delete]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      await api(`/api/implementation-notes/${btn.dataset.implDelete}`, { method: 'DELETE' });
-      loadImplementationNotes();
-    });
-  });
-  list.querySelectorAll('[data-impl-open]').forEach(el => {
-    el.addEventListener('click', (ev) => {
-      if (ev.target.closest('button,a,input,select,textarea')) return;
-      const id = Number(el.dataset.implOpen || 0);
-      const note = items.find((n) => n.id === id);
-      if (note) openImplEditor(note);
-    });
-  });
-};
-
-addImplementationNoteFromForm = async function () {
-  const title = $('implEditorTitle')?.value.trim();
-  if (!title) return;
-  const noteId = Number($('implEditorNoteId')?.value || 0);
-  const attachmentType = $('implEditorAttachmentType')?.value || '';
-  const attachmentValue = $('implEditorAttachmentValue')?.value.trim() || '';
-  // attachment_type=github の場合は github.com の URL を必須に
-  if (attachmentType === 'github') {
-    let host = '';
-    try { host = new URL(attachmentValue).hostname.toLowerCase(); } catch {}
-    if (!/^(www\.)?github\.com$|\.github\.com$/.test(host)) {
-      alert('GitHub のプロダクトを選択した場合は GitHub の URL (https://github.com/...) を「添付内容」に入れてください。');
-      $('implEditorAttachmentValue')?.focus();
-      return;
-    }
-  }
-  if (attachmentType === 'article') {
-    if (!/^https?:\/\//.test(attachmentValue)) {
-      alert('「記事」を選択した場合は URL を「添付内容」に入れてください。');
-      $('implEditorAttachmentValue')?.focus();
-      return;
-    }
-  }
-  const payload = {
-    title,
-    good_points: $('implEditorGood')?.value.trim() || '',
-    bad_points: $('implEditorBad')?.value.trim() || '',
-    attachment_type: attachmentType,
-    attachment_value: attachmentValue,
-    shareable: !!$('implEditorShareable')?.checked,
-  };
-  if (noteId) {
-    await api(`/api/implementation-notes/${noteId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } else {
-    await api('/api/implementation-notes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  }
-  closeImplEditor();
-  loadImplementationNotes();
-};
 
 renderDomainList = function () {
   const ul = $('domainList');
@@ -6439,6 +6887,7 @@ renderDomainList = function () {
     const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
     return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
+      ${multiUsersHeader(e as Loose)}
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
       <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">
@@ -6527,22 +6976,24 @@ function parseTaskCategories(s) {
 
 function taskCardHtml(t) {
   const aiBadge = t.creator_type === 'ai' ? '<span class="task-origin ai">AI</span>' : '<span class="task-origin human">人間</span>';
+  const isGoal = t.kind === 'goal';
+  const kindBadge = isGoal ? '<span class="task-kind goal">🎯 目標</span>' : '';
   const cats = parseTaskCategories(t.category);
   const catBadges = cats.map(c => `<span class="task-category">${escapeHtml(c)}</span>`).join('');
   const doneBtn = t.status === 'done'
     ? '<button class="ghost" disabled>Done</button>'
     : `<button class="ghost" data-task-done="${t.id}">Done</button>`;
   return `
-    <article class="task-card" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
+    <article class="task-card${isGoal ? ' task-card--goal' : ''}" data-task-open="${t.id}" data-task-drag="${t.id}" draggable="${t.status === 'done' ? 'false' : 'true'}">
       <div class="task-card-head">
-        <strong>${escapeHtml(t.title)}</strong>
-        ${aiBadge}${catBadges}
+        <strong><span class="task-id" title="タスク番号 (Concordia 等の #${t.id} 参照と対応)">#${t.id}</span> ${escapeHtml(t.title)}</strong>
+        ${kindBadge}${aiBadge}${catBadges}
       </div>
       <div class="muted">期日: ${escapeHtml(formatTaskDue(t.due_at))}</div>
       <p>${escapeHtml(t.details || '')}</p>
       <div class="simple-actions">
         ${doneBtn}
-        <button class="ghost" data-task-agent="${t.id}">🤖 AI実装</button>
+        <!-- 🤖 AI実装 は一旦休止 (= 設定 → AI 実装プロジェクト タブの削除と同期) -->
         <button class="ghost" data-task-share="${t.id}">Actioにシェア</button>
         <button class="danger" data-task-delete="${t.id}">削除</button>
       </div>
@@ -6579,10 +7030,6 @@ async function loadWorkLocations() {
     const link = w.url ? `<a href="${escapeHtml(w.url)}" target="_blank" rel="noopener">${escapeHtml(w.url)}</a>` : '';
     const coord = (Number.isFinite(w.latitude) && Number.isFinite(w.longitude))
       ? `<span class="muted">${w.latitude.toFixed(4)}, ${w.longitude.toFixed(4)}</span>` : '';
-    const sharedTag = w.shared_at
-      ? `シェア済み: ${escapeHtml(fmtDate(w.shared_at))}`
-      : (w.shareable ? 'シェア可能' : '非公開');
-    const isOwned = !w.owner_user_id;
     return `
       <div class="simple-item" data-id="${w.id}" data-workplace-open="${w.id}">
         <div class="simple-item-head">
@@ -6594,8 +7041,6 @@ async function loadWorkLocations() {
         <p>${escapeHtml(w.description || '')}</p>
         ${link ? `<div>${link}</div>` : ''}
         <div class="simple-actions">
-          <span class="muted">${sharedTag}</span>
-          ${isOwned ? `<button class="ghost" data-workplace-share="${w.id}" ${w.shared_at ? 'disabled' : ''}>シェア</button>` : ''}
           <button class="danger" data-workplace-delete="${w.id}">削除</button>
         </div>
       </div>`;
@@ -6607,20 +7052,6 @@ async function loadWorkLocations() {
       const id = Number(el.dataset.workplaceOpen || 0);
       const w = _workplaceItems.find(x => x.id === id);
       if (w) openWorkplaceEditor(w);
-    });
-  });
-  list.querySelectorAll('[data-workplace-share]').forEach(btn => {
-    btn.addEventListener('click', async (ev) => {
-      ev.stopPropagation();
-      try {
-        await api('/api/multi/share', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'work_location', id: Number(btn.dataset.workplaceShare) }),
-        });
-        showShareToast('作業場所をシェアしました');
-      } catch (e) { alert(e.message); }
-      loadWorkLocations();
     });
   });
   list.querySelectorAll('[data-workplace-delete]').forEach(btn => {
@@ -6958,7 +7389,7 @@ async function refreshAgentRunHistory(taskId) {
 
 async function refreshAgentRunLog(runId) {
   try {
-    const r = await api(`/api/agent-runs/${runId}/log?tail=131072`);
+    const r = await apiSilent(`/api/agent-runs/${runId}/log?tail=131072`);
     $('agentRunLog').textContent = r.log || '(ログなし)';
     $('agentRunLog').dataset.runId = String(runId);
     const status = r.run?.status || 'unknown';
@@ -6984,22 +7415,18 @@ async function startAgentRunFromModal() {
   const agent = $('agentRunAgent')?.value || 'claude_code';
   const model = $('agentRunModel')?.value || '';
   if (!projectId) return alert('プロジェクトが未登録です。設定 → AI 実装プロジェクトから登録してください');
-  $('agentRunStartBtn').disabled = true;
-  $('agentRunStartBtn').textContent = '起動中…';
-  try {
-    const r = await api(`/api/tasks/${_agentRunCurrentTask.id}/agent-run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, agent, model }),
-    });
-    await refreshAgentRunHistory(_agentRunCurrentTask.id);
-    if (r.run?.id) refreshAgentRunLog(r.run.id);
-  } catch (e) {
-    alert(`起動失敗: ${e.message}`);
-  } finally {
-    $('agentRunStartBtn').disabled = false;
-    $('agentRunStartBtn').textContent = '▶ 実装を開始';
-  }
+  const task = _agentRunCurrentTask;
+  // 「キューに乗せる」 UX: ボタン押下と同時にダイアログを閉じてトーストでフィードバック、
+  // API 呼び出しは fire-and-forget。 結果はトーストで通知し、 履歴はモーダル次回起動時に表示。
+  closeAgentRunModal();
+  flashToast(`🤖 「${task.title}」 を AI 実装キューへ送信しました`);
+  api(`/api/tasks/${task.id}/agent-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId, agent, model }),
+  })
+    .then(() => { flashToast(`✅ 「${task.title}」 の AI 実装を開始しました`); })
+    .catch((e) => { flashToast(`⚠ AI 実装の起動に失敗: ${e.message}`); });
 }
 
 // ── GPS / Place API helpers ────────────────────────────────────────────────
@@ -7062,6 +7489,7 @@ async function _silentCheckin() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ latitude: coords.latitude, longitude: coords.longitude }),
+      silent: true,
     });
     _workplaceLastSilentMs = Date.now();
     const banner = $('workplaceCurrentBanner');
@@ -7205,7 +7633,10 @@ async function saveWorkLocationFromForm() {
 function openTaskEditor(task = null) {
   const isEdit = !!task;
   if (!$('taskEditorModal')) return;
-  $('taskEditorHeading').textContent = isEdit ? 'タスクを変更' : 'タスクを追加';
+  const kind = task?.kind === 'goal' ? 'goal' : 'task';
+  const noun = kind === 'goal' ? '目標' : 'タスク';
+  $('taskEditorHeading').textContent = isEdit ? `${noun}を変更 #${task.id}` : `${noun}を追加`;
+  if ($('taskEditorKind')) $('taskEditorKind').value = kind;
   $('taskEditorTitle').value = task?.title || '';
   $('taskEditorDue').value = task?.due_at ? String(task.due_at).slice(0, 16) : '';
   $('taskEditorStatus').value = task?.status || 'todo';
@@ -7213,11 +7644,32 @@ function openTaskEditor(task = null) {
   $('taskEditorShareActio').checked = !!task?.share_actio;
   $('taskEditorCategory').value = task?.category || '';
   $('taskEditorTaskId').value = task?.id ? String(task.id) : '';
-  // populate category autocomplete
+  // populate category autocomplete (登録済カテゴリ + 登録済リポジトリのサジェスト)
   api('/api/tasks/categories').then(r => {
     const dl = $('taskCategoryOptions');
-    if (dl) dl.innerHTML = (r.items || []).map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+    if (!dl) return;
+    const items = (r.items || []).map(c => ({ value: c }));
+    const repos = ((r.suggestions && r.suggestions.repos) || []).map(c => ({ value: c, hint: 'リポジトリ' }));
+    // dedup
+    const seen = new Set();
+    const merged = [];
+    for (const o of [...items, ...repos]) {
+      if (!o.value || seen.has(o.value)) continue;
+      seen.add(o.value);
+      merged.push(o);
+    }
+    dl.innerHTML = merged
+      .map(o => `<option value="${escapeHtml(o.value)}"${o.hint ? ` label="${escapeHtml(o.hint)}"` : ''}></option>`)
+      .join('');
   }).catch(() => {});
+  // kind 切替で見出しも追従させる
+  const kindEl = $('taskEditorKind');
+  if (kindEl) {
+    kindEl.onchange = () => {
+      const k = kindEl.value === 'goal' ? '目標' : 'タスク';
+      $('taskEditorHeading').textContent = isEdit ? `${k}を変更 #${task.id}` : `${k}を追加`;
+    };
+  }
   showModal('taskEditorModal');
   $('taskEditorTitle').focus();
 }
@@ -7226,154 +7678,31 @@ function closeTaskEditor() {
   hideModal('taskEditorModal');
 }
 
-function openImplEditor(note = null) {
-  const isEdit = !!note;
-  if (!$('implEditorModal')) return;
-  $('implEditorHeading').textContent = isEdit ? '実装自慢を変更' : '実装自慢を追加';
-  $('implEditorNoteId').value = note?.id ? String(note.id) : '';
-  $('implEditorTitle').value = note?.title || '';
-  $('implEditorGood').value = note?.good_points || '';
-  $('implEditorBad').value = note?.bad_points || '';
-  $('implEditorAttachmentType').value = note?.attachment_type || '';
-  $('implEditorAttachmentValue').value = note?.attachment_value || '';
-  $('implEditorShareable').checked = !!note?.shareable;
-  if ($('implEditorAttachmentHint')) $('implEditorAttachmentHint').textContent = '';
-  showModal('implEditorModal');
-  $('implEditorTitle').focus();
-}
-
-// ── implEditor paste / drop 自動分類 ─────────────────────────────────────
-const _GITHUB_HOST = /(^|\.)github\.com$/i;
-const _CODE_HINT = /^\s*(import |export |function |class |const |let |var |if \(|for \(|while \(|def |#include|<\?php|public class|fn |package )/m;
-
-function _classifyTextValue(text) {
-  const trimmed = String(text || '').trim();
-  if (!trimmed) return null;
-  // URL one-liner?
-  const urlMatch = trimmed.match(/^https?:\/\/\S+$/);
-  if (urlMatch) {
-    let host = '';
-    try { host = new URL(trimmed).hostname.toLowerCase(); } catch {}
-    if (_GITHUB_HOST.test(host)) return { type: 'github', value: trimmed };
-    return { type: 'article', value: trimmed };
-  }
-  // Code-ish? (multiple lines + code keywords)
-  const lines = trimmed.split(/\r?\n/);
-  if (lines.length >= 2 && _CODE_HINT.test(trimmed)) {
-    return { type: 'code', value: trimmed };
-  }
-  return null; // free text → leave as-is
-}
-
-function _applyAutoClassification(result, hint) {
-  if (!result) return;
-  const sel = $('implEditorAttachmentType');
-  const val = $('implEditorAttachmentValue');
-  const help = $('implEditorAttachmentHint');
-  if (sel) sel.value = result.type;
-  if (val) val.value = result.value;
-  if (help) help.textContent = hint || `${result.type} として自動分類しました。`;
-}
-
-function wireImplEditorPasteAndDrop(modal) {
-  // paste — テキストか画像
-  modal.addEventListener('paste', async (ev) => {
-    const items = ev.clipboardData?.items || [];
-    let handled = false;
-    for (const it of items) {
-      if (it.kind === 'file') {
-        const file = it.getAsFile();
-        if (!file) continue;
-        if (file.type.startsWith('image/')) {
-          const dataUrl = await _fileToDataUrl(file);
-          _applyAutoClassification({ type: 'screenshot', value: dataUrl }, `スクリーンキャプチャ (${file.type}, ${(file.size/1024).toFixed(0)} KB)`);
-          handled = true;
-          break;
-        }
-        if (file.type.startsWith('video/')) {
-          _applyAutoClassification({ type: 'video', value: file.name }, `動画ファイル: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB) — パスや URL を手動で記入してください`);
-          handled = true;
-          break;
-        }
-      }
-    }
-    if (handled) { ev.preventDefault(); return; }
-    // text path: 直接 paste されると textarea にも入るので preventDefault しない。
-    // 自動分類は textarea の value を見て決める。
-    setTimeout(() => {
-      const text = $('implEditorAttachmentValue')?.value || '';
-      const r = _classifyTextValue(text);
-      if (r) _applyAutoClassification(r, `${r.type === 'github' ? 'GitHub URL' : r.type === 'article' ? '記事 URL' : 'コードスニペット'} として自動分類しました。`);
-    }, 0);
-  });
-  // drop — ファイル
-  modal.addEventListener('dragover', (ev) => {
-    if (ev.dataTransfer?.types?.includes('Files')) {
-      ev.preventDefault();
-      modal.classList.add('drag-over');
-    }
-  });
-  modal.addEventListener('dragleave', () => modal.classList.remove('drag-over'));
-  modal.addEventListener('drop', async (ev) => {
-    modal.classList.remove('drag-over');
-    const files = [...(ev.dataTransfer?.files || [])];
-    const text = ev.dataTransfer?.getData('text/uri-list') || ev.dataTransfer?.getData('text/plain') || '';
-    if (files.length) {
-      ev.preventDefault();
-      const file = files[0];
-      if (file.type.startsWith('image/')) {
-        const dataUrl = await _fileToDataUrl(file);
-        _applyAutoClassification({ type: 'screenshot', value: dataUrl }, `スクリーンキャプチャ ${file.name}`);
-        return;
-      }
-      if (file.type.startsWith('video/')) {
-        _applyAutoClassification({ type: 'video', value: file.name }, `動画ファイル: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)`);
-        return;
-      }
-      _applyAutoClassification({ type: 'other', value: file.name }, `その他ファイル: ${file.name}`);
-      return;
-    }
-    if (text) {
-      ev.preventDefault();
-      const r = _classifyTextValue(text);
-      if (r) _applyAutoClassification(r, '');
-    }
-  });
-}
-
-function _fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(fr.result);
-    fr.onerror = () => reject(fr.error);
-    fr.readAsDataURL(file);
-  });
-}
-
-function closeImplEditor() {
-  hideModal('implEditorModal');
-}
 
 function renderTaskCategoryMenu() {
   const list = $('tasksCategoryList');
   if (!list) return;
-  // Distinct categories from currently loaded tasks (each task may have many) + pre-fetched cache
+  // カテゴリ表示/カウントは todo/doing のアクティブタスクのみ対象
+  const activeTasks = state.taskItems.filter(t => t.status === 'todo' || t.status === 'doing');
   const fromTasks = new Set();
-  for (const t of state.taskItems) {
+  for (const t of activeTasks) {
     for (const c of parseTaskCategories(t.category)) fromTasks.add(c);
   }
   const merged = new Set([...(_taskCategoriesCache || []), ...fromTasks]);
-  const cats = [...merged].sort((a, b) => a.localeCompare(b));
   const counts = { __none__: 0 };
-  for (const t of state.taskItems) {
+  for (const t of activeTasks) {
     const cs = parseTaskCategories(t.category);
     if (!cs.length) counts.__none__ += 1;
     for (const c of cs) counts[c] = (counts[c] || 0) + 1;
   }
+  // アクティブタスクが 0 件のカテゴリはパネルに表示しない
+  const cats = [...merged].filter(c => (counts[c] || 0) > 0).sort((a, b) => a.localeCompare(b));
   const buttons = [
-    `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${state.taskItems.length}</span></button>`,
-    `<button type="button" data-task-cat="__none__" class="${state.taskCategoryFilter === '__none__' ? 'active' : ''}">未分類 <span class="muted">${counts['__none__'] || 0}</span></button>`,
+    `<button type="button" data-task-cat="" class="${state.taskCategoryFilter == null ? 'active' : ''}">全カテゴリ <span class="muted">${activeTasks.length}</span></button>`,
   ];
+  if ((counts['__none__'] || 0) > 0) {
+    buttons.push(`<button type="button" data-task-cat="__none__" class="${state.taskCategoryFilter === '__none__' ? 'active' : ''}">未分類 <span class="muted">${counts['__none__']}</span></button>`);
+  }
   for (const c of cats) {
     buttons.push(
       `<button type="button" data-task-cat="${escapeHtml(c)}" class="${state.taskCategoryFilter === c ? 'active' : ''}" title="${escapeHtml(c)}">
@@ -7440,14 +7769,31 @@ function renderTaskBoard() {
     btn.classList.toggle('active', btn.dataset.taskMenu === state.taskMenu);
   });
   renderTaskCategoryMenu();
+  const filterByCat = (arr) => state.taskCategoryFilter == null
+    ? arr
+    : (state.taskCategoryFilter === '__none__'
+        ? arr.filter((t) => parseTaskCategories(t.category).length === 0)
+        : arr.filter((t) => parseTaskCategories(t.category).includes(state.taskCategoryFilter)));
+  const goals = state.goalItems || [];
+  const goalStatusFiltered = state.taskMenu === 'done'
+    ? goals.filter((g) => g.status === 'done')
+    : goals.filter((g) => g.status !== 'done');
+  const goalView = filterByCat(goalStatusFiltered);
+  const goalsPane = $('tasksGoalsPane');
+  const goalsList = $('tasksGoalsList');
+  if (goalsPane && goalsList) {
+    if (goalView.length === 0) {
+      goalsPane.classList.add('hidden');
+      goalsList.innerHTML = '';
+    } else {
+      goalsPane.classList.remove('hidden');
+      goalsList.innerHTML = goalView.map(taskCardHtml).join('');
+    }
+  }
   const statusFiltered = state.taskMenu === 'done'
     ? state.taskItems.filter((t) => t.status === 'done')
     : state.taskItems.filter((t) => t.status !== 'done');
-  const base = state.taskCategoryFilter == null
-    ? statusFiltered
-    : (state.taskCategoryFilter === '__none__'
-        ? statusFiltered.filter((t) => parseTaskCategories(t.category).length === 0)
-        : statusFiltered.filter((t) => parseTaskCategories(t.category).includes(state.taskCategoryFilter)));
+  const base = filterByCat(statusFiltered);
   const middleItems = base.filter((t) => taskDatePartition(t) === 'middle');
   const rightItems = base.filter((t) => taskDatePartition(t) === 'right');
   middle.innerHTML = middleItems.length ? middleItems.map(taskCardHtml).join('') : '<div class="queue-empty">対象タスクなし</div>';
@@ -7537,7 +7883,6 @@ function renderTaskBoard() {
 
 function decorateTaskAndImplTabs() {
   const taskTab = document.querySelector('.tab[data-tab="tasks"]');
-  const implTab = document.querySelector('.tab[data-tab="impl"]');
   const workplaceTab = document.querySelector('.tab[data-tab="workplace"]');
   if (taskTab) {
     const label = taskTab.querySelector('.tab-label');
@@ -7548,16 +7893,6 @@ function decorateTaskAndImplTabs() {
     }
     if (!isNarrowViewport()) taskTab.style.order = '-20';
     else taskTab.style.order = '';
-  }
-  if (implTab) {
-    const label = implTab.querySelector('.tab-label');
-    if (label) {
-      label.textContent = '✨ 実装自慢';
-      label.dataset.full = '✨ 実装自慢';
-      label.dataset.short = '✨ 実装自慢';
-    }
-    if (!isNarrowViewport()) implTab.style.order = '-19';
-    else implTab.style.order = '';
   }
   if (workplaceTab) workplaceTab.remove(); // workplace は database のサブタブに移行
 }
@@ -7575,6 +7910,11 @@ ensureMemoriaFeatureViews = function () {
           <button id="taskNewBtn" type="button">+ 追加</button>
         </div>
         <div id="taskForm" class="simple-form hidden"></div>
+        <section id="tasksGoalsPane" class="tasks-goals-pane hidden">
+          <h3>🎯 目標</h3>
+          <div id="tasksGoalsList" class="simple-list"></div>
+        </section>
+        <div id="taskReviewPanel" class="task-review-panel"></div>
         <div class="tasks-three-pane">
           <aside id="tasksMenu" class="tasks-menu">
             <div class="tasks-menu-section">
@@ -7606,6 +7946,13 @@ ensureMemoriaFeatureViews = function () {
           <button type="button" class="modal-close" id="taskEditorClose" aria-label="close">×</button>
           <h3 id="taskEditorHeading">タスクを追加</h3>
           <input type="hidden" id="taskEditorTaskId" />
+          <label class="simple-field">
+            <span>種別</span>
+            <select id="taskEditorKind">
+              <option value="task">📝 タスク (短期の作業)</option>
+              <option value="goal">🎯 目標 (中長期で達成したいこと)</option>
+            </select>
+          </label>
           <label class="simple-field">
             <span>タスク内容</span>
             <input id="taskEditorTitle" type="text" />
@@ -7647,66 +7994,9 @@ ensureMemoriaFeatureViews = function () {
         </section>
       </div>`;
   }
-  const implView = $('implView');
-  if (implView && !$('implEditorModal')) {
-    const panel = implView.querySelector('.simple-panel') || implView;
-    const modal = document.createElement('section');
-    modal.id = 'implEditorModal';
-    modal.className = 'dict-detail modal-panel hidden foundation-form';
-    modal.innerHTML = `
-      <button type="button" class="modal-close" id="implEditorClose" aria-label="close">×</button>
-      <h3 id="implEditorHeading">実装自慢を追加</h3>
-      <input type="hidden" id="implEditorNoteId" />
-      <p class="diary-settings-help" style="margin-top:-4px">
-        このウィンドウを開いている間、 <b>コピペ</b> と <b>ファイル D&D</b> を受け付けます。
-        画像 → スクリーンキャプチャ、 リンク → GitHub なら GitHub / 記事なら 記事 / その他、
-        コード片 → コードスニペット、 動画ファイル → 動画 として自動選択 + 添付内容に転記。
-      </p>
-      <label class="simple-field">
-        <span>ドヤポイント</span>
-        <input id="implEditorTitle" type="text" />
-      </label>
-      <label class="simple-field">
-        <span>良かった点</span>
-        <textarea id="implEditorGood" rows="5"></textarea>
-      </label>
-      <label class="simple-field">
-        <span>悪かった点 / トレードオフ</span>
-        <textarea id="implEditorBad" rows="4"></textarea>
-      </label>
-      <label class="simple-field">
-        <span>添付するもの</span>
-        <select id="implEditorAttachmentType">
-          <option value="">なし</option>
-          <option value="github">GitHub のプロダクト</option>
-          <option value="article">記事</option>
-          <option value="screenshot">スクリーンキャプチャ</option>
-          <option value="video">動画</option>
-          <option value="code">コードスニペット</option>
-          <option value="other">その他</option>
-        </select>
-      </label>
-      <label class="simple-field">
-        <span>添付内容</span>
-        <textarea id="implEditorAttachmentValue" rows="4"></textarea>
-        <span id="implEditorAttachmentHint" class="muted" style="font-size:11px"></span>
-      </label>
-      <label class="simple-check-row">
-        <input id="implEditorShareable" type="checkbox" />
-        <span>シェア可能にする</span>
-      </label>
-      <div class="simple-actions">
-        <button id="implEditorSaveBtn">保存</button>
-        <button id="implEditorCancelBtn" type="button" class="ghost">キャンセル</button>
-      </div>`;
-    panel.appendChild(modal);
-    wireImplEditorPasteAndDrop(modal);
-  }
   decorateTaskAndImplTabs();
   upgradeTaskFormMarkup();
-  upgradeImplementationFormMarkup();
   setupTaskFormKeyboard();
-  setupImplementationFormKeyboard();
   if ($('taskNewBtn')) $('taskNewBtn').onclick = () => {
     openTaskEditor(null);
   };
@@ -7714,12 +8004,6 @@ ensureMemoriaFeatureViews = function () {
   if ($('taskEditorCancelBtn')) $('taskEditorCancelBtn').onclick = closeTaskEditor;
   if ($('taskEditorSaveBtn')) $('taskEditorSaveBtn').onclick = addTaskFromForm;
   wireTaskEditorDueShortcuts();
-  if ($('implNewBtn')) $('implNewBtn').onclick = () => {
-    openImplEditor(null);
-  };
-  if ($('implEditorClose')) $('implEditorClose').onclick = closeImplEditor;
-  if ($('implEditorCancelBtn')) $('implEditorCancelBtn').onclick = closeImplEditor;
-  if ($('implEditorSaveBtn')) $('implEditorSaveBtn').onclick = addImplementationNoteFromForm;
   if ($('agentProjectAddBtn')) $('agentProjectAddBtn').onclick = () => openAgentProjectEditor(null);
   if ($('agentProjectEditorClose')) $('agentProjectEditorClose').onclick = closeAgentProjectEditor;
   if ($('agentProjectEditorCancelBtn')) $('agentProjectEditorCancelBtn').onclick = closeAgentProjectEditor;
@@ -7749,15 +8033,20 @@ ensureMemoriaFeatureViews = function () {
 loadTasks = async function () {
   ensureMemoriaFeatureViews();
   const [r] = await Promise.all([
-    api('/api/tasks'),
+    api('/api/tasks?kind=all'),
     reloadTaskCategoriesCache(),
   ]);
-  state.taskItems = r.items || [];
+  const items = r.items || [];
+  // 既存コードは state.taskItems 一本 (tasks のみ) を仮定するので、 互換のため
+  // kind='task' のみを taskItems、 'goal' は別配列で保持。
+  state.taskItems = items.filter((t) => t.kind !== 'goal');
+  state.goalItems = items.filter((t) => t.kind === 'goal');
   if (state.taskDetail?.id) {
-    state.taskDetail = state.taskItems.find((t) => t.id === state.taskDetail.id) || null;
+    state.taskDetail = items.find((t) => t.id === state.taskDetail.id) || null;
   }
   renderTaskBoard();
   renderTaskDetail();
+  void loadTaskReviewView();
 };
 
 addTaskFromForm = async function () {
@@ -7765,6 +8054,7 @@ addTaskFromForm = async function () {
   if (!title) return;
   const editId = Number($('taskEditorTaskId')?.value || 0);
   const category = $('taskEditorCategory')?.value.trim() || null;
+  const kind = $('taskEditorKind')?.value === 'goal' ? 'goal' : 'task';
   if (editId) {
     await api(`/api/tasks/${editId}`, {
       method: 'PATCH',
@@ -7774,6 +8064,7 @@ addTaskFromForm = async function () {
         details: $('taskEditorDetails')?.value.trim() || '',
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
+        kind,
         share_actio: !!$('taskEditorShareActio')?.checked,
         category,
       }),
@@ -7787,6 +8078,7 @@ addTaskFromForm = async function () {
         details: $('taskEditorDetails')?.value.trim() || '',
         due_at: $('taskEditorDue')?.value || null,
         status: $('taskEditorStatus')?.value || 'todo',
+        kind,
         share_actio: !!$('taskEditorShareActio')?.checked,
         category,
         creator_type: 'human',
@@ -7875,7 +8167,10 @@ const DB_SUB_VIEWS = {
   domain: 'domainView',
   workplace: 'workplaceView',
   apps: 'appsView',
-  queue: 'queueView',
+  endpoints: 'endpointsView',
+  weather: 'weatherView',
+  // 旧トップレベル 📋 作業一覧 (worklist) を 📦 プロジェクト サブとして移設。
+  projects: 'worklistView',
 };
 
 state.database = state.database || { sub: 'bookmarks' };
@@ -7909,7 +8204,50 @@ function switchDatabaseSub(sub) {
   if (sub === 'domain') loadDomainCatalog();
   if (sub === 'workplace') loadWorkLocations().catch(console.warn);
   if (sub === 'apps') loadApplicationsCatalog().catch(console.warn);
-  if (sub === 'queue') renderQueue();
+  if (sub === 'endpoints') loadKnownEndpoints().catch(console.warn);
+  if (sub === 'weather') loadTracksWeather();
+  if (sub === 'projects') loadRepoWatch();
+}
+
+// ── 🤖 AI タブのサブビュー ───────────────────────────────────────────────────
+// recommendView は旧トップレベルビューを再利用 (migrateAiSubViews で aiView に取込)。
+const AI_SUB_VIEWS = {
+  recommend: 'recommendView',
+  articles: 'aiArticlesView',
+  seeds: 'aiSeedsView',
+  advice: 'aiAdviceView',
+};
+
+state.ai = state.ai || { sub: 'recommend' };
+
+function migrateAiSubViews() {
+  const aiv = $('aiView');
+  if (!aiv) return;
+  for (const id of Object.values(AI_SUB_VIEWS)) {
+    const v = $(id);
+    if (v && v.parentNode !== aiv) {
+      v.classList.add('hidden');
+      v.classList.add('wl-sub');
+      aiv.appendChild(v);
+    }
+  }
+}
+
+function switchAiSub(sub) {
+  if (!AI_SUB_VIEWS[sub]) return;
+  state.ai = state.ai || {};
+  state.ai.sub = sub;
+  document.querySelectorAll('#aiSubtabs [data-ai-sub]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.aiSub === sub);
+  });
+  for (const [key, viewId] of Object.entries(AI_SUB_VIEWS)) {
+    const view = $(viewId);
+    if (view) view.classList.toggle('hidden', key !== sub);
+  }
+  if (sub === 'recommend') loadRecommendations();
+  if (sub === 'articles') void loadAiArticlesView();
+  if (sub === 'seeds') void loadAiSeedsView();
+  if (sub === 'advice') void loadAiAdviceView();
 }
 
 interface ApplicationCatalogRow {
@@ -7933,6 +8271,108 @@ const APP_KIND_LABELS: Record<string, string> = {
   creative: '🎨 クリエイティブ',
   other: '❓ その他',
 };
+
+// ── 🛡 既知エンドポイント (= packet 監視で接続先を識別する辞書一覧) ──
+// 内蔵 well-known 辞書 + ユーザ登録 (パケット監視アプリの「＋ 登録」) の 2 セクション。
+
+interface WellKnownRule {
+  name: string;
+  match:
+    | { type: 'host_suffix'; value: string }
+    | { type: 'host_exact';  value: string }
+    | { type: 'ptr_suffix';  value: string }
+    | { type: 'ip_cidr';     value: string };
+}
+interface RegisteredEndpointEntry { key: string; note: string; added_at: string }
+
+async function loadKnownEndpoints() {
+  const wkEl = document.getElementById('endpointsWellKnown');
+  const regEl = document.getElementById('endpointsRegistered');
+  const countEl = document.getElementById('endpointsCount');
+  if (!wkEl || !regEl) return;
+  wkEl.innerHTML = '<p class="muted">読み込み中…</p>';
+  regEl.innerHTML = '<p class="muted">読み込み中…</p>';
+  try {
+    const [wkRes, regRes] = await Promise.all([
+      api('/api/packet-monitor/well-known') as Promise<{ items: WellKnownRule[] }>,
+      api('/api/packet-monitor/registered') as Promise<{ items: RegisteredEndpointEntry[] }>,
+    ]);
+    renderKnownEndpoints(wkRes.items || [], regRes.items || []);
+    if (countEl) countEl.textContent = `内蔵 ${wkRes.items?.length || 0} 件 / 登録 ${regRes.items?.length || 0} 件`;
+  } catch (e) {
+    wkEl.innerHTML = `<p class="muted">取得失敗: ${escapeHtml((e as Error).message)}</p>`;
+    regEl.innerHTML = '';
+  }
+}
+
+function renderKnownEndpoints(wellKnown: WellKnownRule[], registered: RegisteredEndpointEntry[]) {
+  const wkEl = document.getElementById('endpointsWellKnown');
+  const regEl = document.getElementById('endpointsRegistered');
+  if (!wkEl || !regEl) return;
+
+  // 同じ name の行は最初の name セルだけに名前を見せる (= 「Cloudflare には 5 条件」 を視覚的に)
+  const groupedByName = new Map<string, WellKnownRule[]>();
+  for (const r of wellKnown) {
+    const arr = groupedByName.get(r.name) || [];
+    arr.push(r);
+    groupedByName.set(r.name, arr);
+  }
+  const wkRows: string[] = [];
+  for (const [name, rules] of groupedByName) {
+    rules.forEach((r, idx) => {
+      const tname = r.match.type;
+      const v = r.match.value;
+      const typeLabel = tname === 'host_suffix' ? 'host サフィックス'
+        : tname === 'host_exact' ? 'host 完全一致'
+        : tname === 'ptr_suffix' ? 'PTR サフィックス'
+        : 'IP CIDR';
+      const nameCell = idx === 0
+        ? `<span class="endpoints-name">${escapeHtml(name)}</span>${rules.length > 1 ? ` <span class="muted">×${rules.length}</span>` : ''}`
+        : '';
+      wkRows.push(`<tr>
+        <td class="endpoints-namecell">${nameCell}</td>
+        <td class="endpoints-typecell"><span class="endpoints-type">${typeLabel}</span></td>
+        <td class="endpoints-valcell"><code>${escapeHtml(v)}</code></td>
+      </tr>`);
+    });
+  }
+  wkEl.innerHTML = wellKnown.length === 0
+    ? '<p class="muted">内蔵 well-known 辞書は空です</p>'
+    : `<table class="endpoints-table">
+        <thead><tr><th>サービス名</th><th>マッチ種別</th><th>値</th></tr></thead>
+        <tbody>${wkRows.join('')}</tbody>
+      </table>`;
+
+  if (registered.length === 0) {
+    regEl.innerHTML = '<p class="muted">まだ登録された宛先はありません。 🛡 パケット監視アプリで「＋ 登録」 を押すとここに溜まります。</p>';
+    return;
+  }
+  regEl.innerHTML = `<table class="endpoints-table">
+    <thead><tr><th>宛先 (ドメイン / IP)</th><th>メモ</th><th>登録時刻</th><th></th></tr></thead>
+    <tbody>${registered.map((e) => `<tr>
+      <td><code>${escapeHtml(e.key)}</code></td>
+      <td class="muted">${escapeHtml(e.note || '')}</td>
+      <td class="muted" style="font-size:11px">${escapeHtml(fmtDate(e.added_at))}</td>
+      <td><button class="ghost endpoints-delete-btn" type="button" data-key="${escapeHtml(e.key)}" title="登録を削除">削除</button></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+document.getElementById('endpointsRefresh')?.addEventListener('click', () => void loadKnownEndpoints());
+document.getElementById('endpointsRegistered')?.addEventListener('click', async (ev) => {
+  const btn = (ev.target as HTMLElement).closest('.endpoints-delete-btn') as HTMLElement | null;
+  if (!btn) return;
+  const key = btn.dataset.key || '';
+  if (!key) return;
+  if (!confirm(`「${key}」 の登録を削除しますか?`)) return;
+  try {
+    await api(`/api/packet-monitor/registered/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    flashToast(`✓ 「${key}」 を削除しました`);
+    void loadKnownEndpoints();
+  } catch (e) {
+    flashToast(`⚠ 削除失敗: ${(e as Error).message}`);
+  }
+});
 
 // ── アプリカタログ (カード形式) ─────────────────────────────────────
 // ドメインタブと同じ pin-grid カードレイアウト。 詳細編集は appsDetail モーダル。
@@ -8096,9 +8536,26 @@ function migrateWorklogSubViews() {
 }
 migrateWorklogSubViews();
 migrateDatabaseSubViews();
+migrateAiSubViews();
 document.querySelectorAll('#databaseSubtabs [data-db-sub]').forEach(btn => {
   btn.addEventListener('click', () => switchDatabaseSub(btn.dataset.dbSub));
 });
+document.querySelectorAll('#aiSubtabs [data-ai-sub]').forEach(btn => {
+  btn.addEventListener('click', () => switchAiSub(btn.dataset.aiSub));
+});
+// ── 起動時のタブ表示 (boot activation) ───────────────────────────────────
+// migrate*SubViews() は bookmarks / recommend 等のサブビューを hidden コンテナ
+// (databaseView / aiView) に取り込んで全て hidden にする。 既定タブ (state.tab)
+// を一度 switchTab して実際に中身を表示しないと、 active なタブボタンだけ光って
+// ビューが hidden のまま = 「データベース / AI タブが表示されない」状態になる。
+// (静的 HTML で唯一 hidden の無かった bookmarksView も migrate 後は hidden に
+//  なるため、 この明示的な活性化が必須。)
+switchTab(state.tab as string);
+// ai-view.ts のトーストを app.ts の flashToast に接続。
+setAiToast((msg) => flashToast(msg));
+// task-review-view.ts のトースト + 変更時タスク再読込を接続。
+setTaskReviewToast((msg) => flashToast(msg));
+setTaskReviewOnChange(() => { void loadTasks(); });
 $('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
 
 function switchWorklogSub(sub) {
@@ -8791,111 +9248,50 @@ $('wlGeminiWebContent')?.addEventListener('keydown', (e) => {
   }
 });
 
-// ── 🌐 Multi (Memoria Hub) browse ─────────────────────────────────────────
-state.multiSubtab = 'bookmarks';
+// ── 🌐 Multi (Memoria Hub) 接続管理ビュー ─────────────────────────────────
+//
+// 二層設計では #multiView は「Hub への接続管理」 ビュー。 Infisical セットアップ
+// または Hub ログインフォームを出すだけ。 旧 Multi browse タブ (共有データの
+// 一覧 / download / moderation) は Phase 6 で撤去した — Hub のデータはモードを
+// 切り替えると通常のタブに proxy 経由でそのまま出る。
 
 function refreshMultiTabVisibility() {
   const visible = !!state.multi?.connected;
-  document.querySelectorAll('.tab-multi-only').forEach(t => { t.hidden = !visible; });
-  if (!visible && state.tab === 'multi') switchTab('bookmarks');
+  document.querySelectorAll('.tab-multi-only').forEach(t => { (t as HTMLElement).hidden = !visible; });
+  // 未接続でも multi タブに居る場合 (= Hub login をしようとしている) はそのまま居らせる。
+  // 旧仕様では database へ自動リダイレクトしていたが、 二層設計では multi タブは
+  // login フォーム専用ビューなので、 未接続 = 表示すべき状態 になる。
   if (visible) {
     const badge = $('multiUserBadge');
     if (badge) badge.textContent = `🌐 ${state.multi.user.name} (${state.multi.user.role})`;
   }
-  const role = state.multi?.user?.role;
-  const isMod = role === 'admin' || role === 'moderator';
-  document.querySelectorAll('.multi-mod-only').forEach(t => { t.hidden = !(visible && isMod); });
 }
 
-function isCurrentUserModerator() {
-  const role = state.multi?.user?.role;
-  return role === 'admin' || role === 'moderator';
-}
-
+// #multiView を開いたとき: Infisical 未設定なら setup フォーム、 設定済なら
+// Hub ログインフォームを出す。 旧 browse 部 (#multiMainContent) は常に隠す。
 async function loadMulti() {
   refreshMultiTabVisibility();
-  // Multi Mode は Cernere 認証 (= Infisical 由来の CERNERE_BASE_URL) 前提。
-  // 未設定なら Hub の中身ではなく Infisical setup フォームを出す。
-  // status 取得失敗時は素通り (= 旧 server 互換、 Local 機能を妨げない)。
-  let infiConfigured = true;
-  try {
-    const st = await api('/api/setup/infisical/status') as { configured?: boolean };
-    infiConfigured = st.configured !== false;
-  } catch { infiConfigured = true; }
-  const setupEl = $('multiInfisicalSetup');
+  // Local Memoria は Infisical を使わないので、 旧 multiInfisicalSetup の
+  // 出し分けは廃止。 Hub ログインフォームを常に表示する。
   const loginEl = $('multiCernereLogin');
   const mainEl = $('multiMainContent');
-  // gate 1: Infisical 未設定 → setup フォーム
-  if (!infiConfigured) {
-    setupEl?.classList.remove('hidden');
-    loginEl?.classList.add('hidden');
-    mainEl?.classList.add('hidden');
-    return;
-  }
-  setupEl?.classList.add('hidden');
-  // gate 2: Infisical OK だが Hub 未接続 → Cernere ログインフォーム
-  if (!state.multi?.connected) {
-    loginEl?.classList.remove('hidden');
-    mainEl?.classList.add('hidden');
-    // Hub URL 欄に登録済 server を pre-fill
-    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
-    const firstUrl = state.multi?.servers?.[0]?.url;
-    if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
-    return;
-  }
-  loginEl?.classList.add('hidden');
-  mainEl?.classList.remove('hidden');
-  const sub = state.multiSubtab;
-  document.querySelectorAll('.multi-subtab').forEach(b => {
-    b.classList.toggle('active', b.dataset.mtab === sub);
-  });
-  if (sub === 'moderation') {
-    return loadModeration();
-  }
-  let url;
-  if (sub === 'bookmarks') url = '/api/multi/proxy/api/shared/bookmarks?limit=50';
-  else if (sub === 'digs') url = '/api/multi/proxy/api/shared/digs?limit=50';
-  else url = '/api/multi/proxy/api/shared/dictionary?limit=200';
-  let data;
-  try { data = await api(url); }
-  catch (e) {
-    $('multiList').innerHTML = `<div class="queue-empty">取得失敗: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
-  const items = data.items || [];
-  if (!items.length) {
-    $('multiList').innerHTML = '<div class="queue-empty">該当エントリなし</div>';
-    return;
-  }
-  if (sub === 'bookmarks') $('multiList').innerHTML = items.map(renderMultiBookmark).join('');
-  else if (sub === 'digs') $('multiList').innerHTML = items.map(renderMultiDig).join('');
-  else $('multiList').innerHTML = items.map(renderMultiDict).join('');
-  $('multiList').querySelectorAll('[data-download]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const kind = btn.dataset.download;
-      const id = Number(btn.dataset.id);
-      btn.disabled = true;
-      btn.textContent = '取込中…';
-      try {
-        await api('/api/multi/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind, remote_id: id }),
-        });
-        btn.textContent = '✓ 取込済';
-      } catch (e) {
-        btn.textContent = `✗ ${e.message}`;
-        btn.disabled = false;
-      }
-    });
-  });
-  $('multiList').querySelectorAll('[data-hide]').forEach(btn => {
-    btn.addEventListener('click', () => moderate('hide', btn.dataset.hide, Number(btn.dataset.id)));
-  });
+  mainEl?.classList.add('hidden');
+  loginEl?.classList.remove('hidden');
+  // Hub URL は hidden field に保持。 表示は #multiLoginUrlDisplay に流す。
+  const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
+  const urlDisplay = $('multiLoginUrlDisplay');
+  const firstUrl = state.multi?.servers?.[0]?.url;
+  if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
+  if (urlDisplay) urlDisplay.textContent = (urlInput?.value || firstUrl || '— (Hub が未登録)');
 }
 
-// Cernere ログインフォーム (Multi view 内) の送信。 成功で Hub に接続済みになり、
-// loadMulti を呼び直して通常の Hub 内容へ。
+// Hub ログインフォーム (#multiView 内) の送信。 成功したら selectDataSource で
+// その Hub を Multi モードのデータソースに切り替える。
+// Cernere Composite SSO popup flow.
+// 1) Local /api/multi/login-url で Cernere popup URL を取得
+// 2) window.open() で popup を開く
+// 3) postMessage({ type: 'cernere:auth', authCode }) を Cernere popup から受け取る
+// 4) Local /api/multi/exchange に authCode を渡して session を確立
 document.getElementById('multiLoginSubmit')?.addEventListener('click', async () => {
   const btn = $('multiLoginSubmit') as HTMLButtonElement | null;
   const msg = $('multiLoginMsg');
@@ -8905,199 +9301,85 @@ document.getElementById('multiLoginSubmit')?.addEventListener('click', async () 
     msg.style.color = ok ? '#1f7a1f' : '#c0392b';
     msg.hidden = false;
   };
-  const url = ($('multiLoginUrl') as HTMLInputElement).value.trim();
-  const email = ($('multiLoginEmail') as HTMLInputElement).value.trim();
-  const password = ($('multiLoginPassword') as HTMLInputElement).value;
-  if (!url || !email || !password) {
-    return setMsg('⚠ Hub URL / メールアドレス / パスワードは必須');
-  }
+  const url = (($('multiLoginUrl') as HTMLInputElement)?.value || state.multi?.servers?.[0]?.url || '').trim().replace(/\/$/, '');
+  if (!url) return setMsg('⚠ Hub が登録されていません。 設定タブから Hub を追加してください');
   if (btn) { btn.disabled = true; btn.textContent = 'ログイン中…'; }
+  let popup: Window | null = null;
+  let onMessage: ((ev: MessageEvent) => void) | null = null;
+  let popupWatch: number | null = null;
+  const cleanup = () => {
+    if (onMessage) window.removeEventListener('message', onMessage);
+    if (popupWatch != null) clearInterval(popupWatch);
+    if (popup && !popup.closed) { try { popup.close(); } catch { /* ignore */ } }
+    if (btn) { btn.disabled = false; btn.textContent = '🔐 Cernere でログイン'; }
+  };
   try {
-    const res = await fetch('/api/multi/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, email, password }),
+    // 1. Cernere の popup URL を Local server 経由で取得 (= Hub に問い合わせ)
+    const luQs = `url=${encodeURIComponent(url)}&origin=${encodeURIComponent(window.location.origin)}`;
+    const luRes = await fetch(`/api/multi/login-url?${luQs}`);
+    const luData = await luRes.json() as { url?: string; error?: string };
+    if (!luRes.ok || !luData.url) {
+      setMsg(`⚠ ${luData.error || `login-url 取得失敗: ${luRes.status}`}`);
+      cleanup();
+      return;
+    }
+    // 2. popup を中央寄せで開く (500x700)
+    const w = 500, h = 700;
+    const x = Math.max(0, window.screenX + (window.outerWidth - w) / 2);
+    const y = Math.max(0, window.screenY + (window.outerHeight - h) / 2);
+    popup = window.open(
+      luData.url, 'cernere-login',
+      `width=${w},height=${h},left=${x},top=${y}`,
+    );
+    if (!popup) {
+      setMsg('⚠ popup が開けませんでした (ブラウザのポップアップブロック?)');
+      cleanup();
+      return;
+    }
+    setMsg('Cernere ログインを popup で開きました');
+
+    // 3. postMessage で authCode を受け取る
+    const expectedOrigin = new URL(luData.url).origin;
+    await new Promise<void>((resolve, reject) => {
+      onMessage = (ev: MessageEvent) => {
+        if (ev.origin !== expectedOrigin) return;
+        const m = ev.data as { type?: string; authCode?: string };
+        if (m?.type !== 'cernere:auth' || !m.authCode) return;
+        (async () => {
+          try {
+            const exRes = await fetch('/api/multi/exchange', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url, authCode: m.authCode }),
+            });
+            const exData = await exRes.json() as { user?: { displayName?: string }; error?: string };
+            if (!exRes.ok) {
+              setMsg(`⚠ ${exData.error || `exchange 失敗: ${exRes.status}`}`);
+              return reject(new Error('exchange failed'));
+            }
+            setMsg(`✓ ${exData.user?.displayName || ''} としてログインしました`, true);
+            await refreshMultiStatus();
+            setTimeout(() => { void selectDataSource(url); }, 400);
+            resolve();
+          } catch (e) { reject(e); }
+        })();
+      };
+      window.addEventListener('message', onMessage);
+      // popup が閉じられたら abort
+      popupWatch = window.setInterval(() => {
+        if (popup && popup.closed) reject(new Error('popup closed by user'));
+      }, 500);
     });
-    const j = await res.json() as { user?: { displayName?: string }; error?: string };
-    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
-    setMsg(`✓ ${j.user?.displayName || ''} としてログインしました`, true);
-    ($('multiLoginPassword') as HTMLInputElement).value = '';
-    await refreshMultiStatus();
-    setTimeout(() => { void loadMulti(); }, 600);
   } catch (e: unknown) {
     setMsg(`⚠ ${(e as Error).message}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'ログイン'; }
+    cleanup();
   }
 });
 
 // Infisical setup フォーム (Multi view 内) の送信。 成功したら loadMulti を
 // 呼び直して通常の Hub 内容に切り替える。
-document.getElementById('infiSetupSubmit')?.addEventListener('click', async () => {
-  const btn = $('infiSetupSubmit') as HTMLButtonElement | null;
-  const msg = $('infiSetupMsg');
-  const setMsg = (text: string, ok = false) => {
-    if (!msg) return;
-    msg.textContent = text;
-    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
-    msg.hidden = false;
-  };
-  const body = {
-    siteUrl: ($('infiSiteUrl') as HTMLInputElement).value.trim(),
-    projectId: ($('infiProjectId') as HTMLInputElement).value.trim(),
-    environment: ($('infiEnvironment') as HTMLInputElement).value.trim() || 'dev',
-    clientId: ($('infiClientId') as HTMLInputElement).value.trim(),
-    clientSecret: ($('infiClientSecret') as HTMLInputElement).value.trim(),
-  };
-  if (!body.siteUrl || !body.projectId || !body.clientId || !body.clientSecret) {
-    return setMsg('⚠ Site URL / Project ID / Client ID / Client Secret は必須');
-  }
-  if (btn) { btn.disabled = true; btn.textContent = '接続中…'; }
-  try {
-    const res = await fetch('/api/setup/infisical', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await res.json() as { injected?: number; error?: string };
-    if (!res.ok) { setMsg(`⚠ ${j.error || res.status}`); return; }
-    setMsg(`✓ ${j.injected ?? 0} 件の secret を取得しました`, true);
-    setTimeout(() => { void loadMulti(); }, 900);
-  } catch (e: unknown) {
-    setMsg(`⚠ ${(e as Error).message}`);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '接続して保存'; }
-  }
-});
-
-async function moderate(action, kind, id) {
-  if (action === 'hide') {
-    const reason = prompt('非表示にする理由 (任意):') ?? '';
-    if (reason === null) return;
-    try {
-      await api('/api/multi/proxy/api/shared/moderation/hide', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind, id, reason }),
-      });
-      showShareToast('🛡 非表示にしました');
-      loadMulti();
-    } catch (e) { alert(`失敗: ${e.message}`); }
-    return;
-  }
-  if (action === 'unhide') {
-    try {
-      await api('/api/multi/proxy/api/shared/moderation/unhide', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind, id }),
-      });
-      showShareToast('✓ 復元しました');
-      loadModeration();
-    } catch (e) { alert(`失敗: ${e.message}`); }
-  }
-}
-
-async function loadModeration() {
-  if (!isCurrentUserModerator()) {
-    $('multiList').innerHTML = '<div class="queue-empty">モデレーション権限がありません</div>';
-    return;
-  }
-  let hidden, log;
-  try {
-    [hidden, log] = await Promise.all([
-      api('/api/multi/proxy/api/shared/moderation/hidden?limit=100'),
-      api('/api/multi/proxy/api/shared/moderation/log?limit=100'),
-    ]);
-  } catch (e) {
-    $('multiList').innerHTML = `<div class="queue-empty">取得失敗: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
-  const hiddenItems = hidden.items || [];
-  const logItems = log.items || [];
-  $('multiList').innerHTML = `
-    <h3 class="mod-h">非表示中 (${hiddenItems.length})</h3>
-    ${hiddenItems.length === 0 ? '<div class="queue-empty">非表示エントリなし</div>'
-      : hiddenItems.map(i => `<div class="multi-card mod-hidden-card">
-          <div class="title">${KIND_LABEL[i.kind] || i.kind} — ${escapeHtml(i.label || `id=${i.id}`)}</div>
-          <div class="multi-meta">
-            <span>owner: ${escapeHtml(i.owner_user_name || i.owner_user_id)}</span>
-            <span>hidden ${fmtDate(i.hidden_at)} by ${escapeHtml(i.hidden_by || '?')}</span>
-            ${i.hidden_reason ? `<span>${escapeHtml(i.hidden_reason)}</span>` : ''}
-            <button class="ghost ghost-sm" data-unhide="${i.kind}" data-id="${i.id}">↺ 復元</button>
-          </div>
-        </div>`).join('')}
-    <h3 class="mod-h">監査ログ (最新 ${logItems.length})</h3>
-    <ul class="mod-log">
-      ${logItems.map(e => `<li>
-        <span class="mono">${escapeHtml(e.occurred_at)}</span>
-        <b>${escapeHtml(e.action)}</b> ${escapeHtml(e.resource_kind)}#${e.resource_id}
-        by ${escapeHtml(e.acting_user_id)}
-        ${e.details_json ? `<span class="mod-det">${escapeHtml(JSON.stringify(e.details_json))}</span>` : ''}
-      </li>`).join('')}
-    </ul>
-  `;
-  $('multiList').querySelectorAll('[data-unhide]').forEach(btn => {
-    btn.addEventListener('click', () => moderate('unhide', btn.dataset.unhide, Number(btn.dataset.id)));
-  });
-}
-
-const KIND_LABEL = { bookmark: '📑', dig: '⛏', dict: '📖' };
-
-function modHideButton(kind, id) {
-  return isCurrentUserModerator()
-    ? `<button class="ghost ghost-sm danger" data-hide="${kind}" data-id="${id}">🛡 非表示</button>`
-    : '';
-}
-
-function renderMultiBookmark(b) {
-  return `<div class="multi-card">
-    <div class="title">${escapeHtml(b.title || b.url)}</div>
-    <div class="url"><a href="${escapeHtml(b.url)}" target="_blank" rel="noreferrer">${escapeHtml(b.url)}</a></div>
-    ${b.summary ? `<div class="summary">${escapeHtml(b.summary)}</div>` : ''}
-    <div class="cats">${(b.categories || []).map(c => `<span class="cat">${escapeHtml(c)}</span>`).join('')}</div>
-    <div class="multi-meta">
-      <span>by ${escapeHtml(b.owner_user_name || b.owner_user_id || '?')}</span>
-      <span>${fmtDate(b.shared_at)}</span>
-      <button class="ghost ghost-sm" data-download="bookmark" data-id="${b.id}">📥 ローカルへ取込</button>
-      ${modHideButton('bookmark', b.id)}
-    </div>
-  </div>`;
-}
-
-function renderMultiDig(d) {
-  const r = d.result_json || d.result || {};
-  const summary = (r.summary || '').slice(0, 600);
-  return `<div class="multi-card">
-    <div class="title">⛏ ${escapeHtml(d.query)}</div>
-    ${summary ? `<div class="summary">${escapeHtml(summary)}</div>` : ''}
-    <div class="multi-meta">
-      <span>by ${escapeHtml(d.owner_user_name || d.owner_user_id || '?')}</span>
-      <span>${fmtDate(d.shared_at)}</span>
-      <button class="ghost ghost-sm" data-download="dig" data-id="${d.id}">📥 ローカルへ取込</button>
-      ${modHideButton('dig', d.id)}
-    </div>
-  </div>`;
-}
-
-function renderMultiDict(e) {
-  return `<div class="multi-card">
-    <div class="title">📖 ${escapeHtml(e.term)}</div>
-    ${e.definition ? `<div class="summary">${escapeHtml(e.definition)}</div>` : ''}
-    <div class="multi-meta">
-      <span>by ${escapeHtml(e.owner_user_name || e.owner_user_id || '?')}</span>
-      <span>${fmtDate(e.shared_at)}</span>
-      <button class="ghost ghost-sm" data-download="dict" data-id="${e.id}">📥 ローカルへ取込</button>
-      ${modHideButton('dict', e.id)}
-    </div>
-  </div>`;
-}
-
-document.querySelectorAll('.multi-subtab').forEach(b => {
-  b.addEventListener('click', () => {
-    state.multiSubtab = b.dataset.mtab;
-    loadMulti();
-  });
-});
-document.getElementById('multiRefresh')?.addEventListener('click', loadMulti);
+// Local Memoria は Infisical を直接知らない設計に統一済 — 旧 infiSetupSubmit
+// ハンドラ + /api/setup/infisical 経路は撤去された。
 
 // First paint: surface the multi tab if we're already connected.
 refreshMultiTabVisibility();
@@ -10412,6 +10694,119 @@ async function loadTracksWeather(opts: { force?: boolean } = {}) {
   }
 }
 
+// /api/weather/briefing で今日の対象地点を複数サイト検証し、 雨判定を表示。
+// あわせて成長型ブラックボックスのレビュー待ち (OK/NG) を読み込む。
+interface BriefingEntryDto {
+  place: string; kind: string; willRain: boolean; onsetHour: string | null;
+  votesAtOnset: { rain: number; total: number } | null; popAtOnset: number | null;
+  source: string; status: string; rationale: string;
+  sourcesUsed: number; sourcesFailed: number;
+}
+async function loadWeatherBriefing() {
+  const body = document.getElementById('tracksBriefingBody');
+  const pill = document.getElementById('tracksBriefingPill');
+  if (!body) return;
+  if (pill) { pill.className = 'ext-cfg-pill ext-cfg-pill-loading'; pill.textContent = '検証中…'; }
+  body.innerHTML = '<span class="muted">複数サイトを照合中…</span>';
+  try {
+    const b = await api('/api/weather/briefing') as { date: string; entries: BriefingEntryDto[]; anyRain: boolean };
+    if (!b.entries.length) {
+      body.innerHTML = '<span class="muted">対象地点なし。 「作業場所」 に自宅 (🏠) を登録してください。</span>';
+      if (pill) { pill.className = 'ext-cfg-pill ext-cfg-pill-inactive'; pill.textContent = '地点なし'; }
+      return;
+    }
+    body.innerHTML = b.entries.map((e) => {
+      const kindIcon = e.kind === 'home' ? '🏠' : '📍';
+      const rain = e.willRain
+        ? `☔ ${e.onsetHour ? e.onsetHour.slice(11, 16) + ' 頃から' : '日中'}雨`
+        : '☀️ 雨なし';
+      const votes = e.votesAtOnset ? ` (${e.votesAtOnset.rain}/${e.votesAtOnset.total}ソース一致${e.popAtOnset != null ? ` / 降水確率${e.popAtOnset}%` : ''})` : '';
+      const prov = e.source === 'rule'
+        ? (e.status === 'pending_review' ? '<span style="color:#b8860b">ルール判定(承認待ち)</span>' : 'ルール判定')
+        : 'AI判定';
+      const srcInfo = `${e.sourcesUsed}サイト${e.sourcesFailed ? ` (失敗${e.sourcesFailed})` : ''}`;
+      return `<div style="padding:4px 0;border-bottom:1px solid var(--border,#eee)">
+        <div><strong>${kindIcon} ${escapeHtml(e.place)}</strong> — ${rain}${escapeHtml(votes)}</div>
+        <div class="muted" style="font-size:11px">${prov} / ${srcInfo} — ${escapeHtml(e.rationale)}</div>
+      </div>`;
+    }).join('');
+    if (pill) {
+      pill.className = 'ext-cfg-pill ' + (b.anyRain ? 'ext-cfg-pill-configured' : 'ext-cfg-pill-active');
+      pill.textContent = b.anyRain ? '雨の予報あり' : '雨なし';
+    }
+  } catch (e: unknown) {
+    body.innerHTML = `<span style="color:var(--danger)">検証失敗: ${escapeHtml((e as Error)?.message || '')}</span>`;
+    if (pill) { pill.className = 'ext-cfg-pill ext-cfg-pill-inactive'; pill.textContent = '失敗'; }
+  }
+  void loadBlackboxReview();
+}
+
+interface BlackboxDecisionDto { id: number; domain: string; rationale: string; output: unknown; }
+async function loadBlackboxReview() {
+  const host = document.getElementById('tracksBlackboxReview');
+  if (!host) return;
+  try {
+    const r = await api('/api/blackbox/decisions?status=pending_review&limit=20') as { items: BlackboxDecisionDto[] };
+    if (!r.items.length) { host.innerHTML = ''; return; }
+    host.innerHTML = '<div class="muted" style="font-size:11px;margin-bottom:4px">ルールが先に判断した項目 — OK/NG で育てる:</div>'
+      + r.items.map((d) => `<div class="bb-review-item" data-id="${d.id}" style="display:flex;gap:6px;align-items:center;padding:3px 0">
+          <span style="flex:1;font-size:11px">[${escapeHtml(d.domain)}] ${escapeHtml(d.rationale)}</span>
+          <button class="ghost bb-ok" data-id="${d.id}" type="button">OK</button>
+          <button class="ghost bb-ng" data-id="${d.id}" type="button">NG</button>
+        </div>`).join('');
+    host.querySelectorAll<HTMLButtonElement>('.bb-ok').forEach((btn) =>
+      btn.addEventListener('click', () => void postBlackboxVerdict(Number(btn.dataset.id), 'ok')));
+    host.querySelectorAll<HTMLButtonElement>('.bb-ng').forEach((btn) =>
+      btn.addEventListener('click', () => void postBlackboxVerdict(Number(btn.dataset.id), 'ng')));
+  } catch { host.innerHTML = ''; }
+}
+
+async function postBlackboxVerdict(id: number, verdict: 'ok' | 'ng') {
+  try {
+    await api(`/api/blackbox/decisions/${id}/verdict`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ verdict }) });
+    await loadBlackboxReview();
+  } catch (e: unknown) { alert(`記録失敗: ${(e as Error)?.message || ''}`); }
+}
+
+// /api/weather/ensemble を叩いて全API のアンサンブルを DB 保存 + 時間別の表で表示。
+interface EnsembleHourDto {
+  hour: string; votesRain: number; votesTotal: number; agreement: number;
+  avgPop: number | null; maxPrecipMm: number | null;
+}
+interface EnsembleSourceDto { id: string; ok: boolean; error: string | null; points: number; }
+async function loadEnsembleTable() {
+  const host = document.getElementById('tracksEnsembleTable');
+  if (!host) return;
+  host.innerHTML = '<span class="muted">全予報サイトを取得中…</span>';
+  try {
+    const r = await api('/api/weather/ensemble') as {
+      snapshot_id: number; date: string; sources: EnsembleSourceDto[]; hours: EnsembleHourDto[]; agreement_threshold: number;
+    };
+    const okN = r.sources.filter((s) => s.ok).length;
+    const head = `<div style="margin-bottom:4px">DB保存: <code>weather_ensemble_snapshots</code> #${r.snapshot_id} / ソース ${okN}/${r.sources.length}成功 / 一致しきい値 ${Math.round(r.agreement_threshold * 100)}%`
+      + ` <span class="muted">(${r.sources.map((s) => `${s.ok ? '○' : '×'}${escapeHtml(s.id)}`).join(' ')})</span></div>`;
+    if (!r.hours.length) { host.innerHTML = head + '<span class="muted">これ以降の予報なし</span>'; return; }
+    const rows = r.hours.map((h) => {
+      const rain = h.agreement >= r.agreement_threshold;
+      return `<tr style="${rain ? 'background:rgba(52,152,219,.12)' : ''}">
+        <td style="padding:2px 6px">${h.hour.slice(11, 16)}</td>
+        <td style="padding:2px 6px;text-align:center">${rain ? '☔' : '·'} ${h.votesRain}/${h.votesTotal}</td>
+        <td style="padding:2px 6px;text-align:right">${Math.round(h.agreement * 100)}%</td>
+        <td style="padding:2px 6px;text-align:right">${h.avgPop != null ? h.avgPop + '%' : '—'}</td>
+        <td style="padding:2px 6px;text-align:right">${h.maxPrecipMm != null ? h.maxPrecipMm.toFixed(1) : '0'}mm</td>
+      </tr>`;
+    }).join('');
+    host.innerHTML = head + `<table style="border-collapse:collapse;width:100%;font-size:11px">
+      <thead><tr style="border-bottom:1px solid var(--border,#ddd)">
+        <th style="padding:2px 6px;text-align:left">時刻</th><th style="padding:2px 6px">雨票(雨/全)</th>
+        <th style="padding:2px 6px;text-align:right">一致</th><th style="padding:2px 6px;text-align:right">降水確率</th>
+        <th style="padding:2px 6px;text-align:right">降水量</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e: unknown) {
+    host.innerHTML = `<span style="color:var(--danger)">取得失敗: ${escapeHtml((e as Error)?.message || '')}</span>`;
+  }
+}
+
 function renderWeatherHourly(hourly: { time: string[]; temperature: number[];
   precipitation: number[]; precipitation_probability: number[]; weather_code: number[] }, date: string) {
   const host = document.getElementById('tracksWeatherHourly');
@@ -10463,11 +10858,24 @@ function setText(id: string, v: string) {
   if (el) el.textContent = v;
 }
 
-// 固定 lat/lon モーダル
+// 固定 lat/lon + プロバイダ API キーのモーダル
+function setKeyState(id: string, isSet: boolean) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = isSet ? '（設定済み）' : '（未設定）';
+}
+
 async function openWeatherSettings() {
   const r = await api('/api/weather/config') as { fixed_lat: number | null; fixed_lon: number | null };
   ($('weatherSettingsLat') as HTMLInputElement).value = r.fixed_lat != null ? String(r.fixed_lat) : '';
   ($('weatherSettingsLon') as HTMLInputElement).value = r.fixed_lon != null ? String(r.fixed_lon) : '';
+  // キーは値を読み戻さない (サーバは has_*_key の真偽のみ返す)。 入力は空にして状態だけ表示。
+  ($('weatherSettingsOwmKey') as HTMLInputElement).value = '';
+  ($('weatherSettingsWapiKey') as HTMLInputElement).value = '';
+  try {
+    const s = await api('/api/weather/sources') as { has_openweathermap_key?: boolean; has_weatherapi_key?: boolean };
+    setKeyState('weatherOwmKeyState', !!s.has_openweathermap_key);
+    setKeyState('weatherWapiKeyState', !!s.has_weatherapi_key);
+  } catch { /* sources 取得失敗は状態非表示で続行 */ }
   const err = $('weatherSettingsError');
   if (err) { err.hidden = true; err.textContent = ''; }
   showModal('weatherSettingsModal');
@@ -10476,26 +10884,45 @@ async function openWeatherSettings() {
 async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
   const err = $('weatherSettingsError');
   const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
-  let payload: { lat: number | null; lon: number | null };
+
+  // 1) 座標: clear なら null、 両方入力ありなら保存、 空なら触らない
+  let configPayload: { lat: number | null; lon: number | null } | null = null;
   if (opts.clear) {
-    payload = { lat: null, lon: null };
+    configPayload = { lat: null, lon: null };
   } else {
     const latStr = ($('weatherSettingsLat') as HTMLInputElement).value.trim();
     const lonStr = ($('weatherSettingsLon') as HTMLInputElement).value.trim();
-    if (!latStr || !lonStr) return showErr('lat / lon の両方を入力してください (空欄保存は ✖ 解除 ボタン)');
-    const lat = Number(latStr); const lon = Number(lonStr);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return showErr('数値を入力してください');
-    payload = { lat, lon };
-  }
-  try {
-    const res = await fetch('/api/weather/config', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({})) as { error?: string };
-      return showErr(body.error || `${res.status}`);
+    if (latStr || lonStr) {
+      if (!latStr || !lonStr) return showErr('座標は lat / lon の両方を入力してください (解除は「座標解除」 ボタン)');
+      const lat = Number(latStr); const lon = Number(lonStr);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return showErr('座標は数値で入力してください');
+      configPayload = { lat, lon };
     }
+  }
+
+  // 2) API キー: 入力があるものだけ送る (空欄は変更しない)
+  const owm = opts.clear ? '' : ($('weatherSettingsOwmKey') as HTMLInputElement).value.trim();
+  const wapi = opts.clear ? '' : ($('weatherSettingsWapiKey') as HTMLInputElement).value.trim();
+  const sourcesPayload: { openweathermap_api_key?: string; weatherapi_api_key?: string } = {};
+  if (owm) sourcesPayload.openweathermap_api_key = owm;
+  if (wapi) sourcesPayload.weatherapi_api_key = wapi;
+  const hasSources = Object.keys(sourcesPayload).length > 0;
+
+  if (!configPayload && !hasSources) return showErr('変更がありません');
+
+  const patch = async (url: string, body: unknown): Promise<boolean> => {
+    const res = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({})) as { error?: string };
+      showErr(b.error || `${res.status}`);
+      return false;
+    }
+    return true;
+  };
+
+  try {
+    if (configPayload && !(await patch('/api/weather/config', configPayload))) return;
+    if (hasSources && !(await patch('/api/weather/sources', sourcesPayload))) return;
     hideModal('weatherSettingsModal');
     void loadTracksWeather({ force: true });
   } catch (e) {
@@ -10505,6 +10932,8 @@ async function saveWeatherSettings(opts: { clear?: boolean } = {}) {
 
 document.getElementById('tracksWeatherRefresh')?.addEventListener('click', () => void loadTracksWeather({ force: true }));
 document.getElementById('tracksWeatherSettingsBtn')?.addEventListener('click', () => void openWeatherSettings());
+document.getElementById('tracksBriefingRefresh')?.addEventListener('click', () => void loadWeatherBriefing());
+document.getElementById('tracksEnsembleRefresh')?.addEventListener('click', () => void loadEnsembleTable());
 document.getElementById('weatherSettingsSaveBtn')?.addEventListener('click', () => void saveWeatherSettings());
 document.getElementById('weatherSettingsClearBtn')?.addEventListener('click', () => void saveWeatherSettings({ clear: true }));
 document.getElementById('weatherSettingsCloseBtn')?.addEventListener('click', () => hideModal('weatherSettingsModal'));
@@ -10535,12 +10964,25 @@ const REVIEW_FILES_UI = [
   ['REVIEW_MISSING_FEATURES.md', '不足機能'],
   ['REVIEW_QUALITY.md', '品質'],
 ];
+// Foedus (Cernere↔Hub 連結契約レビュー) 形式のファイルタブ。
+const FOEDUS_FILES_UI = [
+  ['REVIEW.md', '総合'],
+  ['REVIEW_DATA_BOUNDARY.md', 'データ境界'],
+  ['REVIEW_LINKAGE_CONTRACT.md', '連結契約'],
+  ['REVIEW_SECURITY.md', 'セキュリティ'],
+  ['REVIEW_FLOW.md', '横断フロー'],
+  ['CONTRACT.md', '契約 (層B)'],
+];
+function reviewFilesUi(format) {
+  return format === 'foedus' ? FOEDUS_FILES_UI : REVIEW_FILES_UI;
+}
 const reviewState = {
   items: [],
   availableDates: [],          // 全 repo を横断した「レビューが存在する日」 (新しい順)
   listDate: null,              // 現在カードを絞り込む日付 (null = 未初期化)
   filterRepo: null,            // null = 全カテゴリ
   selected: null,
+  format: 'aiformat',          // 選択中レビューの形式 (aiformat | foedus)
   dates: [],
   currentDate: null,
   currentFile: 'REVIEW.md',
@@ -10564,10 +11006,15 @@ async function loadReviewRepos() {
       renderReviewCards();
       return;
     }
-    if (!reviewState.listDate || !reviewState.availableDates.includes(reviewState.listDate)) {
-      reviewState.listDate = reviewState.availableDates[0];
+    // 既定は「全期間 (各リポの最新)」= listDate 未指定。 ユーザが日付を選んだ
+    // ときだけ絞り込む。 (Foedus 等が repo 固有の新しい日付を増やすと、 最新日を
+    // 自動選択する旧挙動では他リポが日付フィルタから外れて消えて見えるため。)
+    if (reviewState.listDate && !reviewState.availableDates.includes(reviewState.listDate)) {
+      reviewState.listDate = null;
     }
-    const r = await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`);
+    const r = reviewState.listDate
+      ? await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`)
+      : await api('/api/review/repos');
     reviewState.items = (r.items || []).slice().sort((a, b) => a.repo.localeCompare(b.repo));
     renderReviewListDateMenu();
     renderReviewMenu();
@@ -10590,7 +11037,8 @@ function renderReviewListDateMenu() {
     return;
   }
   sel.disabled = false;
-  sel.innerHTML = reviewState.availableDates.map((d) =>
+  const allOpt = `<option value=""${reviewState.listDate ? '' : ' selected'}>全期間 (最新)</option>`;
+  sel.innerHTML = allOpt + reviewState.availableDates.map((d) =>
     `<option value="${escapeHtml(d)}"${d === reviewState.listDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
 }
 
@@ -10636,10 +11084,13 @@ function renderReviewCards() {
     const prBadge = activePrCount > 0
       ? `<a class="badge review-pr-badge" href="${escapeHtml(it.fix_pr || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="要修正 PR を開く">🔧 ${activePrCount}</a>`
       : '';
+    const foedusTag = it.format_key === 'foedus'
+      ? `<span class="badge" title="Foedus 連結契約レビュー (Cernere↔Hub)">🔗 Foedus</span>` : '';
     return `
       <article class="card review-card" data-review-card="${escapeHtml(it.repo)}">
         <header class="review-card-head">
           <strong class="review-card-repo">${escapeHtml(it.repo)}</strong>
+          ${foedusTag}
           ${prBadge}
         </header>
         <div class="review-card-meta">
@@ -10659,9 +11110,10 @@ async function openReviewDetail(repo) {
   try {
     const r = await api(`/api/review/repos/${encodeURIComponent(repo)}`);
     reviewState.selected = repo;
+    reviewState.format = r.format_key || 'aiformat';
     reviewState.dates = r.dates || [];
     reviewState.currentDate = r.dates?.[0] ?? null;
-    reviewState.currentFile = 'REVIEW.md';
+    reviewState.currentFile = reviewFilesUi(reviewState.format)[0][0];
     reviewState.fixPr = r.latest?.fix_pr ?? null;
     if (!reviewState.currentDate) {
       alert(`${repo}: レビューフォルダはありますが日付ディレクトリが見つかりません。`);
@@ -10696,7 +11148,7 @@ function renderReviewDetailHeader() {
   repoEl.textContent = reviewState.selected || '';
   dateSel.innerHTML = reviewState.dates.map((d) =>
     `<option value="${escapeHtml(d)}"${d === reviewState.currentDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
-  fileTabs.innerHTML = REVIEW_FILES_UI.map(([f, label]) =>
+  fileTabs.innerHTML = reviewFilesUi(reviewState.format).map(([f, label]) =>
     `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${escapeHtml(f)}">${escapeHtml(label)}</button>`).join('');
   if (reviewState.fixPr) {
     fixLink.setAttribute('href', reviewState.fixPr);
@@ -10886,9 +11338,9 @@ document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
 });
 document.getElementById('reviewListDateSel')?.addEventListener('change', (ev) => {
   const v = (ev.target as HTMLSelectElement).value;
-  if (!v) return;
-  reviewState.listDate = v;
-  // 日付を切り替えると repo フィルタはリセット (= 別日付のリストに移るため)
+  // 空 = 「全期間 (最新)」。 日付選択時はその日で絞り込む。
+  reviewState.listDate = v || null;
+  // 日付を切り替えると repo フィルタはリセット (= 別リストに移るため)
   reviewState.filterRepo = null;
   void loadReviewRepos();
 });
@@ -10935,6 +11387,455 @@ $('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTarg
 document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
   reviewState.currentDate = ev.target.value;
   void loadReviewFile();
+});
+
+// ── 📋 作業一覧 / 📦 リポジトリ セクション ────────────────────────────────
+//
+// 「作業一覧」 タブ (worklistView) の中の 1 セクション。 登録した GitHub リポの
+// PR / Issue / デフォルトブランチ最終更新を一覧する。 内部ビューアは持たず、
+// すべての項目は GitHub への外部リンク。 サマリはサーバ側 (repo_watch テーブル)
+// にキャッシュされ、 「更新」 で取り直す。 今後ほかのリストを足す時は
+// worklistView に <section> を追加し、 ここに同様の load/render を書く。
+interface RepoListItem {
+  kind: 'pr' | 'issue';
+  number: number;
+  title: string;
+  html_url: string;
+  state: string | null;
+  author: string | null;
+  updated_at: string | null;
+}
+interface RepoWatchItem {
+  id: number;
+  provider: string;
+  owner: string;
+  name: string;
+  html_url: string;
+  default_branch: string | null;
+  open_pr_count: number | null;
+  open_issue_count: number | null;
+  last_commit_sha: string | null;
+  last_commit_message: string | null;
+  last_commit_url: string | null;
+  last_commit_at: string | null;
+  ci_status: string | null;
+  ci_conclusion: string | null;
+  ci_url: string | null;
+  ci_workflow_name: string | null;
+  ci_run_at: string | null;
+  fetched_at: string | null;
+  fetch_error: string | null;
+  items?: RepoListItem[];
+}
+interface RepoCommit {
+  sha: string;
+  message: string;
+  html_url: string;
+  author: string | null;
+  when: string | null;
+}
+// expandedRepos: 「more」 で 50 件展開済みの repo id 集合。 一覧 refresh しても保持。
+// openedRepos: カード「開閉」 状態。 開いた repo は header クリックで閉じる。
+// commitsByRepo: 直近コミット の lazy fetch キャッシュ (open する度に再 fetch しない)。
+// commitsLoading: いま fetch 中の repo id (= スピナー表示用)。
+const repoWatchState: {
+  items: RepoWatchItem[];
+  tokenSet: boolean;
+  expandedRepos: Set<number>;
+  openedRepos: Set<number>;
+  commitsByRepo: Map<number, { items: RepoCommit[]; error: string | null }>;
+  commitsLoading: Set<number>;
+} = {
+  items: [],
+  tokenSet: false,
+  expandedRepos: new Set(),
+  openedRepos: new Set(),
+  commitsByRepo: new Map(),
+  commitsLoading: new Set(),
+};
+
+/** ざっくり相対時刻 ("3時間前" 等)。 不正値や未来は fmtDate にフォールバック。 */
+function repoFmtAgo(s: string | null): string {
+  if (!s) return '—';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+  const ms = Date.now() - d.getTime();
+  if (Number.isNaN(ms)) return s;
+  if (ms < 0) return fmtDate(s);
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return 'たった今';
+  if (min < 60) return `${min}分前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}時間前`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}日前`;
+  const mon = Math.floor(day / 30);
+  if (mon < 12) return `${mon}ヶ月前`;
+  return `${Math.floor(mon / 12)}年前`;
+}
+
+async function loadRepoWatch() {
+  const list = document.getElementById('repoList');
+  const empty = document.getElementById('repoEmpty');
+  if (!list) return;
+  try {
+    const r = await api('/api/repos') as { items?: RepoWatchItem[]; token_set?: boolean };
+    repoWatchState.items = r.items || [];
+    repoWatchState.tokenSet = !!r.token_set;
+    renderRepoWatch();
+  } catch (e) {
+    list.innerHTML = '';
+    empty?.classList.add('hidden');
+    list.innerHTML = `<p class="muted">読み込みエラー: ${escapeHtml((e as Error).message)}</p>`;
+  }
+}
+
+/** CI status/conclusion → アイコン + ラベル + CSS modifier。 */
+function repoCiBadge(it: RepoWatchItem): string {
+  const s = (it.ci_status || '').toLowerCase();
+  const c = (it.ci_conclusion || '').toLowerCase();
+  if (!s) return '';
+  let mod = 'none'; let icon = '⚪'; let label = '—';
+  if (s !== 'completed') { mod = 'running'; icon = '◷'; label = s; }
+  else if (c === 'success') { mod = 'pass'; icon = '✓'; label = 'passing'; }
+  else if (c === 'failure') { mod = 'fail'; icon = '✗'; label = 'failing'; }
+  else if (c === 'cancelled' || c === 'skipped' || c === 'neutral') { mod = 'skip'; icon = '⊘'; label = c; }
+  else if (c === 'timed_out' || c === 'action_required') { mod = 'fail'; icon = '!'; label = c; }
+  else { mod = 'none'; icon = '?'; label = c || s; }
+  const title = `${it.ci_workflow_name || 'CI'}: ${label}${it.ci_run_at ? ` (${repoFmtAgo(it.ci_run_at)})` : ''}`;
+  const href = it.ci_url || `${it.html_url}/actions`;
+  return `<a class="repo-watch-ci repo-watch-ci-${mod}" href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(title)}">${icon} ${escapeHtml(label)}</a>`;
+}
+
+function repoItemRowHtml(item: RepoListItem): string {
+  const isPr = item.kind === 'pr';
+  const icon = isPr ? '🔃' : '⭕';
+  const author = item.author ? ` <span class="muted">${escapeHtml(item.author)}</span>` : '';
+  const when = item.updated_at ? ` <span class="muted">· ${escapeHtml(repoFmtAgo(item.updated_at))}</span>` : '';
+  return `
+    <li class="repo-watch-item repo-watch-item-${isPr ? 'pr' : 'issue'}">
+      <span class="repo-watch-item-icon">${icon}</span>
+      <a class="repo-watch-item-link" href="${escapeHtml(item.html_url)}" target="_blank" rel="noopener" title="${escapeHtml(item.title)}">
+        <span class="repo-watch-item-num">#${item.number}</span>
+        <span class="repo-watch-item-title">${escapeHtml(item.title)}</span>
+      </a>
+      ${author}${when}
+    </li>`;
+}
+
+function renderRepoWatch() {
+  const list = document.getElementById('repoList');
+  const empty = document.getElementById('repoEmpty');
+  const hint = document.getElementById('repoTokenHint');
+  if (!list || !empty) return;
+  if (hint) hint.style.display = repoWatchState.tokenSet ? 'none' : '';
+  if (repoWatchState.items.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = repoWatchState.items.map((it) => {
+    const slug = `${it.owner}/${it.name}`;
+    const branch = it.default_branch || 'main';
+    const prCount = it.open_pr_count == null ? '—' : String(it.open_pr_count);
+    const issueCount = it.open_issue_count == null ? '—' : String(it.open_issue_count);
+    const prLink = `${it.html_url}/pulls`;
+    const issueLink = `${it.html_url}/issues`;
+    const branchLink = `${it.html_url}/commits/${encodeURIComponent(branch)}`;
+    const commitMsg = it.last_commit_message
+      ? escapeHtml(it.last_commit_message)
+      : '<span class="muted">コミット情報なし</span>';
+    const commitWhen = it.last_commit_at
+      ? `<a href="${escapeHtml(it.last_commit_url || branchLink)}" target="_blank" rel="noopener" title="${escapeHtml(fmtDate(it.last_commit_at))}">${escapeHtml(repoFmtAgo(it.last_commit_at))}</a>`
+      : '<span class="muted">—</span>';
+    const fetched = it.fetched_at
+      ? `<span class="muted" style="font-size:11px" title="${escapeHtml(fmtDate(it.fetched_at))}">サマリ取得: ${escapeHtml(repoFmtAgo(it.fetched_at))}</span>`
+      : '';
+    const err = it.fetch_error
+      ? `<div class="muted" style="font-size:11px;color:#c0392b;margin-top:4px">⚠ ${escapeHtml(it.fetch_error)}</div>`
+      : '';
+    const ciBadge = repoCiBadge(it);
+
+    // 開閉ステート: 開いていれば PR/Issue + 直近の作業 サマリを表示、 閉じていれば
+    // ヘッダ + stats + 最終コミット の 1 行だけにまとめる。 既定は閉。
+    const isOpened = repoWatchState.openedRepos.has(it.id);
+    // PR / Issue items: 既定 5 件、 expanded なら最大 50 件 (loadRepoItemsMore で差し替え済)。
+    const isExpanded = repoWatchState.expandedRepos.has(it.id);
+    const totalCount = (it.open_pr_count ?? 0) + (it.open_issue_count ?? 0);
+    const items = it.items || [];
+    const shownItems = isExpanded ? items : items.slice(0, 5);
+    let itemsBlock = '';
+    if (shownItems.length > 0) {
+      const remain = totalCount - shownItems.length;
+      const more = !isExpanded && remain > 0
+        ? `<button class="ghost repo-watch-more-btn" type="button" data-repo-id="${it.id}">more (${Math.min(remain, 50 - shownItems.length)} 件) ▼</button>`
+        : (isExpanded && items.length >= 50
+          ? `<span class="muted" style="font-size:11px">直近 50 件まで表示中（残りは GitHub で確認）</span>`
+          : '');
+      itemsBlock = `
+        <ul class="repo-watch-items">${shownItems.map(repoItemRowHtml).join('')}</ul>
+        ${more ? `<div class="repo-watch-more-row">${more}</div>` : ''}`;
+    } else if (totalCount === 0) {
+      itemsBlock = `<p class="muted repo-watch-empty-items">open な PR / Issue はありません</p>`;
+    }
+
+    // 「直近の作業」 サマリ (= 開いた時だけ表示)。 lazy fetch のキャッシュを使う。
+    let commitsBlock = '';
+    if (isOpened) {
+      if (repoWatchState.commitsLoading.has(it.id)) {
+        commitsBlock = `<div class="repo-watch-commits">
+          <div class="repo-watch-commits-head">📝 直近の作業</div>
+          <p class="muted" style="font-size:12px">読み込み中…</p>
+        </div>`;
+      } else {
+        const cached = repoWatchState.commitsByRepo.get(it.id);
+        if (cached) {
+          if (cached.items.length === 0) {
+            const errMsg = cached.error
+              ? `<p class="muted" style="font-size:11px;color:#c0392b">⚠ ${escapeHtml(cached.error.slice(0, 200))}</p>`
+              : `<p class="muted" style="font-size:12px">直近のコミットはありません</p>`;
+            commitsBlock = `<div class="repo-watch-commits">
+              <div class="repo-watch-commits-head">📝 直近の作業</div>
+              ${errMsg}
+            </div>`;
+          } else {
+            const rows = cached.items.map((cm) => {
+              const short = (cm.sha || '').slice(0, 7);
+              const who = cm.author ? `<span class="muted">${escapeHtml(cm.author)}</span>` : '';
+              const when = cm.when
+                ? `<span class="muted" title="${escapeHtml(fmtDate(cm.when))}">${escapeHtml(repoFmtAgo(cm.when))}</span>`
+                : '';
+              return `<li class="repo-watch-commit">
+                <a class="repo-watch-commit-link" href="${escapeHtml(cm.html_url)}" target="_blank" rel="noopener" title="${escapeHtml(cm.message)}">
+                  <code class="repo-watch-commit-sha">${escapeHtml(short)}</code>
+                  <span class="repo-watch-commit-text">${escapeHtml(cm.message)}</span>
+                </a>
+                ${who}${when}
+              </li>`;
+            }).join('');
+            commitsBlock = `<div class="repo-watch-commits">
+              <div class="repo-watch-commits-head">📝 直近の作業 (${cached.items.length})</div>
+              <ul class="repo-watch-commits-list">${rows}</ul>
+            </div>`;
+          }
+        }
+      }
+    }
+
+    const toggleIcon = isOpened ? '▾' : '▸';
+    const toggleTitle = isOpened ? '閉じる' : '開いて直近の作業 + PR/Issue を表示';
+    return `
+      <article class="card repo-watch-card ${isOpened ? 'is-opened' : 'is-closed'}" data-repo-id="${it.id}">
+        <header class="repo-watch-head">
+          <button class="ghost repo-toggle-btn" type="button" data-repo-id="${it.id}" title="${escapeHtml(toggleTitle)}" aria-expanded="${isOpened}">${toggleIcon}</button>
+          <a class="repo-watch-slug" href="${escapeHtml(it.html_url)}" target="_blank" rel="noopener">
+            <strong>${escapeHtml(slug)}</strong>
+          </a>
+          ${ciBadge}
+          <span class="grow"></span>
+          <button class="ghost repo-refresh-btn" type="button" data-repo-id="${it.id}" title="このリポを更新">↻</button>
+          <button class="ghost repo-delete-btn" type="button" data-repo-id="${it.id}" title="一覧から削除">✕</button>
+        </header>
+        <div class="repo-watch-stats">
+          <a class="repo-watch-stat" href="${escapeHtml(prLink)}" target="_blank" rel="noopener">
+            <span class="repo-watch-stat-num">${escapeHtml(prCount)}</span>
+            <span class="repo-watch-stat-label">Open PR</span>
+          </a>
+          <a class="repo-watch-stat" href="${escapeHtml(issueLink)}" target="_blank" rel="noopener">
+            <span class="repo-watch-stat-num">${escapeHtml(issueCount)}</span>
+            <span class="repo-watch-stat-label">Open Issue</span>
+          </a>
+        </div>
+        ${isOpened ? itemsBlock : ''}
+        ${commitsBlock}
+        <div class="repo-watch-branch">
+          <a href="${escapeHtml(branchLink)}" target="_blank" rel="noopener" title="デフォルトブランチのコミット一覧"><code>${escapeHtml(branch)}</code></a>
+          <span class="repo-watch-commit-msg">${commitMsg}</span>
+          <span class="repo-watch-commit-when">${commitWhen}</span>
+        </div>
+        <div class="repo-watch-foot">${fetched}</div>
+        ${err}
+      </article>`;
+  }).join('');
+}
+
+/** 「開く」 アクション: opened フラグを立て、 commits を lazy fetch (初回のみ)。 */
+async function openRepoWatchCard(id: number) {
+  if (repoWatchState.openedRepos.has(id)) return;
+  repoWatchState.openedRepos.add(id);
+  // すでにキャッシュ済みなら即 render、 なければ loading 状態で render → fetch。
+  const cached = repoWatchState.commitsByRepo.get(id);
+  if (cached) {
+    renderRepoWatch();
+    return;
+  }
+  repoWatchState.commitsLoading.add(id);
+  renderRepoWatch();
+  try {
+    const r = await api(`/api/repos/${id}/commits?limit=10`) as { items?: RepoCommit[]; error?: string | null };
+    repoWatchState.commitsByRepo.set(id, { items: r.items || [], error: r.error || null });
+  } catch (e) {
+    repoWatchState.commitsByRepo.set(id, { items: [], error: (e as Error).message });
+  } finally {
+    repoWatchState.commitsLoading.delete(id);
+    renderRepoWatch();
+  }
+}
+
+function closeRepoWatchCard(id: number) {
+  if (!repoWatchState.openedRepos.has(id)) return;
+  repoWatchState.openedRepos.delete(id);
+  renderRepoWatch();
+}
+
+function toggleRepoWatchCard(id: number) {
+  if (repoWatchState.openedRepos.has(id)) closeRepoWatchCard(id);
+  else void openRepoWatchCard(id);
+}
+
+async function loadRepoItemsMore(id: number) {
+  try {
+    const r = await api(`/api/repos/${id}/items?limit=50`) as { items?: RepoListItem[] };
+    const idx = repoWatchState.items.findIndex((x) => x.id === id);
+    if (idx >= 0) {
+      repoWatchState.items[idx] = { ...repoWatchState.items[idx], items: r.items || [] };
+      repoWatchState.expandedRepos.add(id);
+      renderRepoWatch();
+    }
+  } catch (e) {
+    flashToast(`展開失敗: ${(e as Error).message}`);
+  }
+}
+
+// ── 追加モーダル ──────────────────────────────────────────────────────────
+function openRepoWatchModal() {
+  const input = $('repoWatchUrl') as HTMLInputElement | null;
+  if (input) input.value = '';
+  const err = $('repoWatchError');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  showModal('repoWatchModal');
+  input?.focus();
+}
+
+async function submitRepoWatch() {
+  const url = (($('repoWatchUrl') as HTMLInputElement | null)?.value || '').trim();
+  const err = $('repoWatchError');
+  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
+  if (!url) return showErr('リポジトリ URL または owner/name を入力してください');
+  try {
+    const res = await fetch('/api/repos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      return showErr(body.error || `${res.status}`);
+    }
+    hideModal('repoWatchModal');
+    flashToast('リポジトリを追加しました');
+    await loadRepoWatch();
+  } catch (e) {
+    showErr((e as Error).message);
+  }
+}
+
+async function refreshRepoWatch(id: number) {
+  try {
+    const res = await fetch(`/api/repos/${id}/refresh`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      flashToast(`更新失敗: ${body.error || res.status}`);
+      return;
+    }
+    const { item } = await res.json() as { item: RepoWatchItem };
+    const idx = repoWatchState.items.findIndex((r) => r.id === id);
+    if (idx >= 0) repoWatchState.items[idx] = item;
+    // 直近コミット キャッシュも破棄 (= refresh 後に開いた時は再取得)。
+    // 開いたままなら即座に再 fetch して画面を更新する。
+    repoWatchState.commitsByRepo.delete(id);
+    if (repoWatchState.openedRepos.has(id)) {
+      repoWatchState.commitsLoading.add(id);
+      renderRepoWatch();
+      try {
+        const r2 = await api(`/api/repos/${id}/commits?limit=10`) as { items?: RepoCommit[]; error?: string | null };
+        repoWatchState.commitsByRepo.set(id, { items: r2.items || [], error: r2.error || null });
+      } catch (e) {
+        repoWatchState.commitsByRepo.set(id, { items: [], error: (e as Error).message });
+      } finally {
+        repoWatchState.commitsLoading.delete(id);
+        renderRepoWatch();
+      }
+    } else {
+      renderRepoWatch();
+    }
+  } catch (e) {
+    flashToast(`更新失敗: ${(e as Error).message}`);
+  }
+}
+
+async function deleteRepoWatch(id: number) {
+  const it = repoWatchState.items.find((r) => r.id === id);
+  if (it && !confirm(`「${it.owner}/${it.name}」 を一覧から削除しますか?`)) return;
+  try {
+    const res = await fetch(`/api/repos/${id}`, { method: 'DELETE' });
+    if (!res.ok) { flashToast(`削除失敗: ${res.status}`); return; }
+    repoWatchState.items = repoWatchState.items.filter((r) => r.id !== id);
+    renderRepoWatch();
+    flashToast('削除しました');
+  } catch (e) {
+    flashToast(`削除失敗: ${(e as Error).message}`);
+  }
+}
+
+async function refreshAllRepoWatch() {
+  const btn = $('repoRefreshAllBtn') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '更新中…'; }
+  try {
+    const res = await fetch('/api/repos/refresh', { method: 'POST' });
+    if (res.ok) {
+      const { items } = await res.json() as { items: RepoWatchItem[] };
+      repoWatchState.items = items;
+      renderRepoWatch();
+      flashToast('全リポを更新しました');
+    } else {
+      flashToast(`更新失敗: ${res.status}`);
+    }
+  } catch (e) {
+    flashToast(`更新失敗: ${(e as Error).message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '更新'; }
+  }
+}
+
+$('repoAddBtn')?.addEventListener('click', openRepoWatchModal);
+$('repoRefreshAllBtn')?.addEventListener('click', () => void refreshAllRepoWatch());
+$('repoWatchSaveBtn')?.addEventListener('click', () => void submitRepoWatch());
+$('repoWatchCloseBtn')?.addEventListener('click', () => hideModal('repoWatchModal'));
+$('repoWatchUrl')?.addEventListener('keydown', (ev) => {
+  if ((ev as KeyboardEvent).key === 'Enter') { ev.preventDefault(); void submitRepoWatch(); }
+});
+document.getElementById('repoList')?.addEventListener('click', (ev) => {
+  const target = ev.target as HTMLElement;
+  const refreshBtn = target.closest('.repo-refresh-btn') as HTMLElement | null;
+  if (refreshBtn) {
+    void refreshRepoWatch(Number(refreshBtn.dataset.repoId));
+    return;
+  }
+  const deleteBtn = target.closest('.repo-delete-btn') as HTMLElement | null;
+  if (deleteBtn) {
+    void deleteRepoWatch(Number(deleteBtn.dataset.repoId));
+    return;
+  }
+  const toggleBtn = target.closest('.repo-toggle-btn') as HTMLElement | null;
+  if (toggleBtn) {
+    toggleRepoWatchCard(Number(toggleBtn.dataset.repoId));
+    return;
+  }
+  const moreBtn = target.closest('.repo-watch-more-btn') as HTMLElement | null;
+  if (moreBtn) {
+    void loadRepoItemsMore(Number(moreBtn.dataset.repoId));
+  }
 });
 
 // ── transit (Ekispert 経路検索 + 乗車記録 + 運行情報) ─────────────────────
@@ -11256,7 +12157,7 @@ $('transitRideManualSaveBtn')?.addEventListener('click', async () => {
   }
 });
 
-async function loadMeals() {
+async function loadMeals(opts: { silent?: boolean } = {}) {
   const list = document.getElementById('mealsList');
   if (!list) return;
   // 単一日付フィルタ — 値があれば「その日 0:00 〜 23:59」 で絞り込み
@@ -11268,7 +12169,7 @@ async function loadMeals() {
     params.set('to', v + 'T23:59:59');
   }
   try {
-    const r = await api(`/api/meals?${params.toString()}`);
+    const r = await (opts.silent ? apiSilent : api)(`/api/meals?${params.toString()}`);
     mealsState.items = r.meals || [];
     renderMeals();
     schedulePendingPoll();
@@ -11494,7 +12395,7 @@ function schedulePendingPoll() {
   if (!hasPending) return;
   mealsState.pollTimer = setTimeout(() => {
     if (state.tab !== 'meals') return;
-    loadMeals();
+    loadMeals({ silent: true });
   }, 4000);
 }
 
@@ -11835,7 +12736,10 @@ async function submitMealModal() {
     return;
   }
 
+  // ボタン押下フィードバック: ダイアログを即座に閉じてキューを進め、 ネットワーク処理はバックグラウンドで進める。
   if (status) status.textContent = item.kind === 'edit' ? `📝 保存中…` : `📤 登録中…`;
+  flashToast(item.kind === 'edit' ? '📝 保存をキューに入れました' : '📤 登録をキューに入れました');
+  advanceMealQueue();
 
   try {
     if (item.kind === 'edit') {
@@ -11913,10 +12817,10 @@ async function submitMealModal() {
     if (status) status.textContent = item.kind === 'edit'
       ? `⚠ 保存エラー: ${e.message}`
       : `⚠ 登録エラー: ${e.message}`;
+    flashToast(item.kind === 'edit' ? `⚠ 保存エラー: ${e.message}` : `⚠ 登録エラー: ${e.message}`);
     console.warn('[meals] submit error:', e);
   }
   await loadMeals();
-  advanceMealQueue();
 }
 
 function skipMealModalItem() {
@@ -12768,7 +13672,7 @@ function scrollPageToTop() {
     '.notes-pane', '.notes-comments', '.notes-sidebar',
     '.bookmarks-main', '.bookmarks-categories',
     '#cards', '#mealsList', '#reviewCards', '#reviewBody',
-    '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView', '#implView',
+    '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView',
   ];
   document.querySelectorAll(selectors.join(',')).forEach((el) => {
     if ((el as HTMLElement).scrollTop > 0) (el as HTMLElement).scrollTop = 0;

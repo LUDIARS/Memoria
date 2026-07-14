@@ -176,5 +176,7 @@ zip を貼り付けます (`v0.0.0-dev` がデフォルト)。
 - アイコンは現状プレースホルダ。 本番ブランディング時に差し替え
 - macOS の codesign / notarize はまだ実装していません — DMG は
   「未確認の開発元」ダイアログ越しでしか起動できない状態です
-- 自動アップデート (`electron-updater`) も未実装。 アップデートは
-  毎回インストーラ再ダウンロードしてください
+- 自動アップデート (`electron-updater`) は v1.0.1 から稼働中。
+  起動 5 秒後と 6 時間毎に GitHub Releases (LUDIARS/Memoria) の
+  `latest.yml` を見に行き、 更新があれば background download →
+  終了時 install。 Tray menu から手動チェック + 「適用して再起動」 も可能

@@ -1,0 +1,55 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "メモリア",
+      "intents": [
+        {
+          "name": "CreateTaskIntent",
+          "slots": [
+            {
+              "name": "TaskTitle",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "{TaskTitle} をタスクに追加",
+            "タスクに {TaskTitle} を追加",
+            "{TaskTitle} をタスクとして登録",
+            "{TaskTitle} を覚えて"
+          ]
+        },
+        {
+          "name": "ReadNotificationsIntent",
+          "slots": [],
+          "samples": [
+            "通知を読んで",
+            "未読通知を読んで",
+            "通知はある",
+            "新着を教えて"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        }
+      ],
+      "types": []
+    }
+  }
+}

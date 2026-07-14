@@ -1,5 +1,5 @@
 // /api/domains* — ドメイン辞書 (page_visits の集約 + 各ドメインの分類)。
-// Spec: spec/api/domain.md
+// Spec: spec/interface/domain.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

@@ -1,0 +1,113 @@
+// Discord Bot の起動/停止エントリ。 server/index.ts の listen 後に呼ぶ。
+// enabled かつ token/self/guild が揃っているときだけ起動する。全て best-effort。
+
+import type { Client } from 'discord.js';
+import type BetterSqlite3 from 'better-sqlite3';
+import { discordReady } from './settings.js';
+import { createDiscordClient } from './client.js';
+import { postAnnouncement, postToChannel } from './notifier.js';
+import { findTrigger } from './notify/config.js';
+import { fireTrigger } from './notify/engine.js';
+import { postRssNews, type NewsPostResult } from './news.js';
+import { postRollingBriefing } from './briefing-post.js';
+import { formatSingleTaskCard } from './notify/card.js';
+import { postMorningRecommend } from './recommend-scheduler.js';
+
+type Db = BetterSqlite3.Database;
+
+let current: Client | null = null;
+
+/** Discord Bot を起動する (条件を満たさなければ skip)。 */
+export async function startDiscordBot(db: Db): Promise<void> {
+  if (current) return; // 二重起動防止
+  const ready = discordReady(db);
+  if (!ready.ok) {
+    console.log(`[discord] 起動 skip: ${ready.reason}`);
+    return;
+  }
+  current = await createDiscordClient(db);
+}
+
+/** Discord Bot を停止する。 */
+export function stopDiscordBot(): void {
+  if (!current) return;
+  try { current.destroy(); } catch { /* swallow */ }
+  current = null;
+}
+
+/**
+ * 既存の通知 (日記完了 / リマインダー等) を Discord #announce に投稿する seam。
+ * Bot 未起動 / 未接続なら何もしない (best-effort)。 Memoria の通知トリガからこれを
+ * 呼べば「アナウンスを Discord にも流す」 が実現する。
+ */
+export async function announceToDiscord(db: Db, text: string): Promise<void> {
+  if (!current?.isReady()) return;
+  await postAnnouncement(current, db, text);
+}
+
+/** Discord Bot が起動済みで接続中か。 ブリーフィングなど「送信先があるか」 判定に使う。 */
+export function discordClientReady(): boolean {
+  return current?.isReady() ?? false;
+}
+
+/**
+ * 定期ブリーフィングを #briefing に「1 件だけ」 保って投稿する seam。
+ * 前回メッセージを編集 (チャンク数一致時) もしくは削除して再投稿する。
+ * Bot 未起動なら false (= 送らなかった)。
+ */
+export async function postBriefingToDiscord(db: Db, parts: string[]): Promise<boolean> {
+  if (!current?.isReady()) return false;
+  return postRollingBriefing(current, db, parts);
+}
+
+/**
+ * RSS「今日のダイジェスト」 を #news に即時投稿する seam。
+ * 設定 UI / API の「Discord に投稿」 から呼ぶ。 Bot 未起動なら not_ready。
+ */
+export async function postRssNewsNow(db: Db): Promise<NewsPostResult> {
+  if (!current?.isReady()) return { ok: false, reason: 'not_ready', digestPosted: false, trendingPosted: false };
+  return postRssNews(current, db);
+}
+
+/**
+ * タスク登録を #task チャンネルに通知する seam。
+ * Discord RWF 経由の登録はすでに返信済みのため `_skip_discord_notify` フラグで抑制。
+ * Bot 未起動なら何もしない (best-effort)。
+ */
+export async function postTaskToDiscord(
+  db: Db,
+  task: { title: string; category: string | null; due_at: string | null; details?: string | null },
+): Promise<void> {
+  if (!current?.isReady()) return;
+  const card = formatSingleTaskCard({
+    title: task.title,
+    category: task.category,
+    dueAt: task.due_at,
+    details: task.details,
+  });
+  await postToChannel(current, db, 'task', card);
+}
+
+/**
+ * 朝のおすすめを即時生成して #recommend に投稿する seam (設定 UI のテスト送信用)。
+ * Bot 未起動なら false。
+ */
+export async function postRecommendNow(db: Db): Promise<{ ok: boolean; count: number }> {
+  if (!current?.isReady()) return { ok: false, count: 0 };
+  return postMorningRecommend(current, db);
+}
+
+/**
+ * 指定 id の通知トリガーを即時発火する (設定 UI の「テスト送信」 用)。
+ * Bot 未起動なら not_ready。 該当 0 件でもテストとして送る (postWhenEmpty)。
+ */
+export async function fireNotifyTriggerById(
+  db: Db,
+  id: string,
+): Promise<{ ok: boolean; reason?: string; count?: number }> {
+  if (!current?.isReady()) return { ok: false, reason: 'not_ready' };
+  const trigger = findTrigger(db, id);
+  if (!trigger) return { ok: false, reason: 'not_found' };
+  const r = await fireTrigger(current, db, trigger, { postWhenEmpty: true });
+  return { ok: true, count: r.count };
+}

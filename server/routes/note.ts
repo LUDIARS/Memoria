@@ -1,5 +1,5 @@
 // /api/notes* — markdown ライク WYSIWYG ノート (UUID 管理) + bookmark base + per-user comment sets
-// Spec: spec/api/note.md / spec/feature/note.md / spec/feature/extension.md
+// Spec: spec/interface/note.md / spec/feature/note.md / spec/feature/extension.md
 
 import { Hono, type Context } from 'hono';
 import { existsSync, readFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ function hostnameOf(rawUrl: string): string {
 }
 import type {
   ExtensionRules, ExtensionChatDomain, ExtensionImplRule, ExtensionShoppingDomain,
-  ExtensionNotionDomain,
+  ExtensionNotionDomain, ExtensionFurusatoDomain,
 } from '../db.js';
 import type { NoteRow, NoteBlockRow, NoteBlockType, NoteKind } from '../db/types/note.js';
 import { NOTE_BLOCK_TYPES } from '../db/types/note.js';
@@ -861,6 +861,10 @@ export function makeNoteRouter(deps: NoteRouterDeps): Hono {
         ? ((body as { notion_domains: unknown[] }).notion_domains).filter((d): d is ExtensionNotionDomain =>
             !!d && typeof (d as { host?: unknown }).host === 'string')
         : cur.notion_domains,
+      furusato_domains: Array.isArray(body.furusato_domains)
+        ? body.furusato_domains.filter((d): d is ExtensionFurusatoDomain =>
+            !!d && typeof d.host === 'string')
+        : cur.furusato_domains,
     };
     setExtensionRules(db, next);
     return c.json(next);

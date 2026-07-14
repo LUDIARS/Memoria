@@ -11,6 +11,7 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { secureHeaders } from 'hono/secure-headers';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
@@ -19,13 +20,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   openDb, ensureUserStopwordsTable,
-  getAppSettings, setAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
+  getAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
   insertGpsLocation, listPendingMeals,
 } from './db.js';
-import {
-  hasInfisicalCreds, missingWantedKeys, applyInfisicalCreds,
-  type InfisicalCreds,
-} from './lib/env-bootstrap.js';
 import { resolveUnresolvedBatch } from './lib/place-resolver.js';
 import { loadLlmConfigFromSettings } from './llm.js';
 import { initWebPush } from './push.js';
@@ -37,6 +34,7 @@ import { startSchedulers } from './lib/scheduler.js';
 import { makeMcpServer } from './lib/mcp-server.js';
 import { startLegatusSubscriber } from './lib/legatus-subscriber.js';
 import { startMqttBroker } from './mqtt/broker.js';
+import { startDiscordBot } from './discord/index.js';
 import { startWifiLocation } from './wifi-location.js';
 import { fetchPageHtml } from './lib/fetch-page.js';
 import { privacySettings } from './lib/privacy.js';
@@ -47,23 +45,40 @@ import { makeDomainRouter } from './routes/domain.js';
 import { makeVisitRouter } from './routes/visit.js';
 import { makeDictRouter } from './routes/dict.js';
 import { makeMealRouter } from './routes/meal.js';
+import { makeDiscordRouter } from './routes/discord.js';
 import { makeDiaryRouter } from './routes/diary.js';
 import { makeTaskRouter } from './routes/task.js';
 import { makeAgentRouter } from './routes/agent.js';
 import { makeWorkplaceRouter } from './routes/workplace.js';
+import { makeAttendanceRouter } from './routes/attendance.js';
 import { makeActivityRouter } from './routes/activity.js';
 import { configureActivitySamplers } from './lib/activity-sampler.js';
 import { makeImplRouter } from './routes/impl.js';
 import { makePushRouter } from './routes/push.js';
+import { makePluginsRouter } from './routes/plugins.js';
+import { mountUserApps } from './plugins/host.js';
 import { makeNoteRouter } from './routes/note.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
+import { makeMultiProxyMiddleware } from './local/multi-proxy.js';
 import { makeMiscRouter } from './routes/misc.js';
-import { makeReviewRouter, seedReviewTargets } from './routes/review.js';
+import { makeReviewRouter, seedReviewTargets, seedReviewScopes } from './routes/review.js';
+import { makeRepoRouter } from './routes/repo.js';
+import { makePacketMonitorRouter } from './routes/packet-monitor.js';
+import { makeMetricsRouter } from './routes/metrics.js';
 import { seedStationsIfEmpty } from './lib/transit-stations-seed.js';
 import { makeWeatherRouter } from './routes/weather.js';
+import { makeBlackBoxRouter } from './routes/blackbox.js';
+import { makeSqliteBlackBox } from '@ludiars/blackbox';
+import { DOMAIN_WILL_RAIN, DOMAIN_LIKELY_PLACE } from './weather/domains.js';
 import { makeTransitRouter } from './routes/transit.js';
 import { makeStalenessRouter } from './routes/staleness.js';
+import { makeRssRouter } from './routes/rss.js';
+import { makeBriefingRouter } from './routes/briefing.js';
+import { makeGoalEvalRouter } from './goals/router.js';
+import { makeRoadmapRouter } from './roadmap/router.js';
+import { makeAiHubRouter } from './routes/ai-hub.js';
+import { makeTaskReviewRouter } from './routes/task-review.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -133,6 +148,11 @@ try {
   if (seedResult.seeded > 0) {
     console.log(`[startup] seeded ${seedResult.seeded} review target(s) from LUDIARS clones (${seedResult.skipped} skipped)`);
   }
+  // git clone ではない仮想スコープ (Foedus の Cernere↔Hub 連結契約レビュー等) も seed。
+  const scopeResult = seedReviewScopes(db);
+  if (scopeResult.seeded > 0) {
+    console.log(`[startup] seeded ${scopeResult.seeded} foedus review scope(s) (${scopeResult.skipped} skipped)`);
+  }
 } catch (e) {
   const msg = e instanceof Error ? e.message : String(e);
   console.warn(`[startup] review target seed failed: ${msg}`);
@@ -151,6 +171,17 @@ setTimeout(() => {
 
 // ── App ──────────────────────────────────────────────────────────────────
 const app = new Hono();
+// セキュリティヘッダ (HSTS / X-Content-Type-Options / X-Frame-Options / Referrer-Policy 等)。
+// クロスオリジン分離系 (COOP / COEP / CORP) は Cernere SSO ポップアップや Hub 連携を
+// 壊しうるため無効化し、 副作用のない古典的なヘッダのみを付与する。
+app.use(
+  '*',
+  secureHeaders({
+    crossOriginOpenerPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false,
+  }),
+);
 app.use('/api/*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] }));
 
 // 構造化 access ログ
@@ -171,66 +202,23 @@ app.use('*', async (c, next) => {
   }
 });
 
-// ── Infisical セットアップ (Multi Mode 専用) ─────────────────────────────
-//
-// Local Mode の Memoria は Infisical を使わない (= 全機能ローカル完結)。
-// Multi Mode (Hub 連携) でだけ Cernere 認証が要り、 その CERNERE_BASE_URL 等を
-// Infisical から取る。 なので global gate は張らず、 frontend の Multi view が
-// status を見て「未設定なら setup フォームを出す」 方式にする。
-//
-// machine identity の取得経路 (優先順):
-//   1. Excubitor inject / host shell env
-//   2. app_settings (前回の Multi view 入力)  — bootstrap.ts が起動時に読込済
-//   3. Multi view の setup フォーム            — /api/setup/infisical
-let infisicalConfigured = hasInfisicalCreds();
-if (infisicalConfigured) {
-  const missing = missingWantedKeys();
-  if (missing.length > 0) {
-    console.warn(`[infisical] 接続済だが未取得の設定キー: ${missing.join(', ')} (= Hub 連携の一部が degraded)`);
-  }
-} else {
-  console.log('[infisical] machine identity 未設定 — Local Mode は通常動作、 Multi Mode 利用時に setup を促す');
-}
+// Local Memoria は Infisical / Cernere を直接知らない設計に統一済。
+// 旧 /api/setup/infisical* と writeEnvSecrets() は撤去 — Hub 連携は Hub 側 (server/multi/)
+// の Infisical 設定 (= env-cli) で完結する。
 
-// Multi view が叩く: Infisical が設定済か (= setup フォームを出すかの判定)。
-app.get('/api/setup/infisical/status', (c) =>
-  c.json({ configured: infisicalConfigured, missing: missingWantedKeys() }));
-
-// Multi view の setup フォームからの machine identity 受け口。
-app.post('/api/setup/infisical', async (c) => {
-  const body = await c.req.json().catch(() => null) as Partial<InfisicalCreds> | null;
-  const creds: InfisicalCreds = {
-    siteUrl: String(body?.siteUrl ?? '').trim().replace(/\/$/, ''),
-    projectId: String(body?.projectId ?? '').trim(),
-    environment: String(body?.environment ?? 'dev').trim() || 'dev',
-    clientId: String(body?.clientId ?? '').trim(),
-    clientSecret: String(body?.clientSecret ?? '').trim(),
-  };
-  if (!creds.siteUrl || !creds.projectId || !creds.clientId || !creds.clientSecret) {
-    return c.json({ error: 'siteUrl / projectId / clientId / clientSecret は必須' }, 400);
-  }
-  let injected = 0;
-  try {
-    ({ injected } = await applyInfisicalCreds(creds));
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return c.json({ error: `Infisical 接続失敗: ${msg}` }, 502);
-  }
-  // 成功したら app_settings に永続化 (次回起動は bootstrap.ts が読む)。
-  setAppSettings(db, {
-    'infisical.site_url': creds.siteUrl,
-    'infisical.project_id': creds.projectId,
-    'infisical.environment': creds.environment,
-    'infisical.client_id': creds.clientId,
-    'infisical.client_secret': creds.clientSecret,
-  });
-  infisicalConfigured = true;
-  console.log(`[infisical] 接続成功 — ${injected} secrets inject`);
-  return c.json({ ok: true, injected });
-});
+// ── Multi モード proxy 層 ─────────────────────────────────────────────────
+//
+// Multi モード時、 Multi 対応 7 型の CRUD を Hub の /api/data/* に転送し、
+// 個人ログ系は 503 local_only を返す。 Local モードでは素通り。 feature
+// router より前に置く必要がある (= router に届く前に横取りする)。
+app.use('/api/*', makeMultiProxyMiddleware(db));
 
 // ── routers (mount with absolute /api/... paths inside each) ──────────────
 const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSummary };
+
+// 成長型ブラックボックス engine (天気の雨判定 / 行きがち場所推定 + 将来の汎用ルール)。
+// 実体は @ludiars/blackbox (Lapilli)。schema 保証 + 旧テーブルからの migration も内蔵。
+const blackbox = makeSqliteBlackBox(db);
 
 app.route('/', makeBookmarkRouter({
   db, htmlDir: HTML_DIR,
@@ -270,11 +258,35 @@ app.route('/', makeDiaryRouter({
   enqueueWeekly: queues.enqueueWeekly,
 }));
 app.route('/', makeTaskRouter({ db }));
+app.route('/', makeTaskReviewRouter({ db }));
+app.route('/', makeMetricsRouter());
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
+app.route('/', makeAttendanceRouter({ db }));
+app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
+// ── Alexa (Echo) skill 連携 ─────────────────────────────────────────────
+//
+// zod / ask-sdk-* 等、 他 domain とは独立した重い依存を抱える単体 "app"。
+// 静的 import だとこの app の依存解決失敗 (未 install 等) が module graph の
+// link 時点で発生し、 index.ts 内のどの try/catch でも捕まえられず Memoria
+// 本体 (Discord/MQTT/GPS 等) ごと落としてしまう。 動的 import + try/catch で
+// 隔離し、 起動失敗は best-effort でこの app だけ無効化する。
+try {
+  const { loadAlexaConfig } = await import('./alexa/config.js');
+  const { makeAlexaRouter } = await import('./routes/alexa.js');
+  app.route('/', makeAlexaRouter({ db, config: loadAlexaConfig() }));
+} catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(`[alexa] failed to start: ${msg}`);
+}
+// ユーザーアプリ (プラグイン) を本体プロセスに in-process マウント
+// (submodule server/plugins/memoria-plugin)。 /plugins/<id> を static catch-all
+// より前に登録する必要があるためここで mount し、 manifest を /api/plugins に渡す。
+const userApps = await mountUserApps(app, { db, dataDir: DATA_DIR });
+app.route('/', makePluginsRouter({ db, registry: userApps.registry }));
 app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
@@ -288,18 +300,63 @@ app.route('/', makeConfigRouter({
   domainCatalogQueue: queues.domainCatalogQueue,
   pageMetadataQueue: queues.pageMetadataQueue,
   mealVisionQueue: queues.mealVisionQueue,
+  aiAnalysisQueue: queues.aiAnalysisQueue,
 }));
 app.route('/', makeMultiRouter({
-  db, htmlDir: HTML_DIR,
+  db,
   broadcastLocation: ws.broadcastLocation,
   broadcastLocationResolved: ws.broadcastLocationResolved,
   triggerResolveAsync: ws.triggerResolveAsync,
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
 app.route('/', makeReviewRouter({ db }));
-app.route('/', makeWeatherRouter({ db }));
+app.route('/', makeRepoRouter({ db }));
+app.route('/', makePacketMonitorRouter({
+  dataDir: DATA_DIR,
+  aiAnalysisQueue: queues.aiAnalysisQueue,
+}));
+app.route('/', makeWeatherRouter({ db, engine: blackbox.engine }));
+app.route('/', makeBlackBoxRouter({
+  engine: blackbox.engine,
+  ledger: blackbox.ledger,
+  knownDomains: [DOMAIN_WILL_RAIN, DOMAIN_LIKELY_PLACE],
+}));
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
+app.route('/', makeRssRouter({ db }));
+app.route('/', makeBriefingRouter({ db }));
+app.route('/', makeGoalEvalRouter({ db }));
+app.route('/', makeRoadmapRouter());
+app.route('/', makeAiHubRouter({ db }));
+
+// ---- Corpus hub マニフェスト (<private-reference-012>Hub-DESIGN.md D6) ----------------------
+// Memoria は横断 hub サービス Corpus から参照される leaf。 knowledge (ブクマ /
+// 辞書 / ディグ / ドメイン) は scope:multi で共有可、 lifelog (日記 / 週次 /
+// 食事 / 軌跡 / 活動) は scope:local で端末内に留める。 scope が「シェア可能 /
+// 不可」 の境界そのもの。 panels[] は declarative rendering 確定後に追加する。
+// 認証不要 (local Memoria は loopback 信頼で local Corpus が読む)。
+app.get('/.well-known/corpus-service.json', (c) =>
+  c.json({
+    service: 'memoria',
+    displayName: 'Memoria',
+    version: '0.1.0',
+    corpusApi: 1,
+    health: '/api/server/info',
+    data: [
+      { id: 'bookmarks', title: 'ブックマーク', path: '/api/bookmarks', scope: 'multi' },
+      { id: 'dictionary', title: '辞書', path: '/api/dictionary', scope: 'multi' },
+      { id: 'dig', title: 'ディグ', path: '/api/dig', scope: 'multi' },
+      { id: 'domains', title: 'ドメイン辞書', path: '/api/domains', scope: 'multi' },
+      { id: 'diary', title: '日記', path: '/api/diary', scope: 'local' },
+      { id: 'weekly', title: '週次レポート', path: '/api/weekly', scope: 'local' },
+      { id: 'meals', title: '食事記録', path: '/api/meals', scope: 'local' },
+      { id: 'locations', title: 'GPS 軌跡', path: '/api/locations', scope: 'local' },
+      { id: 'activity', title: '開発活動', path: '/api/activity/work-time', scope: 'local' },
+    ],
+    panels: [],
+    auth: 'none',
+  }),
+);
 
 // ---- static UI ------------------------------------------------------------
 
@@ -323,24 +380,8 @@ const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
 
-// 起動時の Cernere project-token 事前取得 — 「起動時に必ず認証を通す」 ポリシー。
-// 接続済みサーバごとに user-JWT → Cernere /api/auth/project-token → memory cache。
-// 失敗してもプロセスは落とさず、 該当 Hub への次の操作で再試行される。
-void import('./local/multi-client.js').then(async ({ readMultiServers, isConnected }) => {
-  const { getProjectTokenForHub } = await import('./lib/cernere-session.js');
-  const projectKey = process.env.CERNERE_PROJECT_KEY ?? 'memoria';
-  const { servers } = readMultiServers(db);
-  for (const s of servers) {
-    const state = { ...s, label: s.label } as const;
-    if (!isConnected(state as never)) continue;
-    try {
-      await getProjectTokenForHub(s.url, s.jwt as string, projectKey);
-      console.log(`[cernere] startup auth ok — hub=${s.url} project=${projectKey}`);
-    } catch (e) {
-      console.warn(`[cernere] startup auth failed — hub=${s.url}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-});
+// 二層設計では起動時の Cernere 事前認証は廃止。 ローカルは Cernere を直接
+// 叩かず、 Multi モード時に Hub の session token を使うだけ (= Hub が代理認証)。
 
 // 起動時に未解決 GPS の backfill を 1 batch だけ走らせる. listen 直後でなく
 // 5 秒遅延させて、 Memoria 起動直後のバタつき (server / WS / RAG init) と
@@ -400,6 +441,7 @@ setInterval(() => {
 // ── schedulers ────────────────────────────────────────────────────────────
 startSchedulers({
   db,
+  blackbox: blackbox.engine,
   enqueueDiary: queues.enqueueDiary,
   enqueueWeekly: queues.enqueueWeekly,
   getPrivacySettings: () => {
@@ -477,6 +519,14 @@ try {
   const msg = e instanceof Error ? e.message : String(e);
   console.error(`[mqtt-broker] failed to start: ${msg}`);
 }
+
+// ---- Discord Bot (行動ログ取得 + 自動処理 + 通知) --------------------------
+//
+// features.discord.enabled かつ token/self/guild が揃っているときだけ起動。
+// spec/feature/discord-bot.md。 起動失敗は best-effort で本体に影響させない。
+startDiscordBot(db).catch((e: unknown) => {
+  console.error(`[discord] failed to start: ${e instanceof Error ? e.message : String(e)}`);
+});
 
 // ---- PC WiFi → 位置情報 (Google Geolocation API) --------------------------
 //

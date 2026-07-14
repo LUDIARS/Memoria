@@ -71,6 +71,13 @@ async function getExtensionRules() {
           { host: 'www.notion.so', enabled: true },
           { host: 'notion.site', enabled: true },
         ],
+        furusato_domains: [
+          { host: 'satofull.jp', label: 'さとふる', enabled: true },
+          { host: 'furunavi.jp', label: 'ふるなび', enabled: true },
+          { host: 'furusato-tax.jp', label: 'ふるさとチョイス', enabled: true },
+          { host: 'furusato.au.com', label: 'au PAY ふるさと納税', enabled: true },
+          { host: 'furusato.ana.co.jp', label: 'ANAのふるさと納税', enabled: true },
+        ],
       };
     }
   }
@@ -113,6 +120,13 @@ function detectDispatch({ url, host, title, bodyText }) {
       if (!d.enabled) continue;
       if (hostMatches(host, d.host)) {
         dispatches.push({ kind: 'shopping', host: d.host, label: d.label });
+      }
+    }
+    // furusato (ふるさと納税)
+    for (const d of rules.furusato_domains || []) {
+      if (!d.enabled) continue;
+      if (hostMatches(host, d.host)) {
+        dispatches.push({ kind: 'furusato', host: d.host, label: d.label });
       }
     }
     return { dispatches };
@@ -177,6 +191,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'memoria.addWishlist') {
     handleAddWishlist(msg.payload || {}).then(sendResponse);
+    return true;
+  }
+
+  if (msg.type === 'memoria.addFurusatoBookmark') {
+    handleAddFurusatoBookmark(msg.payload || {}).then(sendResponse);
     return true;
   }
 
@@ -288,6 +307,34 @@ async function handleAddWishlist(payload) {
         status: 'todo',
         creator_type: 'human',
         category: '買い物',
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status} ${text.slice(0, 120)}`);
+    }
+    const data = await res.json();
+    return { ok: true, ...data };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function handleAddFurusatoBookmark(payload) {
+  try {
+    const server = await getServer();
+    // furusato-nozei プラグイン (server/plugins/host.ts が /plugins/<id> にマウント) の bookmarks API。
+    const res = await fetch(`${server}/plugins/furusato-nozei/api/bookmarks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        site: payload.site || null,
+        municipality: payload.municipality || null,
+        product_name: (payload.product_name || payload.title || '').slice(0, 200) || '返礼品',
+        amount_yen: typeof payload.amount_yen === 'number' ? payload.amount_yen : null,
+        url: payload.url,
+        image_url: payload.image_url || null,
+        category: payload.category || null,
       }),
     });
     if (!res.ok) {

@@ -20,6 +20,12 @@ share/download する」 モデルだった。 これだと:
   データアクセス先が Hub の JSON API になる。
 - 拠点ごとに Hub を立てられる (= 各 Hub が独立した Cernere + データストア)。
 
+> **関連**: 本書は Hub の **データハブ役** (Memoria 共有 7 型の JSON CRUD) の
+> 設計。 Hub にはこれと別に **frontend shell 役** (複数 LUDIARS アプリの集約
+> レンダリング) を将来載せる方向で準備中。 そちらは
+> [`hub-shell.md`](./hub-shell.md) を参照。 2 役は Hub 内で同居するが
+> 互いに依存しない。
+
 ## 2. アーキテクチャ
 
 ```
@@ -111,8 +117,8 @@ sequenceDiagram
     Hub-->>Admin: Infisical 設定 HTML フォーム
     Admin->>Hub: POST /api/setup/infisical { siteUrl, projectId, env, clientId, clientSecret }
     Hub->>Infisical: login (universal-auth) + secrets fetch
-    Infisical-->>Hub: secrets (CERNERE_BASE_URL 等)
-    Hub->>Hub: machine identity を永続化 (Hub の DB) + env inject
+    Infisical-->>Hub: secrets (MEMORIA_PG_URL / CERNERE_BASE_URL 等)
+    Hub->>Hub: machine identity を creds ファイルに永続化 + env inject
     Hub-->>Admin: { ok }  → 以後 / はログイン UI を出す
 ```
 
@@ -225,7 +231,10 @@ endpoint は Multi モード時 `503 { error: 'local_only' }`。
   「誰のものか」 を追跡。
 - ローカルの `app_settings` に Hub ごとの session token を保持 (per-hub、 memory より
   永続。 ただし Cernere accessToken そのものは Hub 側に留まりローカルには来ない)。
-- Hub の machine identity (Infisical creds) は Hub の DB に保存、 ローカルには出さない。
+- Hub の machine identity (Infisical creds) は Hub のローカル creds ファイルに
+  保存 (gitignore 済)、 ローカルには出さない。 アプリ設定値 (MEMORIA_PG_URL /
+  CERNERE_BASE_URL 等) は Infra 系も含め全部 Infisical 本体に置く — Postgres に
+  creds を置くと PG_URL 取得との循環依存になるためファイルにする。
 
 ## 9. 移行と後方互換
 

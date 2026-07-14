@@ -1,5 +1,5 @@
 // activity domain — activity_events / server_events
-// Spec: spec/db/activity.md
+// Spec: spec/data/activity.md
 
 export type ActivityKind =
   | 'git_commit'
@@ -8,7 +8,14 @@ export type ActivityKind =
   | 'codex_prompt'
   | 'task_created'
   | 'task_done'
-  | 'task_updated';
+  | 'task_updated'
+  | 'goal_created'
+  | 'goal_done'
+  | 'goal_updated'
+  | 'discord_message'
+  | 'discord_presence'
+  | 'discord_voice'
+  | 'discord_reaction';
 
 export interface ActivityEventRow {
   id: number;

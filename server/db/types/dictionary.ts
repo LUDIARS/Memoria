@@ -1,5 +1,5 @@
 // dictionary domain — dictionary_entries / dictionary_links
-// Spec: spec/db/dictionary.md
+// Spec: spec/data/dictionary.md
 
 export interface DictionaryEntryRow {
   id: number;

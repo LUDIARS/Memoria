@@ -23,7 +23,7 @@ import {
   upsertDiary, getDiary, getAppSettings,
   digThemeContext,
   upsertWeekly, listDiariesInRange,
-  getDiarySettings,
+  getDiarySettings, diaryRepos,
   countBookmarksInRange, countVisitEventsInRange, countActivityEventsInRange,
   insertApplicationPending, getApplication, setApplication,
 } from '../db.js';
@@ -42,7 +42,7 @@ import {
   summarizeGithubByRepo,
   weekRangeFor, weekOfMonth,
 } from '../diary.js';
-import { sendPushToAll } from '../push.js';
+import { sendNotificationToAll } from '../notifications.js';
 import type { GithubByRepo, AggregatedDay } from '../diary.js';
 import {
   getLatestSnapshotForDate, rowToForecast, describeCode, type Forecast,
@@ -75,7 +75,7 @@ function makeBookmarkPusher(db: Db) {
     }
     const titleLines = items.slice(0, 5).map((it) => `・${(it.title || '').slice(0, 60)}`).join('\n');
     const more = items.length > 5 ? `\n…他 ${items.length - 5} 件` : '';
-    sendPushToAll(db, {
+    sendNotificationToAll(db, {
       title: `📚 AI 要約完了 (${items.length} 件)`,
       body: titleLines + more,
       url: '/?tab=bookmarks',
@@ -132,6 +132,10 @@ export interface QueueBundle {
   diaryQueue: FifoQueue;
   weeklyQueue: FifoQueue;
   applicationCatalogQueue: FifoQueue;
+  /** AI 分析系の一般 queue (= packet-monitor の identify-with-ai /
+   *  identify-process 等、 ユーザ操作で即時走らせる LLM 呼出を見える化)。
+   *  concurrency 1 で他の queue と公平に並ぶ。 */
+  aiAnalysisQueue: FifoQueue;
   // タスク投入ヘルパ
   enqueueSummary: (id: number) => void;
   enqueueCloud: (id: number, args: { docs: string; label: string }) => void;
@@ -160,6 +164,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
   const applicationCatalogQueue = new FifoQueue();
   const diaryQueue = new FifoQueue();
   const weeklyQueue = new FifoQueue();
+  const aiAnalysisQueue = new FifoQueue();
 
   const bookmarkPusher = makeBookmarkPusher(db);
 
@@ -444,7 +449,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
         const result = await runDig({ query, searchEngine, theme, themeContext: themeCtx });
         setDigResult(db, id, { status: 'done', result });
         // Dig 完了で push 通知 (登録済端末のみ)。 失敗は本体に影響させない。
-        sendPushToAll(db, {
+        sendNotificationToAll(db, {
           title: `🔍 ディグ完了: ${query.slice(0, 40)}`,
           body: theme ? `テーマ: ${theme}` : 'AI 分析が出揃いました',
           url: `/?tab=dig&dig=${id}`,
@@ -481,9 +486,8 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
     return {
       github_token: s.github_token || process.env.MEMORIA_GH_TOKEN || '',
       github_user: s.github_user || process.env.MEMORIA_GH_USER || '',
-      github_repos: s.github_repos
-        ? s.github_repos.split(',').map((x) => x.trim()).filter(Boolean)
-        : [],
+      // 集計対象リポは `📋 作業一覧` (repo_watch) から導出。 旧 diary_settings.github_repos は不使用。
+      github_repos: diaryRepos(db),
     };
   }
 
@@ -615,7 +619,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
           error: null,
         });
         // 日記が完成したら登録済端末に push 通知。 失敗しても本体には影響させない。
-        sendPushToAll(db, {
+        sendNotificationToAll(db, {
           title: `📝 ${dateStr} の日記が完成しました`,
           body: ctx.highlights ? ctx.highlights.split('\n').slice(0, 2).join(' ').slice(0, 140) : '作業内容とハイライトが揃いました',
           url: `/?tab=diary&date=${encodeURIComponent(dateStr)}`,
@@ -710,6 +714,7 @@ export function makeQueues(deps: QueuesDeps): QueueBundle {
     diaryQueue,
     weeklyQueue,
     applicationCatalogQueue,
+    aiAnalysisQueue,
     enqueueSummary,
     enqueueCloud,
     enqueueDig,

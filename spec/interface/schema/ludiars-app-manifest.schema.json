@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ludiars.github.io/Memoria/spec/schema/ludiars-app-manifest.schema.json",
+  "title": "LUDIARS App Manifest",
+  "description": "Manifest a LUDIARS app exposes to a Hub Shell (see spec/feature/hub-shell.md). Phase 0 stub — fields may change before Phase 1 starts.",
+  "type": "object",
+  "required": ["id", "displayName", "description", "entry"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,31}$",
+      "description": "Short immutable identifier. Used in URLs and Hub Shell internals."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Human-readable name shown in the Hub Shell nav."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "description": "One-line role description displayed under the app name in the tab nav (e.g. 'ナレッジ管理'). Required; kept short to fit the tab layout. See hub-shell.md §4.2."
+    },
+    "shortCode": {
+      "type": "string",
+      "pattern": "^[A-Z][a-zA-Z]?$",
+      "description": "LUDIARS 2-letter project code (see reference_project_codes)."
+    },
+    "icon": {
+      "type": "string",
+      "description": "Emoji or URL to SVG/PNG. URL is resolved relative to the manifest if a base is known."
+    },
+    "version": {
+      "type": "string",
+      "description": "Manifest version (semver recommended)."
+    },
+    "entry": {
+      "description": "How the Hub Shell should mount this app's UI.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "tag", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "const": "web-component" },
+            "tag": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*-[a-z0-9-]+$",
+              "description": "Custom element tag (must contain a hyphen per HTML spec)."
+            },
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "URL to the JS module that registers the custom element."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "const": "esm" },
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "URL to an ESM module whose default export is { mount(el, ctx), unmount(el) }."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "remoteEntry", "exposedModule"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "const": "module-federation" },
+            "remoteEntry": { "type": "string", "format": "uri" },
+            "exposedModule": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["cernere-session", "design-tokens", "shell-router", "push-notification"]
+      },
+      "uniqueItems": true,
+      "description": "Capabilities the app requests from the Hub Shell. Phase 1 will define each."
+    },
+    "dataChannels": {
+      "type": "array",
+      "description": "Cross-app data channels this app participates in (see hub-shell.md §8). Phase 0 only declares 'task'; more channels added later.",
+      "items": {
+        "type": "object",
+        "required": ["name", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["task"],
+            "description": "Channel identifier. Phase 0 ships 'task' only."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["provider", "consumer", "both"],
+            "description": "provider = authoritative store; consumer = reads/writes via shell mediation; both = bidirectional sync."
+          }
+        }
+      },
+      "uniqueItems": true
+    },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/apps/[a-z][a-z0-9-]*(/.*)?$",
+            "description": "URL prefix in the Hub Shell's URL space."
+          },
+          "default": {
+            "type": "boolean",
+            "description": "If true, navigating to /apps/<id> resolves to this route."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 // /api/setup-docs*, /api/privacy/settings, /api/llm/*, /api/maps/*, /api/queue*
 // /api/locations/settings* (ingest key 管理) も含む。
-// Spec: spec/api/config.md
+// Spec: spec/interface/config.md
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -19,7 +19,7 @@ import type { FifoQueue } from '../queue.js';
 
 type Db = BetterSqlite3.Database;
 
-const SETUP_DOCS: Record<string, { title: string; body: string }> = {
+export const SETUP_DOCS: Record<string, { title: string; body: string }> = {
   tailscale: {
     title: 'Tailscale を使用した VPN 構築方法',
     body: '# Tailscale を使用した VPN 構築方法\n\n1. Memoria を動かす PC と、接続したい端末に Tailscale をインストールします。\n2. すべて同じ tailnet にログインします。\n3. Memoria 側の PC で `tailscale ip -4` を実行し、Tailscale IP を確認します。\n4. 端末側から `http://<tailscale-ip>:5180` を開きます。\n5. OwnTracks や Legatus を使う場合も、接続先はこの Tailscale IP にします。\n6. 外部公開が必要ない場合は、インターネットへ直接公開しないでください。',
@@ -27,6 +27,41 @@ const SETUP_DOCS: Record<string, { title: string; body: string }> = {
   cloudflare: {
     title: 'Cloudflare Tunnel を使用した公開方法',
     body: '# Cloudflare Tunnel を使用した公開方法\n\n1. Memoria を動かす PC に `cloudflared` をインストールします。\n2. `cloudflared tunnel login` を実行し、Tunnel を作成します。\n3. 公開ホスト名の転送先を `http://localhost:5180` に設定します。\n4. 個人データを扱うため、Cloudflare Access などで認証を必ず設定します。\n5. tailnet 外のネットワークから Web UI と `/share` が動くことを確認します。\n6. 認証なしで Memoria を直接公開しないでください。',
+  },
+  alexa: {
+    title: 'Amazon Echo / Alexa の設定方法',
+    body: [
+      '# Amazon Echo / Alexa の設定方法',
+      '',
+      '## Amazon側の設定',
+      '1. Alexa Developer Consoleで **Custom Skill** を作成し、言語を「日本語（日本）」にします。',
+      '2. Interaction ModelのJSON Editorへ `config/alexa/interaction-model.ja-JP.json` を読み込み、モデルをビルドします。',
+      '3. Custom endpointを `https://<Memoriaの公開ホスト>/api/alexa/skill` に設定します。Amazonから到達できるHTTPS/443と、信頼されたCAの証明書が必要です。',
+      '4. Skill manifestのpermissionsへ `alexa::devices:all:notifications:write` を追加します。',
+      '5. events.publicationsへ `AMAZON.MessageAlert.Activated`、events.subscriptionsへ `SKILL_PROACTIVE_SUBSCRIPTION_CHANGED` を追加します。events endpointも同じMemoria URLにします。',
+      '6. Alexaアプリで作成したSkillを有効にし、Skillの「通知」を許可します。',
+      '',
+      '## Memoria側の設定',
+      '`server/.env.secrets` またはInfisical/env-cliへ次を設定してMemoriaを再起動します。値はGitへコミットしないでください。',
+      '',
+      '```dotenv',
+      'MEMORIA_ALEXA_SKILL_ID=amzn1.ask.skill.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+      'MEMORIA_ALEXA_CLIENT_ID=amzn1.application-oa2-client.xxxxxxxxxxxxxxxxxxxxxxxx',
+      'MEMORIA_ALEXA_CLIENT_SECRET=...',
+      'MEMORIA_ALEXA_PROACTIVE_STAGE=development',
+      '```',
+      '',
+      '開発中は `development`、Skillの認定・公開後だけ `live` を使用します。client IDとsecretは必ず両方設定してください。',
+      '',
+      '## 動作確認',
+      '- 「アレクサ、メモリアを開いて」',
+      '- 「アレクサ、メモリアで牛乳を買うをタスクに追加」',
+      '- Memoriaで通知を発生させた後、「アレクサ、メモリアで通知を読んで」',
+      '',
+      '> Alexa Proactive Eventsは自由文の即時アナウンスではありません。EchoへはAmazon定型の新着通知が届き、本文はMemoria Skillを開いたときに読み上げます。',
+      '',
+      '詳しいmanifest例とトラブルシュートは `spec/setup/amazon-echo.md` を参照してください。',
+    ].join('\n'),
   },
   legatus: {
     title: 'Legatus の起動方法',
@@ -39,6 +74,73 @@ const SETUP_DOCS: Record<string, { title: string; body: string }> = {
   mcp: {
     title: 'MCPサーバの設定方法',
     body: '# MCPサーバの設定方法\n\n## 概要\nMemoria MCP サーバ (mcp-server/index.js) を使うと、Claude Desktop や Claude Code からブックマーク検索・タスク操作・辞書参照などを直接呼び出せます。\n\n## 依存インストール\n```\ncd mcp-server && npm install\n```\n\n## MEMORIA_URL の設定\n環境変数 MEMORIA_URL で Memoria サーバの URL を指定します。\n- デフォルト: http://localhost:5180\n- Tailscale 経由の場合: http://<tailscale-ip>:5180\n- Cloudflare Tunnel 経由の場合: https://<your-tunnel-host>\n\n## Claude Desktop の設定\n%APPDATA%\\Claude\\claude_desktop_config.json (Windows) または\n~/Library/Application Support/Claude/claude_desktop_config.json (Mac) に以下を追加:\n\n{\n  "mcpServers": {\n    "memoria": {\n      "command": "node",\n      "args": ["C:/path/to/Memoria/mcp-server/index.js"],\n      "env": { "MEMORIA_URL": "http://localhost:5180" }\n    }\n  }\n}\n\n## Claude Code の設定\n.claude/settings.json または ~/.claude/settings.json に以下を追加:\n\n{\n  "mcpServers": {\n    "memoria": {\n      "command": "node",\n      "args": ["/path/to/Memoria/mcp-server/index.js"],\n      "env": { "MEMORIA_URL": "http://localhost:5180" }\n    }\n  }\n}\n\n## 動作確認\nClaude に以下を試してください:\n- add_task でタスクを追加\n- list_tasks でタスク一覧を取得\n- search_bookmarks でブックマーク検索\n- list_diary_entries で日記一覧を取得',
+  },
+  packetmon: {
+    title: '🛡 パケット監視の起動方法',
+    body: [
+      '# 🛡 パケット監視の起動方法',
+      '',
+      'Memoria の「🛡 パケット監視」タブは、 ローカル PC で走っている外部ツール tools/PacketMonitor が書いている raw.tsv を読んで表示します。 capture 自体は Memoria では起こしません — 先にこの手順で外部 tshark を起動してください。',
+      '',
+      '## 前提',
+      '',
+      '- Windows 10 / 11',
+      '- Wireshark + Npcap (winget で `WiresharkFoundation.Wireshark` を install)',
+      '- PowerShell 5.1+ (Windows 標準)',
+      '',
+      'スクリプト一式は `E:\\Document\\Ars\\PacketMonitor\\` に置いてあります。 他のパスにある場合は環境変数 `MEMORIA_PACKETMON_LOG_ROOT` で logs ディレクトリを指してください。',
+      '',
+      '## 1. 監視開始 (アダプタ別)',
+      '',
+      '```',
+      'powershell -File "E:\\Document\\Ars\\PacketMonitor\\start-monitor.ps1"',
+      '```',
+      '',
+      'IPv4 が振られているアダプタごとに tshark を 1 プロセス spawn し、 `logs\\<adapter>\\raw.tsv` に 1 パケット 1 行で TSV を append します。 出力フィールドは:',
+      '',
+      '- `frame.time_epoch` / `_ws.col.Protocol`',
+      '- `ip.src` / `ip.dst` / `tcp.srcport` / `tcp.dstport` / `udp.srcport` / `udp.dstport`',
+      '- `tls.handshake.extensions_server_name` (= TLS SNI = どこへ繋ぐ宣言)',
+      '- `http.host` (= 平文 HTTP の Host ヘッダ)',
+      '- `dns.qry.name` (= DNS query 名)',
+      '',
+      '## 2. Memoria 側の表示',
+      '',
+      'Memoria のメインタブ「🛡 パケット監視」 を開くと、 アダプタごとに OUTBOUND (どこへ・何を渡しているか) と INBOUND (どこから来ているか、 逆引きあり) のサマリが出ます。 期間 / 上位件数 / 逆引き ON/OFF は画面上部で切替。',
+      '',
+      '## 3. 監視停止',
+      '',
+      '```',
+      'powershell -File "E:\\Document\\Ars\\PacketMonitor\\stop-monitor.ps1"',
+      '```',
+      '',
+      'pid ファイル (`logs\\.monitor-state.json`) を読んで該当 tshark プロセスだけ停止します。',
+      '',
+      '## 4. プロセス紐付け (任意・Sysmon)',
+      '',
+      'パケットだけでは「どのプロセスが」 は取れません。 PID × 接続先まで欲しい時は Sysmon を入れます:',
+      '',
+      '```',
+      'winget install --id Microsoft.Sysinternals.Sysmon --exact --accept-package-agreements --accept-source-agreements',
+      'powershell -Command "Start-Process sysmon -ArgumentList \'-accepteula\',\'-i\',\'E:\\Document\\Ars\\PacketMonitor\\sysmon-config.xml\' -Verb RunAs -Wait"',
+      '```',
+      '',
+      'config は NetworkConnect (Event 3) + DnsQuery (Event 22) のみを拾う最小構成です。 集計は:',
+      '',
+      '```',
+      'powershell -File "E:\\Document\\Ars\\PacketMonitor\\sysmon-tail.ps1" -SinceMinutes 5 -TopN 20',
+      '```',
+      '',
+      '## 5. 環境変数 (override)',
+      '',
+      '- `MEMORIA_PACKETMON_LOG_ROOT` — logs root を別パスに置く場合に指定。 未設定なら `E:\\Document\\Ars\\PacketMonitor\\logs` → `%USERPROFILE%\\Document\\Ars\\PacketMonitor\\logs` の順に探します。',
+      '',
+      '## 注意',
+      '',
+      '- Memoria は raw.tsv を「読むだけ」 で、 個人データの DB 保存はしません。',
+      '- 同時書込み中のファイルを読むので、 開いた直後のサマリは「直近 32 MiB」 だけを対象にしています (= 巨大化したログでも応答時間を保つため)。',
+      '- Tailscale (wintun) や vEthernet (Hyper-V vSwitch) は Npcap で見えないため、 アダプタ列挙には出ません。 物理 NIC を通る WireGuard UDP として観測できます。',
+    ].join('\n'),
   },
 };
 
@@ -59,13 +161,15 @@ export interface ConfigRouterDeps {
   domainCatalogQueue: FifoQueue;
   pageMetadataQueue: FifoQueue;
   mealVisionQueue: FifoQueue;
+  /** AI 分析系の一般 queue (packet-monitor identify-with-ai / identify-process など) */
+  aiAnalysisQueue?: FifoQueue;
 }
 
 export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
   const {
     db, port, dataDir, onMcpAutostartChange, onActivitySettingsChange,
     summaryQueue, cloudQueue, digQueue, diaryQueue, weeklyQueue,
-    domainCatalogQueue, pageMetadataQueue, mealVisionQueue,
+    domainCatalogQueue, pageMetadataQueue, mealVisionQueue, aiAnalysisQueue,
   } = deps;
   const r = new Hono();
 
@@ -139,6 +243,9 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
         // Mask the API key when returning to FE.
         openai_api_key: cfg.openai_api_key ? '***' : '',
         openai_api_key_set: !!cfg.openai_api_key,
+        // gamma (ローカル LLM): base_url は平文表示、 api_key は masked。
+        gamma_api_key: cfg.gamma_api_key ? '***' : '',
+        gamma_api_key_set: !!cfg.gamma_api_key,
         // Standing memo passed to every diary generation.
         diary_global_memo: settings['diary.global_memo'] || '',
         user_profile: {
@@ -176,6 +283,7 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
     const patch = settingsPatchFromConfig(body);
     // Don't blow away the API key with the masked '***' value.
     if (patch['llm.openai.api_key'] === '***') delete patch['llm.openai.api_key'];
+    if (patch['llm.gamma.api_key'] === '***') delete patch['llm.gamma.api_key'];
     // Diary-specific standing memo lives outside the LLM config object.
     if (typeof body.diary_global_memo === 'string') {
       patch['diary.global_memo'] = body.diary_global_memo;
@@ -224,6 +332,8 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
       domain: domainCatalogQueue.snapshot(),
       page: pageMetadataQueue.snapshot(),
       meal: mealVisionQueue.snapshot(),
+      // AI 分析系 (= ユーザ操作で起こす identify-with-ai / identify-process 等)
+      ai_analysis: aiAnalysisQueue ? aiAnalysisQueue.snapshot() : { depth: 0, running: false, items: [], history: [] },
       // Backward-compat top-level fields:
       ...summaryQueue.snapshot(),
     });
@@ -232,7 +342,7 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
   // ---- Google Maps client config -------------------------------------------
   r.get('/api/maps/config', (c: Context) => {
     const settings = getAppSettings(db);
-    const key = settings['maps.api_key'] || process.env.GOOGLE_MAPS_API_KEY || '';
+    const key = settings['maps.api_key'] || '';
     return c.json({ apiKey: key, hasKey: !!key });
   });
 

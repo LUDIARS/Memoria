@@ -13,11 +13,11 @@ Memoria 内蔵の Web Push 配信 (web-push lib + VAPID 鍵)。 端末ごとの 
 - リマインダー時刻 / Nuntius 連携設定もここ
 
 ## データ
-- [push_subscriptions](../db/push.md) — endpoint (UNIQUE) / p256dh / auth / label / user_agent / revoked_at
+- [push_subscriptions](../data/push.md) — endpoint (UNIQUE) / p256dh / auth / label / user_agent / revoked_at
 - VAPID 鍵: `<DATA>/vapid.json` (DB 外、 初回起動で自動生成)
 
 ## API
-- [push.md](../api/push.md) — `/api/push/vapid-public-key` / `/api/push/subscribe` / `/api/push/subscriptions` / `DELETE /api/push/subscriptions/:id` / `/api/push/test`
+- [push.md](../interface/push.md) — `/api/push/vapid-public-key` / `/api/push/subscribe` / `/api/push/subscriptions` / `DELETE /api/push/subscriptions/:id` / `/api/push/test`
 
 ## シェア可能か
 **local-only**

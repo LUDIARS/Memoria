@@ -6,6 +6,13 @@
 ローカル LLM がそれを要約・分類・関連付けして、**学んだことを忘れないように
 可視化** する。 紙のノートと検索エンジンと活動ログの中間にいる存在。
 
+## セットアップ
+
+設定・起動手順は用途別に [`spec/setup/`](spec/setup/) にまとめてある:
+
+- [ローカルで起動する](spec/setup/local-startup.md) / [LLM プロバイダ](spec/setup/llm-providers.md) / [WebPush 通知](spec/setup/webpush.md) / [位置情報の取り込み](spec/setup/location-tracking.md) / [マルチサーバ Hub](spec/setup/hub.md)
+- 全設定キー: [spec/setup/config-reference.md](spec/setup/config-reference.md)
+
 ## 何ができるか (ひと言で)
 
 - **ライフログ**: ブラウザ履歴 / GPS 軌跡 / 開発活動 (commits + AI prompt) /
@@ -42,7 +49,7 @@ Memoria は **個人データはすべて手元の SQLite に留まる** のが�
 
 ## A. デスクトップアプリ (推奨)
 
-[Tauri 2.x](https://tauri.app/) 製。インストーラには Memoria サーバ + Node
+[Electron](https://www.electronjs.org/) 製。インストーラには Memoria サーバ + Node
 ランタイムが同梱されているので、ユーザは何もインストールしなくていい。
 
 ### 1. インストール
@@ -106,7 +113,7 @@ npm start
 # → http://localhost:5180/
 ```
 
-開発時は `npm run dev` (Node の `--watch` で自動再起動)。
+開発時は `npm run dev` (`tsx watch` で自動再起動)。
 
 ### 設定はすべて UI から
 
@@ -127,25 +134,28 @@ MEMORIA_PORT=6000 MEMORIA_DATA=/var/memoria npm start
 ```
 Memoria/
 ├ extension/        Chrome 拡張 (MV3)
-├ server/           Node.js + Hono + better-sqlite3
-│  ├ index.js       HTTP API + 静的配信
+├ server/           Node.js + Hono + better-sqlite3 (TypeScript / tsx 直接実行)
+│  ├ index.ts       HTTP API + 静的配信
+│  ├ bootstrap.ts   起動口 (Infisical creds 注入 → index.ts)
 │  ├ db/            SQLite façade (Phase 0 シーム)
-│  ├ db.js          スキーマ + クエリ (legacy export)
-│  ├ claude.js      HTML→テキスト + claude CLI 呼出し
-│  ├ llm.js         プロバイダ切替 (claude/gemini/codex/openai)
-│  ├ dig.js         ディグ deep research
-│  ├ diary.js       日記 + 週報
-│  ├ domain-catalog.js  ドメイン分類 (site_name + できること自動推論)
-│  ├ page-metadata.js   per-URL meta + kind
-│  ├ wordcloud.js   ワードクラウド
-│  ├ recommendations.js おすすめ
-│  ├ queue.js       FIFO キュー
+│  ├ db.ts          スキーマ + クエリ (legacy export)
+│  ├ claude.ts      HTML→テキスト + claude CLI 呼出し
+│  ├ llm.ts         プロバイダ切替 (claude/gemini/codex/openai)
+│  ├ dig.ts         ディグ deep research
+│  ├ diary.ts       日記 + 週報
+│  ├ domain-catalog.ts  ドメイン分類 (site_name + できること自動推論)
+│  ├ page-metadata.ts   per-URL meta + kind
+│  ├ wordcloud.ts   ワードクラウド
+│  ├ recommendations-ai.ts おすすめ
+│  ├ queue.ts       FIFO キュー
+│  ├ routes/        Hono router 群 (/api/* — domain ごとに 1 ファイル)
+│  ├ lib/           横断ヘルパ (queues / scheduler / samplers 等)
 │  ├ local/         ローカル専用 (uptime, multi-client)
 │  ├ multi/         マルチサーバ (Memoria Hub) — 別 Node プロセス
-│  ├ types/         JSDoc から参照する .d.ts (Phase 1 TS migration)
-│  └ public/        SPA (vanilla JS)
+│  ├ types/         JSDoc から参照する .d.ts (TS migration の中間成果物)
+│  └ public/        SPA (vanilla TS → esbuild で public/app.js にバンドル)
 │
-├ desktop/          Tauri ラッパ + bundle スクリプト
+├ desktop/          Electron ラッパ + bundle スクリプト
 ├ docs/             設計書 (multi-server-architecture.md, mobile-share.md)
 ├ mcp-server/       MCP として外部公開する実装 (Claude Desktop / Code 連携)
 └ data/             ★ git 管理外 (HTML + SQLite)
@@ -264,6 +274,23 @@ UI 設定が無い限り使うのは port / data dir くらい。
 | `MEMORIA_GOOGLE_GEOLOCATION_API_KEY` | – | 設定すると PC WiFi → Google Geolocation API で位置取り込みを起動 (Windows のみ) |
 | `MEMORIA_WIFI_INTERVAL_SEC` | `600` | WiFi 位置の実行間隔 |
 | `MEMORIA_LEGATUS_WS` | (off) | `on` で旧 Legatus 経由 subscriber を opt-in (通常は内蔵 broker のみ) |
+
+## 出席チェックイン受信 (Aedilis 連携・投機実装)
+
+会場の出席チェックイン (Aedilis) を「在席ログの 1 種」 として取り込む受け口。
+
+- `POST /api/attendance/ingest` — body は Aedilis cloud の webhook 形式
+  (`{ type:'attendance.checked_in', userId, facilityId, checkedInAt, reservationId|null, source }`)。
+  認証は GPS 取込と同じ ingest key (`X-Memoria-Ingest-Key` / `Authorization: Bearer` /
+  Basic、 未設定なら LAN-only 前提で素通り)。 `(userId, facilityId, checkedInAt)`
+  で冪等化 (再送は `deduped:true`)。
+- `GET /api/attendance/recent?limit=&facility=` — 受信済み一覧 (確認用)。
+- **個人データは userId アンカーのみ**。 facilityId / checkedInAt / reservationId だけ
+  保存し、 氏名等の生 PII は持たない ([[project_personal_data_rule]])。
+- **本番化 TODO**: Memoria は online への直接 write 不可で relay 経由が正
+  ([[feedback_memoria_online_flow]])。 本番では Aedilis が直接ここへ POST するのでは
+  なく、 Imperativus / Legatus 系の relay フォワーダ経由でこの受け口へ届ける構成に
+  寄せる (I/F はそのまま流用可)。 契約書 = `Aedilis/checkin-spike/CONTRACTS.md §5`。
 
 ## ユーザがやる必要のある設定
 

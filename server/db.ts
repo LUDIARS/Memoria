@@ -4,6 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkS
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import { ensureRssSchema } from './rss/index.js';
 import type { BookmarkRow } from './db/types/bookmark.js';
 import type { TaskRow } from './db/types/task.js';
 import type { AgentRunRow, AgentProjectRow } from './db/types/agent.js';
@@ -18,6 +19,7 @@ import type { PageVisitRow, VisitEventRow } from './db/types/visit.js';
 import type { PageMetadataRow, DomainCatalogRow } from './db/types/page.js';
 import type { ApplicationRow } from './db/types/application.js';
 import type { ServerEventRow, ActivityEventRow, ActivityKind } from './db/types/activity.js';
+import type { AttendanceEventRow } from './db/types/attendance.js';
 import type { PushSubscriptionRow } from './db/types/push.js';
 import type { ExternalChatMessageRow } from './db/types/chat.js';
 import type { UserStopwordRow } from './db/types/stopwords.js';
@@ -27,6 +29,8 @@ import type {
   NoteCommentSetRow, NoteCommentRow,
 } from './db/types/note.js';
 import { NOTE_BLOCK_TYPES } from './db/types/note.js';
+import type { AiArticle, AiSeed, AiAdvice, SourceRef, ArticleTag, AiArticleFilter, ArticleTagCount } from './ai-hub/types.js';
+import type { TaskReview, InsertTaskReviewInput, TaskReviewStatus, TaskSnapshotEntry } from './task-review/types.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -235,6 +239,28 @@ export function openDb(dbPath: string): Db {
     -- 同一 ref_id (sha 等) の重複登録を防ぐ — kind+ref_id の組で一意。
     CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_events_ref
       ON activity_events(kind, ref_id) WHERE ref_id IS NOT NULL;
+
+    -- 出席チェックイン (Aedilis → Memoria webhook、 CONTRACTS.md §5)。
+    -- 在席ログの 1 種としてローカルに記録する。 個人データは user_id アンカー
+    -- のみ ([[project_personal_data_rule]])。 生 PII は持たない。
+    CREATE TABLE IF NOT EXISTS attendance_events (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id       TEXT NOT NULL,
+      facility_id   TEXT NOT NULL,
+      checked_in_at INTEGER NOT NULL,
+      reservation_id TEXT,
+      source        TEXT NOT NULL DEFAULT 'aedilis',
+      event_type    TEXT NOT NULL DEFAULT 'attendance.checked_in',
+      ingested_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_events_user
+      ON attendance_events(user_id, checked_in_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_attendance_events_recent
+      ON attendance_events(checked_in_at DESC);
+    -- 同一の出席 (同 user × 同施設 × 同時刻) を二重記録しない。 webhook は
+    -- fire-and-forget で再送されうるので冪等ガードを置く。
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_events_dedup
+      ON attendance_events(user_id, facility_id, checked_in_at);
 
     CREATE TABLE IF NOT EXISTS diary_entries (
       date                  TEXT PRIMARY KEY,
@@ -498,6 +524,27 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_weather_snapshots_date
       ON weather_snapshots(date DESC, fetched_at DESC);
 
+    -- マルチソース・アンサンブルの保存。 1 fetch = 1 行。 全API の予報を時刻別に
+    -- 突き合わせた結果 (hours_json) と、 どのソースが成功したか (sources_json) を残す。
+    -- spec/feature/weather-multisource.md / spec/data/weather.md。
+    CREATE TABLE IF NOT EXISTS weather_ensemble_snapshots (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      fetched_at          INTEGER NOT NULL,
+      date                TEXT NOT NULL,
+      lat                 REAL NOT NULL,
+      lon                 REAL NOT NULL,
+      label               TEXT,
+      agreement_threshold REAL NOT NULL,
+      sources_json        TEXT NOT NULL,
+      hours_json          TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_weather_ensemble_fetched
+      ON weather_ensemble_snapshots(fetched_at DESC);
+
+    -- 成長型ブラックボックス (blackbox_rules / blackbox_decisions) のテーブルは
+    -- @ludiars/blackbox の ensureBlackboxSchema() が作成・migration する (index.ts の
+    -- makeSqliteBlackBox 経由)。ここでは定義しない。
+
     -- レビュー対象リポジトリ。 ludiars-review skill (= cloud routine) が
     -- iterate するリスト。 起動時に LUDIARS_ROOT 配下の git clone を seed し、
     -- ユーザは UI から任意のローカルパスを足せる。 format_key は将来カスタム
@@ -511,6 +558,74 @@ export function openDb(dbPath: string): Db {
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_review_targets_enabled ON review_targets(enabled);
+
+    -- AI 主導おすすめ run の履歴。 1 run = 6 agent 並列 Sonnet + Opus 統合の結果。
+    -- agent_logs_json:  各 agent の入出力サマリ (= 「なぜ・どうおすすめしたか」 の根拠)
+    -- results_json:     Opus 統合済みの最終おすすめリスト (RecommendationItem[])
+    -- status:           pending / running / done / error
+    CREATE TABLE IF NOT EXISTS recommendation_runs (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      started_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at     TEXT,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      error           TEXT,
+      agent_logs_json TEXT,
+      results_json    TEXT,
+      model_sonnet    TEXT,
+      model_opus      TEXT,
+      duration_ms     INTEGER,
+      result_count    INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_recommendation_runs_started
+      ON recommendation_runs(started_at DESC);
+
+    -- ウォッチ対象のソース管理リポジトリ。 PR / Issue / デフォルトブランチの
+    -- 最終更新を一覧するためのレジストリ。 内部ビューアは持たず、 表示は
+    -- すべて元のホスティング先 (GitHub 等) へリンクするだけ。
+    -- provider は将来 GitHub 以外 (gitlab / bitbucket / gitea ...) を足す
+    -- ための拡張点 (現状は 'github' のみ実装)。
+    -- 各 *_count / last_commit_* / fetched_at / fetch_error はホスティング先
+    -- API レート制限を避けるための直近フェッチのキャッシュ。 表示は常に
+    -- このキャッシュから行い、 refresh で明示的に取り直す。
+    CREATE TABLE IF NOT EXISTS repo_watch (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider            TEXT NOT NULL DEFAULT 'github',
+      owner               TEXT NOT NULL,
+      name                TEXT NOT NULL,
+      html_url            TEXT NOT NULL,
+      default_branch      TEXT,
+      open_pr_count       INTEGER,
+      open_issue_count    INTEGER,
+      last_commit_sha     TEXT,
+      last_commit_message TEXT,
+      last_commit_url     TEXT,
+      last_commit_at      TEXT,
+      fetched_at          TEXT,
+      fetch_error         TEXT,
+      sort_order          INTEGER NOT NULL DEFAULT 0,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(provider, owner, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_watch_sort ON repo_watch(sort_order, id);
+
+    -- repo_watch の各リポについて、 直近フェッチ時の open PR / Issue を最大 50 件まで
+    -- キャッシュする。 一覧上には top 5 を updated_at DESC で表示、 「more」 で
+    -- 50 件まで展開する。 表示時に外部リンクへ飛ばすだけなので body 等は保持しない。
+    CREATE TABLE IF NOT EXISTS repo_watch_items (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id    INTEGER NOT NULL REFERENCES repo_watch(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL,                   -- 'pr' | 'issue'
+      number     INTEGER NOT NULL,
+      title      TEXT NOT NULL,
+      html_url   TEXT NOT NULL,
+      state      TEXT,                            -- 'open' | 'closed' (現状 open のみ取得)
+      author     TEXT,
+      updated_at TEXT,                            -- ISO8601
+      fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(repo_id, kind, number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_repo_watch_items_recent
+      ON repo_watch_items(repo_id, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -570,6 +685,7 @@ export function openDb(dbPath: string): Db {
       title         TEXT NOT NULL,
       details       TEXT,
       status        TEXT NOT NULL DEFAULT 'todo',
+      kind          TEXT NOT NULL DEFAULT 'task',
       creator_type  TEXT NOT NULL DEFAULT 'human',
       due_at        TEXT,
       share_actio   INTEGER NOT NULL DEFAULT 0,
@@ -583,6 +699,21 @@ export function openDb(dbPath: string): Db {
       ON tasks(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(due_at);
+    -- idx_tasks_kind は ALTER で kind カラムを足した後にしか作れないので、
+    -- migration block の末尾で作成する (下記 ALTER 群の直後を参照)。
+
+    CREATE TABLE IF NOT EXISTS goal_eval_logs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      goal_id      INTEGER NOT NULL,
+      date         TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(goal_id, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goal_eval_logs_date
+      ON goal_eval_logs(date DESC);
+    CREATE INDEX IF NOT EXISTS idx_goal_eval_logs_goal
+      ON goal_eval_logs(goal_id, date DESC);
 
     CREATE TABLE IF NOT EXISTS agent_projects (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -607,7 +738,9 @@ export function openDb(dbPath: string): Db {
       pid            INTEGER,
       summary        TEXT,
       started_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      finished_at    TEXT
+      finished_at    TEXT,
+      mode           TEXT NOT NULL DEFAULT 'local',
+      concordia_session_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task
       ON agent_runs(task_id, started_at DESC);
@@ -716,6 +849,62 @@ export function openDb(dbPath: string): Db {
       ON note_comments(set_id, position);
     CREATE INDEX IF NOT EXISTS idx_note_comments_target
       ON note_comments(target_block_uuid);
+
+    -- AI ハブ (🤖 AI タブ)。 前日の作業ログから自動生成する技術記事・記事ネタ・
+    -- 週次の AI 助言を保持する。 すべて個人の作業ログ由来の派生物でローカル完結
+    -- ([[project_personal_data_rule]])。
+    CREATE TABLE IF NOT EXISTS ai_articles (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      title       TEXT NOT NULL,
+      body_md     TEXT NOT NULL,              -- 記事本文 (Markdown)
+      topic_key   TEXT,                       -- 重複排除キー (repo:theme 等)
+      source_refs TEXT,                       -- JSON 配列: [{kind, ref, repo}]
+      origin      TEXT NOT NULL DEFAULT 'digest', -- 'digest' | 'requested'
+      for_date    TEXT,                       -- 対象作業日 YYYY-MM-DD
+      -- 転写先 note.id (NULL=未転写)。 notes.id は UUID (TEXT) なので TEXT で持つ
+      -- (spec の "INTEGER" は note id が UUID 化される前の名残。 実体に合わせる)。
+      note_id     TEXT,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE TABLE IF NOT EXISTS ai_article_seeds (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      title       TEXT NOT NULL,
+      summary     TEXT,                       -- なぜ記事になるか
+      angle       TEXT,                       -- 提案アングル
+      source_refs TEXT,                       -- JSON
+      for_date    TEXT,
+      status      TEXT NOT NULL DEFAULT 'pending', -- 'pending'|'requested'|'done'|'dismissed'
+      article_id  INTEGER,                    -- 記事化済みなら ai_articles.id
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE TABLE IF NOT EXISTS ai_advice (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      for_date     TEXT NOT NULL,             -- 生成対象日 YYYY-MM-DD
+      body_md      TEXT NOT NULL,             -- 助言本文 (Markdown)
+      data_summary TEXT,                      -- JSON: 投入データの件数等
+      created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_articles_created ON ai_articles(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_seeds_status ON ai_article_seeds(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
+
+    -- タスク確認 (朝の Sonnet タスク棚卸し)。 同一プロジェクトの近いタスクの統合提案
+    -- (cluster) と完了していそうなタスクのクローズ提案 (completed) を pending で積む。
+    -- Spec: spec/feature/task-review.md
+    CREATE TABLE IF NOT EXISTS task_reviews (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind        TEXT NOT NULL,                  -- 'cluster' | 'completed'
+      project     TEXT,                           -- 所属プロジェクト(category)。cluster 用
+      task_ids    TEXT NOT NULL,                  -- JSON number[]: 対象タスク id
+      primary_id  INTEGER,                        -- cluster: 統合先 (代表) タスク id
+      reason      TEXT NOT NULL,                  -- 提案理由 (人間向け短文)
+      snapshot    TEXT NOT NULL,                  -- JSON [{id,title,status}]: 生成時スナップショット
+      status      TEXT NOT NULL DEFAULT 'pending', -- 'pending' | 'applied' | 'dismissed'
+      for_date    TEXT,                           -- 生成対象日 YYYY-MM-DD
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      applied_at  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_reviews_status ON task_reviews(status, created_at DESC);
   `);
 
   // notes rev1 → rev2: 旧 INTEGER 行を UUID で再挿入
@@ -790,6 +979,21 @@ export function openDb(dbPath: string): Db {
     db.exec(`ALTER TABLE work_locations ADD COLUMN radius_m INTEGER`);
   }
 
+  // repo_watch: CI (GitHub Actions 最新 run) のキャッシュ列を後付け。
+  const repoWatchCols = (db.prepare(`PRAGMA table_info(repo_watch)`).all() as { name: string }[]).map(c => c.name);
+  const repoWatchAlters: ReadonlyArray<readonly [string, string]> = [
+    ['ci_status', 'TEXT'],         // queued / in_progress / completed
+    ['ci_conclusion', 'TEXT'],     // success / failure / cancelled / skipped / null
+    ['ci_url', 'TEXT'],            // workflow run の html_url
+    ['ci_workflow_name', 'TEXT'],
+    ['ci_run_at', 'TEXT'],         // ISO8601 (workflow run の updated_at)
+  ];
+  for (const [col, ddl] of repoWatchAlters) {
+    if (repoWatchCols.length > 0 && !repoWatchCols.includes(col)) {
+      db.exec(`ALTER TABLE repo_watch ADD COLUMN ${col} ${ddl}`);
+    }
+  }
+
   const mealsCols = (db.prepare(`PRAGMA table_info(meals)`).all() as { name: string }[]).map(c => c.name);
   if (mealsCols.length > 0 && !mealsCols.includes('additions_json')) {
     db.exec(`ALTER TABLE meals ADD COLUMN additions_json TEXT`);
@@ -819,16 +1023,27 @@ export function openDb(dbPath: string): Db {
     ['shared_at', 'TEXT'],
     ['shared_origin', 'TEXT'],
     ['category', 'TEXT'],
+    ['kind', `TEXT NOT NULL DEFAULT 'task'`],
   ];
   for (const [col, ddl] of taskAlters) {
     if (taskCols.length > 0 && !taskCols.includes(col)) {
       db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${ddl}`);
     }
   }
-  // agent_runs.model — add if missing on existing DBs.
+  // kind カラムは ALTER で足したばかり (or 元から存在) — どちらにせよ
+  // index を作る。 IF NOT EXISTS で冪等。
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind)`);
+  // agent_runs.model / .mode / .concordia_session_id — add if missing on existing DBs.
+  // CREATE INDEX は ALTER の後で発行する (memory: sqlite-create-index-after-alter).
   const arCols = (db.prepare(`PRAGMA table_info(agent_runs)`).all() as { name: string }[]).map(c => c.name);
   if (arCols.length > 0 && !arCols.includes('model')) {
     db.exec(`ALTER TABLE agent_runs ADD COLUMN model TEXT`);
+  }
+  if (arCols.length > 0 && !arCols.includes('mode')) {
+    db.exec(`ALTER TABLE agent_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'local'`);
+  }
+  if (arCols.length > 0 && !arCols.includes('concordia_session_id')) {
+    db.exec(`ALTER TABLE agent_runs ADD COLUMN concordia_session_id TEXT`);
   }
 
   // Forward-compat: ensure newer columns exist on older word_clouds tables.
@@ -875,6 +1090,15 @@ export function openDb(dbPath: string): Db {
   // and writes it here. Replaces the visit_events session heuristic, which
   // over-counted days with long idle browser tabs (see trendsWorkHours).
   if (!deCols.includes('work_minutes')) db.exec(`ALTER TABLE diary_entries ADD COLUMN work_minutes INTEGER`);
+
+  // ai_articles: タグ列 (言語/プロジェクト/内容タイプ/技術領域/その他) を後付け。
+  // JSON 配列 [{category,value}] を持ち、 日付 × タグでフィルタする。
+  // ([[feedback_sqlite_create_index_after_alter]] に従い INDEX は ALTER の後)
+  const aaCols = (db.prepare(`PRAGMA table_info(ai_articles)`).all() as { name: string }[]).map(c => c.name);
+  if (aaCols.length > 0 && !aaCols.includes('tags')) {
+    db.exec(`ALTER TABLE ai_articles ADD COLUMN tags TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_articles_for_date ON ai_articles(for_date DESC)`);
 
   // gps_locations: 圧縮メタ列を後付けで足す
   const gpsCols = (db.prepare(`PRAGMA table_info(gps_locations)`).all() as { name: string }[]).map(c => c.name);
@@ -951,6 +1175,9 @@ export function openDb(dbPath: string): Db {
   if (!cols.includes('access_count')) {
     db.exec(`ALTER TABLE bookmarks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`);
   }
+
+  // RSS リーダー + トレンド取り込みドメインのスキーマ (自己完結モジュール)。
+  ensureRssSchema(db);
 
   return db;
 }
@@ -2375,6 +2602,13 @@ const ACTIVITY_KINDS = new Set<ActivityKind>([
   'task_created',
   'task_done',
   'task_updated',
+  'goal_created',
+  'goal_done',
+  'goal_updated',
+  'discord_message',
+  'discord_presence',
+  'discord_voice',
+  'discord_reaction',
 ]);
 
 export interface RecordActivityEventInput {
@@ -2412,6 +2646,56 @@ export function recordActivityEvent(
     metadata ? JSON.stringify(metadata) : null,
   );
   return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
+}
+
+// ── attendance events (Aedilis 出席チェックイン、 CONTRACTS.md §5) ─────────
+
+export interface RecordAttendanceEventInput {
+  userId: string;
+  facilityId: string;
+  checkedInAt: number;             // epoch ms
+  reservationId?: string | null;   // walk-in は null
+  source?: string | null;          // 既定 'aedilis'
+}
+
+/**
+ * 出席チェックインを 1 件記録する。 webhook の再送に備え、
+ * (user_id, facility_id, checked_in_at) の UNIQUE で冪等化する
+ * (重複は INSERT OR IGNORE で deduped=true)。
+ */
+export function recordAttendanceEvent(
+  db: Db,
+  { userId, facilityId, checkedInAt, reservationId, source }: RecordAttendanceEventInput,
+): { inserted: boolean; id: number } {
+  const info = db.prepare(`
+    INSERT OR IGNORE INTO attendance_events
+      (user_id, facility_id, checked_in_at, reservation_id, source, event_type)
+    VALUES (?, ?, ?, ?, ?, 'attendance.checked_in')
+  `).run(
+    userId,
+    facilityId,
+    checkedInAt,
+    reservationId ?? null,
+    source ?? 'aedilis',
+  );
+  return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
+}
+
+/** 出席イベントを新しい順に返す (UI / デバッグ用)。 facility で絞り込み可。 */
+export function listAttendanceEvents(
+  db: Db,
+  { limit = 50, facilityId = null }: { limit?: number; facilityId?: string | null } = {},
+): AttendanceEventRow[] {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50));
+  const where = facilityId ? 'WHERE facility_id = ?' : '';
+  const args: unknown[] = facilityId ? [facilityId, safeLimit] : [safeLimit];
+  return db.prepare(`
+    SELECT id, user_id, facility_id, checked_in_at, reservation_id, source, event_type, ingested_at
+    FROM attendance_events
+    ${where}
+    ORDER BY checked_in_at DESC
+    LIMIT ?
+  `).all(...args) as AttendanceEventRow[];
 }
 
 export interface ActivityEventParsed extends Omit<ActivityEventRow, 'ingested_at'> {
@@ -2551,6 +2835,178 @@ export function updateReviewTarget(
 export function deleteReviewTarget(db: Db, id: number): boolean {
   const r = db.prepare(`DELETE FROM review_targets WHERE id = ?`).run(id);
   return r.changes > 0;
+}
+
+// ─── repo_watch (ソース管理リポジトリのウォッチ一覧) ──────────────────────────
+export interface RepoWatchRow {
+  id: number;
+  provider: string;
+  owner: string;
+  name: string;
+  html_url: string;
+  default_branch: string | null;
+  open_pr_count: number | null;
+  open_issue_count: number | null;
+  last_commit_sha: string | null;
+  last_commit_message: string | null;
+  last_commit_url: string | null;
+  last_commit_at: string | null;
+  ci_status: string | null;
+  ci_conclusion: string | null;
+  ci_url: string | null;
+  ci_workflow_name: string | null;
+  ci_run_at: string | null;
+  fetched_at: string | null;
+  fetch_error: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+const REPO_WATCH_COLS = `
+  id, provider, owner, name, html_url, default_branch,
+  open_pr_count, open_issue_count,
+  last_commit_sha, last_commit_message, last_commit_url, last_commit_at,
+  ci_status, ci_conclusion, ci_url, ci_workflow_name, ci_run_at,
+  fetched_at, fetch_error, sort_order, created_at
+`;
+
+export function listRepoWatch(db: Db): RepoWatchRow[] {
+  return db.prepare(
+    `SELECT ${REPO_WATCH_COLS} FROM repo_watch ORDER BY sort_order ASC, id ASC`,
+  ).all() as RepoWatchRow[];
+}
+
+export function getRepoWatch(db: Db, id: number): RepoWatchRow | undefined {
+  return db.prepare(
+    `SELECT ${REPO_WATCH_COLS} FROM repo_watch WHERE id = ?`,
+  ).get(id) as RepoWatchRow | undefined;
+}
+
+/** 新規登録。 (provider, owner, name) が重複する場合は UNIQUE 制約で throw。 */
+export function insertRepoWatch(
+  db: Db,
+  { provider = 'github', owner, name, html_url, default_branch = null }:
+    { provider?: string; owner: string; name: string; html_url: string; default_branch?: string | null },
+): number {
+  const max = db.prepare(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM repo_watch`).get() as { m: number };
+  const r = db.prepare(
+    `INSERT INTO repo_watch (provider, owner, name, html_url, default_branch, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(provider, owner, name, html_url, default_branch, max.m + 1);
+  return Number(r.lastInsertRowid);
+}
+
+export function deleteRepoWatch(db: Db, id: number): boolean {
+  const r = db.prepare(`DELETE FROM repo_watch WHERE id = ?`).run(id);
+  return r.changes > 0;
+}
+
+/** 直近フェッチのキャッシュ列を更新する。 fetch 成否どちらでも呼ぶ。 */
+export function updateRepoWatchStats(
+  db: Db,
+  id: number,
+  stats: {
+    default_branch?: string | null;
+    open_pr_count?: number | null;
+    open_issue_count?: number | null;
+    last_commit_sha?: string | null;
+    last_commit_message?: string | null;
+    last_commit_url?: string | null;
+    last_commit_at?: string | null;
+    ci_status?: string | null;
+    ci_conclusion?: string | null;
+    ci_url?: string | null;
+    ci_workflow_name?: string | null;
+    ci_run_at?: string | null;
+    fetch_error?: string | null;
+  },
+): void {
+  db.prepare(
+    `UPDATE repo_watch SET
+       default_branch      = ?,
+       open_pr_count       = ?,
+       open_issue_count    = ?,
+       last_commit_sha     = ?,
+       last_commit_message = ?,
+       last_commit_url     = ?,
+       last_commit_at      = ?,
+       ci_status           = ?,
+       ci_conclusion       = ?,
+       ci_url              = ?,
+       ci_workflow_name    = ?,
+       ci_run_at           = ?,
+       fetched_at          = datetime('now'),
+       fetch_error         = ?
+     WHERE id = ?`,
+  ).run(
+    stats.default_branch ?? null,
+    stats.open_pr_count ?? null,
+    stats.open_issue_count ?? null,
+    stats.last_commit_sha ?? null,
+    stats.last_commit_message ?? null,
+    stats.last_commit_url ?? null,
+    stats.last_commit_at ?? null,
+    stats.ci_status ?? null,
+    stats.ci_conclusion ?? null,
+    stats.ci_url ?? null,
+    stats.ci_workflow_name ?? null,
+    stats.ci_run_at ?? null,
+    stats.fetch_error ?? null,
+    id,
+  );
+}
+
+// ─── repo_watch_items (各リポの open PR / Issue キャッシュ) ────────────────
+export interface RepoWatchItemRow {
+  id: number;
+  repo_id: number;
+  kind: string;       // 'pr' | 'issue'
+  number: number;
+  title: string;
+  html_url: string;
+  state: string | null;
+  author: string | null;
+  updated_at: string | null;
+  fetched_at: string;
+}
+
+export function listRepoWatchItems(db: Db, repoId: number, limit = 50): RepoWatchItemRow[] {
+  return db.prepare(
+    `SELECT id, repo_id, kind, number, title, html_url, state, author, updated_at, fetched_at
+     FROM repo_watch_items
+     WHERE repo_id = ?
+     ORDER BY updated_at DESC, id DESC
+     LIMIT ?`,
+  ).all(repoId, limit) as RepoWatchItemRow[];
+}
+
+/** ある repo の items を丸ごと差し替える (取得結果を毎回上書きする想定)。 */
+export function replaceRepoWatchItems(
+  db: Db,
+  repoId: number,
+  items: ReadonlyArray<{
+    kind: string;
+    number: number;
+    title: string;
+    html_url: string;
+    state?: string | null;
+    author?: string | null;
+    updated_at?: string | null;
+  }>,
+): void {
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM repo_watch_items WHERE repo_id = ?`).run(repoId);
+    if (items.length === 0) return;
+    const ins = db.prepare(
+      `INSERT INTO repo_watch_items (repo_id, kind, number, title, html_url, state, author, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const it of items) {
+      ins.run(repoId, it.kind, it.number, it.title, it.html_url,
+        it.state ?? null, it.author ?? null, it.updated_at ?? null);
+    }
+  });
+  tx();
 }
 
 export function activityEventsForDate(db: Db, dateStr: string): ActivityEventParsed[] {
@@ -3020,6 +3476,20 @@ export function getDiarySettings(db: Db): Record<string, string | null> {
   return out;
 }
 
+/**
+ * 日記の commit 集計対象リポを返す (`owner/name` slug 配列)。
+ *
+ * 出典は `📋 作業一覧` の `repo_watch` テーブル (provider='github')。
+ * 旧: `diary_settings.github_repos` のカンマ区切り手動入力 → 廃止。
+ * ユーザは worklist で登録するだけで日記にも反映される。
+ * worklist が空なら空配列を返し、 呼び出し側は GitHub 全体 search に fallback する。
+ */
+export function diaryRepos(db: Db): string[] {
+  return listRepoWatch(db)
+    .filter((r) => r.provider === 'github')
+    .map((r) => `${r.owner}/${r.name}`);
+}
+
 export function setDiarySettings(db: Db, patch: Record<string, unknown>): void {
   const tx = db.transaction(() => {
     for (const [k, v] of Object.entries(patch)) {
@@ -3230,8 +3700,24 @@ export function trendsWorkHours(db: Db, { sinceDays = 30 }: { sinceDays?: number
 export interface GpsWalkingRow {
   date: string;
   distance_km: number;
+  /** 徒歩速度帯のみで積算した距離 (カロリー計算用) */
+  walking_distance_km: number;
   walking_minutes: number;
   travel_minutes: number;
+  // ── 「自宅以外にいた時間」 の内訳 (面積棒グラフ用) ──────────────
+  // 1 日 = 自宅 + 移動 + 場所滞在 + 不明 (どこにも match しない停止)。
+  // 「自宅以外」 = travel + 場所滞在 + 不明 の合計分数。 場所滞在は
+  // work_locations (is_home=0) の name でキー化。
+  /** 自宅 (work_locations.is_home=1) に居た分数 */
+  home_minutes: number;
+  /** 自宅以外の連続点をベースに集計した「外にいた」 合計分数 */
+  away_minutes: number;
+  /** 自宅以外 のうち、 0.5 m/s 以上で動いていた区間 */
+  away_moving_minutes: number;
+  /** 自宅以外 のうち、 登録 work_locations にいた時間。 場所 name でキー化。 */
+  away_places: { name: string; minutes: number }[];
+  /** 自宅以外 のうち、 場所未登録 + 停止 (= 不明な滞在) */
+  away_unknown_minutes: number;
 }
 
 /**
@@ -3241,6 +3727,9 @@ export interface GpsWalkingRow {
  *   - walking_minutes: 0.5〜3.5 m/s の区間 Δt 合計 (徒歩速度帯)
  *   - travel_minutes: 0.5 m/s 以上で動いていた区間 Δt 合計 (移動全体、
  *     乗り物含む)
+ *   - home_minutes / away_* : 各 GPS 点を work_locations の radius_m で
+ *     home / 場所 / 不明 に分類 (priority: is_home=1 > is_home=0 > 不明)。
+ *     セグメント Δt をその分類に振り分けて積算する。
  *
  * 静止判定は速度ベース。停車中の jitter は accuracy で弾く。
  */
@@ -3250,7 +3739,13 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
   function parseUtc(s: string): Date {
-    return new Date(String(s).replace(' ', 'T') + 'Z');
+    // recorded_at は 2 形式が混在する:
+    //   - "2026-05-16T02:36:06.000Z"  (OwnTracks 直接挿入: ISO + Z)
+    //   - "2026-05-16 02:36:06"       (Legatus/diary 経由: SQLite datetime)
+    // 後者は UTC として 'Z' を付ける必要があるが、 既に Z が付いている前者に
+    // 二度 Z を足すと Invalid Date になる (= 全 row 弾かれて全日 0 になる)。
+    const raw = String(s).replace(' ', 'T');
+    return new Date(/[zZ]$/.test(raw) ? raw : raw + 'Z');
   }
   function haversineMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
     const R = 6_371_008;
@@ -3262,11 +3757,45 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     const h = sa * sa + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * so * so;
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
   }
-  const SEG_DT_MAX_MS = 10 * 60_000;       // > 10 分の隙間は信頼しない
+  // GPS は 「移動した時だけ点を打つ」 ので、 連続する 2 点 (p1, p2) の間は
+  // 「p1 の場所に居続けて、 p2 で観測される直前に移動した」 と仮定する。
+  //   → gap 全体を p1 の class に倒す (同一クラスでも遷移でも同じ扱い)
+  //   → cap は 12 時間 (これより長い gap はデータ欠落とみなして無視)
+  // 移動メトリクス (距離 / walking / travel) は速度ノイズ防止のため 10 分超
+  // で切る (= 別ロジック)。
+  const SEG_DT_MAX_MS_MOVEMENT = 10 * 60_000;            // 10 分 (移動メトリクス用)
+  const SEG_DT_MAX_MS_DWELL    = 12 * 60 * 60_000;       // 12 時間 (滞在仮定の上限)
   const ACC_MAX_M = 200;                   // accuracy 200m 超は jitter とみなす
   const WALK_MIN_MPS = 0.5;                // 1.8 km/h
   const WALK_MAX_MPS = 3.5;                // 12.6 km/h (上限 = ジョギング以下)
   const TRAVEL_MIN_MPS = 0.5;              // 動いている扱いの下限
+  const DEFAULT_RADIUS_M = 100;            // work_locations.radius_m が NULL の時の既定
+
+  // work_locations を読み、 home + その他の場所に分けて in-memory 配列にする。
+  const places = db.prepare(`
+    SELECT id, name, latitude, longitude, radius_m, is_home
+    FROM work_locations
+    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+  `).all() as Array<{ id: number; name: string; latitude: number; longitude: number; radius_m: number | null; is_home: 0 | 1 }>;
+  const homePlace = places.find(p => p.is_home === 1) || null;
+  const otherPlaces = places.filter(p => p.is_home === 0);
+
+  function classifyPoint(lat: number, lon: number): { kind: 'home' | 'place' | 'unknown'; placeName?: string } {
+    // priority: home > その他 > 不明。 同 priority 内は最も近い場所を選ぶ。
+    if (homePlace) {
+      const r = homePlace.radius_m ?? DEFAULT_RADIUS_M;
+      const d = haversineMeters({ lat, lon }, { lat: homePlace.latitude, lon: homePlace.longitude });
+      if (d <= r) return { kind: 'home' };
+    }
+    let best: { p: typeof otherPlaces[number]; d: number } | null = null;
+    for (const p of otherPlaces) {
+      const r = p.radius_m ?? DEFAULT_RADIUS_M;
+      const d = haversineMeters({ lat, lon }, { lat: p.latitude, lon: p.longitude });
+      if (d <= r && (!best || d < best.d)) best = { p, d };
+    }
+    if (best) return { kind: 'place', placeName: best.p.name };
+    return { kind: 'unknown' };
+  }
 
   const startDate = new Date(Date.now() - (days - 1) * 86400_000);
   const startKey = dateKeyLocal(startDate);
@@ -3277,35 +3806,73 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     ORDER BY recorded_at ASC
   `).all(userId, startKey) as { recorded_at: string; lat: number; lon: number; accuracy_m: number | null }[];
 
-  interface DayBucket { distance_m: number; walking_ms: number; travel_ms: number }
+  interface DayBucket {
+    distance_m: number;        // 移動距離 (vehicle 含む)
+    walking_distance_m: number; // 徒歩速度帯のみで積算 (= カロリー計算の根拠)
+    walking_ms: number;
+    travel_ms: number;
+    home_ms: number;
+    away_moving_ms: number;
+    away_places_ms: Map<string, number>;
+    away_unknown_ms: number;
+  }
   const perDay = new Map<string, DayBucket>();
   function bucket(key: string): DayBucket {
     let b = perDay.get(key);
     if (!b) {
-      b = { distance_m: 0, walking_ms: 0, travel_ms: 0 };
+      b = {
+        distance_m: 0, walking_distance_m: 0, walking_ms: 0, travel_ms: 0,
+        home_ms: 0, away_moving_ms: 0, away_places_ms: new Map(), away_unknown_ms: 0,
+      };
       perDay.set(key, b);
     }
     return b;
   }
-  let prev: { ts: number; key: string; lat: number; lon: number; accOk: boolean } | null = null;
+  function attributeDwell(b: DayBucket, dwellMs: number, cls: ReturnType<typeof classifyPoint>): void {
+    if (dwellMs <= 0) return;
+    if (cls.kind === 'home') b.home_ms += dwellMs;
+    else if (cls.kind === 'place' && cls.placeName) {
+      b.away_places_ms.set(cls.placeName, (b.away_places_ms.get(cls.placeName) || 0) + dwellMs);
+    } else b.away_unknown_ms += dwellMs;
+  }
+  type PrevPoint = { ts: number; key: string; lat: number; lon: number; accOk: boolean; cls: ReturnType<typeof classifyPoint> };
+  let prev: PrevPoint | null = null;
   for (const r of rows) {
     const d = parseUtc(r.recorded_at);
     const ts = d.getTime();
     if (!Number.isFinite(ts)) { prev = null; continue; }
     const key = dateKeyLocal(d);
     const accOk = !r.accuracy_m || r.accuracy_m < ACC_MAX_M;
+    const cls = classifyPoint(r.lat, r.lon);
     if (prev && prev.key === key && accOk && prev.accOk) {
       const dt = ts - prev.ts;
-      if (dt > 0 && dt <= SEG_DT_MAX_MS) {
+      if (dt > 0 && dt <= SEG_DT_MAX_MS_DWELL) {
         const dist = haversineMeters(prev, { lat: r.lat, lon: r.lon });
         const speed = dist / (dt / 1000); // m/s
         const b = bucket(key);
-        b.distance_m += dist;
-        if (speed >= TRAVEL_MIN_MPS) b.travel_ms += dt;
-        if (speed >= WALK_MIN_MPS && speed <= WALK_MAX_MPS) b.walking_ms += dt;
+        const moving = (dt <= SEG_DT_MAX_MS_MOVEMENT) && (speed >= TRAVEL_MIN_MPS);
+
+        // 1. 移動メトリクス (10 分以内 + 速度あり、 速度ノイズ除去)
+        if (dt <= SEG_DT_MAX_MS_MOVEMENT) {
+          b.distance_m += dist;
+          if (speed >= TRAVEL_MIN_MPS) b.travel_ms += dt;
+          if (speed >= WALK_MIN_MPS && speed <= WALK_MAX_MPS) {
+            b.walking_ms += dt;
+            b.walking_distance_m += dist;
+          }
+        }
+
+        // 2. 滞在分類 (GPS は移動した時だけ点を打つ前提):
+        //    短時間 (≤ 10 分) で動いている → 移動中として away_moving
+        //    それ以外の gap (静止 or sparse) → p1 の場所に滞在し続けたと仮定
+        if (moving) {
+          b.away_moving_ms += dt;
+        } else {
+          attributeDwell(b, dt, prev.cls);
+        }
       }
     }
-    prev = { ts, key, lat: r.lat, lon: r.lon, accOk };
+    prev = { ts, key, lat: r.lat, lon: r.lon, accOk, cls };
   }
 
   const out: GpsWalkingRow[] = [];
@@ -3315,11 +3882,33 @@ export function trendsGpsWalking(db: Db, { sinceDays = 30, userId = 'me' }: { si
     dt.setDate(today.getDate() - i);
     const k = dateKeyLocal(dt);
     const b = perDay.get(k);
+    if (!b) {
+      out.push({
+        date: k, distance_km: 0, walking_distance_km: 0, walking_minutes: 0, travel_minutes: 0,
+        home_minutes: 0, away_minutes: 0, away_moving_minutes: 0,
+        away_places: [], away_unknown_minutes: 0,
+      });
+      continue;
+    }
+    const home_min = Math.round(b.home_ms / 60_000);
+    const moving_min = Math.round(b.away_moving_ms / 60_000);
+    const unknown_min = Math.round(b.away_unknown_ms / 60_000);
+    const places_arr = [...b.away_places_ms.entries()]
+      .map(([name, ms]) => ({ name, minutes: Math.round(ms / 60_000) }))
+      .filter(p => p.minutes > 0)
+      .sort((a, b2) => b2.minutes - a.minutes);
+    const places_total = places_arr.reduce((s, p) => s + p.minutes, 0);
     out.push({
       date: k,
-      distance_km: b ? Number((b.distance_m / 1000).toFixed(2)) : 0,
-      walking_minutes: b ? Math.round(b.walking_ms / 60_000) : 0,
-      travel_minutes: b ? Math.round(b.travel_ms / 60_000) : 0,
+      distance_km: Number((b.distance_m / 1000).toFixed(2)),
+      walking_distance_km: Number((b.walking_distance_m / 1000).toFixed(2)),
+      walking_minutes: Math.round(b.walking_ms / 60_000),
+      travel_minutes: Math.round(b.travel_ms / 60_000),
+      home_minutes: home_min,
+      away_minutes: moving_min + places_total + unknown_min,
+      away_moving_minutes: moving_min,
+      away_places: places_arr,
+      away_unknown_minutes: unknown_min,
     });
   }
   return out;
@@ -4191,12 +4780,13 @@ export interface InsertAgentRunInput {
   prompt?: string | null;
   status?: AgentRunRow['status'];
   log_path?: string | null;
+  mode?: AgentRunRow['mode'];
 }
 
 export function insertAgentRun(db: Db, r: InsertAgentRunInput): number {
   const info = db.prepare(`
-    INSERT INTO agent_runs (task_id, project_id, agent, model, prompt, status, log_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO agent_runs (task_id, project_id, agent, model, prompt, status, log_path, mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     r.task_id ?? null,
     r.project_id ?? null,
@@ -4205,12 +4795,13 @@ export function insertAgentRun(db: Db, r: InsertAgentRunInput): number {
     r.prompt ?? null,
     r.status || 'pending',
     r.log_path ?? null,
+    r.mode ?? 'local',
   );
   return Number(info.lastInsertRowid);
 }
 
 export function updateAgentRun(db: Db, id: number, patch: Record<string, unknown>): void {
-  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at', 'model']);
+  const allowed = new Set(['status', 'exit_code', 'log_path', 'pid', 'summary', 'finished_at', 'model', 'concordia_session_id']);
   const cols: string[] = [];
   const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
@@ -4322,16 +4913,28 @@ export function setWorkLocationOwner(db: Db, id: number, { ownerUserId, ownerUse
 
 export interface ListTasksOptions {
   status?: TaskRow['status'] | null;
+  /**
+   * - 'task' | 'goal' : その kind だけ返す
+   * - 'all'           : 両方
+   * - null (既定)      : 'task' (= 通常タスク一覧、 目標は別 query で取る前提)
+   */
+  kind?: TaskRow['kind'] | 'all' | null;
   limit?: number;
   offset?: number;
 }
 
-export function listTasks(db: Db, { status = null, limit = 100, offset = 0 }: ListTasksOptions = {}): TaskRow[] {
+export function listTasks(db: Db, { status = null, kind = null, limit = 100, offset = 0 }: ListTasksOptions = {}): TaskRow[] {
   const where: string[] = [];
   const args: unknown[] = [];
   if (status) {
     where.push('status = ?');
     args.push(status);
+  }
+  if (kind === null) {
+    where.push(`kind = 'task'`);
+  } else if (kind !== 'all') {
+    where.push('kind = ?');
+    args.push(kind);
   }
   args.push(limit, offset);
   return db.prepare(`
@@ -4353,6 +4956,7 @@ export interface InsertTaskInput {
   title: string;
   details?: string | null;
   status?: TaskRow['status'];
+  kind?: TaskRow['kind'];
   creator_type?: TaskRow['creator_type'];
   due_at?: string | null;
   share_actio?: boolean | 0 | 1;
@@ -4361,12 +4965,13 @@ export interface InsertTaskInput {
 
 export function insertTask(db: Db, task: InsertTaskInput): number {
   const info = db.prepare(`
-    INSERT INTO tasks (title, details, status, creator_type, due_at, share_actio, category)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (title, details, status, kind, creator_type, due_at, share_actio, category)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     task.title,
     task.details ?? null,
     task.status || 'todo',
+    task.kind === 'goal' ? 'goal' : 'task',
     task.creator_type === 'ai' ? 'ai' : 'human',
     task.due_at ?? null,
     task.share_actio ? 1 : 0,
@@ -4389,6 +4994,7 @@ export function listTaskCategories(db: Db): string[] {
     SELECT category
     FROM tasks
     WHERE category IS NOT NULL AND category != ''
+      AND status IN ('todo', 'doing')
   `).all() as { category: string | null }[];
   const fromTasks = new Set<string>();
   for (const row of rows) {
@@ -4443,7 +5049,7 @@ export function unregisterTaskCategory(db: Db, name: string): void {
 }
 
 export function updateTask(db: Db, id: number, patch: Record<string, unknown>): void {
-  const allowed = new Set(['title', 'details', 'status', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin', 'category']);
+  const allowed = new Set(['title', 'details', 'status', 'kind', 'creator_type', 'due_at', 'share_actio', 'shared_at', 'shared_origin', 'category']);
   const cols: string[] = [];
   const args: unknown[] = [];
   for (const [k, v] of Object.entries(patch)) {
@@ -4558,6 +5164,10 @@ export interface ListNotesOptions {
 export interface NoteListRow extends NoteRow {
   block_count: number;
   preview: string;
+}
+
+function normalizeNoteText(text: string | undefined): string {
+  return (text ?? '').replace(/\r\n|\r/g, '\n');
 }
 
 export function listNotes(db: Db, opts: ListNotesOptions = {}): { items: NoteListRow[]; total: number } {
@@ -4711,7 +5321,7 @@ export function insertBlock(db: Db, noteId: string, input: InsertBlockInput): No
   const info = db.prepare(`
     INSERT INTO note_blocks (uuid, note_id, position, block_type, text, data_json)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(uuid, noteId, position, input.block_type, input.text ?? '', dataJson);
+  `).run(uuid, noteId, position, input.block_type, normalizeNoteText(input.text), dataJson);
   bumpNoteUpdated(db, noteId);
   const id = Number(info.lastInsertRowid);
   return db.prepare(`SELECT * FROM note_blocks WHERE id = ?`).get(id) as NoteBlockRow;
@@ -4729,7 +5339,7 @@ export function updateBlock(db: Db, noteId: string, blockUuid: string, patch: Re
     cols.push('block_type = ?'); args.push(patch.block_type);
   }
   if (typeof patch.text === 'string') {
-    cols.push('text = ?'); args.push(patch.text);
+    cols.push('text = ?'); args.push(normalizeNoteText(patch.text));
   }
   if ('data' in patch) {
     cols.push('data_json = ?');
@@ -4909,11 +5519,18 @@ export interface ExtensionNotionDomain {
   enabled: boolean;
 }
 
+export interface ExtensionFurusatoDomain {
+  host: string;
+  label: string;
+  enabled: boolean;
+}
+
 export interface ExtensionRules {
   chat_domains: ExtensionChatDomain[];
   impl_rules: ExtensionImplRule[];
   shopping_domains: ExtensionShoppingDomain[];
   notion_domains: ExtensionNotionDomain[];
+  furusato_domains: ExtensionFurusatoDomain[];
 }
 
 const DEFAULT_EXTENSION_RULES: ExtensionRules = {
@@ -4936,6 +5553,13 @@ const DEFAULT_EXTENSION_RULES: ExtensionRules = {
     { host: 'www.notion.so', enabled: true },
     { host: 'notion.site', enabled: true },
   ],
+  furusato_domains: [
+    { host: 'satofull.jp', label: 'さとふる', enabled: true },
+    { host: 'furunavi.jp', label: 'ふるなび', enabled: true },
+    { host: 'furusato-tax.jp', label: 'ふるさとチョイス', enabled: true },
+    { host: 'furusato.au.com', label: 'au PAY ふるさと納税', enabled: true },
+    { host: 'furusato.ana.co.jp', label: 'ANAのふるさと納税', enabled: true },
+  ],
 };
 
 export function getExtensionRules(db: Db): ExtensionRules {
@@ -4951,6 +5575,7 @@ export function getExtensionRules(db: Db): ExtensionRules {
       impl_rules: parsed.impl_rules ?? DEFAULT_EXTENSION_RULES.impl_rules,
       shopping_domains: parsed.shopping_domains ?? DEFAULT_EXTENSION_RULES.shopping_domains,
       notion_domains: parsed.notion_domains ?? DEFAULT_EXTENSION_RULES.notion_domains,
+      furusato_domains: parsed.furusato_domains ?? DEFAULT_EXTENSION_RULES.furusato_domains,
     };
   } catch {
     return DEFAULT_EXTENSION_RULES;
@@ -4962,4 +5587,776 @@ export function setExtensionRules(db: Db, rules: ExtensionRules): void {
     INSERT INTO app_settings (key, value) VALUES ('extension_rules_json', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(JSON.stringify(rules));
+}
+
+// ── recommendation_runs (AI 主導おすすめ) ─────────────────────────────────────
+
+export interface RecommendationRunRow {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: 'pending' | 'running' | 'done' | 'error';
+  error: string | null;
+  agent_logs_json: string | null;
+  results_json: string | null;
+  model_sonnet: string | null;
+  model_opus: string | null;
+  duration_ms: number | null;
+  result_count: number | null;
+}
+
+export function insertRecommendationRun(db: Db): number {
+  const res = db.prepare(`
+    INSERT INTO recommendation_runs (status) VALUES ('running')
+  `).run();
+  return Number(res.lastInsertRowid);
+}
+
+export function failRecommendationRun(db: Db, id: number, error: string): void {
+  // WHERE status='running' を付けて、 既に cancel/done に遷移済の row を
+  // 上書きしないようにする (= 「キューを上書き」 した abandoned run が後から
+  // 完了しても、 現在の状態を破壊しない)。
+  db.prepare(`
+    UPDATE recommendation_runs
+       SET status = 'error',
+           error = ?,
+           finished_at = datetime('now'),
+           duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
+     WHERE id = ? AND status = 'running'
+  `).run(error.slice(0, 4000), id);
+}
+
+// 'running' のまま放置されている run を 'cancelled' に変更し、 件数を返す。
+// サーバが死んだまま再起動した / inFlight promise が hang した、 等で
+// 詰まったキューを掃除するために使う。
+export function cancelRunningRecommendationRuns(db: Db, reason = 'user_cancelled'): number {
+  const r = db.prepare(`
+    UPDATE recommendation_runs
+       SET status = 'cancelled',
+           error = ?,
+           finished_at = datetime('now'),
+           duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
+     WHERE status = 'running'
+  `).run(reason.slice(0, 4000));
+  return r.changes;
+}
+
+export function completeRecommendationRun(
+  db: Db,
+  id: number,
+  payload: {
+    agentLogs: unknown;
+    results: unknown[];
+    modelSonnet: string;
+    modelOpus: string;
+  },
+): void {
+  // WHERE status='running' で、 cancel/done 済の row を上書きしない。
+  // (force 実行で abandon された旧 run が遅れて終わっても無視する)
+  db.prepare(`
+    UPDATE recommendation_runs
+       SET status = 'done',
+           finished_at = datetime('now'),
+           agent_logs_json = ?,
+           results_json = ?,
+           model_sonnet = ?,
+           model_opus = ?,
+           result_count = ?,
+           duration_ms = CAST((julianday('now') - julianday(started_at)) * 86400000 AS INTEGER)
+     WHERE id = ? AND status = 'running'
+  `).run(
+    JSON.stringify(payload.agentLogs),
+    JSON.stringify(payload.results),
+    payload.modelSonnet,
+    payload.modelOpus,
+    payload.results.length,
+    id,
+  );
+}
+
+export function getRecommendationRun(db: Db, id: number): RecommendationRunRow | null {
+  const row = db.prepare(`SELECT * FROM recommendation_runs WHERE id = ?`).get(id) as RecommendationRunRow | undefined;
+  return row ?? null;
+}
+
+export function getLatestRecommendationRun(db: Db, status: 'done' | 'any' = 'done'): RecommendationRunRow | null {
+  const where = status === 'done' ? `WHERE status = 'done'` : '';
+  const row = db.prepare(`
+    SELECT * FROM recommendation_runs
+    ${where}
+    ORDER BY started_at DESC
+    LIMIT 1
+  `).get() as RecommendationRunRow | undefined;
+  return row ?? null;
+}
+
+export function listRecommendationRuns(db: Db, limit = 30): RecommendationRunRow[] {
+  return db.prepare(`
+    SELECT id, started_at, finished_at, status, error, model_sonnet, model_opus, duration_ms, result_count
+    FROM recommendation_runs
+    ORDER BY started_at DESC
+    LIMIT ?
+  `).all(Number(limit) || 30) as RecommendationRunRow[];
+}
+
+export function findRunningRecommendationRun(db: Db): RecommendationRunRow | null {
+  const row = db.prepare(`
+    SELECT * FROM recommendation_runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1
+  `).get() as RecommendationRunRow | undefined;
+  return row ?? null;
+}
+
+// ── recommendation 入力データ集計 (直近 N 日) ────────────────────────────────
+//
+// 6 agent に渡すための各領域 1 週間サマリ。 LLM への入力サイズが現実的になる
+// よう、 各 agent 用に top-N で truncate する。
+
+export interface RecSourceBookmark {
+  id: number;
+  url: string;
+  title: string;
+  summary: string | null;
+  memo: string;
+  created_at: string;
+  categories: string[];
+}
+
+export function recRecentBookmarks(db: Db, sinceDays = 7, limit = 50): RecSourceBookmark[] {
+  const rows = db.prepare(`
+    SELECT id, url, title, summary, memo, created_at
+    FROM bookmarks
+    WHERE created_at >= datetime('now', ?)
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as Array<Omit<RecSourceBookmark, 'categories'>>;
+  const ids = rows.map(r => r.id);
+  if (ids.length === 0) return [];
+  const cats = db.prepare(`
+    SELECT bookmark_id, category FROM bookmark_categories
+    WHERE bookmark_id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids) as { bookmark_id: number; category: string }[];
+  const byId = new Map<number, string[]>();
+  for (const c of cats) {
+    let arr = byId.get(c.bookmark_id);
+    if (!arr) { arr = []; byId.set(c.bookmark_id, arr); }
+    arr.push(c.category);
+  }
+  return rows.map(r => ({ ...r, categories: byId.get(r.id) ?? [] }));
+}
+
+export interface RecBrowserDomain {
+  domain: string;
+  visits: number;
+  last_seen_at: string;
+  sample_titles: string[];
+}
+
+export function recBrowserHistory(db: Db, sinceDays = 7, topDomains = 30): RecBrowserDomain[] {
+  // domain × visit_events 集計 + 各 domain の代表 title を 3 件まで
+  const rows = db.prepare(`
+    SELECT domain, COUNT(*) AS visits, MAX(visited_at) AS last_seen_at
+    FROM visit_events
+    WHERE visited_at >= datetime('now', ?)
+      AND domain IS NOT NULL AND domain <> ''
+    GROUP BY domain
+    ORDER BY visits DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, topDomains) as { domain: string; visits: number; last_seen_at: string }[];
+  if (rows.length === 0) return [];
+  const titleStmt = db.prepare(`
+    SELECT DISTINCT title FROM visit_events
+    WHERE domain = ? AND visited_at >= datetime('now', ?) AND title IS NOT NULL AND title <> ''
+    ORDER BY visited_at DESC
+    LIMIT 3
+  `);
+  return rows.map(r => ({
+    domain: r.domain,
+    visits: r.visits,
+    last_seen_at: r.last_seen_at,
+    sample_titles: (titleStmt.all(r.domain, `-${sinceDays} days`) as { title: string }[]).map(t => t.title),
+  }));
+}
+
+export interface RecGitCommit {
+  occurred_at: string;
+  source: string | null;     // repo name
+  content: string;           // commit message (1 行目)
+  metadata: Record<string, unknown> | null;
+}
+
+export function recGitCommits(db: Db, sinceDays = 7, limit = 80): RecGitCommit[] {
+  const rows = db.prepare(`
+    SELECT occurred_at, source, content, metadata_json
+    FROM activity_events
+    WHERE kind = 'git_commit' AND occurred_at >= datetime('now', ?)
+    ORDER BY occurred_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { occurred_at: string; source: string | null; content: string; metadata_json: string | null }[];
+  return rows.map(r => ({
+    occurred_at: r.occurred_at,
+    source: r.source,
+    content: r.content,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) as Record<string, unknown> : null,
+  }));
+}
+
+export interface RecClaudePrompt {
+  occurred_at: string;
+  source: string | null;
+  content: string;
+  metadata: Record<string, unknown> | null;
+}
+
+export function recClaudePrompts(db: Db, sinceDays = 7, limit = 80): RecClaudePrompt[] {
+  const rows = db.prepare(`
+    SELECT occurred_at, source, content, metadata_json
+    FROM activity_events
+    WHERE kind = 'claude_code_prompt' AND occurred_at >= datetime('now', ?)
+    ORDER BY occurred_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { occurred_at: string; source: string | null; content: string; metadata_json: string | null }[];
+  return rows.map(r => ({
+    occurred_at: r.occurred_at,
+    source: r.source,
+    content: r.content,
+    metadata: r.metadata_json ? safeParse(r.metadata_json) as Record<string, unknown> : null,
+  }));
+}
+
+export interface RecGameSummary {
+  appid: number;
+  name: string;
+  minutes_7d: number;
+  last_played_at: string;
+}
+
+export function recGamesLastWeek(db: Db, sinceDays = 7, limit = 20): RecGameSummary[] {
+  const rows = db.prepare(`
+    SELECT appid, name,
+           MAX(playtime_2weeks_min) - MIN(playtime_2weeks_min) AS minutes_7d,
+           MAX(sampled_at) AS last_played_at
+    FROM steam_activity
+    WHERE sampled_at >= datetime('now', ?)
+    GROUP BY appid, name
+    HAVING minutes_7d > 0
+    ORDER BY minutes_7d DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as RecGameSummary[];
+  return rows;
+}
+
+export interface RecAppSummary {
+  process_name: string;
+  app_name: string | null;
+  kind: string | null;
+  minutes_7d: number;
+  sample_titles: string[];
+}
+
+export function recAppsLastWeek(db: Db, sinceDays = 7, limit = 30): RecAppSummary[] {
+  // app_samples は 30s 周期で 1 行 = sample_interval_sec 秒なので合算
+  const rows = db.prepare(`
+    SELECT s.process_name,
+           a.name AS app_name,
+           a.kind AS kind,
+           SUM(s.sample_interval_sec) / 60.0 AS minutes_7d
+    FROM app_samples s
+    LEFT JOIN applications a ON a.process_name = s.process_name
+    WHERE s.sampled_at >= datetime('now', ?)
+    GROUP BY s.process_name
+    HAVING minutes_7d >= 5
+    ORDER BY minutes_7d DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { process_name: string; app_name: string | null; kind: string | null; minutes_7d: number }[];
+  if (rows.length === 0) return [];
+  const titleStmt = db.prepare(`
+    SELECT DISTINCT window_title FROM app_samples
+    WHERE process_name = ? AND sampled_at >= datetime('now', ?) AND window_title IS NOT NULL AND window_title <> ''
+    ORDER BY sampled_at DESC
+    LIMIT 5
+  `);
+  return rows.map(r => ({
+    process_name: r.process_name,
+    app_name: r.app_name,
+    kind: r.kind,
+    minutes_7d: Math.round(r.minutes_7d),
+    sample_titles: (titleStmt.all(r.process_name, `-${sinceDays} days`) as { window_title: string }[]).map(t => t.window_title),
+  }));
+}
+
+export interface RecNoteSummary {
+  id: string;
+  title: string;
+  kind: string;
+  updated_at: string;
+  preview: string;
+}
+
+export function recRecentNotes(db: Db, sinceDays = 7, limit = 30): RecNoteSummary[] {
+  const notes = db.prepare(`
+    SELECT id, title, kind, updated_at
+    FROM notes
+    WHERE updated_at >= datetime('now', ?)
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { id: string; title: string; kind: string; updated_at: string }[];
+  if (notes.length === 0) return [];
+  const blockStmt = db.prepare(`
+    SELECT text FROM note_blocks
+    WHERE note_id = ?
+    ORDER BY position
+    LIMIT 6
+  `);
+  return notes.map(n => {
+    const blocks = blockStmt.all(n.id) as { text: string }[];
+    const preview = blocks.map(b => (b.text || '').trim()).filter(Boolean).join('\n').slice(0, 600);
+    return { id: n.id, title: n.title, kind: n.kind, updated_at: n.updated_at, preview };
+  });
+}
+
+export interface RecDigSummary {
+  id: number;
+  query: string;
+  created_at: string;
+  status: string;
+  result_preview: string;
+}
+
+export function recRecentDigs(db: Db, sinceDays = 7, limit = 25): RecDigSummary[] {
+  const rows = db.prepare(`
+    SELECT id, query, created_at, status, result_json
+    FROM dig_sessions
+    WHERE created_at >= datetime('now', ?)
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(`-${sinceDays} days`, limit) as { id: number; query: string; created_at: string; status: string; result_json: string | null }[];
+  return rows.map(r => ({
+    id: r.id,
+    query: r.query,
+    created_at: r.created_at,
+    status: r.status,
+    result_preview: r.result_json ? String(r.result_json).slice(0, 400) : '',
+  }));
+}
+
+// ── AI ハブ (ai_articles / ai_article_seeds / ai_advice) ─────────────────────
+//
+// 前日の作業ログから自動生成する技術記事・記事ネタ・週次助言。 すべて個人の
+// 作業ログ由来の派生物でローカル完結 ([[project_personal_data_rule]])。
+// source_refs / data_summary は DB に JSON 文字列で持ち、 読み出し時に parse する。
+
+function parseSourceRefs(json: string | null): SourceRef[] {
+  const v = safeParse(json);
+  return Array.isArray(v) ? (v as SourceRef[]) : [];
+}
+
+function parseTags(json: string | null): ArticleTag[] {
+  const v = safeParse(json);
+  if (!Array.isArray(v)) return [];
+  const out: ArticleTag[] = [];
+  for (const t of v) {
+    if (!t || typeof t !== 'object') continue;
+    const o = t as Record<string, unknown>;
+    const category = typeof o.category === 'string' ? o.category.trim() : '';
+    const value = typeof o.value === 'string' ? o.value.trim() : '';
+    if (category && value) out.push({ category, value });
+  }
+  return out;
+}
+
+interface AiArticleDbRow {
+  id: number;
+  title: string;
+  body_md: string;
+  topic_key: string | null;
+  source_refs: string | null;
+  origin: string;
+  for_date: string | null;
+  tags: string | null;
+  note_id: string | null;
+  created_at: string;
+}
+
+function rowToAiArticle(r: AiArticleDbRow): AiArticle {
+  return {
+    id: r.id,
+    title: r.title,
+    body_md: r.body_md,
+    topic_key: r.topic_key,
+    source_refs: parseSourceRefs(r.source_refs),
+    origin: r.origin,
+    for_date: r.for_date,
+    tags: parseTags(r.tags),
+    note_id: r.note_id,
+    created_at: r.created_at,
+  };
+}
+
+const AI_ARTICLE_COLS =
+  'id, title, body_md, topic_key, source_refs, origin, for_date, tags, note_id, created_at';
+
+export interface InsertAiArticleInput {
+  title: string;
+  body_md: string;
+  topic_key?: string | null;
+  source_refs?: SourceRef[] | null;
+  origin?: 'digest' | 'requested';
+  for_date?: string | null;
+  tags?: ArticleTag[] | null;
+}
+
+export function insertAiArticle(db: Db, input: InsertAiArticleInput): number {
+  const res = db.prepare(`
+    INSERT INTO ai_articles (title, body_md, topic_key, source_refs, origin, for_date, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.title,
+    input.body_md,
+    input.topic_key ?? null,
+    input.source_refs && input.source_refs.length ? JSON.stringify(input.source_refs) : null,
+    input.origin ?? 'digest',
+    input.for_date ?? null,
+    input.tags && input.tags.length ? JSON.stringify(input.tags) : null,
+  );
+  return Number(res.lastInsertRowid);
+}
+
+/**
+ * 記事一覧。 旧シグネチャ (limit: number) と新シグネチャ (filter: AiArticleFilter)
+ * の両対応。 日付範囲は SQL で、 タグ AND 絞り込みは JSON 列のため JS 側で行う。
+ */
+export function listAiArticles(db: Db, opts: number | AiArticleFilter = 50): AiArticle[] {
+  const filter: AiArticleFilter = typeof opts === 'number' ? { limit: opts } : opts;
+  const safeLimit = Math.max(1, Math.min(500, Number(filter.limit) || 50));
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (filter.from) { where.push('for_date >= ?'); params.push(filter.from); }
+  if (filter.to)   { where.push('for_date <= ?'); params.push(filter.to); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  // タグ絞り込みがある場合は LIMIT 前に全件マッチさせたいので、 SQL では広めに
+  // 取得 (500 上限) し、 JS でタグ AND を適用してから limit する。
+  const wantTagFilter = !!(filter.tags && filter.tags.length);
+  const sqlLimit = wantTagFilter ? 500 : safeLimit;
+  const rows = db.prepare(`
+    SELECT ${AI_ARTICLE_COLS}
+    FROM ai_articles
+    ${whereSql}
+    ORDER BY COALESCE(for_date, substr(created_at,1,10)) DESC, created_at DESC
+    LIMIT ?
+  `).all(...params, sqlLimit) as AiArticleDbRow[];
+  let articles = rows.map(rowToAiArticle);
+  if (wantTagFilter) {
+    const need = filter.tags as ArticleTag[];
+    articles = articles.filter(a =>
+      need.every(nt => a.tags.some(t => t.category === nt.category && t.value === nt.value)),
+    ).slice(0, safeLimit);
+  }
+  return articles;
+}
+
+export function getAiArticle(db: Db, id: number): AiArticle | null {
+  const row = db.prepare(`
+    SELECT ${AI_ARTICLE_COLS}
+    FROM ai_articles WHERE id = ?
+  `).get(id) as AiArticleDbRow | undefined;
+  return row ? rowToAiArticle(row) : null;
+}
+
+// ── task_reviews (タスク確認キュー) ──────────────────────────────────────────
+
+interface TaskReviewDbRow {
+  id: number;
+  kind: string;
+  project: string | null;
+  task_ids: string;
+  primary_id: number | null;
+  reason: string;
+  snapshot: string;
+  status: string;
+  for_date: string | null;
+  created_at: string;
+  applied_at: string | null;
+}
+
+function parseNumberArray(json: string | null): number[] {
+  if (!json) return [];
+  try {
+    const v: unknown = JSON.parse(json);
+    return Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseSnapshot(json: string | null): TaskSnapshotEntry[] {
+  if (!json) return [];
+  try {
+    const v: unknown = JSON.parse(json);
+    if (!Array.isArray(v)) return [];
+    return v
+      .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+      .map((e) => ({ id: Number(e.id), title: String(e.title ?? ''), status: String(e.status ?? '') }))
+      .filter((e) => Number.isFinite(e.id));
+  } catch {
+    return [];
+  }
+}
+
+function rowToTaskReview(r: TaskReviewDbRow): TaskReview {
+  return {
+    id: r.id,
+    kind: r.kind === 'cluster' ? 'cluster' : 'completed',
+    project: r.project,
+    task_ids: parseNumberArray(r.task_ids),
+    primary_id: r.primary_id,
+    reason: r.reason,
+    snapshot: parseSnapshot(r.snapshot),
+    status: (['pending', 'applied', 'dismissed'] as const).includes(r.status as TaskReviewStatus)
+      ? (r.status as TaskReviewStatus)
+      : 'pending',
+    for_date: r.for_date,
+    created_at: r.created_at,
+    applied_at: r.applied_at,
+  };
+}
+
+const TASK_REVIEW_COLS =
+  'id, kind, project, task_ids, primary_id, reason, snapshot, status, for_date, created_at, applied_at';
+
+export function insertTaskReview(db: Db, input: InsertTaskReviewInput): number {
+  const res = db.prepare(`
+    INSERT INTO task_reviews (kind, project, task_ids, primary_id, reason, snapshot, for_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.kind,
+    input.project ?? null,
+    JSON.stringify(input.task_ids),
+    input.primary_id ?? null,
+    input.reason,
+    JSON.stringify(input.snapshot),
+    input.for_date ?? null,
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function listTaskReviews(db: Db, opts: { status?: TaskReviewStatus | 'all' } = {}): TaskReview[] {
+  const status = opts.status ?? 'pending';
+  const rows = status === 'all'
+    ? db.prepare(`SELECT ${TASK_REVIEW_COLS} FROM task_reviews ORDER BY created_at DESC LIMIT 200`).all() as TaskReviewDbRow[]
+    : db.prepare(`SELECT ${TASK_REVIEW_COLS} FROM task_reviews WHERE status = ? ORDER BY created_at DESC LIMIT 200`).all(status) as TaskReviewDbRow[];
+  return rows.map(rowToTaskReview);
+}
+
+export function getTaskReview(db: Db, id: number): TaskReview | null {
+  const row = db.prepare(`SELECT ${TASK_REVIEW_COLS} FROM task_reviews WHERE id = ?`).get(id) as TaskReviewDbRow | undefined;
+  return row ? rowToTaskReview(row) : null;
+}
+
+export function setTaskReviewStatus(db: Db, id: number, status: TaskReviewStatus, appliedAt?: string | null): void {
+  db.prepare(`UPDATE task_reviews SET status = ?, applied_at = COALESCE(?, applied_at) WHERE id = ?`)
+    .run(status, appliedAt ?? null, id);
+}
+
+/** 再解析の前に pending を一掃する (毎朝のスナップショットを作り直すため)。 applied/dismissed は履歴として残す。 */
+export function deletePendingTaskReviews(db: Db): number {
+  const r = db.prepare(`DELETE FROM task_reviews WHERE status = 'pending'`).run();
+  return Number(r.changes ?? 0);
+}
+
+/** 全記事のタグを category+value で集計する (フィルタ chips 用)。 件数降順。 */
+export function listAiArticleTags(db: Db): ArticleTagCount[] {
+  const rows = db.prepare(`SELECT tags FROM ai_articles WHERE tags IS NOT NULL`).all() as { tags: string | null }[];
+  const counts = new Map<string, ArticleTagCount>();
+  for (const r of rows) {
+    for (const t of parseTags(r.tags)) {
+      const key = `${t.category} ${t.value}`;
+      const ex = counts.get(key);
+      if (ex) ex.count += 1;
+      else counts.set(key, { category: t.category, value: t.value, count: 1 });
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.count - a.count);
+}
+
+/** 記事の総数 (タグフィルタの「記事数/10」 しきい値計算用)。 */
+export function countAiArticles(db: Db): number {
+  const r = db.prepare(`SELECT COUNT(*) AS c FROM ai_articles`).get() as { c: number };
+  return r.c;
+}
+
+/**
+ * さかのぼり生成の候補日。 指定範囲で日記がある日を新しい順に返し、 各日の
+ * 既存 ai_articles 件数を添える (UI が「未生成のみ」 判定に使う)。
+ */
+export function listDiaryDigestCandidates(
+  db: Db, from: string, to: string,
+): { date: string; articleCount: number }[] {
+  const days = db.prepare(`
+    SELECT date FROM diary_entries
+    WHERE date >= ? AND date <= ?
+    ORDER BY date DESC
+  `).all(from, to) as { date: string }[];
+  const counts = db.prepare(`
+    SELECT for_date AS d, COUNT(*) AS c FROM ai_articles
+    WHERE for_date >= ? AND for_date <= ?
+    GROUP BY for_date
+  `).all(from, to) as { d: string; c: number }[];
+  const byDate = new Map(counts.map(r => [r.d, r.c]));
+  return days.map(r => ({ date: r.date, articleCount: byDate.get(r.date) ?? 0 }));
+}
+
+export function setAiArticleNote(db: Db, id: number, noteId: string): void {
+  db.prepare(`UPDATE ai_articles SET note_id = ? WHERE id = ?`).run(noteId, id);
+}
+
+/** 記事のタグを丸ごと差し替える (再タグ付け用)。 */
+export function setAiArticleTags(db: Db, id: number, tags: ArticleTag[]): void {
+  db.prepare(`UPDATE ai_articles SET tags = ? WHERE id = ?`)
+    .run(tags.length ? JSON.stringify(tags) : null, id);
+}
+
+/** 記事のタイトル + 本文を差し替える (raw JSON 混入の救済用)。 */
+export function setAiArticleBody(db: Db, id: number, title: string, body_md: string): void {
+  db.prepare(`UPDATE ai_articles SET title = ?, body_md = ? WHERE id = ?`).run(title, body_md, id);
+}
+
+/**
+ * LLM 由来のタグ軸 (言語/内容タイプ/技術領域/その他) が 1 つも無い記事を返す。
+ * プロジェクトタグしか無い = 旧生成 (article_write が tags を落とした) 記事の検出に使う。
+ */
+export function listAiArticlesMissingLlmTags(db: Db, limit = 500): AiArticle[] {
+  const rows = db.prepare(`SELECT ${AI_ARTICLE_COLS} FROM ai_articles ORDER BY created_at DESC LIMIT ?`)
+    .all(Math.max(1, Math.min(2000, limit))) as AiArticleDbRow[];
+  return rows.map(rowToAiArticle)
+    .filter(a => !a.tags.some(t => t.category !== 'プロジェクト'));
+}
+
+interface AiSeedDbRow {
+  id: number;
+  title: string;
+  summary: string | null;
+  angle: string | null;
+  source_refs: string | null;
+  for_date: string | null;
+  status: string;
+  article_id: number | null;
+  created_at: string;
+}
+
+function rowToAiSeed(r: AiSeedDbRow): AiSeed {
+  return {
+    id: r.id,
+    title: r.title,
+    summary: r.summary,
+    angle: r.angle,
+    source_refs: parseSourceRefs(r.source_refs),
+    for_date: r.for_date,
+    status: r.status,
+    article_id: r.article_id,
+    created_at: r.created_at,
+  };
+}
+
+export interface InsertAiSeedInput {
+  title: string;
+  summary?: string | null;
+  angle?: string | null;
+  source_refs?: SourceRef[] | null;
+  for_date?: string | null;
+  status?: string;
+}
+
+export function insertAiSeed(db: Db, input: InsertAiSeedInput): number {
+  const res = db.prepare(`
+    INSERT INTO ai_article_seeds (title, summary, angle, source_refs, for_date, status)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    input.title,
+    input.summary ?? null,
+    input.angle ?? null,
+    input.source_refs && input.source_refs.length ? JSON.stringify(input.source_refs) : null,
+    input.for_date ?? null,
+    input.status ?? 'pending',
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function listAiSeeds(db: Db, status: string | null = 'pending', limit = 100): AiSeed[] {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  const where = status ? `WHERE status = ?` : '';
+  const args: unknown[] = status ? [status, safeLimit] : [safeLimit];
+  const rows = db.prepare(`
+    SELECT id, title, summary, angle, source_refs, for_date, status, article_id, created_at
+    FROM ai_article_seeds
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(...args) as AiSeedDbRow[];
+  return rows.map(rowToAiSeed);
+}
+
+export function getAiSeed(db: Db, id: number): AiSeed | null {
+  const row = db.prepare(`
+    SELECT id, title, summary, angle, source_refs, for_date, status, article_id, created_at
+    FROM ai_article_seeds WHERE id = ?
+  `).get(id) as AiSeedDbRow | undefined;
+  return row ? rowToAiSeed(row) : null;
+}
+
+/** seed の status を更新する。 記事化済みなら articleId を併せて設定する。 */
+export function updateAiSeedStatus(db: Db, id: number, status: string, articleId: number | null = null): void {
+  if (articleId != null) {
+    db.prepare(`UPDATE ai_article_seeds SET status = ?, article_id = ? WHERE id = ?`).run(status, articleId, id);
+  } else {
+    db.prepare(`UPDATE ai_article_seeds SET status = ? WHERE id = ?`).run(status, id);
+  }
+}
+
+interface AiAdviceDbRow {
+  id: number;
+  for_date: string;
+  body_md: string;
+  data_summary: string | null;
+  created_at: string;
+}
+
+function rowToAiAdvice(r: AiAdviceDbRow): AiAdvice {
+  const summary = safeParse(r.data_summary);
+  return {
+    id: r.id,
+    for_date: r.for_date,
+    body_md: r.body_md,
+    data_summary: summary && typeof summary === 'object' && !Array.isArray(summary)
+      ? (summary as Record<string, unknown>)
+      : null,
+    created_at: r.created_at,
+  };
+}
+
+export interface InsertAiAdviceInput {
+  for_date: string;
+  body_md: string;
+  data_summary?: Record<string, unknown> | null;
+}
+
+export function insertAiAdvice(db: Db, input: InsertAiAdviceInput): number {
+  const res = db.prepare(`
+    INSERT INTO ai_advice (for_date, body_md, data_summary)
+    VALUES (?, ?, ?)
+  `).run(
+    input.for_date,
+    input.body_md,
+    input.data_summary ? JSON.stringify(input.data_summary) : null,
+  );
+  return Number(res.lastInsertRowid);
+}
+
+export function latestAiAdvice(db: Db): AiAdvice | null {
+  const row = db.prepare(`
+    SELECT id, for_date, body_md, data_summary, created_at
+    FROM ai_advice
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get() as AiAdviceDbRow | undefined;
+  return row ? rowToAiAdvice(row) : null;
 }

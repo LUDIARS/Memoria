@@ -1,7 +1,7 @@
 /**
  * env-bootstrap — `.env` ファイル無しで Memoria server を起動するための env 注入。
  *
- * アプリ設定値 (CERNERE_BASE_URL / MEMORIA_PLACES_API_KEY 等) は Infisical に置く。
+ * アプリ設定値 (CERNERE_BASE_URL 等) は Infisical に置く。
  * Infisical に到達するための machine identity 認証情報 (INFISICAL_*) だけは
  * Infisical に入れられない (chicken-and-egg) ので、 以下のどれかで渡す:
  *
@@ -16,7 +16,7 @@
 /** Infisical から取れていてほしい設定キー。 揃わなければ起動ログで警告。 */
 const WANTED_KEYS: readonly string[] = [
   'CERNERE_BASE_URL',          // Memoria Hub の認証で叩く Cernere の base URL
-  'MEMORIA_PLACES_API_KEY',    // server-side Google key (Routes/Places/Geocoding、 referer 制限なし)
+  // Google Maps/Places key は env ではなく設定 UI (app_settings `maps.api_key`) で管理する。
 ];
 
 /** machine identity の 5 値。 app_settings には `infisical.<lower>` キーで保存。 */

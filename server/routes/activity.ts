@@ -1,5 +1,5 @@
 // /api/activity/* — PC アプリ使用統計 + Steam 活動。
-// Spec: spec/api/activity.md (未作成、 本 PR で feature 投入)
+// Spec: spec/interface/activity.md (未作成、 本 PR で feature 投入)
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';

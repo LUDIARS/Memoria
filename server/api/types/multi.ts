@@ -1,5 +1,5 @@
 // multi (Hub 連携) API request/response types
-// Spec: spec/api/multi.md
+// Spec: spec/interface/multi.md
 
 export interface MultiServer {
   url: string;

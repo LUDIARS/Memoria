@@ -22,12 +22,14 @@
 | ドメイン辞書 | [domain-catalog.md](domain-catalog.md) | 🏠 | ブラウジング履歴の蒸留 |
 | タスク管理 | [task.md](task.md) | ✓ | Hub ではなく **Actio** に共有 (`/api/tasks/:id/share/actio`) |
 | エージェント実行 | [agent.md](agent.md) | 🏠 | 絶対パス + プロンプト + コードログを含む |
+| エージェント実行 (Concordia) | [concordia-runner.md](concordia-runner.md) | 🏠 | agent.md の代替経路: wt タブ + Lictor inject。 `llm.task_runner=concordia` で有効 |
 | 作業場所 + presence | [workplace.md](workplace.md) | ✓ | カタログ (lat/lng + 名前 + tags) と presence (enter/leave) の 2 系統 |
 | 実装自慢ノート | [implementation-notes.md](implementation-notes.md) | ✓ | `shareable=1` フラグ必須の二段階フロー |
 | 食事写真 + 栄養推定 | [meal.md](meal.md) | 🏠 | 健康情報の機微度を考慮した意図的 local-only |
 | GPS 軌跡 | [gps.md](gps.md) | 🏠 | Tailscale 経由が推奨。 workplace presence は別系統で出る |
 | ブラウジング履歴 | [visit.md](visit.md) | 🏠 | bookmark に昇格させて初めてシェア可能 |
 | PWA Web Push | [push-notification.md](push-notification.md) | 🏠 | 端末固有の機微鍵を含む |
+| Amazon Echo / Alexa連携 | [amazon-echo.md](amazon-echo.md) | 🏠 | 本文はローカル保持。Amazonへはopt-inで未読件数だけ送信 |
 | Memoria Hub プレゼンス | [multi-hub.md](multi-hub.md) | ✓ | この機能自体が Hub 連携の入口 |
 | Legatus → Memoria GPS 転送 | [legatus-subscriber.md](legatus-subscriber.md) | 🏠 | loopback / tailnet 内で完結 |
 | 外部 chat 取り込み | [external-chat.md](external-chat.md) | 🏠 | チャネル名 / 個人発言を含む |

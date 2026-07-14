@@ -6,18 +6,28 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import { yesterdayLocal, formatLocalDate, weekRangeFor } from '../diary.js';
 import { listTasks, getAppSettings, setAppSettings } from '../db.js';
-import { sendPushToAll } from '../push.js';
+import { sendNotificationToAll } from '../notifications.js';
 import { featureEnabled } from './privacy.js';
 import {
   fetchForecast, insertWeatherSnapshot, readLatestGpsLatLon,
   isRainingNow, nextRainStart, describeCode,
 } from './weather.js';
 import { runDetection as runTransitDetection } from './transit-detect.js';
+import { pollAllFeeds, getRssConfig } from '../rss/index.js';
+import type { BlackBoxEngine } from '@ludiars/blackbox';
+import { getWeatherConfig } from '../weather/config.js';
+import { buildBriefing, formatBriefingPush } from '../weather/briefing.js';
+import { startBriefingScheduler } from '../briefing/index.js';
+import { startGoalEvalScheduler } from '../goals/eval-scheduler.js';
+import { startAiHubSchedulers } from '../ai-hub/index.js';
+import { startTaskReviewScheduler } from '../task-review/index.js';
 
 type Db = BetterSqlite3.Database;
 
 export interface SchedulerDeps {
   db: Db;
+  /** 成長型ブラックボックス engine (朝の雨ブリーフィングで雨判定に使う)。 */
+  blackbox: BlackBoxEngine;
   enqueueDiary: (dateStr: string) => void;
   enqueueWeekly: (weekStart: string) => void;
   /** privacySettings() を呼べるように渡す。 settings を毎回読みたいので関数渡し */
@@ -35,7 +45,80 @@ export function startSchedulers(deps: SchedulerDeps): void {
   scheduleSundayEvening(deps);
   startTaskReminderInterval(deps);
   startWeatherRainAlertInterval(deps);
+  startWeatherMorningBriefingInterval(deps);
   startTransitDetectionInterval(deps);
+  startRssPollInterval(deps);
+  startBriefingScheduler(deps.db);
+  startGoalEvalScheduler(deps.db);
+  startAiHubSchedulers(deps.db);
+  startTaskReviewScheduler(deps.db);
+}
+
+// 朝の雨ブリーフィング — 1 分おきに時刻を見て、 設定時刻 (既定 7:00) に当日 1 回だけ、
+// 対象地点 (自宅 + 行きがちな場所) をマルチソースで検証し、 雨があれば push。
+// 「いま雨」 アラート (startWeatherRainAlertInterval) とは別系統のマルチソース版。
+function startWeatherMorningBriefingInterval(deps: SchedulerDeps): void {
+  const tick = async () => {
+    try {
+      if (!featureEnabled(deps.db, 'weather_enabled')) return;
+      const cfg = getWeatherConfig(deps.db);
+      if (!cfg.briefing.enabled) return;
+
+      const now = new Date();
+      if (now.getHours() !== cfg.briefing.hour || now.getMinutes() !== 0) return;
+
+      const today = formatLocalDate(now);
+      const appS = getAppSettings(deps.db);
+      if (appS['weather.morning_briefing.last_sent_date'] === today) return;
+
+      const briefing = await buildBriefing(deps.db, deps.blackbox, now);
+      const payload = formatBriefingPush(briefing, cfg.briefing.notifyWhenClear);
+      // 送信有無に関わらず当日分は処理済みにする (雨ゼロでも再計算を避ける)。
+      setAppSettings(deps.db, { 'weather.morning_briefing.last_sent_date': today });
+      if (!payload) {
+        console.log(`[weather briefing] ${today}: 雨なし — 送信スキップ`);
+        return;
+      }
+      await sendNotificationToAll(deps.db, {
+        title: payload.title, body: payload.body,
+        tag: `memoria-weather-briefing-${today}`, url: '/?tab=weather',
+      }).catch((e: unknown) => console.error('[weather briefing] push failed:', e instanceof Error ? e.message : String(e)));
+      console.log(`[weather briefing] sent for ${today}: ${payload.title}`);
+    } catch (e: unknown) {
+      console.warn('[weather briefing] tick failed:', e instanceof Error ? e.message : String(e));
+    }
+  };
+  // 起動 20s 後に 1 回 (起動が briefing 時刻ちょうどなら拾う)、 以後 1 分おき。
+  setTimeout(() => { void tick(); }, 20_000).unref?.();
+  setInterval(() => { void tick(); }, 60_000).unref?.();
+}
+
+// RSS / トレンド取り込み — rss.poll_interval_minutes おきに全フィードを
+// 取得 → 新着を AI 採点 → 閾値以上を push。 設定で OFF にできる。
+// 多重起動は pollAllFeeds 側の in-flight guard が防ぐ。
+function startRssPollInterval(deps: SchedulerDeps): void {
+  // 設定間隔を毎 tick 読み直す。 最小 5 分を内部で 1 分刻みに丸めるため、
+  // 1 分ごとに「前回から interval 経過したか」 を判定する素朴方式。
+  let lastRun = 0;
+  const tick = async () => {
+    try {
+      const cfg = getRssConfig(deps.db);
+      if (!cfg.enabled) return;
+      const intervalMs = Math.max(5, cfg.poll_interval_minutes) * 60 * 1000;
+      const now = Date.now();
+      if (now - lastRun < intervalMs) return;
+      lastRun = now;
+      const r = await pollAllFeeds(deps.db);
+      if (r.newArticles > 0 || r.notified > 0) {
+        console.log(`[rss] poll: feeds=${r.feeds} new=${r.newArticles} scored=${r.scored} notified=${r.notified}`);
+      }
+    } catch (e: unknown) {
+      console.warn('[rss] poll tick failed:', e instanceof Error ? e.message : String(e));
+    }
+  };
+  // 起動 45s 後に初回 (lastRun=0 なので即走る)、 以後 1 分ごとに判定。
+  setTimeout(() => { void tick(); }, 45_000).unref?.();
+  setInterval(() => { void tick(); }, 60_000).unref?.();
 }
 
 // Midnight scheduler — fires at next 00:00:05 local, generates the previous
@@ -118,7 +201,7 @@ function startTaskReminderInterval(deps: SchedulerDeps): void {
       const more = tasks.length > 5 ? `\n…他 ${tasks.length - 5} 件` : '';
       const pushBody = `todo: ${todoCount} 件, 進行中: ${doingCount} 件\n${preview}${more}`;
 
-      await sendPushToAll(deps.db, { title: '📋 本日のタスクリマインド', body: pushBody })
+      await sendNotificationToAll(deps.db, { title: '📋 本日のタスクリマインド', body: pushBody })
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
           console.error('[reminder] push failed:', msg);
@@ -213,7 +296,7 @@ function startWeatherRainAlertInterval(deps: SchedulerDeps): void {
         return;   // 今日は雨無し
       }
 
-      await sendPushToAll(deps.db, {
+      await sendNotificationToAll(deps.db, {
         title,
         body,
         tag: `memoria-weather-rain-${today}`,

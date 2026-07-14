@@ -1,5 +1,5 @@
 // note API request/response types (rev2)
-// Spec: spec/api/note.md
+// Spec: spec/interface/note.md
 
 import type {
   NoteRow, NoteBlockRow, NoteBlockType, NoteKind,
@@ -204,11 +204,18 @@ export interface ExtensionNotionDomain {
   enabled: boolean;
 }
 
+export interface ExtensionFurusatoDomain {
+  host: string;
+  label: string;
+  enabled: boolean;
+}
+
 export interface ExtensionRules {
   chat_domains: ExtensionChatDomain[];
   impl_rules: ExtensionImplRule[];
   shopping_domains: ExtensionShoppingDomain[];
   notion_domains: ExtensionNotionDomain[];
+  furusato_domains: ExtensionFurusatoDomain[];
 }
 
 export type ExtensionRulesUpdateRequest = Partial<ExtensionRules>;
