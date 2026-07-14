@@ -35,7 +35,6 @@ import { makeMcpServer } from './lib/mcp-server.js';
 import { startLegatusSubscriber } from './lib/legatus-subscriber.js';
 import { startMqttBroker } from './mqtt/broker.js';
 import { startDiscordBot } from './discord/index.js';
-import { loadAlexaConfig } from './alexa/config.js';
 import { startWifiLocation } from './wifi-location.js';
 import { fetchPageHtml } from './lib/fetch-page.js';
 import { privacySettings } from './lib/privacy.js';
@@ -80,7 +79,6 @@ import { makeGoalEvalRouter } from './goals/router.js';
 import { makeRoadmapRouter } from './roadmap/router.js';
 import { makeAiHubRouter } from './routes/ai-hub.js';
 import { makeTaskReviewRouter } from './routes/task-review.js';
-import { makeAlexaRouter } from './routes/alexa.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -89,7 +87,6 @@ const HTML_DIR = join(DATA_DIR, 'html');
 const MEAL_DIR = join(DATA_DIR, 'meals');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
 const CLAUDE_BIN = process.env.MEMORIA_CLAUDE_BIN ?? 'claude';
-const ALEXA_CONFIG = loadAlexaConfig();
 
 mkdirSync(HTML_DIR, { recursive: true });
 mkdirSync(MEAL_DIR, { recursive: true });
@@ -270,7 +267,21 @@ app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
-app.route('/', makeAlexaRouter({ db, config: ALEXA_CONFIG }));
+// ── Alexa (Echo) skill 連携 ─────────────────────────────────────────────
+//
+// zod / ask-sdk-* 等、 他 domain とは独立した重い依存を抱える単体 "app"。
+// 静的 import だとこの app の依存解決失敗 (未 install 等) が module graph の
+// link 時点で発生し、 index.ts 内のどの try/catch でも捕まえられず Memoria
+// 本体 (Discord/MQTT/GPS 等) ごと落としてしまう。 動的 import + try/catch で
+// 隔離し、 起動失敗は best-effort でこの app だけ無効化する。
+try {
+  const { loadAlexaConfig } = await import('./alexa/config.js');
+  const { makeAlexaRouter } = await import('./routes/alexa.js');
+  app.route('/', makeAlexaRouter({ db, config: loadAlexaConfig() }));
+} catch (e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(`[alexa] failed to start: ${msg}`);
+}
 // ユーザーアプリ (プラグイン) を本体プロセスに in-process マウント
 // (submodule server/plugins/memoria-plugin)。 /plugins/<id> を static catch-all
 // より前に登録する必要があるためここで mount し、 manifest を /api/plugins に渡す。
