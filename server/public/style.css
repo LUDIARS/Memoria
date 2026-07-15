@@ -7363,3 +7363,17 @@ dialog.loc-edit-modal[open] {
 .diary-backfill-progress::after { content: ""; display: block; height: 100%; width: var(--pct, 0%); background: var(--accent); transition: width 0.2s ease; }
 .diary-backfill-log { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: 12px; }
 .diary-backfill-log li { padding: 3px 0; border-bottom: 1px solid var(--border); }
+.rec-not-useful {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.rec-not-useful h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.rec-not-useful-item {
+  opacity: 0.82;
+}

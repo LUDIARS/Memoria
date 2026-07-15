@@ -24,9 +24,10 @@ import {
   insertRecommendationRun, completeRecommendationRun, failRecommendationRun,
   findRunningRecommendationRun, cancelRunningRecommendationRuns,
   listAiArticles,
+  listRecommendationNotUseful,
   type RecSourceBookmark, type RecBrowserDomain, type RecGitCommit,
   type RecClaudePrompt, type RecGameSummary, type RecAppSummary,
-  type RecNoteSummary, type RecDigSummary,
+  type RecNoteSummary, type RecDigSummary, type RecommendationNotUsefulRow,
 } from './db.js';
 import {
   listRecentTopArticles, listEnabledInterests,
@@ -300,7 +301,18 @@ function agentPromptAntenna(kind: string, body: string, focus: string): string {
   ].join('\n');
 }
 
-function synthesisPrompt(agentOutputs: RecAgentLog[]): string {
+function formatNotUsefulPolicies(items: readonly RecommendationNotUsefulRow[]): string {
+  if (items.length === 0) return '(なし)';
+  return items.map(item => {
+    const url = item.url ? `\n  URL: ${item.url}` : '';
+    return `- ${item.title}${url}\n  判断基準: ${item.reason}`;
+  }).join('\n');
+}
+
+function synthesisPrompt(
+  agentOutputs: RecAgentLog[],
+  notUsefulItems: readonly RecommendationNotUsefulRow[],
+): string {
   const byAxis = (axis: RecAxis) =>
     agentOutputs
       .filter(a => REC_AGENT_AXIS[a.kind] === axis)
@@ -327,6 +339,11 @@ function synthesisPrompt(agentOutputs: RecAgentLog[]): string {
     '  軸B はアナリストが挙げた記事の **実 URL** を優先的に使う (実在性が高いため)。',
     'web 上で確実に到達できる安定した URL を優先 (公式ドキュメント / 主要 OSS リポ /',
     '著名 blog / 一次ニュース記事 等)。',
+    '',
+    '## 再提案してはいけないもの',
+    formatNotUsefulPolicies(notUsefulItems),
+    '上記の URL、現象、判断基準に該当する提案は出力しないこと。',
+    '同じ問題を別の表現に言い換えた提案や、判断基準に反する対処案も出力しないこと。',
     '',
     '出力フォーマット (JSON のみ):',
     '```json',
@@ -454,7 +471,23 @@ function inferAxis(kinds: RecAgentKind[]): RecAxis {
   return kinds.some(k => REC_AGENT_AXIS[k] === 'news_antenna') ? 'news_antenna' : 'stagnation';
 }
 
-function parseSynthesisItems(raw: string): RecResultItem[] {
+function isCloudflare502TestRecommendation(item: RecResultItem): boolean {
+  const text = [item.url, item.title, item.why, item.expected_value].join(' ').toLowerCase();
+  return text.includes('cloudflare') && (/\b502\b/.test(text) || text.includes('bad gateway'));
+}
+
+function shouldExcludeRecommendation(
+  item: RecResultItem,
+  notUsefulItems: readonly RecommendationNotUsefulRow[],
+): boolean {
+  if (isCloudflare502TestRecommendation(item)) return true;
+  return notUsefulItems.some(notUseful => notUseful.url === item.url);
+}
+
+function parseSynthesisItems(
+  raw: string,
+  notUsefulItems: readonly RecommendationNotUsefulRow[],
+): RecResultItem[] {
   const json = extractJson(raw);
   if (!Array.isArray(json)) return [];
   const out: RecResultItem[] = [];
@@ -467,7 +500,8 @@ function parseSynthesisItems(raw: string): RecResultItem[] {
     const expected_value = typeof r.expected_value === 'string' ? r.expected_value.trim() : '';
     const kinds = Array.isArray(r.agent_kinds) ? r.agent_kinds.filter(k => REC_AGENT_KINDS.includes(k as RecAgentKind)) as RecAgentKind[] : [];
     const axis: RecAxis = r.axis === 'news_antenna' || r.axis === 'stagnation' ? r.axis : inferAxis(kinds);
-    out.push({ url, title, why, expected_value, agent_kinds: kinds, axis });
+    const item = { url, title, why, expected_value, agent_kinds: kinds, axis };
+    if (!shouldExcludeRecommendation(item, notUsefulItems)) out.push(item);
   }
   return out;
 }
@@ -531,12 +565,13 @@ export async function runAiRecommendations(db: Db, options: { force?: boolean } 
         }
       }));
 
+      const notUsefulItems = listRecommendationNotUseful(db);
       const synthesized = await runLlm({
         task: 'recommendation_synthesize',
-        prompt: synthesisPrompt(agentLogs),
+        prompt: synthesisPrompt(agentLogs, notUsefulItems),
         timeoutMs: AGENT_TIMEOUT_MS,
       });
-      const items = parseSynthesisItems(synthesized);
+      const items = parseSynthesisItems(synthesized, notUsefulItems);
       const logs: RecAgentLogBundle = {
         agents: agentLogs,
         synthesis: { input_agent_count: agentLogs.length, output: synthesized },

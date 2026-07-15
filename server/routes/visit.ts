@@ -20,6 +20,7 @@ import {
   pageVisitsForDate, revisitedBookmarksForDate, browsingDomainStatsForDate,
   listServerEvents, listServerEventsForDate,
   getLatestRecommendationRun, getRecommendationRun, listRecommendationRuns,
+  listRecommendationNotUseful, saveRecommendationNotUseful,
 } from '../db.js';
 import { shouldSkipDomain } from '../domain-catalog.js';
 import { featureEnabled } from '../lib/privacy.js';
@@ -182,8 +183,15 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
   // 最新 done run + 進行中 run の状態を返す。 force=1 が来たら新規 run を蹴る。
   r.get('/api/recommendations', (c: Context) => {
     const avail = isAiRecommendationsAvailable();
+    const notUsefulItems = listRecommendationNotUseful(db);
     if (!avail.available) {
-      return c.json({ available: false, reason: avail.reason, run: null });
+      return c.json({
+        available: false,
+        reason: avail.reason,
+        run: null,
+        items: [],
+        not_useful_items: notUsefulItems,
+      });
     }
     const latest = getLatestRecommendationRun(db, 'done');
     const items = latest?.results_json ? safeParseArray(latest.results_json) as RecResultItem[] : [];
@@ -200,7 +208,33 @@ export function makeVisitRouter(deps: VisitRouterDeps): Hono {
         model_opus: latest.model_opus,
       } : null,
       items,
+      not_useful_items: notUsefulItems,
     });
+  });
+
+  r.post('/api/recommendations/not-useful', async (c: Context) => {
+    const body = await c.req.json().catch(() => null) as {
+      title?: unknown;
+      url?: unknown;
+      reason?: unknown;
+    } | null;
+    const title = typeof body?.title === 'string' ? body.title.trim() : '';
+    const url = typeof body?.url === 'string' ? body.url.trim() : '';
+    const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+    if (!title || !url || !reason) return c.json({ error: 'title, url, reason are required' }, 400);
+    if (title.length > 300 || url.length > 2_000 || reason.length > 1_000) {
+      return c.json({ error: 'input is too long' }, 400);
+    }
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return c.json({ error: 'url must use http or https' }, 400);
+      }
+    } catch {
+      return c.json({ error: 'url is invalid' }, 400);
+    }
+    const item = saveRecommendationNotUseful(db, { title, url, reason });
+    return c.json({ ok: true, item });
   });
 
   r.post('/api/recommendations/run', async (c: Context) => {
