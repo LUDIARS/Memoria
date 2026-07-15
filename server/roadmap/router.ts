@@ -4,6 +4,7 @@
 
 import { Hono, type Context } from 'hono';
 import { aggregateRoadmaps } from './aggregate.js';
+import { loadPublicGoals } from './public-goals.js';
 
 export function makeRoadmapRouter(): Hono {
   const r = new Hono();
@@ -18,6 +19,15 @@ export function makeRoadmapRouter(): Hono {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       // 設定不備 (root 不在等) は無言フォールバックせず 503 で明示する。
+      return c.json({ error: message }, 503);
+    }
+  });
+
+  r.get('/api/public-goals', (c: Context) => {
+    try {
+      return c.json(loadPublicGoals());
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
       return c.json({ error: message }, 503);
     }
   });
