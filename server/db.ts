@@ -559,6 +559,25 @@ export function openDb(dbPath: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_review_targets_enabled ON review_targets(enabled);
 
+    -- 「参考にならない」と判断したおすすめ。理由は次回以降のAI生成時に
+    -- 除外方針として渡すため、URLだけでなく判断基準も保存する。
+    CREATE TABLE IF NOT EXISTS recommendation_not_useful (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      stable_key  TEXT NOT NULL UNIQUE,
+      title       TEXT NOT NULL,
+      url         TEXT,
+      reason      TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- テスト中に起きる一時的な障害を、対処すべき課題として再提案しない。
+    INSERT OR IGNORE INTO recommendation_not_useful
+      (stable_key, title, url, reason)
+    VALUES
+      ('cloudflare-502-test', 'Cloudflare 502（テスト環境）', NULL,
+       'テストの過程で発生する一時的な 502 であり、恒久対策・調査・監視強化の提案は不要。');
+
     -- AI 主導おすすめ run の履歴。 1 run = 6 agent 並列 Sonnet + Opus 統合の結果。
     -- agent_logs_json:  各 agent の入出力サマリ (= 「なぜ・どうおすすめしたか」 の根拠)
     -- results_json:     Opus 統合済みの最終おすすめリスト (RecommendationItem[])
@@ -5704,6 +5723,50 @@ export function findRunningRecommendationRun(db: Db): RecommendationRunRow | nul
     SELECT * FROM recommendation_runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1
   `).get() as RecommendationRunRow | undefined;
   return row ?? null;
+}
+
+// ── recommendation_not_useful (AIおすすめの除外方針) ────────────────────────
+
+export interface RecommendationNotUsefulRow {
+  id: number;
+  stable_key: string;
+  title: string;
+  url: string | null;
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listRecommendationNotUseful(db: Db): RecommendationNotUsefulRow[] {
+  return db.prepare(`
+    SELECT id, stable_key, title, url, reason, created_at, updated_at
+    FROM recommendation_not_useful
+    ORDER BY created_at DESC, id DESC
+  `).all() as RecommendationNotUsefulRow[];
+}
+
+export function saveRecommendationNotUseful(
+  db: Db,
+  input: { title: string; url: string; reason: string },
+): RecommendationNotUsefulRow {
+  const stableKey = `url:${input.url}`;
+  db.prepare(`
+    INSERT INTO recommendation_not_useful (stable_key, title, url, reason)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(stable_key) DO UPDATE SET
+      title = excluded.title,
+      url = excluded.url,
+      reason = excluded.reason,
+      updated_at = datetime('now')
+  `).run(stableKey, input.title, input.url, input.reason);
+
+  const row = db.prepare(`
+    SELECT id, stable_key, title, url, reason, created_at, updated_at
+    FROM recommendation_not_useful
+    WHERE stable_key = ?
+  `).get(stableKey) as RecommendationNotUsefulRow | undefined;
+  if (!row) throw new Error('recommendation_not_useful の保存結果を取得できません');
+  return row;
 }
 
 // ── recommendation 入力データ集計 (直近 N 日) ────────────────────────────────

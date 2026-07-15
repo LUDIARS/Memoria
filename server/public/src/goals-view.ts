@@ -66,6 +66,20 @@ interface RoadmapAggregate {
   lines: RoadmapLine[];
   errors: Array<{ repo: string; message: string }>;
 }
+interface PublicGoalMember {
+  repo: string;
+  mediumTermTarget: number;
+}
+interface PublicGoal {
+  id: string;
+  title: string;
+  accent: string;
+  summary: string;
+  members: PublicGoalMember[];
+}
+interface PublicGoalsResponse {
+  goals: PublicGoal[];
+}
 
 let selectedRoadmapMonth: string | null = null;
 
@@ -225,6 +239,27 @@ function renderRoadmapSection(agg: RoadmapAggregate | null, err: string | null):
 
 // ── 旧来の個別目標タスク (従属表示) ───────────────────────────────────────────
 
+function renderPublicGoals(goals: PublicGoal[] | null, err: string | null): string {
+  const head = '<div class="rm-section-head"><span class="rm-section-title">公開目標</span></div>';
+  if (err) {
+    return head + `<div class="rm-error">公開目標を読み込めません: ${esc(err)}</div>`;
+  }
+  if (!goals?.length) {
+    return head + '<div class="rm-empty muted">公開目標はまだありません。</div>';
+  }
+  const cards = goals.map((goal) => {
+    const members = goal.members.map((member) => `
+      <li><span>${esc(member.repo)}</span><span class="public-goal-target">中期目標 ${member.mediumTermTarget}%</span></li>`).join('');
+    return `
+      <article class="public-goal-card" style="--public-goal-accent:${esc(goal.accent)}">
+        <h3>${esc(goal.title)}</h3>
+        <p>${esc(goal.summary)}</p>
+        <ul>${members}</ul>
+      </article>`;
+  }).join('');
+  return head + `<div class="public-goal-list">${cards}</div>`;
+}
+
 function renderLegacyGoals(goals: GoalTask[], evalByGoal: Map<number, GoalEvalLog[]>, month: string): string {
   if (!goals.length) return ''; // 個別目標タスクが無ければセクションごと出さない
   const header = `
@@ -258,7 +293,8 @@ export async function loadGoalsView(): Promise<void> {
 
   const month = selectedRoadmapMonth ?? currentMonth();
   selectedRoadmapMonth = month;
-  const [roadmapRes, goalsRes, evalsRes] = await Promise.all([
+  const [publicGoalsRes, roadmapRes, goalsRes, evalsRes] = await Promise.all([
+    fetch('/api/public-goals').catch(() => null),
     fetch(`/api/roadmaps?month=${encodeURIComponent(month)}`).catch(() => null),
     fetch('/api/tasks?kind=goal&limit=200').catch(() => null),
     fetch(`/api/goal-evals?month=${month}`).catch(() => null),
@@ -275,6 +311,17 @@ export async function loadGoalsView(): Promise<void> {
     roadmapErr = 'サーバに接続できません';
   }
 
+  let publicGoals: PublicGoal[] | null = null;
+  let publicGoalsErr: string | null = null;
+  if (publicGoalsRes && publicGoalsRes.ok) {
+    publicGoals = (await publicGoalsRes.json() as PublicGoalsResponse).goals;
+  } else if (publicGoalsRes) {
+    const body = await publicGoalsRes.json().catch(() => null) as { error?: string } | null;
+    publicGoalsErr = body?.error ?? `HTTP ${publicGoalsRes.status}`;
+  } else {
+    publicGoalsErr = 'サーバに接続できません';
+  }
+
   const goals: GoalTask[] = goalsRes && goalsRes.ok ? (await goalsRes.json() as GoalTask[]) : [];
   const evals: GoalEvalLog[] = evalsRes && evalsRes.ok ? (await evalsRes.json() as GoalEvalLog[]) : [];
   const evalByGoal = new Map<number, GoalEvalLog[]>();
@@ -283,7 +330,9 @@ export async function loadGoalsView(): Promise<void> {
     evalByGoal.get(e.goal_id)!.push(e);
   }
 
-  root.innerHTML = renderRoadmapSection(agg, roadmapErr) + renderLegacyGoals(goals, evalByGoal, month);
+  root.innerHTML = renderPublicGoals(publicGoals, publicGoalsErr)
+    + renderRoadmapSection(agg, roadmapErr)
+    + renderLegacyGoals(goals, evalByGoal, month);
   root.querySelector('#goalsRefreshBtn')?.addEventListener('click', () => void loadGoalsView());
   root.querySelector('#roadmapMonthSelect')?.addEventListener('change', (event) => {
     const nextMonth = event.target instanceof HTMLSelectElement ? event.target.value : null;

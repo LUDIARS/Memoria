@@ -284,7 +284,7 @@ const state: State = {
   visitsSelected: new Set<unknown>(),
   visitsRange: '7',
   trendsRange: '7',
-  recommendations: { available: true, running: false, items: [], run: null, reason: '' },
+  recommendations: { available: true, running: false, items: [], run: null, reason: '', notUsefulItems: [] },
   digSession: null,
   digHistory: [],
   digSelected: new Set<unknown>(),
@@ -3990,6 +3990,7 @@ async function loadRecommendations(opts: { silent?: boolean } = {}) {
       items: data.items || [],
       run: data.run || null,
       reason: data.reason || '',
+      notUsefulItems: data.not_useful_items || [],
     };
     renderRecommendations();
     if (state.recommendations.running) startRecPolling();
@@ -4008,6 +4009,25 @@ function startRecPolling() {
 
 function stopRecPolling() {
   if (recPollTimer) { clearInterval(recPollTimer); recPollTimer = null; }
+}
+
+function renderNotUsefulRecommendations(items: Loose[]) {
+  const list = $('recNotUsefulList');
+  if (!list) return;
+  if (items.length === 0) {
+    list.innerHTML = '<div class="muted">まだ登録されていません。</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => {
+    const url = item.url ? `<div class="url">${escapeHtml(item.url)}</div>` : '';
+    return `
+      <article class="rec-card rec-not-useful-item">
+        <div class="rec-title">${escapeHtml(item.title)}</div>
+        ${url}
+        <div class="why"><strong>今後採用しない判断基準:</strong> ${escapeHtml(item.reason)}</div>
+      </article>
+    `;
+  }).join('');
 }
 
 async function triggerRecommendationRun() {
@@ -4043,6 +4063,9 @@ function renderRecommendations() {
   const runBtn = $('recRunNow');
   const runMeta = $('recRunMeta');
   const reasonEl = $('recDisabledReason');
+  const notUsefulItems = Array.isArray(rec.notUsefulItems) ? rec.notUsefulItems : [];
+
+  renderNotUsefulRecommendations(notUsefulItems);
 
   // AI 未設定: placeholder のみ表示
   if (!rec.available) {
@@ -4110,6 +4133,7 @@ function renderRecommendations() {
         ${r.expected_value ? `<div class="why"><strong>得られるもの:</strong> ${escapeHtml(r.expected_value)}</div>` : ''}
         <div class="actions">
           <button class="rec-save">保存</button>
+          <button class="ghost rec-not-useful">参考にならない</button>
           <a class="ghost rec-open" href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">開く</a>
         </div>
       </div>
@@ -4131,6 +4155,38 @@ function renderRecommendations() {
         await refreshQueue();
       } catch (e) {
         alert(`保存失敗: ${e.message}`);
+      }
+    });
+    const notUsefulButton = card.querySelector<HTMLButtonElement>('.rec-not-useful');
+    if (!notUsefulButton || !url) return;
+    notUsefulButton.addEventListener('click', async () => {
+      const reason = window.prompt(
+        '同じ内容・考え方を次回以降おすすめしないための判断基準を入力してください。',
+        'この提案は参考にならないため、同じ趣旨の提案は不要。',
+      );
+      if (reason === null) return;
+      const trimmedReason = reason.trim();
+      if (!trimmedReason) {
+        alert('判断基準を入力してください。');
+        return;
+      }
+      notUsefulButton.disabled = true;
+      try {
+        const result = await api('/api/recommendations/not-useful', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: r.title || url, url, reason: trimmedReason }),
+        });
+        const previous = state.recommendations.notUsefulItems || [];
+        state.recommendations.notUsefulItems = [
+          result.item,
+          ...previous.filter(item => item.stable_key !== result.item.stable_key),
+        ];
+        state.recommendations.items = state.recommendations.items.filter(item => item.url !== url);
+        renderRecommendations();
+      } catch (e) {
+        alert(`参考にならないリストへの登録に失敗しました: ${e.message}`);
+        notUsefulButton.disabled = false;
       }
     });
   });

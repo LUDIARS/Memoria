@@ -7288,6 +7288,13 @@ dialog.loc-edit-modal[open] {
 .rm-mem-i3 { border-color: var(--rm-accent, var(--accent)); font-weight: 600; }
 .rm-mem-star { color: var(--rm-accent, var(--accent)); }
 .rm-mem-mat { color: var(--muted); }
+.public-goal-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.public-goal-card { border: 1px solid var(--border); border-left: 4px solid var(--public-goal-accent, var(--accent)); border-radius: 8px; padding: 12px 14px; background: var(--panel); }
+.public-goal-card h3 { margin: 0; font-size: 15px; }
+.public-goal-card p { margin: 8px 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.public-goal-card ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.public-goal-card li { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.public-goal-target { flex: none; padding: 2px 7px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); color: var(--public-goal-accent, var(--accent)); white-space: nowrap; }
 .goals-legacy-head { margin-top: 24px; }
 @media (prefers-color-scheme: dark) {
   .rm-ach-pending { background: #374151; color: #9ca3af; }
@@ -7363,3 +7370,17 @@ dialog.loc-edit-modal[open] {
 .diary-backfill-progress::after { content: ""; display: block; height: 100%; width: var(--pct, 0%); background: var(--accent); transition: width 0.2s ease; }
 .diary-backfill-log { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: 12px; }
 .diary-backfill-log li { padding: 3px 0; border-bottom: 1px solid var(--border); }
+.rec-not-useful {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.rec-not-useful h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.rec-not-useful-item {
+  opacity: 0.82;
+}
