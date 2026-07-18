@@ -1,6 +1,17 @@
+<p align="center">
+  <img src="desktop/icons/icon.png" width="100" alt="Memoria logo" />
+</p>
+
 # Memoria — ライフログ & ナレッジ管理ツール
 
-**学習効率化と可視化のための、ローカル完結型ライフログ & ナレッジハブ。**
+ローカル完結型の、学習効率化・可視化のための **ライフログ & ナレッジハブ**。
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+  <a href="https://github.com/LUDIARS/Memoria/actions"><img src="https://github.com/LUDIARS/Memoria/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+</p>
+
+---
 
 「自分が何を読み・どこへ行き・何を考え・何を作ったか」を 1 か所に蓄え、
 ローカル LLM がそれを要約・分類・関連付けして、**学んだことを忘れないように
