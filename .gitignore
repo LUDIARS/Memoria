@@ -21,6 +21,8 @@ server/multi/.infisical-creds.json
 
 # logs / artifacts
 *.log
+*.stackdump
+.anatomia/
 logs/
 server/logs/
 .DS_Store
