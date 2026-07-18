@@ -5148,6 +5148,15 @@ $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
 // GitHub 設定の入口は ⚙ 設定 → 🔌 連携 / API key に移動済 (openAiSettings で load)
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
 $('diarySettingsTest')?.addEventListener('click', testGithubPat);
+$('personalityShareEnabled')?.addEventListener('change', (e) => {
+  togglePersonalityShareEnabled((e.target as HTMLInputElement).checked).catch(() => { /* swallow */ });
+});
+$('personalityShareIssueBtn')?.addEventListener('click', () => {
+  issuePersonalityShareToken().catch(() => { /* swallow */ });
+});
+$('personalityShareRevokeBtn')?.addEventListener('click', () => {
+  revokePersonalityShareToken().catch(() => { /* swallow */ });
+});
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
 $('domainSearch')?.addEventListener('input', (e) => {
@@ -6770,6 +6779,7 @@ async function loadPrivacySettings() {
   if ($('activitySteamEnabled')) $('activitySteamEnabled').checked = !!s.activity_steam_enabled;
   // Steam credentials (= 別 endpoint なので非同期 load)
   loadActivityCredentials().catch(() => { /* swallow */ });
+  loadPersonalityShareSettings().catch(() => { /* swallow */ });
   configureWorkplaceCheckin(!!s.workplace_geo_enabled);
   if (s.tasks_reminder_enabled) {
     scheduleLocalTaskReminder(s.tasks_reminder_hour ?? 6, s.tasks_reminder_minute ?? 0);
@@ -8694,6 +8704,56 @@ async function saveActivityCredentials() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+interface PersonalityShareStatus {
+  enabled: boolean;
+  hasToken: boolean;
+  issuedAt: string | null;
+  expiresAt: string | null;
+}
+
+function renderPersonalityShareStatus(s: PersonalityShareStatus) {
+  const box = $('personalityShareBox');
+  box?.classList.toggle('hidden', !s.enabled);
+  const status = $('personalityShareStatus');
+  if (status) {
+    status.textContent = !s.enabled
+      ? ''
+      : s.hasToken
+        ? `✓ トークン発行済み (${s.issuedAt ? new Date(s.issuedAt).toLocaleDateString('ja-JP') : '?'} 発行 / ${s.expiresAt ? new Date(s.expiresAt).toLocaleDateString('ja-JP') : '?'} 失効)`
+        : '未発行 — 「トークンを発行」から開始してください';
+  }
+}
+
+async function loadPersonalityShareSettings() {
+  const s = await api('/api/personality-export/status') as PersonalityShareStatus;
+  if ($('personalityShareEnabled')) $('personalityShareEnabled').checked = !!s.enabled;
+  renderPersonalityShareStatus(s);
+}
+
+async function togglePersonalityShareEnabled(enabled: boolean) {
+  const s = await api('/api/personality-export/settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  }) as PersonalityShareStatus;
+  renderPersonalityShareStatus(s);
+}
+
+async function issuePersonalityShareToken() {
+  const r = await api('/api/personality-export/token', { method: 'POST' }) as { token: string; issuedAt: string; expiresAt: string };
+  const tokenBox = $('personalityShareTokenBox');
+  const tokenValue = $('personalityShareTokenValue') as HTMLInputElement | null;
+  if (tokenValue) tokenValue.value = r.token;
+  tokenBox?.classList.remove('hidden');
+  await loadPersonalityShareSettings();
+}
+
+async function revokePersonalityShareToken() {
+  await api('/api/personality-export/token', { method: 'DELETE' });
+  $('personalityShareTokenBox')?.classList.add('hidden');
+  await loadPersonalityShareSettings();
 }
 
 interface WorkTimeRow {

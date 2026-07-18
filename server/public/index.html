@@ -1821,6 +1821,29 @@
       <span id="activitySteamApiKeyStatus" class="ai-keystatus"></span>
       <label>SteamID64 (17 桁): <input id="activitySteamId" type="text" placeholder="76561198..." autocomplete="off" /></label>
       <p class="ai-settings-help">API key: <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener">steamcommunity.com/dev/apikey</a> で発行 (無料、 ドメインは <code>localhost</code> でも OK)。 SteamID64 は <a href="https://steamid.io/" target="_blank" rel="noopener">steamid.io</a> 等。 プロフィール公開設定が ON でないと空が返る。</p>
+
+      <h4>🧭 Voluptas 連携 (性格傾向 export)</h4>
+      <p class="ai-settings-help">
+        タスク / 日記 / 活動ログから計算した性格傾向 (5 軸) を Voluptas のゲーム嗜好診断へ連携できます。
+        個人データはローカルに閉じるのが既定方針のため、 既定 OFF です。 送信されるのは
+        <strong>集計済みの数値のみ</strong> — タスクのタイトル/詳細、 日記本文、 活動ログの内容は一切送信しません。
+        ON にしてトークンを発行し、 Voluptas 側の設定画面にそのトークンを貼り付けてください。
+      </p>
+      <label class="check-inline">
+        <input id="personalityShareEnabled" type="checkbox" />
+        Voluptas への性格傾向 export を有効化する
+      </label>
+      <div id="personalityShareBox" class="hidden" style="margin-top:8px">
+        <div class="ai-settings-actions">
+          <button id="personalityShareIssueBtn" type="button" class="ghost">🔑 トークンを発行</button>
+          <button id="personalityShareRevokeBtn" type="button" class="ghost">失効</button>
+        </div>
+        <span id="personalityShareStatus" class="ai-keystatus"></span>
+        <div id="personalityShareTokenBox" class="hidden" style="margin-top:6px">
+          <p class="ai-settings-help">このトークンは今だけ表示されます。 Voluptas の設定画面に貼り付けてください:</p>
+          <input id="personalityShareTokenValue" type="text" readonly onclick="this.select()" />
+        </div>
+      </div>
     </section>
 
     <!-- ── 🔒 プライバシー側 (移設): デスクトップ自動起動 + WebPush 通知 ── -->

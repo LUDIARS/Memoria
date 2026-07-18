@@ -43,6 +43,9 @@ export interface PrivacySettings {
   // 無ければそもそも fetch しないので OFF は明示的に切りたい場合のみ。
   weather_enabled: boolean;
   weather_rain_alert_enabled: boolean;
+  // Voluptas への性格傾向 (作業データ由来) export。 default false (= 明示 opt-in)。
+  // OFF の間は共有トークンが有効でも /api/external/personality-features は 404 を返す。
+  external_share_voluptas_personality_enabled: boolean;
 }
 
 export type PrivacyBoolKey = keyof Pick<PrivacySettings,
@@ -57,6 +60,7 @@ export type PrivacyBoolKey = keyof Pick<PrivacySettings,
   | 'diary_auto_generate'
   | 'activity_app_sampling_enabled' | 'activity_steam_enabled'
   | 'weather_enabled' | 'weather_rain_alert_enabled'
+  | 'external_share_voluptas_personality_enabled'
 >;
 
 export function settingBool(settings: Record<string, string | null>, key: string, fallback = true): boolean {
@@ -106,6 +110,8 @@ export function privacySettings(db: Db): PrivacySettings {
     // 天気 (Open-Meteo)。 default true、 GPS / 固定 lat/lon が無ければ自動 skip。
     weather_enabled: settingBool(s, 'features.weather.enabled', true),
     weather_rain_alert_enabled: settingBool(s, 'features.weather.rain_alert.enabled', true),
+    // Voluptas 連携 — default OFF。 有効化して初めて共有トークン発行 UI が意味を持つ。
+    external_share_voluptas_personality_enabled: settingBool(s, 'features.external_share.voluptas_personality.enabled', false),
   };
 }
 
