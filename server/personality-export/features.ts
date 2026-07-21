@@ -122,7 +122,8 @@ export function computeRhythmAxis(
   for (const a of activities) {
     const d = new Date(a.occurred_at);
     if (Number.isNaN(d.getTime())) continue;
-    hourCounts[d.getHours()] += 1;
+    // occurred_at は UTC ISO。 server の timezone / DST で軸が変わらないよう UTC 時刻を使う。
+    hourCounts[d.getUTCHours()] += 1;
   }
   const activityEligible = activities.length >= MIN_ACTIVITY_SAMPLE;
   const entropyVariability = activityEligible ? shannonEntropyNormalized(hourCounts) : null;

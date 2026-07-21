@@ -5149,13 +5149,18 @@ $('diaryNotesSave')?.addEventListener('click', saveDiaryNotes);
 $('diarySettingsSave')?.addEventListener('click', saveDiarySettings);
 $('diarySettingsTest')?.addEventListener('click', testGithubPat);
 $('personalityShareEnabled')?.addEventListener('change', (e) => {
-  togglePersonalityShareEnabled((e.target as HTMLInputElement).checked).catch(() => { /* swallow */ });
+  const input = e.target as HTMLInputElement;
+  const previousEnabled = !input.checked;
+  togglePersonalityShareEnabled(input.checked).catch((error: unknown) => {
+    input.checked = previousEnabled;
+    renderPersonalityShareError(error);
+  });
 });
 $('personalityShareIssueBtn')?.addEventListener('click', () => {
-  issuePersonalityShareToken().catch(() => { /* swallow */ });
+  issuePersonalityShareToken().catch(renderPersonalityShareError);
 });
 $('personalityShareRevokeBtn')?.addEventListener('click', () => {
-  revokePersonalityShareToken().catch(() => { /* swallow */ });
+  revokePersonalityShareToken().catch(renderPersonalityShareError);
 });
 $('weeklyGenerate')?.addEventListener('click', generateWeekly);
 $('weeklyDelete')?.addEventListener('click', deleteWeeklyEntry);
@@ -8713,6 +8718,16 @@ interface PersonalityShareStatus {
   expiresAt: string | null;
 }
 
+function renderPersonalityShareError(error: unknown) {
+  // enable 失敗時は通常 hidden の領域も開き、 rollback と同時にエラーを見せる。
+  $('personalityShareBox')?.classList.remove('hidden');
+  const status = $('personalityShareStatus');
+  if (status) {
+    const message = error instanceof Error ? error.message : String(error);
+    status.textContent = `⚠️ 操作に失敗しました: ${message}`;
+  }
+}
+
 function renderPersonalityShareStatus(s: PersonalityShareStatus) {
   const box = $('personalityShareBox');
   box?.classList.toggle('hidden', !s.enabled);
@@ -8738,6 +8753,8 @@ async function togglePersonalityShareEnabled(enabled: boolean) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   }) as PersonalityShareStatus;
+  const input = $('personalityShareEnabled') as HTMLInputElement | null;
+  if (input) input.checked = !!s.enabled;
   renderPersonalityShareStatus(s);
 }
 

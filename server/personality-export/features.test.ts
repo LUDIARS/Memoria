@@ -96,6 +96,29 @@ test('computeRhythmAxis leans toward 規則型 when activity concentrates on one
   assert.ok(axis!.score < 0, `expected 規則型 (negative), got ${axis!.score}`);
 });
 
+test('computeRhythmAxis uses UTC hours so daylight saving time cannot shift the result', () => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    const activities: ActivityFeatureInput[] = [
+      ...Array.from({ length: 10 }, (_, i) => ({
+        kind: 'git_commit',
+        occurred_at: `2026-01-${String(i + 1).padStart(2, '0')}T15:00:00.000Z`,
+      })),
+      ...Array.from({ length: 10 }, (_, i) => ({
+        kind: 'git_commit',
+        occurred_at: `2026-07-${String(i + 1).padStart(2, '0')}T15:00:00.000Z`,
+      })),
+    ];
+    const axis = computeRhythmAxis(activities, []);
+    assert.ok(axis);
+    assert.equal(axis.score, -1);
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  }
+});
+
 test('computeRhythmAxis returns null when neither signal has enough samples', () => {
   assert.equal(computeRhythmAxis([], []), null);
 });

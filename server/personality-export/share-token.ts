@@ -63,7 +63,9 @@ export function verifyShareToken(db: Db, presented: string, now: () => Date = ()
   const storedHash = s[TOKEN_HASH_KEY];
   if (!storedHash) return false;
   const expiresAt = s[EXPIRES_AT_KEY];
-  if (expiresAt && now().getTime() > new Date(expiresAt).getTime()) return false;
+  if (!expiresAt) return false;
+  const expiresAtMs = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresAtMs) || now().getTime() >= expiresAtMs) return false;
 
   const presentedHash = hashToken(presented);
   const a = Buffer.from(storedHash, 'hex');
