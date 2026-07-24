@@ -194,6 +194,17 @@ app.get('/api/setup/infisical/status', (c) => {
 });
 
 app.post('/api/setup/infisical', async (c) => {
+  // 設定済み Hub の credential source を無認証 POST で乗っ取れないよう、
+  // この route は初回セットアップ専用 (VULNWEB-004 / Issue #256)。
+  // 再設定は creds ファイル削除 or env-cli 経由で行う。
+  if (hasInfisicalCreds()) {
+    return c.json({ error: 'already_configured', detail: '再設定は creds ファイルを削除してから行ってください' }, 409);
+  }
+  // HUB_SETUP_TOKEN を設定した環境では初回セットアップにもトークンを要求する。
+  const setupToken = process.env.HUB_SETUP_TOKEN;
+  if (setupToken && c.req.header('x-setup-token') !== setupToken) {
+    return c.json({ error: 'unauthorized', detail: 'X-Setup-Token が一致しません' }, 401);
+  }
   const body = await c.req.json().catch(() => null);
   const siteUrl = body?.siteUrl?.trim();
   const projectId = body?.projectId?.trim();
@@ -305,7 +316,13 @@ void adapter; // 将来 isRevoked check 等に使う想定
 // `sub` を使うため、 ここでは小さい自前 middleware で sub を読む。
 
 const CERNERE_JWT_SECRET = process.env.CERNERE_JWT_SECRET ?? '';
-const IS_DEV = process.env.NODE_ENV !== 'production';
+// X-User-Id/X-User-Role ヘッダによる開発用認証迂回は、 NODE_ENV 判定だと
+// 通常 start (NODE_ENV 未設定) で fail-open になるため、 明示 opt-in に変更
+// (VULNWEB-005 / Issue #256)。 有効化は HUB_DEV_HEADER_AUTH=1 のみ。
+const DEV_HEADER_AUTH = process.env.HUB_DEV_HEADER_AUTH === '1';
+if (DEV_HEADER_AUTH) {
+  console.warn('[hub] WARNING: HUB_DEV_HEADER_AUTH=1 — X-User-Id/X-User-Role ヘッダ認証が有効 (開発専用、本番では絶対に設定しないこと)');
+}
 
 // PASETO v4 (Phase 1 / Cernere Issue #91)。 起動時 + 6h 毎に Cernere の
 // /.well-known/cernere-public-key を fetch して in-memory cache に持つ。
@@ -360,7 +377,7 @@ const authMiddleware = async (c, next) => {
       return next();
     }
   }
-  if (IS_DEV) {
+  if (DEV_HEADER_AUTH) {
     const devUserId = c.req.header('x-user-id') ?? c.req.header('X-User-Id');
     if (devUserId) {
       c.set('userId', devUserId);

@@ -1,4 +1,4 @@
-// Personality export の opt-in と credential 操作を、直接の loopback リクエストに限定する。
+// 機微 API (personality export / agent 実行など) を、直接の loopback リクエストに限定する。
 
 import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Context } from 'hono';

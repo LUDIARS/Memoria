@@ -17,7 +17,7 @@ import {
   gatherPersonalityFeatureInputs,
   PERSONALITY_SAMPLE_WINDOW_DAYS,
 } from '../personality-export/feature-inputs.js';
-import { isDirectLoopbackRequest } from '../personality-export/local-request.js';
+import { isDirectLoopbackRequest } from '../lib/local-request.js';
 
 type Db = BetterSqlite3.Database;
 

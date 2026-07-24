@@ -12,8 +12,24 @@ import {
 import {
   startAgentRun, cancelAgentRun, readAgentRunLog, isRunning as isAgentRunning,
 } from '../agent-dispatch.js';
+import { isDirectLoopbackRequest } from '../lib/local-request.js';
+import { timingSafeEqual } from 'node:crypto';
 
 type Db = BetterSqlite3.Database;
+
+// agent 実行系はホスト上で approval なしの agent プロセスを spawn できる強権限 API。
+// LAN 公開 (GPS/UI) と同居するため、 loopback 直リクエスト以外は既定で拒否する。
+// リモート UI から使いたい場合のみ MEMORIA_AGENT_TOKEN を設定し、
+// X-Memoria-Agent-Token ヘッダで渡す (VULNWEB-001 / Issue #256)。
+function agentAccessGuard(c: Context): boolean {
+  if (isDirectLoopbackRequest(c)) return true;
+  const expected = process.env.MEMORIA_AGENT_TOKEN;
+  const got = c.req.header('x-memoria-agent-token');
+  if (!expected || !got) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(got);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 const VALID_AGENTS = new Set(['claude_code', 'codex', 'gemini'] as const);
 
@@ -25,6 +41,15 @@ export interface AgentRouterDeps {
 export function makeAgentRouter(deps: AgentRouterDeps): Hono {
   const { db, dataDir } = deps;
   const r = new Hono();
+
+  for (const path of ['/api/agent-projects', '/api/agent-projects/*', '/api/agent-runs', '/api/agent-runs/*', '/api/tasks/:id/agent-run']) {
+    r.use(path, async (c, next) => {
+      if (!agentAccessGuard(c)) {
+        return c.json({ error: 'forbidden', detail: 'agent API is loopback-only (set MEMORIA_AGENT_TOKEN for remote access)' }, 403);
+      }
+      await next();
+    });
+  }
 
   r.get('/api/agent-projects', (c: Context) => {
     return c.json({ items: listAgentProjects(db) });
