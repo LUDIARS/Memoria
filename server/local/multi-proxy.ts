@@ -69,7 +69,7 @@ function mapToHub(path: string): MapResult {
   // worklog / worklist (= tasks / repo dashboard) / packet-monitor も Hub には
   // 対応 endpoint が無いので Multi モードでは local_only。 frontend 側でタブが
   // mode-locked になるので通常は呼ばれないが、 念のためサーバ側でもガード。
-  if (/^\/api\/(diary|weekly|meals|locations|tracks|legatus|visits|trends|recommendations|activity|weather|transit|review|work-sessions|wifi|worklog|repos|tasks|packet-monitor)(\/|$)/.test(path)) {
+  if (/^\/api\/(diary|weekly|meals|locations|tracks|legatus|visits|trends|recommendations|activity|weather|transit|review|work-sessions|wifi|worklog|repos|tasks|packet-monitor|spending-logs)(\/|$)/.test(path)) {
     return { kind: 'local-only' };
   }
 

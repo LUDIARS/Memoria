@@ -80,6 +80,7 @@ import { makeGoalEvalRouter } from './goals/router.js';
 import { makeRoadmapRouter } from './roadmap/router.js';
 import { makeAiHubRouter } from './routes/ai-hub.js';
 import { makeTaskReviewRouter } from './routes/task-review.js';
+import { makeSpendingLogRouter } from './spending-log/router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -267,6 +268,7 @@ app.route('/', makeAttendanceRouter({ db }));
 app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makePersonalityExportRouter({ db }));
+app.route('/', makeSpendingLogRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
 // ── Alexa (Echo) skill 連携 ─────────────────────────────────────────────
