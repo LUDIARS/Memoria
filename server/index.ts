@@ -333,7 +333,7 @@ app.route('/', makeGoalEvalRouter({ db }));
 app.route('/', makeRoadmapRouter());
 app.route('/', makeAiHubRouter({ db }));
 
-// ---- Corpus hub マニフェスト (<private-reference-012>Hub-DESIGN.md D6) ----------------------
+// ---- Corpus hub マニフェスト (Corpus-Hub-DESIGN.md D6) --------------------
 // Memoria は横断 hub サービス Corpus から参照される leaf。 knowledge (ブクマ /
 // 辞書 / ディグ / ドメイン) は scope:multi で共有可、 lifelog (日記 / 週次 /
 // 食事 / 軌跡 / 活動) は scope:local で端末内に留める。 scope が「シェア可能 /
