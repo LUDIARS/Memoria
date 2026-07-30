@@ -206,7 +206,9 @@ digest 生成には LLM が要る。 Hub に LLM creds を置きたくない
   LLM provider に送ることになる**ので、 room 作成時に
   `llm_policy` (`any_member` / `creator_only` / `local_model_only`) を選べるようにする
 - 削除: room は archive のみ (削除しない)。 誤って出した contribution は
-  `retract` + moderator による hide
+  `retract` + moderator による hide。 room ごと消す必要がある場合は
+  [`hub-social.md`](./hub-social.md) §8.1 の **admin `purge`** のみ
+  (contribution は append-only なので、 個別行の物理削除経路は持たない)
 
 ## 9. 実装フェーズ
 

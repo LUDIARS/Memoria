@@ -16,7 +16,7 @@
 
 | migration | 内容 |
 |---|---|
-| `008_social_core.sql` | `subjects` / `subject_aliases` / `url_canonical_rules` / `comments` / `reactions` / `bookmark_renditions` / `subject_activity` / `subject_watches` / `subject_mutes` / `notifications` / `hub_members` + `bookmarks.url_canonical` 追加 |
+| `008_social_core.sql` | `subjects` / `subject_aliases` / `url_canonical_rules` / `comments` / `reactions` / `bookmark_renditions` / `subject_activity` / `subject_watches` / `subject_mutes` / `unshare_audit` / `notifications` / `hub_members` + `bookmarks.url_canonical` 追加 |
 | `009_worklog.sql` | `worklog_entries` / `worklog_digests` |
 | `010_dig_rooms.sql` | `dig_rooms` / `dig_room_members` / `dig_contributions` / `dig_room_digests` / `dig_room_jobs` |
 
@@ -364,6 +364,32 @@ digest 生成の依頼キュー ([feature §5](../feature/hub-dig-rooms.md#5-ま
 | `disabled_at` | TIMESTAMPTZ |  | NULL | 非 NULL = 書き込み禁止 |
 
 初回ログイン時に upsert。 最初のユーザは `admin` を自動付与。
+
+### `unshare_audit`
+
+公開の取り下げ ([feature §8.1](../feature/hub-social.md#81-公開の取り下げ-unshare)) の監査記録。
+取り下げ自体を「なかったこと」 にしないため、 **この表からは削除しない**。
+
+| 列 | 型 | NotNull | Default | 役割 |
+|---|---|---|---|---|
+| `id` | BIGSERIAL | ✓ | — | PK |
+| `mode` | TEXT | ✓ | — | `hide` / `unshare` / `purge` |
+| `target_kind` | TEXT | ✓ | — | `subject` / `comment` / `rendition` / `worklog_entry` / `worklog_digest` / `dig_room` / `dig_contribution` / 共有 7 型のいずれか |
+| `target_id` | TEXT | ✓ | — | 対象の id (型が混在するので TEXT) |
+| `subject_id` | UUID |  | NULL | 分かる場合の subject (purge 後は解決できないため記録しておく) |
+| `subject_key` | TEXT |  | NULL | 同上。 purge されても「何が消えたか」 が追える |
+| `owner_user_id` | TEXT |  | NULL | 取り下げられた対象の持ち主 |
+| `actor_user_id` | TEXT | ✓ | — | 取り下げを実行した人 |
+| `actor_role` | TEXT | ✓ | — | 実行時の role (`owner` / `moderator` / `admin`) |
+| `reason` | TEXT |  | NULL | |
+| `cascade_counts_json` | JSONB |  | NULL | `purge` で消えた件数 `{ comments, reactions, renditions }` |
+| `created_at` | TIMESTAMPTZ | ✓ | `now()` | |
+
+- Index: `idx_unshare_audit_created` (`created_at DESC`) /
+  `idx_unshare_audit_owner` (`owner_user_id, created_at DESC`) /
+  `idx_unshare_audit_target` (`target_kind, target_id`)
+- ローカルの `shared_at` クリア同期 (`GET /api/social/unshares?since=`) は
+  この表を `created_at` で引く
 
 ### `notifications`
 

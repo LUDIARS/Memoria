@@ -286,6 +286,37 @@ UNIQUE (target_kind, target_id, user_id, kind)
   rendition upload = 60/hour/user。 超過は `429 { error: 'rate_limited', retryAfter }`
 - 本文サイズ: comment `body_md` ≤ 16 KiB、 rendition text ≤ 1 MiB
 
+### 8.1 公開の取り下げ (unshare)
+
+> **決定 (neco 2026-07-30)**: 拠点内のグループ単位の部分公開は **持たない**
+> (ログインできる = 拠点メンバー = 相互に読める)。 その代わり
+> **一度公開したものを取り下げられる**ことを保証する。 取り下げは
+> **管理権限 (moderator / admin) の操作**として設計する。
+
+取り下げは 3 段階。 段階が上がるほど不可逆になる。
+
+| 段階 | 何が起きるか | 実行できるのは |
+|---|---|---|
+| `hide` | `hidden_at` / `hidden_by` / `hidden_reason` を立てる。 一覧 / フィード / API から消えるが **DB 行は残る** (復帰可・監査可) | 出した本人 / moderator |
+| `unshare` | Hub の行を削除。 ローカル原本は残り、 ローカルの `shared_at` をクリアして「未共有」 に戻す | 出した本人 / moderator |
+| `purge` | subject ごと削除。 配下の `comments` / `reactions` / `bookmark_renditions` も CASCADE で消える。 **復帰不可** | admin のみ |
+
+- **本人取り下げ**: `owner_user_id` が自分の行 (共有 7 型 / `worklog_entries` /
+  `bookmark_renditions` / 自分の `comments`) は本人が `hide` / `unshare` できる。
+  moderator 権限を待たずに引っ込められる方が事故対応が速い
+- **他人のもの**の取り下げは moderator。 `purge` だけは admin に限る
+- **既定は subject を残す**。 元オブジェクトを取り下げても subject 行は残し、
+  `title` を「(取り下げ済)」 に置換する。 理由: **他人のコメントは他人のもの**なので、
+  出した人の一存で消えない。 議論ごと消す必要がある場合は admin の `purge`
+- **監査を残す**。 `unshare_audit` に「誰が・何を・いつ・どの段階で・理由」 を記録する。
+  取り下げ自体を「なかったこと」 にはしない
+- **ローカルへの伝播**: ローカルは Multi 接続時に
+  `GET /api/social/unshares?since=` を引き、 自分の行の `shared_at` を
+  クリア / 復元する。 他人が取り下げたものはローカルに何も無いので伝播不要
+  (§9 のとおり他人のデータをローカルに持たない設計が効いている)
+- 取り下げは **退会処理の代替ではない**。 ユーザ自体の削除は Cernere 側の
+  責務で、 Hub 側は `hub_members.disabled_at` + 本人の全 `unshare` までを担う
+
 ## 9. Local / Multi との関係 (どこにデータが在るか)
 
 social 層は **Hub 専用**。 v0.1 では他人のコメント / いいねを
@@ -332,7 +363,7 @@ social 層は **Hub 専用**。 v0.1 では他人のコメント / いいねを
 | 4 | `note_block` anchor + 既存ローカル `note_comment_sets` の push/pull 配線 (`remote_id` 記録) |
 | 5 | `subject_activity` + `GET /api/feed` + ミュート。 フィード UI |
 | 6 | `notifications` + watch + ローカル pull → WebPush 配送 |
-| 7 | moderation (hide / soft delete / role) + レート制限 + `recount` |
+| 7 | moderation (hide / soft delete / role) + **取り下げ 3 段階 (§8.1) + `unshare_audit`** + レート制限 + `recount` |
 | 8 | (opt-in) 案 C の HTML rendition + `CssPath` / `Point` anchor |
 
 Phase 1-3 で「ノート / ブクマを共有して記事にコメントしていいねする」 が成立する。
@@ -341,8 +372,8 @@ Phase 2 完了後に並走できる (subject + comment + reaction があれば�
 
 ## 12. オープン論点
 
-1. **拠点内は全部見える前提でよいか** — v0.1 は「Hub にログインできる = 拠点メンバー =
-   相互に読める」。 部分公開 (グループ単位) が要るなら `subject_visibility` が必要
+1. ~~**拠点内は全部見える前提でよいか**~~ → **決定済 (2026-07-30)**。 部分公開は
+   持たず、 代わりに取り下げ (§8.1) を用意する。 `subject_visibility` は作らない
 2. **AI ノートの取り込み経路** — 「ノート (AI ノート含む)」 のうち、 外部
    (Notion 等) で書いた記事を Memoria note として取り込むなら
    `notes.source_kind='notion'` + `source_ref=<page id>` で入れる想定。

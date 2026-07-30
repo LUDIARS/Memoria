@@ -191,7 +191,9 @@ Multi モードでは他メンバーの worklog も同じビューで見える (
 - 削除: `DELETE /api/worklog/entries/:id` はローカル行を消す。 Hub の push 済行は
   `DELETE /api/worklog/entries/:id?remote=1` で明示的に消す (自動追随はしない)。
   subject 化されたコメントは残る (発言は他人のもの) が、 subject の title は
-  「(削除済)」 に置換する
+  「(削除済)」 に置換する。 公開そのものの取り下げは
+  [`hub-social.md`](./hub-social.md) §8.1 の 3 段階 (`hide` / `unshare` / `purge`) に従う —
+  **entry の持ち主本人が `unshare` できる** (moderator を待たない)
 
 ## 9. 実装フェーズ
 

@@ -257,6 +257,29 @@
 | `/api/worklog/push` | 接続済 Hub が無ければ `503 { error: 'no_hub' }` |
 | `/api/dig-rooms*` | `503 { error: 'local_only' }` (room は Hub 上のもの) |
 
+## 8.5 公開の取り下げ (unshare)
+
+[feature §8.1](../feature/hub-social.md#81-公開の取り下げ-unshare) の 3 段階。
+
+| method | path | req | res |
+|---|---|---|---|
+| POST | `/api/social/unshare` | `{ targetKind, targetId, mode: 'hide'\|'unshare'\|'purge', reason? }` | `{ ok, mode, cascadeCounts? }` |
+| POST | `/api/social/unshare/restore` | `{ targetKind, targetId }` | `{ ok }` (`hide` の解除のみ。 `unshare` / `purge` は復元不可) |
+| GET | `/api/social/unshares?since=&mine=1` | — | `{ items: UnshareRecord[] }` (ローカルの `shared_at` 同期用) |
+| GET | `/api/social/admin/unshare-audit?limit=&targetKind=` | — | `{ items }` (moderator 以上) |
+
+- 権限: `hide` / `unshare` は **対象の持ち主本人 または moderator**、
+  `purge` は **admin のみ**。 不足時は `403 { error: 'forbidden', required: 'admin' }`
+- `mode='purge'` は破壊的なので `?confirm=<subjectKey>` を必須にする。
+  一致しなければ `400 { error: 'confirm_mismatch' }`
+- `unshare` の対象が共有 7 型の行のときは Hub 行を削除し、
+  レスポンスに `{ localHint: { table, ownerRowKey } }` を返す。 ローカルは
+  それを見て自分の `shared_at` / `shared_origin` を NULL に戻す
+- `purge` のレスポンス `cascadeCounts` は消えた件数
+  (`{ comments, reactions, renditions }`)。 `unshare_audit` にも同じ値が残る
+- `GET /api/social/unshares?mine=1` はローカルの定期同期が使う。
+  `since` は前回取得時刻 (`unshare_audit.created_at`)
+
 ## 9. レート制限
 
 | endpoint | 制限 |
@@ -268,6 +291,7 @@
 | `POST /api/dig-rooms/:id/contributions` | 120 / 10 min / user |
 | `POST /api/dig-rooms/:id/digests` | 6 / hour / room |
 | `GET /api/dig-rooms/jobs` | 120 / hour / user (= 30 秒間隔まで許容) |
+| `POST /api/social/unshare` | 60 / hour / user (`purge` は 10 / hour / admin) |
 
 ## 10. 管理
 
