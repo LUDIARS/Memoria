@@ -1,8 +1,8 @@
-# hub-social — 共有サーバ層の API 契約 (social / worklog / dig room)
+# hub-social — 共有サーバ層の API 契約 (social / achievements / dig room)
 
 > 設計の全体像:
 > [`spec/feature/hub-social.md`](../feature/hub-social.md) (subject / コメント / いいね / フィード) /
-> [`hub-worklog.md`](../feature/hub-worklog.md) (実績) /
+> [`hub-achievements.md`](../feature/hub-achievements.md) (実績) /
 > [`hub-dig-rooms.md`](../feature/hub-dig-rooms.md) (共同 dig)。
 > schema: [`spec/data/hub-social.md`](../data/hub-social.md)。
 > Hub 全体の入口は [`multi.md`](./multi.md)。
@@ -138,18 +138,18 @@
 }
 ```
 
-## 6. worklog
+## 6. achievements
 
 ### 6.1 Hub 側
 
 | method | path | req | res |
 |---|---|---|---|
-| GET | `/api/worklog?owner=&repo=&kinds=&from=&to=&rollup=` | — | `{ items: WorklogEntry[], nextCursor? }` |
-| POST | `/api/worklog/entries:batch` | `{ entries: WorklogEntryInput[], sharePolicy }` | `{ ok, upserted, skipped, ids }` |
-| DELETE | `/api/worklog/entries/:id` | — | `{ ok }` (owner / moderator) |
-| GET | `/api/worklog/digests?scopeKind=&scopeKey=&from=&to=&latestOnly=1` | — | `{ items: WorklogDigest[] }` |
-| POST | `/api/worklog/digests` | `{ scopeKind, scopeKey, periodStart, periodEnd, summaryMd, highlights?, metrics?, generatedBy }` | `201 { digest }` (`rev` はサーバが決める) |
-| GET | `/api/worklog/repos` | — | `{ items: [{ repoKey, repoAlias, entryCount, lastOccurredAt, owners[] }] }` |
+| GET | `/api/achievements?owner=&repo=&kinds=&from=&to=&rollup=` | — | `{ items: WorklogEntry[], nextCursor? }` |
+| POST | `/api/achievements/entries:batch` | `{ entries: WorklogEntryInput[], sharePolicy }` | `{ ok, upserted, skipped, ids }` |
+| DELETE | `/api/achievements/entries/:id` | — | `{ ok }` (owner / moderator) |
+| GET | `/api/achievements/digests?scopeKind=&scopeKey=&from=&to=&latestOnly=1` | — | `{ items: WorklogDigest[] }` |
+| POST | `/api/achievements/digests` | `{ scopeKind, scopeKey, periodStart, periodEnd, summaryMd, highlights?, metrics?, generatedBy }` | `201 { digest }` (`rev` はサーバが決める) |
+| GET | `/api/achievements/repos` | — | `{ items: [{ repoKey, repoAlias, entryCount, lastOccurredAt, owners[] }] }` |
 
 - `rollup=pr` (既定) — `parent_ref` を持つ commit を PR 行に畳んで返す。
   `rollup=none` で全件
@@ -162,20 +162,46 @@
 
 | method | path | req | res |
 |---|---|---|---|
-| GET | `/api/worklog?...` | — | ローカル `worklog_entries` (共有前の全量) |
-| GET | `/api/worklog/sources` | — | `{ items: WorklogSource[] }` |
-| POST | `/api/worklog/sources` | `{ sourceKind, repoKey?, localPath?, alias?, sharePolicy?, llmOptout? }` | `201 { source }` |
-| PATCH | `/api/worklog/sources/:id` | 同上 (部分) | `{ source }` |
-| POST | `/api/worklog/ingest` | `{ sourceIds?: number[], full?: boolean }` | `202 { queued }` |
-| POST | `/api/worklog/redaction/check` | `{ sourceIds?: number[] }` | `{ ok, blocked: [{ entryId, field, term }] }` |
-| POST | `/api/worklog/push` | `{ sourceIds?: number[], dryRun?: boolean }` | `{ ok, pushed, blocked: [...] }` |
-| GET/POST | `/api/worklog/redaction/terms` | `{ term, origin }` | 禁止語辞書の CRUD |
-| POST | `/api/worklog/digests` | `{ scopeKind, scopeKey, periodStart, periodEnd, push?: boolean }` | `202 { queued }` (ローカル LLM で生成) |
+| GET | `/api/achievements?...` | — | ローカル `achievement_entries` (共有前の全量) |
+| GET | `/api/achievements/sources` | — | `{ items: WorklogSource[] }` |
+| POST | `/api/achievements/sources` | `{ sourceKind, repoKey?, localPath?, alias?, sharePolicy?, llmOptout? }` | `201 { source }` |
+| PATCH | `/api/achievements/sources/:id` | 同上 (部分) | `{ source }` |
+| POST | `/api/achievements/ingest` | `{ sourceIds?: number[], full?: boolean }` | `202 { queued }` |
+| POST | `/api/achievements/redaction/check` | `{ sourceIds?: number[] }` | `{ ok, blocked: [{ entryId, field, term }] }` |
+| POST | `/api/achievements/push` | `{ sourceIds?: number[], dryRun?: boolean }` | `{ ok, pushed, blocked: [...] }` |
+| GET/POST | `/api/achievements/redaction/terms` | `{ term, origin }` | 禁止語辞書の CRUD |
+| POST | `/api/achievements/digests` | `{ scopeKind, scopeKey, periodStart, periodEnd, push?: boolean }` | `202 { queued }` (ローカル LLM で生成) |
 
-- `POST /api/worklog/push` は **必ず** redaction スキャンを通る。
+- `POST /api/achievements/push` は **必ず** redaction スキャンを通る。
   1 件でも block があれば **push 全体を中止**し `409 { error: 'redaction_blocked', blocked }`
 - `dryRun=true` で「何が出るか」 の差分だけ返す (push しない)
 - `sharePolicy='none'` の source は push 対象から自動除外 (エラーにしない)
+
+## 6.5 AIノート (`ai_articles`) の共有
+
+既存 `/api/data/*` の 8 型目として載るので、 CRUD は
+[`multi.md`](./multi.md) / [`../feature/multi-hub.md`](../feature/multi-hub.md) §6.1 の
+`<type> = ai-articles` に従う。 本書で追加するのは **共有前のゲート**のみ。
+
+| 側 | method | path | req | res |
+|---|---|---|---|---|
+| ローカル | POST | `/api/ai/articles/:id/share` | `{ hubUrl?, includeSourceRefs?: boolean }` | `{ ok, remoteId }` / `409 { error: 'redaction_blocked', blocked }` |
+| ローカル | POST | `/api/ai/articles/share/check` | `{ ids?: number[] }` | `{ ok, blocked: [{ articleId, field, term }] }` |
+| ローカル | POST | `/api/ai/articles/:id/unshare` | — | `{ ok }` (§8.5 の `unshare` に委譲) |
+| Hub | POST | `/api/data/ai-articles` | `AiArticleInput` + `{ sharePolicy, redactionScannedAt }` | `201 { item }` |
+
+- ローカルの `share` は **必ず** `server/shared/redaction.ts` を通る
+  ([`../feature/hub-achievements.md`](../feature/hub-achievements.md) §4.3 と同一実装)。
+  スキャン対象は `title` / `body_md` / `tags` / `source_refs`
+- `includeSourceRefs=true` は、 参照している repo すべての
+  `achievement_sources.share_policy` が `full` のときのみ許可。
+  1 つでも違えば `400 { error: 'source_refs_not_shareable', repos: [...] }`
+- Hub 側は `redactionScannedAt` が無い / 古い (> 24h) POST を
+  `400 { error: 'redaction_scan_required' }` で拒否する
+- 転写済 (`note_id` あり) の記事を share すると、 Hub は `note_subject_id` を埋め
+  `subject_aliases` に `ai_article` → `note` subject の別名を張る
+  ([feature §1.2](../feature/hub-social.md#12-aiノート共有で追加が要るもの))
+- `ai_article_seeds` / `ai_advice` に共有 endpoint は **作らない** (local-only)
 
 ## 7. dig room
 
@@ -253,8 +279,8 @@
 | `/api/social/comments` (POST) | ノートはローカル `note_comments` に書く (`remote_id=null`)。 他 kind は `503` |
 | `/api/social/reactions` | `503 { error: 'local_only' }` |
 | `/api/feed` / `/api/notifications` | `503 { error: 'local_only' }` |
-| `/api/worklog*` (ローカル分) | **通常動作** (取り込み・一覧・digest はローカルだけで完結する) |
-| `/api/worklog/push` | 接続済 Hub が無ければ `503 { error: 'no_hub' }` |
+| `/api/achievements*` (ローカル分) | **通常動作** (取り込み・一覧・digest はローカルだけで完結する) |
+| `/api/achievements/push` | 接続済 Hub が無ければ `503 { error: 'no_hub' }` |
 | `/api/dig-rooms*` | `503 { error: 'local_only' }` (room は Hub 上のもの) |
 
 ## 8.5 公開の取り下げ (unshare)
@@ -287,7 +313,7 @@
 | `POST /api/social/comments` | 30 / 10 min / user |
 | `POST /api/social/reactions` | 300 / 10 min / user |
 | `POST /api/social/renditions` | 60 / hour / user |
-| `POST /api/worklog/entries:batch` | 20 / hour / user (1 回 500 件まで) |
+| `POST /api/achievements/entries:batch` | 20 / hour / user (1 回 500 件まで) |
 | `POST /api/dig-rooms/:id/contributions` | 120 / 10 min / user |
 | `POST /api/dig-rooms/:id/digests` | 6 / hour / room |
 | `GET /api/dig-rooms/jobs` | 120 / hour / user (= 30 秒間隔まで許容) |

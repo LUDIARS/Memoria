@@ -40,8 +40,9 @@
 | ストップワード | [stopwords.md](stopwords.md) | 🏠 | wordcloud 除外語 |
 | ノート (WYSIWYG) | [note.md](note.md) | 🏠 | esa / DocBase 風ブロックベースエディタ。 markdown + 文字色 + テーブル + Mermaid |
 | Chrome 拡張 dispatch | [extension.md](extension.md) | 🏠 | chat / impl / shopping ドメインで追加ボタンを出し分け |
-| Hub 社会層 (コメント / いいね) | [hub-social.md](hub-social.md) | ✓ | subject 単位でコメント・いいね・フィード・通知。 記事本文への範囲コメント込み |
-| 実績共有 (worklog) | [hub-worklog.md](hub-worklog.md) | ✓ | GitHub / ローカル git / activity から「やった事」 を取り込み。 **既定は非共有**、 repo 単位 opt-in + 禁止語スキャン |
+| Hub 社会層 (コメント / いいね) | [hub-social.md](hub-social.md) | ✓ | subject 単位でコメント・いいね・フィード・通知。 記事本文への範囲コメント + **AIノート (`ai_articles`) の共有** 込み |
+| AI ハブ (AIノート / ネタ / 助言) | [ai-hub.md](ai-hub.md) | ✓ / 🏠 | AI記事 (= AIノート) は Hub 共有可 (禁止語スキャン必須)。 記事ネタ / AIアドバイスは local-only |
+| 実績共有 (achievements) | [hub-achievements.md](hub-achievements.md) | ✓ | GitHub / ローカル git / activity から「やった事」 を取り込み。 **既定は非共有**、 repo 単位 opt-in + 禁止語スキャン |
 | 共同 dig (dig room) | [hub-dig-rooms.md](hub-dig-rooms.md) | ✓ | みんなでディグる。 append-only の contribution + rev 付きまとめ |
 
 ## 凡例 (項目)

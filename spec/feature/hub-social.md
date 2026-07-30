@@ -3,7 +3,7 @@
 > Memoria Hub を「置き場」 から **共同ナレッジサーバ** に上げる層の設計。
 > 関連:
 > - [`multi-hub.md`](./multi-hub.md) — Hub の **データハブ役** (Memoria 共有 7 型の JSON CRUD)。 本書はその上に載る
-> - [`hub-worklog.md`](./hub-worklog.md) — GitHub / ローカルから「過去やった事」 を取り込んで共有する層
+> - [`hub-achievements.md`](./hub-achievements.md) — GitHub / ローカルから「過去やった事」 を取り込んで共有する層
 > - [`hub-dig-rooms.md`](./hub-dig-rooms.md) — みんなでディグる (共同 dig)
 > - [`hub-aggregation.md`](./hub-aggregation.md) — 他 LUDIARS アプリの横断集約 (別レイヤ、 本書と非依存)
 > - schema: [`spec/data/hub-social.md`](../data/hub-social.md) / API: [`spec/interface/hub-social.md`](../interface/hub-social.md)
@@ -12,7 +12,7 @@
 
 やりたいことは 4 つ。
 
-1. ノート (AI が書いたノート / 外部取り込みノートを含む) を共有する
+1. ノート (**AIノート = `ai_articles` を含む**、 §1.1) を共有する
 2. ブックマークを共有する
 3. **ブックマークや記事本文にコメントを書ける**
 4. **いいねできる**
@@ -35,10 +35,66 @@ user C が https://example.com/x をシェア  → hub.bookmarks(id=48, owner=C)
 この上に素朴にコメントを足すと `comment.bookmark_id` が 11 / 27 / 48 に散り、
 **同じ記事についての議論が 3 つに割れる**。 いいねも 3 分割されるので
 「よく読まれている記事」 も出せない。 ノートは UUID なので割れないが、
-ブックマーク / 記事本文 / worklog / dig room では割れる。
+ブックマーク / 記事本文 / achievements / dig room では割れる。
 
 → **社会層は「持ち主付きコピー」 ではなく「話題 (subject)」 に紐づける**。
 これが本書の中心的な設計判断。
+
+### 1.1 「ノート」 は 2 種類ある
+
+Memoria で「ノート」 と言うと 2 つある。 **両方共有する**。
+
+| | テーブル | 何か | 現状の共有経路 |
+|---|---|---|---|
+| **ノート** | `notes` / `note_blocks` | 手で書く WYSIWYG ドキュメント (esa 風) | ✅ 既存 `/api/data/notes` |
+| **AIノート** | `ai_articles` | 毎朝 6:00 に前日の `activity_events` から自動生成される技術記事 ([`ai-hub.md`](./ai-hub.md)) | ❌ **無い** |
+
+AIノートは `📓ノートへ転写` ボタンで `notes` に写せるので「転写してから共有」 も
+できるが、 **自動生成で量が多い**ので転写を共有の前提にすると摩擦が大きい。
+→ **`ai_articles` を Hub の共有型に足す** (§1.2)。
+
+### 1.2 AIノート共有で追加が要るもの
+
+| 追加 | 内容 |
+|---|---|
+| subject kind | `ai_article` (key = `<article id>`)。 §3.1 の表に追加 |
+| Hub 共有型 | `/api/data/ai-articles` = **8 型目**。 Hub Postgres に `ai_articles` テーブル (migration `011`) |
+| **redaction ゲート** | ⚠ 必須。 下記 |
+| 転写との重複解消 | 下記 |
+
+#### redaction が必須な理由
+
+AIノートの本文は **commit message / AI prompt / repo 名から LLM が生成した文章**。
+つまり **private repo 名・顧客名・社内固有名が本文に混入し得る**
+([[feedback_external_doc_redaction_rules]])。 手書きノートと違い、
+ユーザが 1 文字ずつ書いたものではないので **目視前提にできない**。
+
+→ AIノートの共有は [`hub-achievements.md`](./hub-achievements.md) §4.3 の
+**禁止語スキャンを共用**する。 実装も同じ `server/shared/redaction.ts` を通す
+(achievements 側と別実装にしない)。 スキャン対象は `title` / `body_md` /
+`tags` / `source_refs`。 1 件でも hit したら共有を中止し、 どのフィールドに
+どの語が出たかを返す (自動書き換えはしない)。
+
+さらに `source_refs` は **既定で共有しない**。 commit sha と repo 名の組は
+それ自体が private repo の存在を露出するため、 出すのは
+`achievement_sources.share_policy` が `full` の repo に限る。
+
+#### 転写した AIノートの扱い
+
+`ai_articles.note_id` が埋まっている (= `notes` に転写済み) 場合、 同じ内容に
+対して `ai_article` subject と `note` subject の 2 つができ、 **議論が割れる**
+(§1 で直したはずの問題の再発)。
+
+→ **転写時に subject alias を張る**。 `subject_aliases` に
+`(kind='ai_article', key=<article id>)` → 転写先 `note` subject の id を登録し、
+以降 `ai_article` の resolve は note subject を返す。 **note 側を正**とする
+(転写は「これは残す価値がある」 という人間の判断なので、 そちらに寄せる)。
+
+#### 共有しないもの
+
+- `ai_article_seeds` (記事ネタ) — 未検証のネタ。 出す価値が無く、 repo 名が生で入る
+- `ai_advice` (AIアドバイス) — 個人の生活 / 作業データから生成した個人向け助言。
+  日記と同じ機微度なので **local-only**
 
 ## 2. 用語
 
@@ -59,10 +115,11 @@ user C が https://example.com/x をシェア  → hub.bookmarks(id=48, owner=C)
 |---|---|---|---|
 | `bookmark` | `<canonical-url>` | URL 正規化 (§3.2) | ブックマーク / 記事そのもの |
 | `note` | `<note uuid>` | `notes.id` | ノート全体 |
+| `ai_article` | `<article id>` | `ai_articles.id` | AIノート (§1.2)。 転写済なら `note` subject に alias される |
 | `note_block` | `<note uuid>/<block uuid>` | `note_blocks.uuid` | ノートの特定ブロック |
 | `dig_room` | `<room uuid>` | `dig_rooms.id` | 共同 dig の部屋 ([`hub-dig-rooms.md`](./hub-dig-rooms.md)) |
-| `worklog_entry` | `<provider>:<owner>/<repo>:<kind>:<ref>` | `worklog_entries` | 個々の実績 (commit / PR / release) |
-| `worklog_digest` | `<digest uuid>` | `worklog_digests.id` | 期間まとめ ([`hub-worklog.md`](./hub-worklog.md)) |
+| `achievement_entry` | `<provider>:<owner>/<repo>:<kind>:<ref>` | `achievement_entries` | 個々の実績 (commit / PR / release) |
+| `achievement_digest` | `<digest uuid>` | `achievement_digests.id` | 期間まとめ ([`hub-achievements.md`](./hub-achievements.md)) |
 | `dictionary_term` | `<normalized term>` | `dictionary_entries.term` | 用語 (同じ語について全員で議論できる) |
 
 subject は **要求時に生成される** (get-or-create)。 コメント / いいねを付けようと
@@ -136,7 +193,7 @@ comments(id uuid, subject_id, author_user_id, parent_comment_id?, anchor_json?, 
 > **set = (subject, author) でグルーピングした comments の射影**として扱う。
 > `GET /api/social/comments?subject=<id>&group=author` が set 相当のレスポンスを返す。
 
-理由: worklog / bookmark / dig room にもコメントを付けるので、 「note 専用の
+理由: achievements / bookmark / dig room にもコメントを付けるので、 「note 専用の
 set テーブル」 を全 kind ぶん増やすと table が kind 数だけ増える。 グルーピングは
 クエリで足りる。
 
@@ -251,7 +308,7 @@ UNIQUE (target_kind, target_id, user_id, kind)
 
 - 並び: `active` (最終アクティビティ降順) / `new` (subject 作成降順) /
   `liked` (期間内 like 数降順) / `hot` (like + comment を時間減衰させたスコア)
-- 絞り込み: `kinds` / `tags` / `repo` (worklog) / `author` / `since`
+- 絞り込み: `kinds` / `tags` / `repo` (achievements) / `author` / `since`
 - 各行は `{ subject, latestActivity, commentCount, likeCount, participants[], excerpt }`
 - `subject_activity` テーブル (subject × 日 の集計) を持ち、 フィードと
   「掘り尽くし度」 表示の両方が使う
@@ -301,7 +358,7 @@ UNIQUE (target_kind, target_id, user_id, kind)
 | `unshare` | Hub の行を削除。 ローカル原本は残り、 ローカルの `shared_at` をクリアして「未共有」 に戻す | 出した本人 / moderator |
 | `purge` | subject ごと削除。 配下の `comments` / `reactions` / `bookmark_renditions` も CASCADE で消える。 **復帰不可** | admin のみ |
 
-- **本人取り下げ**: `owner_user_id` が自分の行 (共有 7 型 / `worklog_entries` /
+- **本人取り下げ**: `owner_user_id` が自分の行 (共有 7 型 / `achievement_entries` /
   `bookmark_renditions` / 自分の `comments`) は本人が `hide` / `unshare` できる。
   moderator 権限を待たずに引っ込められる方が事故対応が速い
 - **他人のもの**の取り下げは moderator。 `purge` だけは admin に限る
@@ -325,7 +382,7 @@ social 層は **Hub 専用**。 v0.1 では他人のコメント / いいねを
 | データ | ローカル SQLite | Hub Postgres |
 |---|---|---|
 | 自分のコメント (note) | ✅ 原本 (`note_comment_sets` / `note_comments`) | ✅ push copy |
-| 自分のコメント (bookmark / worklog / dig room) | ❌ (v0.1 は Hub 直書き) | ✅ 原本 |
+| 自分のコメント (bookmark / achievements / dig room) | ❌ (v0.1 は Hub 直書き) | ✅ 原本 |
 | 他人のコメント | ❌ 保持しない | ✅ |
 | いいね | ❌ | ✅ |
 | rendition | ローカルの `html/` アーカイブ (既存) | ✅ 抽出本文 (共有分のみ) |
@@ -357,6 +414,7 @@ social 層は **Hub 専用**。 v0.1 では他人のコメント / いいねを
 
 | Phase | 内容 |
 |---|---|
+| 0 | **AIノート共有** — Hub `ai_articles` テーブル (migration 011) + `/api/data/ai-articles` (8 型目) + `server/shared/redaction.ts` の禁止語スキャン共用。 社会層より前に出せる (既存 7 型と同じ形なので) |
 | 1 | `server/shared/canonical-url.ts` + `subjects` / `subject_aliases` / `url_canonical_rules`。 `bookmarks.url_canonical` 列追加 + 既存行バックフィル。 `GET/POST /api/social/subjects/resolve` |
 | 2 | `comments` + `reactions` + トリガ (カウンタ)。 subject 全体コメント + いいね。 ローカル Multi モード UI (ノート / ブクマ詳細にコメント欄) |
 | 3 | `bookmark_renditions` (案 B: 抽出本文) + anchor 解決 (`TextQuote`/`TextPosition`)。 記事本文への範囲コメント |
@@ -367,17 +425,16 @@ social 層は **Hub 専用**。 v0.1 では他人のコメント / いいねを
 | 8 | (opt-in) 案 C の HTML rendition + `CssPath` / `Point` anchor |
 
 Phase 1-3 で「ノート / ブクマを共有して記事にコメントしていいねする」 が成立する。
-[`hub-worklog.md`](./hub-worklog.md) / [`hub-dig-rooms.md`](./hub-dig-rooms.md) は
+[`hub-achievements.md`](./hub-achievements.md) / [`hub-dig-rooms.md`](./hub-dig-rooms.md) は
 Phase 2 完了後に並走できる (subject + comment + reaction があれば載る)。
 
 ## 12. オープン論点
 
 1. ~~**拠点内は全部見える前提でよいか**~~ → **決定済 (2026-07-30)**。 部分公開は
    持たず、 代わりに取り下げ (§8.1) を用意する。 `subject_visibility` は作らない
-2. **AI ノートの取り込み経路** — 「ノート (AI ノート含む)」 のうち、 外部
-   (Notion 等) で書いた記事を Memoria note として取り込むなら
-   `notes.source_kind='notion'` + `source_ref=<page id>` で入れる想定。
-   取り込み方向 (Notion → Memoria の一方向 pull か双方向か) は未決
+2. ~~**AI ノートの取り込み経路**~~ → **解消 (2026-07-30)**。 AIノートは Memoria の
+   `ai_articles` (`ai-hub.md`) であり、 外部 (Notion) の記事ではない。 §1.2 で
+   Hub 共有型として直接扱う。 外部記事の取り込みは本設計の対象外
 3. **rendition の保持期間** — 記事本文をいつまで持つか。 コメントが 1 件も無い
    rendition を GC してよいか
 4. **`dictionary_term` の正規化** — 大文字小文字 / 全角半角 / 送り仮名の寄せをどこまでやるか
