@@ -26,6 +26,22 @@ share/download する」 モデルだった。 これだと:
 > [`hub-shell.md`](./hub-shell.md) を参照。 2 役は Hub 内で同居するが
 > 互いに依存しない。
 
+### Hub の役割マップ
+
+Hub には現在 4 つの層がある。 本書は 1 番目。
+
+| 層 | 役割 | 設計 |
+|---|---|---|
+| **データハブ** | Memoria 自身の共有 7 型を Postgres で集中保持 | **本書** |
+| **社会層** | 共有物に対するコメント / いいね / フィード / 通知 | [`hub-social.md`](./hub-social.md) |
+| **横断集約** | 他 LUDIARS アプリのデータを横断 API として束ねる | [`hub-aggregation.md`](./hub-aggregation.md) |
+| **frontend shell** | 複数アプリの UI を 1 画面に集約レンダリング | [`hub-shell.md`](./hub-shell.md) |
+
+社会層の上に載る 2 つの応用機能:
+
+- [`hub-worklog.md`](./hub-worklog.md) — GitHub / ローカルから「過去やった事」 を取り込み共有する
+- [`hub-dig-rooms.md`](./hub-dig-rooms.md) — みんなでディグる (共同 dig)
+
 ## 2. アーキテクチャ
 
 ```
@@ -102,6 +118,23 @@ share/download する」 モデルだった。 これだと:
 | review targets | ❌ ローカル専用 | ローカル git clone を指す |
 
 Multi モード時、 ❌ のタブは **グレーアウト** (= 「この機能は Local モード専用」 と表示)。
+
+### Hub ネイティブなデータ型
+
+上表の 7 型は「ローカルに原本があり Hub に copy が出る」 型。 これとは別に、
+**Hub 上にしか存在しない** 型がある (社会層以降で追加)。
+
+| データ型 | 原本 | 設計 |
+|---|---|---|
+| subject (話題) | Hub のみ | [`hub-social.md`](./hub-social.md) |
+| comment / reaction | Hub のみ (ノートのコメントだけローカルにも原本がある) | 同上 |
+| rendition (記事本文) | Hub のみ (ローカルの `html/` アーカイブとは別物) | 同上 |
+| notification / feed | Hub のみ | 同上 |
+| worklog entry / digest | **ローカルに原本**、 ポリシー通過分のみ Hub へ | [`hub-worklog.md`](./hub-worklog.md) |
+| dig room / contribution | Hub のみ | [`hub-dig-rooms.md`](./hub-dig-rooms.md) |
+
+これらは Local モードでは触れない (worklog を除く)。 縮退動作は
+[`../interface/hub-social.md`](../interface/hub-social.md) §8。
 
 ## 5. シーケンス
 
@@ -193,6 +226,11 @@ sequenceDiagram
 `<type>` = `bookmarks | digs | dictionary | implementation-notes | work-locations | domain-catalog | notes`。
 旧 `/api/shared/*` は移行期間中残し、 Phase 6 で撤去。
 
+社会層 (`/api/social/*` / `/api/feed` / `/api/notifications` / `/api/worklog/*` /
+`/api/dig-rooms/*`) は本表とは別系統で、 契約は
+[`../interface/hub-social.md`](../interface/hub-social.md) にある。
+`/api/data/*` は変更しない。
+
 ### 6.2 ローカル側 (新規 / 変更)
 
 | method | path | 説明 |
@@ -222,6 +260,11 @@ endpoint は Multi モード時 `503 { error: 'local_only' }`。
 | 6 | cleanup — 旧 `/api/multi/{connect,finish,proxy,share,download}` + `/api/shared/*` 撤去 |
 
 各フェーズ完了で commit + 動作確認。
+
+社会層以降のフェーズは本書には含めない —
+[`hub-social.md`](./hub-social.md) §11 / [`hub-worklog.md`](./hub-worklog.md) §9 /
+[`hub-dig-rooms.md`](./hub-dig-rooms.md) §9 を参照。 いずれも本書 Phase 3
+(Hub の `/api/data/*`) が前提。
 
 ## 8. プライバシー観点
 
