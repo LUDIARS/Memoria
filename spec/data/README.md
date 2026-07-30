@@ -26,6 +26,20 @@ Memoria ローカルサーバ (`server/db.ts` で初期化される SQLite フ�
 | ワードクラウド | [wordcloud.md](wordcloud.md) | `word_clouds` |
 | ストップワード | [stopwords.md](stopwords.md) | `user_stopwords` |
 | ノート | [note.md](note.md) | `notes` / `note_blocks` |
+| 実績 (worklog) | [hub-social.md](hub-social.md) §8 | `worklog_sources` / `worklog_entries` / `worklog_redaction_terms` |
+
+## Hub (Postgres) 側のテーブル
+
+`spec/data/` は原則ローカル SQLite の仕様書だが、 共有サーバ層のテーブルは
+1 か所にまとまっている方が読めるので例外として同フォルダに置く。
+
+| ドメイン | spec | 関連テーブル |
+|---|---|---|
+| 共有サーバ層 | [hub-social.md](hub-social.md) | `subjects` / `comments` / `reactions` / `bookmark_renditions` / `notifications` / `worklog_entries` / `worklog_digests` / `dig_rooms` / `dig_contributions` / `dig_room_digests` / `dig_room_jobs` / `hub_members` |
+
+Hub の既存 7 型テーブル (`bookmarks` / `dig_sessions` / `dictionary_entries` /
+`implementation_notes` / `work_locations` / `domain_catalog` / `notes`) は
+`server/multi/migrations/00*.sql` が正本 ([feature/multi-hub.md](../feature/multi-hub.md))。
 
 ## 表記
 

@@ -40,6 +40,9 @@
 | ストップワード | [stopwords.md](stopwords.md) | 🏠 | wordcloud 除外語 |
 | ノート (WYSIWYG) | [note.md](note.md) | 🏠 | esa / DocBase 風ブロックベースエディタ。 markdown + 文字色 + テーブル + Mermaid |
 | Chrome 拡張 dispatch | [extension.md](extension.md) | 🏠 | chat / impl / shopping ドメインで追加ボタンを出し分け |
+| Hub 社会層 (コメント / いいね) | [hub-social.md](hub-social.md) | ✓ | subject 単位でコメント・いいね・フィード・通知。 記事本文への範囲コメント込み |
+| 実績共有 (worklog) | [hub-worklog.md](hub-worklog.md) | ✓ | GitHub / ローカル git / activity から「やった事」 を取り込み。 **既定は非共有**、 repo 単位 opt-in + 禁止語スキャン |
+| 共同 dig (dig room) | [hub-dig-rooms.md](hub-dig-rooms.md) | ✓ | みんなでディグる。 append-only の contribution + rev 付きまとめ |
 
 ## 凡例 (項目)
 各 feature ファイルは以下のセクションを順序固定で持つ:
