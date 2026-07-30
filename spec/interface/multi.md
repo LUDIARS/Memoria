@@ -47,6 +47,10 @@ Multi モード時、 `server/local/multi-proxy.ts` の middleware が feature r
     `/api/dictionary*` → `dictionary`、 `/api/implementation-notes*` →
     `implementation-notes`、 `/api/work-locations*` → `work-locations`、
     `/api/domains*` → `domain-catalog`、 `/api/notes*` → `notes`
+  - `/api/ai/articles*` は **転送しない**。 AIノートはローカル原本を読み続け、
+    Hub には [`hub-social.md`](./hub-social.md) §6.5 の明示シェア
+    (`POST /api/ai/articles/:id/share`) 経由でのみ出る
+    (自動 push は無い)。 `/api/ai/seeds*` / `/api/ai/advice*` は local-only
 - **個人ログ系のパス** (`diary` / `meals` / `locations` / `tracks` / `visits` /
   `trends` / `activity` / `weather` / `transit` / `review` 等) → `503 { error: 'local_only' }`
 - **制御系・インフラ系** (`/api/multi/*` / `/api/setup/*` / その他) → 素通し
@@ -68,7 +72,12 @@ Multi モード時、 `server/local/multi-proxy.ts` の middleware が feature r
 | PATCH | `/api/data/:type/:id` | session | 更新 (owner / admin / moderator のみ) |
 | DELETE | `/api/data/:type/:id` | session | 削除 (owner / admin / moderator のみ) |
 
-`:type` = `bookmarks | digs | dictionary | implementation-notes | work-locations | domain-catalog | notes`。
+`:type` = `bookmarks | digs | dictionary | implementation-notes | work-locations | domain-catalog | notes | ai-articles`。
+
+- `ai-articles` (AIノート) は 8 型目。 CRUD の形は同じだが **POST は共有ゲート付き** —
+  `redactionScannedAt` が無い / 24h より古いリクエストは
+  `400 { error: 'redaction_scan_required' }` で拒否する
+  ([`hub-social.md`](./hub-social.md) §6.5)。
 
 - session token は Cernere の project-token (PASETO v4)。 取得失敗時は Cernere
   accessToken (HS256) に degrade。 どちらも Hub の `authMiddleware` が検証できる。

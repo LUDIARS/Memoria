@@ -39,7 +39,7 @@ Hub には現在 4 つの層がある。 本書は 1 番目。
 
 社会層の上に載る 2 つの応用機能:
 
-- [`hub-worklog.md`](./hub-worklog.md) — GitHub / ローカルから「過去やった事」 を取り込み共有する
+- [`hub-achievements.md`](./hub-achievements.md) — GitHub / ローカルから「過去やった事」 を取り込み共有する
 - [`hub-dig-rooms.md`](./hub-dig-rooms.md) — みんなでディグる (共同 dig)
 
 ## 2. アーキテクチャ
@@ -108,6 +108,9 @@ Hub には現在 4 つの層がある。 本書は 1 番目。
 | work location | ✅ | 同上 |
 | domain catalog | ✅ | サイト辞書 = 共有知識 |
 | notes | ✅ | esa 風、 拠点間で共有したい |
+| ai_articles (AIノート) | ✅ **8 型目** (明示シェアのみ) | 自動生成の技術記事。 一覧はローカル原本を読み、 Hub へは記事単位の明示シェア + **禁止語スキャン必須** ([`hub-social.md`](./hub-social.md) §1.2)。 他の 7 型のような透過 proxy はしない |
+| ai_article_seeds (記事ネタ) | ❌ ローカル専用 | 未検証のネタ。 repo 名が生で入る |
+| ai_advice (AIアドバイス) | ❌ ローカル専用 | 個人の生活 / 作業データ由来の個人向け助言 |
 | diary | ❌ ローカル専用 | 個人ジャーナル ([個人データ保管禁止]) |
 | meals | ❌ ローカル専用 | 個人ログ |
 | GPS / tracks | ❌ ローカル専用 | 位置情報 = 個人ログ |
@@ -121,7 +124,8 @@ Multi モード時、 ❌ のタブは **グレーアウト** (= 「この機能
 
 ### Hub ネイティブなデータ型
 
-上表の 7 型は「ローカルに原本があり Hub に copy が出る」 型。 これとは別に、
+上表の ✅ 8 型 (元の 7 型 + `ai_articles`) は「ローカルに原本があり Hub に copy が
+出る」 型。 これとは別に、
 **Hub 上にしか存在しない** 型がある (社会層以降で追加)。
 
 | データ型 | 原本 | 設計 |
@@ -130,10 +134,10 @@ Multi モード時、 ❌ のタブは **グレーアウト** (= 「この機能
 | comment / reaction | Hub のみ (ノートのコメントだけローカルにも原本がある) | 同上 |
 | rendition (記事本文) | Hub のみ (ローカルの `html/` アーカイブとは別物) | 同上 |
 | notification / feed | Hub のみ | 同上 |
-| worklog entry / digest | **ローカルに原本**、 ポリシー通過分のみ Hub へ | [`hub-worklog.md`](./hub-worklog.md) |
+| achievement entry / digest | **ローカルに原本**、 ポリシー通過分のみ Hub へ | [`hub-achievements.md`](./hub-achievements.md) |
 | dig room / contribution | Hub のみ | [`hub-dig-rooms.md`](./hub-dig-rooms.md) |
 
-これらは Local モードでは触れない (worklog を除く)。 縮退動作は
+これらは Local モードでは触れない (achievements を除く)。 縮退動作は
 [`../interface/hub-social.md`](../interface/hub-social.md) §8。
 
 ## 5. シーケンス
@@ -223,10 +227,17 @@ sequenceDiagram
 | PATCH | `/api/data/<type>/:id` | session | 更新 |
 | DELETE | `/api/data/<type>/:id` | session | 削除 |
 
-`<type>` = `bookmarks | digs | dictionary | implementation-notes | work-locations | domain-catalog | notes`。
+`<type>` = `bookmarks | digs | dictionary | implementation-notes | work-locations | domain-catalog | notes | ai-articles`
+(`ai-articles` は 8 型目。 [`hub-social.md`](./hub-social.md) §1.2、 migration 011)。
 旧 `/api/shared/*` は移行期間中残し、 Phase 6 で撤去。
 
-社会層 (`/api/social/*` / `/api/feed` / `/api/notifications` / `/api/worklog/*` /
+> 本書の Phase 表 (§7) と「7 型」 という表記は **元の 7 型**を指す歴史的記述。
+> AIノート (`ai-articles`) は同じ `/api/data/*` の形で後から足す 8 型目で、
+> 型仕様駆動の汎用 CRUD (`server/multi/data.ts` の `TYPES`) に 1 エントリ
+> 追加するだけで載る。 ただし POST は共有ゲート付き
+> ([`../interface/hub-social.md`](../interface/hub-social.md) §6.5)。
+
+社会層 (`/api/social/*` / `/api/feed` / `/api/notifications` / `/api/achievements/*` /
 `/api/dig-rooms/*`) は本表とは別系統で、 契約は
 [`../interface/hub-social.md`](../interface/hub-social.md) にある。
 `/api/data/*` は変更しない。
@@ -262,7 +273,7 @@ endpoint は Multi モード時 `503 { error: 'local_only' }`。
 各フェーズ完了で commit + 動作確認。
 
 社会層以降のフェーズは本書には含めない —
-[`hub-social.md`](./hub-social.md) §11 / [`hub-worklog.md`](./hub-worklog.md) §9 /
+[`hub-social.md`](./hub-social.md) §11 / [`hub-achievements.md`](./hub-achievements.md) §9 /
 [`hub-dig-rooms.md`](./hub-dig-rooms.md) §9 を参照。 いずれも本書 Phase 3
 (Hub の `/api/data/*`) が前提。
 

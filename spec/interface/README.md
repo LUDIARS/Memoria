@@ -44,7 +44,7 @@ spec/api/
 | GPS / アクセス | [visit.md](visit.md) | `/api/locations*`, `/api/visits*`, `/api/page-metadata*` |
 | 設定 | [config.md](config.md) | `/api/privacy/settings`, `/api/llm/config`, `/api/setup-docs*`, `/api/tracks/settings` |
 | マルチ | [multi.md](multi.md) | `/api/multi/*` |
-| 共有サーバ層 | [hub-social.md](hub-social.md) | `/api/social/*`, `/api/feed`, `/api/notifications*`, `/api/worklog*`, `/api/dig-rooms*` |
+| 共有サーバ層 | [hub-social.md](hub-social.md) | `/api/social/*`, `/api/feed`, `/api/notifications*`, `/api/achievements*`, `/api/dig-rooms*` |
 | Push | [push.md](push.md) | `/api/push/*` |
 | Amazon Echo / Alexa | [alexa.md](alexa.md) | `/api/alexa/skill` |
 | 傾向 / ログ | [misc.md](misc.md) | `/api/trends/*`, `/api/events`, `/api/uptime`, `/api/recommendations*` |

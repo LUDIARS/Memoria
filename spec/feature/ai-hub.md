@@ -107,6 +107,10 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 - `GET  /api/ai/articles/:id` → `{ article }` (404 if none)
 - `GET  /api/ai/articles/:id/export.md` → 記事を Markdown ファイルとして書き出す (`text/markdown` + `Content-Disposition: attachment`、日本語ファイル名は RFC 5987 `filename*`)。frontmatter (title/date/origin/tags/source) + `# title` 本文 + 出所セクション。フォーマットは `server/ai-hub/markdown.ts` の `articleToMarkdown` に集約
 - `POST /api/ai/articles/:id/transcribe` → 記事から note を作成し note_id を更新 → `{ note }`
+- `POST /api/ai/articles/:id/share` (body `{ hubUrl?, includeSourceRefs? }`) → 禁止語スキャン通過後に Hub `/api/data/ai-articles` へ push → `{ ok, remoteId }` / `409 { error: 'redaction_blocked', blocked }`
+- `POST /api/ai/articles/share/check` (body `{ ids? }`) → スキャンだけ実行 → `{ ok, blocked }`
+- `POST /api/ai/articles/:id/unshare` → Hub 側の共有を取り下げ → `{ ok }`
+  (契約の詳細は [`../interface/hub-social.md`](../interface/hub-social.md) §6.5)
 - `GET  /api/ai/seeds?status=pending` → `{ seeds: AiSeed[] }`
 - `POST /api/ai/seeds/:id/request` → seed を LLM で本記事化、ai_articles に insert、seed.status='done'+article_id 設定 → `{ article }`
 - `POST /api/ai/seeds/:id/dismiss` → seed.status='dismissed' → `{ ok: true }`
@@ -149,9 +153,31 @@ server/ai-hub/
 `server/lib/scheduler.ts` の `startSchedulers()` に `startAiHubSchedulers(deps.db)` を追加。実装は既存 `startGoalEvalScheduler` と同形 (毎分 tick、時刻一致 + `*.last_date` 当日ガード、try/catch で全体を止めない)。
 
 ## シェア可能か
-local-only (derived)。記事/ネタ/助言は個人の作業ログから生成される派生物。Hub 共有しない。ノート転写後の公開はユーザの明示操作 (転写ボタン → note → 既存の共有フロー)。
+
+| 対象 | 共有 | 経路 |
+|---|---|---|
+| **AI記事 (`ai_articles`) = AIノート** | ✓ Hub-shareable | ローカル `POST /api/ai/articles/:id/share` → Hub `/api/data/ai-articles` (**8 型目**)。 明示的シェア操作 + **禁止語スキャン必須**。 自動 push / Multi モードの透過 proxy は無い |
+| 記事ネタ (`ai_article_seeds`) | 🏠 local-only | 未検証のネタ。 repo 名が生で入る |
+| AIアドバイス (`ai_advice`) | 🏠 local-only | 個人の生活 / 作業データ由来の個人向け助言 (日記と同機微度) |
+
+> **方針変更 (2026-07-30)**: 旧版は「記事も local-only。 共有したいなら
+> `📓ノートへ転写` してから note の共有フローに乗せる」 だった。 AIノートは
+> 自動生成で量が多く、 転写を共有の前提にすると摩擦が大きいので
+> **`ai_articles` を直接共有できるようにする** ([`hub-social.md`](./hub-social.md) §1.2)。
+>
+> ただし本文は commit message / AI prompt / repo 名から LLM が生成した文章なので、
+> **private repo 名・顧客名が本文に混入し得る**。 手書きノートと違い目視前提に
+> できないため、 共有は [`hub-achievements.md`](./hub-achievements.md) §4.3 の
+> **禁止語スキャンを共用**する (`server/shared/redaction.ts`)。 `source_refs` は
+> 既定で共有しない (commit sha + repo 名の組が private repo の存在を露出するため)。
+>
+> 転写済 (`note_id` あり) の記事は subject alias で note 側に寄せ、
+> 同じ内容についての議論が 2 か所に割れないようにする。
 
 ## プライバシー観点
 - 入力 (activity_events / session-log / 日記 / タスク) は個人データ。LLM 送信は既存 `runLlm` の provider 設定に従う (ローカル `gamma` 選択でローカル完結可)。
 - session-log はリポジトリ外の作業記録なので、読み取り失敗時は静かに無視 (機能を止めない)。
 - 生成物はローカル SQLite に閉じる ([[project_personal_data_rule]])。外部 API へ自動送信しない。
+- **Hub へ出るのは明示シェアした AI記事のみ**。 自動 push は無い (毎朝の生成は
+  ローカル完結)。 スキャン済でない行は Hub 側スキーマ (`redaction_scanned_at` NOT NULL) が
+  受け付けない ([`../data/hub-social.md`](../data/hub-social.md) §4.5)。

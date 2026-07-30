@@ -5,7 +5,7 @@
 > ローカル SQLite に足す分は §6 に分けて書く。
 >
 > 機能側: [`hub-social.md`](../feature/hub-social.md) /
-> [`hub-worklog.md`](../feature/hub-worklog.md) /
+> [`hub-achievements.md`](../feature/hub-achievements.md) /
 > [`hub-dig-rooms.md`](../feature/hub-dig-rooms.md)
 > API: [`../interface/hub-social.md`](../interface/hub-social.md)
 
@@ -17,8 +17,9 @@
 | migration | 内容 |
 |---|---|
 | `008_social_core.sql` | `subjects` / `subject_aliases` / `url_canonical_rules` / `comments` / `reactions` / `bookmark_renditions` / `subject_activity` / `subject_watches` / `subject_mutes` / `unshare_audit` / `notifications` / `hub_members` + `bookmarks.url_canonical` 追加 |
-| `009_worklog.sql` | `worklog_entries` / `worklog_digests` |
+| `009_achievements.sql` | `achievement_entries` / `achievement_digests` |
 | `010_dig_rooms.sql` | `dig_rooms` / `dig_room_members` / `dig_contributions` / `dig_room_digests` / `dig_room_jobs` |
+| `011_ai_articles.sql` | `ai_articles` (**AIノート = 8 型目の共有型**、 §4.5) |
 
 既存 7 型のテーブルは触らない (`bookmarks` への列追加のみ、 `IF NOT EXISTS` で冪等)。
 
@@ -31,7 +32,7 @@
 | 列 | 型 | NotNull | Default | 役割 |
 |---|---|---|---|---|
 | `id` | UUID | ✓ | `gen_random_uuid()` | PK |
-| `kind` | TEXT | ✓ | — | `bookmark` / `note` / `note_block` / `dig_room` / `worklog_entry` / `worklog_digest` / `dictionary_term` |
+| `kind` | TEXT | ✓ | — | `bookmark` / `note` / `note_block` / `ai_article` / `dig_room` / `achievement_entry` / `achievement_digest` / `dictionary_term` |
 | `key` | TEXT | ✓ | — | kind ごとの正規キー ([feature §3.1](../feature/hub-social.md#31-subject-種別と-key))。 canonical URL 等の生値 |
 | `key_hash` | TEXT | ✓ | — | `sha256(key)` の hex。 UNIQUE index 用 (長い URL 対策) |
 | `title` | TEXT |  | NULL | 表示用タイトルのキャッシュ (元オブジェクト由来、 正本ではない) |
@@ -195,12 +196,12 @@ PK: `(subject_id, user_id)` (両テーブル)
 - Index: `idx_renditions_subject` (`subject_id, captured_at DESC`)
 - 「最新 rendition」 = 同 subject で `captured_at` 最大の行。 UI の既定表示
 
-## 4. worklog
+## 4. achievements (実績)
 
-### `worklog_entries` (Hub)
+### `achievement_entries` (Hub)
 
 ローカルから push された、 **共有ポリシー通過済**の行のみ
-([feature §4](../feature/hub-worklog.md#4-共有ゲート--漏らさないための機構))。
+([feature §4](../feature/hub-achievements.md#4-共有ゲート--漏らさないための機構))。
 
 | 列 | 型 | NotNull | Default | 役割 |
 |---|---|---|---|---|
@@ -226,12 +227,12 @@ PK: `(subject_id, user_id)` (両テーブル)
 
 - UNIQUE: `(owner_user_id, repo_key, kind, ref)` — 同じ実績を同じ人が二重に出さない。
   **他人が同じ commit を出すのは許す** (共同作業のため)
-- Index: `idx_worklog_occurred` (`occurred_at DESC`) /
-  `idx_worklog_owner_occurred` (`owner_user_id, occurred_at DESC`) /
-  `idx_worklog_repo` (`repo_key, occurred_at DESC`) /
-  `idx_worklog_parent` (`parent_ref`)
+- Index: `idx_achievements_occurred` (`occurred_at DESC`) /
+  `idx_achievements_owner_occurred` (`owner_user_id, occurred_at DESC`) /
+  `idx_achievements_repo` (`repo_key, occurred_at DESC`) /
+  `idx_achievements_parent` (`parent_ref`)
 
-### `worklog_digests` (Hub)
+### `achievement_digests` (Hub)
 
 | 列 | 型 | NotNull | Default | 役割 |
 |---|---|---|---|---|
@@ -249,7 +250,42 @@ PK: `(subject_id, user_id)` (両テーブル)
 | `hidden_at` / `hidden_by` / `hidden_reason` | | | NULL | |
 
 - UNIQUE: `(owner_user_id, scope_kind, scope_key, period_start, period_end, rev)`
-- Index: `idx_worklog_digests_scope` (`scope_kind, scope_key, period_end DESC`)
+- Index: `idx_achievement_digests_scope` (`scope_kind, scope_key, period_end DESC`)
+
+### 4.5 `ai_articles` (Hub) — AIノート
+
+[feature §1.2](../feature/hub-social.md#12-aiノート共有で追加が要るもの) の 8 型目。
+ローカル `ai_articles` は INTEGER PK なので、 Hub では既存 7 型と同じく
+**持ち主付きコピー** (`owner_user_id` + Hub 側 BIGSERIAL) にする。
+
+| 列 | 型 | NotNull | Default | 役割 |
+|---|---|---|---|---|
+| `id` | BIGSERIAL | ✓ | — | PK (Hub 内部) |
+| `origin_local_id` | BIGINT | ✓ | — | ローカル `ai_articles.id`。 再 push の冪等キー |
+| `title` | TEXT | ✓ | — | |
+| `body_md` | TEXT | ✓ | — | 記事本文 (Markdown) |
+| `topic_key` | TEXT |  | NULL | 重複排除キー (`repo:theme` 等)。 **repo 名を含むため `full` policy 時のみ** |
+| `for_date` | DATE |  | NULL | 対象作業日 |
+| `tags_json` | JSONB |  | NULL | `[{ category, value }]`。 allowlist 通過分のみ |
+| `source_refs_json` | JSONB |  | NULL | `[{ kind, ref, repo }]`。 **既定 NULL** (`full` policy の repo に限り出す) |
+| `note_subject_id` | UUID |  | NULL | 転写済なら転写先 `note` subject。 alias 解決の起点 |
+| `share_policy` | TEXT | ✓ | — | push 時のポリシー (`redacted` / `full`)。 監査用 |
+| `redaction_scanned_at` | TIMESTAMPTZ | ✓ | — | **禁止語スキャンを通った証跡** (スキャンを実行した時刻)。 NOT NULL なので未スキャンの行は insert 自体ができない |
+| `owner_user_id` / `owner_user_name` | TEXT | ✓ | — | |
+| `shared_at` | TIMESTAMPTZ | ✓ | `now()` | |
+| `shared_origin` | TEXT |  | NULL | |
+| `hidden_at` / `hidden_by` / `hidden_reason` | | | NULL | |
+
+- UNIQUE: `(owner_user_id, origin_local_id)`
+- Index: `idx_ai_articles_owner_date` (`owner_user_id, for_date DESC`) /
+  `idx_ai_articles_shared` (`shared_at DESC`)
+- `redaction_scanned_at` を NOT NULL にしているのが要点。
+  **スキャン済でない行は物理的に insert できない** ので、 ゲートを迂回した
+  経路が後から生えても Hub 側で止まる。 achievements の
+  `alias_required` ([interface §6.1](../interface/hub-social.md#61-hub-側)) と同じ、
+  アプリ層のゲートに加えて Hub 側でも張る二重チェック
+- 併せて API 層でも古い証跡を弾く (`redactionScannedAt` が 24h より古い POST は
+  `400 redaction_scan_required`、 [interface §6.5](../interface/hub-social.md#65-aiノート-ai_articles-の共有))
 
 ## 5. dig room
 
@@ -374,7 +410,7 @@ digest 生成の依頼キュー ([feature §5](../feature/hub-dig-rooms.md#5-ま
 |---|---|---|---|---|
 | `id` | BIGSERIAL | ✓ | — | PK |
 | `mode` | TEXT | ✓ | — | `hide` / `unshare` / `purge` |
-| `target_kind` | TEXT | ✓ | — | `subject` / `comment` / `rendition` / `worklog_entry` / `worklog_digest` / `dig_room` / `dig_contribution` / 共有 7 型のいずれか |
+| `target_kind` | TEXT | ✓ | — | `subject` / `comment` / `rendition` / `achievement_entry` / `achievement_digest` / `dig_room` / `dig_contribution` / 共有 8 型 (`ai_article` 含む) のいずれか |
 | `target_id` | TEXT | ✓ | — | 対象の id (型が混在するので TEXT) |
 | `subject_id` | UUID |  | NULL | 分かる場合の subject (purge 後は解決できないため記録しておく) |
 | `subject_key` | TEXT |  | NULL | 同上。 purge されても「何が消えたか」 が追える |
@@ -425,7 +461,7 @@ CREATE INDEX IF NOT EXISTS idx_bookmarks_url_canonical ON bookmarks(url_canonica
 
 正本は `server/db.ts` の CREATE TABLE。 spec としては以下を追加する。
 
-### `worklog_sources` (新規、 [`spec/data/`](./README.md) 側)
+### `achievement_sources` (新規、 [`spec/data/`](./README.md) 側)
 
 | 列 | 型 | NotNull | Default | 役割 |
 |---|---|---|---|---|
@@ -442,21 +478,21 @@ CREATE INDEX IF NOT EXISTS idx_bookmarks_url_canonical ON bookmarks(url_canonica
 
 UNIQUE: `(source_kind, repo_key, local_path)`
 
-### `worklog_entries` (ローカル)
+### `achievement_entries` (ローカル)
 
 Hub 版 (§4) と同じ列に加えて:
 
 | 列 | 型 | 役割 |
 |---|---|---|
-| `source_id` | INTEGER | FK → `worklog_sources(id)` |
+| `source_id` | INTEGER | FK → `achievement_sources(id)` |
 | `pushed_at` | TEXT | Hub に push した時刻 (NULL = 未 push) |
-| `remote_id` | INTEGER | Hub 側 `worklog_entries.id` |
+| `remote_id` | INTEGER | Hub 側 `achievement_entries.id` |
 | `redaction_state` | TEXT | `unchecked` / `passed` / `blocked` |
 | `redaction_hits_json` | TEXT | blocked の内訳 (どのフィールドにどの語) |
 
 UNIQUE: `(repo_key, kind, ref)`
 
-### `worklog_redaction_terms` (ローカル)
+### `achievement_redaction_terms` (ローカル)
 
 | 列 | 型 | NotNull | 役割 |
 |---|---|---|---|
@@ -482,7 +518,7 @@ UNIQUE: `(repo_key, kind, ref)`
 | `comments` | ~1 KB | 50k 行 = 50 MB |
 | `reactions` | ~120 B | 200k 行 = 24 MB |
 | `bookmark_renditions` | 20-80 KB | 2k 記事 = 40-160 MB (案 B の text のみ) |
-| `worklog_entries` | ~600 B | 100k 行 = 60 MB |
+| `achievement_entries` | ~600 B | 100k 行 = 60 MB |
 | `dig_contributions` | ~800 B | 20k 行 = 16 MB |
 
 案 C (HTML) を有効にすると rendition が 1 行 200 KB-2 MB になるため、
