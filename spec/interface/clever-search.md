@@ -1,8 +1,11 @@
 # Clever Search HTTP API
 
-すべて direct loopback 専用のローカル Memoria API。接続元アドレスと URL host の
-両方が loopback であり、`Origin` がある場合は request URL と同一 origin でなければ
-`403` を返す。個人ログを含むため成功・失敗を問わずレスポンスは
+すべて same-machine 専用のローカル Memoria API。接続元アドレスがこの端末の
+loopback または network interface で、URL host も loopback・端末 hostname・端末の
+interface address・`server/browser-host-config.ts` の明示 allowlist のいずれかであり、
+`Origin` がある場合は request URL と同一 origin でなければ `403` を返す。TLS 終端
+proxy の origin 比較には `X-Forwarded-Proto` の `http` / `https` だけを反映する。
+個人ログを含むため成功・失敗を問わずレスポンスは
 `Cache-Control: no-store` とする。型の正本対応は
 `server/api/types/clever-search.ts`。
 
@@ -48,7 +51,7 @@ Response `200`:
 Errors:
 
 - `400`: query 欠落・長すぎる query・不正な `refresh` / `limit` / report ID
-- `403`: direct loopback ではない接続、または cross-origin request（全 endpoint 共通）
+- `403`: same-machine ではない接続、未信頼 host、または cross-origin request（全 endpoint 共通）
 - `500`: FTS5 初期化や保存済み JSON の破損など、ローカル索引の契約違反
 
 ## `GET /api/clever-search/reports?limit=30`

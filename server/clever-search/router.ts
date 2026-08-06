@@ -6,7 +6,7 @@ import type {
   CleverSearchRequest,
   CleverSearchResponse,
 } from '../api/types/clever-search.js';
-import { isDirectLoopbackRequest } from '../lib/local-request.js';
+import { isSameMachineRequest } from '../lib/local-request.js';
 import { buildCleverSearchReport } from './report.js';
 import { ensureCleverSearchSchema } from './schema.js';
 import {
@@ -57,15 +57,15 @@ export function makeCleverSearchRouter(deps: CleverSearchRouterDeps): Hono {
   ensureCleverSearchSchema(db);
   const router = new Hono();
 
-  const requireDirectLoopback: MiddlewareHandler = async (c, next) => {
+  const requireSameMachine: MiddlewareHandler = async (c, next) => {
     c.header('Cache-Control', 'no-store');
-    if (!isDirectLoopbackRequest(c)) {
-      return c.json({ error: 'direct loopback access required' }, 403);
+    if (!isSameMachineRequest(c)) {
+      return c.json({ error: 'same-machine access required' }, 403);
     }
     await next();
   };
-  router.use('/api/clever-search', requireDirectLoopback);
-  router.use('/api/clever-search/*', requireDirectLoopback);
+  router.use('/api/clever-search', requireSameMachine);
+  router.use('/api/clever-search/*', requireSameMachine);
 
   router.post('/api/clever-search', async (c: Context) => {
     const startedAt = performance.now();

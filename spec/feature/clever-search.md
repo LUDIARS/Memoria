@@ -43,22 +43,28 @@ Memoria に蓄積した個人ログを単語で横断検索し、カテゴリ別
 - `GET /api/clever-search/reports`: 保存済みレポートのメタデータ一覧。
 - `GET /api/clever-search/reports/:id`: 保存済みレポート本体の取得。
 
-すべて direct loopback 専用で、cross-origin request を拒否し、
+すべて same-machine 専用で、cross-origin request を拒否し、
 `Cache-Control: no-store` を返す。検索文字列は正規化後1〜120文字、履歴の `limit` は
 省略時20、指定時は1〜100の10進整数だけを受理する。
 
 ## シェア可能か
 
-🏠 **local-only**。Hub / Corpus / Multi share の経路を持たず、検索結果や保存済み
+🏠 **local-only**。同じ端末の hostname / interface address、またはローカル reverse
+proxy / Cloudflare Tunnel が使う明示 allowlist host で開いた UI から利用できる。
+Hub / Corpus / Multi share の経路を持たず、検索結果や保存済み
 レポートを共有 DB、外部 API、外部 LLM へ送らない。
 
 ## プライバシー観点
 
 索引とレポートには会話、日記、活動 metadata、タスクなど機微な個人ログが含まれる。
-LAN や tunnel 経由のアクセス、外部 origin からの localhost 呼び出しを API 境界で
-拒否する。履歴一覧は引用本文を返さないが、検索語自体も個人情報になり得るため、
-レポート本体と同じ direct-loopback 制約を適用する。削除 API はなく、元データ削除後も
+別端末からの LAN / tunnel アクセス、allowlist 外の DNS host、外部 origin からの localhost
+呼び出しを API 境界で拒否する。履歴一覧は引用本文を返さないが、検索語自体も
+個人情報になり得るため、レポート本体と同じ same-machine 制約を適用する。削除 API はなく、元データ削除後も
 既存レポートは履歴として残るため、DB ファイルの保持・削除ポリシーに従う。
+
+公開 Host は非機密の静的設定 `server/browser-host-config.ts` で完全一致管理する。
+CF Access で保護された `memoria.ai-run-do.com` だけを登録し、環境変数や domain wildcard
+では拡張しない。allowlist は接続元アドレスと same-origin の検査を緩和しない。
 
 ## 検索・レポート方式
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
+import { hostname } from 'node:os';
 import { Hono } from 'hono';
 import { openDb } from '../db.js';
 import type { CleverSearchResponse } from '../api/types/clever-search.js';
@@ -253,7 +254,7 @@ test('clever search returns ten thousand FTS and short-query citations within fi
   }
 });
 
-test('clever search rejects remote and cross-origin access to personal reports', async () => {
+test('clever search accepts this machine and rejects remote, arbitrary-host, and cross-origin access', async () => {
   const db = openDb(':memory:');
   try {
     const app = new Hono();
@@ -288,6 +289,36 @@ test('clever search rejects remote and cross-origin access to personal reports',
       { headers: { Origin: 'https://attacker.example' } },
     );
     assert.equal(crossSiteHistory.status, 403);
+
+    const machineOrigin = `http://${hostname()}`;
+    const machineHistory = await requestFrom(
+      app,
+      '127.0.0.1',
+      `${machineOrigin}/api/clever-search/reports`,
+      { headers: { Origin: machineOrigin } },
+    );
+    assert.equal(machineHistory.status, 200);
+
+    const reboundHistory = await requestFrom(
+      app,
+      '127.0.0.1',
+      'http://attacker.example/api/clever-search/reports',
+      { headers: { Origin: 'http://attacker.example' } },
+    );
+    assert.equal(reboundHistory.status, 403);
+
+    const accessHistory = await requestFrom(
+      app,
+      '127.0.0.1',
+      'http://memoria.ai-run-do.com/api/clever-search/reports',
+      {
+        headers: {
+          Origin: 'https://memoria.ai-run-do.com',
+          'X-Forwarded-Proto': 'https',
+        },
+      },
+    );
+    assert.equal(accessHistory.status, 200);
 
     const localHistory = await requestFrom(
       app,
