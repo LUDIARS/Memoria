@@ -1,0 +1,26 @@
+# Excubitor catalog fragment -- Memoria owns this service definition.
+services:
+  - code: memoria-server
+    name: Memoria (server)
+    tier: personal
+    project_code: Mm
+    component: backend
+    port: 5180
+    repo: LUDIARS/Memoria
+    runtime: node
+    cwd: ${ARS_ROOT}/Memoria/server
+    command: npm start
+    allow_hot_reload: false
+    autostart: false
+    restart_policy: on-failure
+    max_restart: 5
+    log_path: ${ARS_ROOT}/logs/memoria-server
+    health:
+      type: http
+      url: http://127.0.0.1:5180/api/health
+      interval_sec: 30
+      grace_period_sec: 15
+    provides:
+      MEMORIA_URL: http://127.0.0.1:${port}
+    env:
+      MEMORIA_PORT: "5180"
