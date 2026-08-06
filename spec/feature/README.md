@@ -37,6 +37,7 @@
 | MCP server autostart | [mcp-server.md](mcp-server.md) | 🏠 | Claude Desktop / Code 連携 (ローカル stdio) |
 | サーバ稼働 / heartbeat | [uptime.md](uptime.md) | 🏠 | PC 起動時間ログ |
 | LLM プロバイダ設定 | [llm-config.md](llm-config.md) | 🏠 | OpenAI API key 等を含む |
+| LLM 観測所 | [llm-observatory.md](llm-observatory.md) | 🏠 | native JSONL から利用量を派生集計。本文とローカル endpoint は保存しない |
 | プライバシー設定 | [privacy-settings.md](privacy-settings.md) | 🏠 | feature flag 集中管理 |
 | ストップワード | [stopwords.md](stopwords.md) | 🏠 | wordcloud 除外語 |
 | ノート (WYSIWYG) | [note.md](note.md) | 🏠 | esa / DocBase 風ブロックベースエディタ。 markdown + 文字色 + テーブル + Mermaid |

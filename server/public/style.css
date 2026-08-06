@@ -7153,3 +7153,37 @@ dialog.loc-edit-modal[open] {
 .rec-not-useful-item {
   opacity: 0.82;
 }
+.llm-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
+.llm-head h2 { margin:0 0 4px; }
+.llm-section { margin:18px 0 26px; }
+.llm-section h3 { display:flex; gap:10px; align-items:baseline; margin:0 0 10px; }
+.llm-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; }
+.llm-metrics.compact { grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }
+.llm-metric { border:1px solid var(--border); background:var(--surface, #fff); border-radius:12px; padding:13px; display:flex; flex-direction:column; gap:4px; }
+.llm-metric > span { color:var(--muted); font-size:12px; }
+.llm-metric > strong { font-size:22px; font-variant-numeric:tabular-nums; }
+.llm-metric small { color:var(--muted); }
+.llm-metric small.up { color:#16834a; }
+.llm-metric small.down { color:#b33a3a; }
+.llm-sync { padding:9px 12px; border-radius:9px; background:color-mix(in srgb, var(--accent) 10%, transparent); margin-bottom:12px; }
+.llm-sync.error { background:#ffe7e7; color:#9b2020; }
+.llm-weekly { display:grid; gap:8px; }
+.llm-week-row { display:grid; grid-template-columns:75px minmax(100px,1fr) 85px 180px; align-items:center; gap:10px; font-variant-numeric:tabular-nums; }
+.llm-week-track { height:10px; border-radius:10px; background:var(--border); overflow:hidden; }
+.llm-week-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#7868e6,#37a6d8); }
+.llm-week-row strong,.llm-week-row small { text-align:right; }
+.llm-local { margin-top:10px; display:flex; align-items:center; flex-wrap:wrap; gap:9px; padding:11px 13px; border:1px solid var(--border); border-radius:10px; }
+.llm-status.ok { color:#16834a; }
+.llm-status.ng { color:#b33a3a; }
+.llm-table-wrap { overflow:auto; border:1px solid var(--border); border-radius:11px; }
+.llm-table { width:100%; border-collapse:collapse; min-width:800px; }
+.llm-table th,.llm-table td { padding:9px 11px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+.llm-table th { position:sticky; top:0; background:var(--surface, #fff); font-size:12px; }
+.llm-table .num { text-align:right; font-variant-numeric:tabular-nums; }
+.llm-table td small { display:block; color:var(--muted); margin-top:3px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.llm-method { padding-bottom:24px; }
+@media (max-width:700px) {
+  .llm-week-row { grid-template-columns:64px 1fr 72px; }
+  .llm-week-row small { grid-column:2 / 4; text-align:left; }
+  .llm-head { align-items:stretch; flex-direction:column; }
+}

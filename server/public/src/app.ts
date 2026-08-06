@@ -157,7 +157,6 @@ declare global {
 // notes module — esa / DocBase 風 WYSIWYG エディタ。
 // switchTab('notes') で loadNotes() を呼ぶ。
 import { loadNotes as notesLoad } from './notes/index.js';
-import { renderMarkdownBlock } from './markdown-block.js';
 
 // 起動チュートリアル / ページヘルプ drawer。 app.ts 肥大化対策で分離。
 // PAGE_HELP の本文を増やす場合は page-help.ts を編集する。
@@ -170,6 +169,7 @@ import { loadRssView } from './rss-view.js';
 import { loadGoalsView } from './goals-view.js';
 import { loadUserApps } from './userapps-view.js';
 import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-view.js';
+import { loadLlmView } from './llm-view.js';
 import {
   loadAiArticlesView,
   loadAiAdviceView,
@@ -1201,6 +1201,7 @@ function switchTab(tab) {
   $('worklogView')?.classList.toggle('hidden', tab !== 'worklog');
   $('trendsView').classList.toggle('hidden', tab !== 'trends');
   $('aiView')?.classList.toggle('hidden', tab !== 'ai');
+  $('llmView')?.classList.toggle('hidden', tab !== 'llm');
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
@@ -1237,6 +1238,7 @@ function switchTab(tab) {
   if (tab === 'goals') void loadGoalsView();
   if (tab === 'userapps') void loadUserApps();
   if (tab === 'clever-search') void loadCleverSearchHistory();
+  if (tab === 'llm') void loadLlmView();
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
@@ -13433,7 +13435,7 @@ declare global {
   const labelEl = () => document.querySelector<HTMLElement>('#legatusBadge .legatus-label');
   const badge = () => document.getElementById('legatusBadge') as HTMLElement | null;
 
-  function setState(state, hint) {
+  function renderConnectionBadge(state, hint) {
     const d = dot();
     if (d) d.dataset.state = state;
     const lab = labelEl();
@@ -13521,13 +13523,20 @@ declare global {
       const skip = ev.skipped ? `skipped (${ev.reason}, net ${ev.net_meters ?? '?'}m)` : `flushed (${ev.points}pt, net ${ev.net_meters ?? '?'}m)`;
       lastEventLine = `[buffer] ${skip}`;
     }
-    setState(ageBucketFromHeartbeat(), `Legatus`);
+    renderConnectionBadge(ageBucketFromHeartbeat(), `Legatus`);
     refreshDetailBox();
   }
 
   function applyConnectionTransition() {
     attempt = 0;
-    setState('connected', 'Legatus');
+    renderConnectionBadge('connected', 'Legatus');
+  }
+
+  function applyConnectionClose() {
+    ws = null;
+    if (!enabled) return;
+    renderConnectionBadge('disconnected', 'Legatus');
+    scheduleReconnect();
   }
 
   function connect() {
@@ -13540,13 +13549,7 @@ declare global {
       try { parsed = JSON.parse(e.data); } catch { return; }
       if (parsed && typeof parsed.type === 'string') applyEvent(parsed);
     });
-    ws.addEventListener('close', () => {
-      ws = null;
-      if (enabled) {
-        setState('disconnected', 'Legatus');
-        scheduleReconnect();
-      }
-    });
+    ws.addEventListener('close', applyConnectionClose);
     ws.addEventListener('error', () => { /* close ハンドラに任せる */ });
   }
 
@@ -13564,7 +13567,7 @@ declare global {
     const b = badge();
     if (on) {
       if (b) b.hidden = false;
-      setState('unknown', 'Legatus');
+      renderConnectionBadge('unknown', 'Legatus');
       connect();
     } else {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -13581,7 +13584,7 @@ declare global {
   setInterval(() => {
     if (!enabled) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    setState(ageBucketFromHeartbeat(), 'Legatus');
+    renderConnectionBadge(ageBucketFromHeartbeat(), 'Legatus');
     refreshDetailBox();
   }, 5000);
 

@@ -29,7 +29,7 @@ spec/
 - `data/` — 46 テーブル中 23 を文書化（残りは内部/キャッシュ系。Phase 0 段階移行中、gap）。
 - `interface/` — 27 ルート中 20 を文書化（packet-monitor / transit / weather / repo /
   staleness / review 等が gap）。
-- `feature/` — 43 ファイル（主要機能を網羅。 Hub 共有サーバ層は `hub-social` /
+- `feature/` — 44 機能ファイル（主要機能を網羅。 Hub 共有サーバ層は `hub-social` /
   `hub-achievements` / `hub-dig-rooms` の 3 本）。
 - `setup/` `test/` — 整備済（`test/` は本 PR で新設）。
 - 残りの table / route doc は `server/db.ts` / `server/routes/*` から追補する

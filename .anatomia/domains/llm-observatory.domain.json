@@ -1,0 +1,23 @@
+{
+  "name": "llm-observatory",
+  "description": "Claude Code / Codex の native JSONL から利用量をローカル集計し、能力資産と Local LLM の状態を direct-loopback 限定 UI に表示する機能。収集、料金換算、永続化、同期、API、専用 UI を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/llm-usage/[^/]+\\.ts$" },
+    { "pathPattern": "(^|/)server/public/src/llm-view\\.ts$" },
+    {
+      "pathPattern": "(^|/)server/public/src/app\\.ts$",
+      "namePattern": "^switchTab$"
+    }
+  ],
+  "source": "manual",
+  "specRefs": [
+    "spec/feature/llm-observatory.md#概要",
+    "spec/feature/llm-observatory.md#データ",
+    "spec/feature/llm-observatory.md#api",
+    "spec/feature/llm-observatory.md#プライバシー観点"
+  ],
+  "lockedFields": ["*"]
+}

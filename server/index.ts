@@ -81,6 +81,7 @@ import { makeAiHubRouter } from './routes/ai-hub.js';
 import { makeTaskReviewRouter } from './routes/task-review.js';
 import { makeSpendingLogRouter } from './spending-log/router.js';
 import { makeCleverSearchRouter } from './clever-search/router.js';
+import { makeLlmUsageRouter } from './llm-usage/router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -250,6 +251,7 @@ app.route('/', makeTaskReviewRouter({ db }));
 console.log('[startup] mounting Clever Search');
 app.route('/', makeCleverSearchRouter({ db }));
 console.log('[startup] Clever Search ready');
+app.route('/', makeLlmUsageRouter({ db }));
 app.route('/', makeMetricsRouter());
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
