@@ -215,6 +215,31 @@ test('clever search index follows source and related-row mutations', () => {
   }
 });
 
+test('clever search startup keeps an existing projection instead of rebuilding every source', () => {
+  const db = openDb(':memory:');
+  try {
+    db.prepare(`
+      INSERT INTO activity_events (kind, occurred_at, source, content)
+      VALUES ('codex_prompt', '2026-08-06 00:00:00', 'startup-fixture', 'original source')
+    `).run();
+    makeCleverSearchRouter({ db });
+    db.prepare(`
+      UPDATE clever_search_sources
+         SET content = 'existing projection sentinel'
+       WHERE source_type = 'activity'
+    `).run();
+
+    makeCleverSearchRouter({ db });
+
+    assert.equal(
+      sourceContent(db, 'activity', 1),
+      'existing projection sentinel',
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test('clever search returns ten thousand FTS and short-query citations within five seconds', async () => {
   const db = openDb(':memory:');
   try {

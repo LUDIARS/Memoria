@@ -302,6 +302,12 @@ function ensureRelatedTableTriggers(db: Db): void {
   `);
 }
 
+function seedSourcesWhenProjectionIsEmpty(db: Db): void {
+  const projected = db.prepare('SELECT 1 FROM clever_search_sources LIMIT 1').get();
+  if (projected) return;
+  for (const spec of SOURCE_SPECS) db.exec(seedSourceSql(spec));
+}
+
 export function ensureCleverSearchSchema(db: Db): void {
   const initialize = db.transaction(() => {
     db.exec(`
@@ -362,7 +368,7 @@ export function ensureCleverSearchSchema(db: Db): void {
 
     for (const spec of SOURCE_SPECS) ensureSourceTriggers(db, spec);
     ensureRelatedTableTriggers(db);
-    for (const spec of SOURCE_SPECS) db.exec(seedSourceSql(spec));
+    seedSourcesWhenProjectionIsEmpty(db);
   });
 
   try {
