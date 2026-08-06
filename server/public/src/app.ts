@@ -331,7 +331,7 @@ const state: State = {
 //   worklist  📋 作業一覧 (タスク + repo 監視ダッシュボード)
 //   queue     ⚙ キュー (ローカル AI / 取り込みジョブの待ち行列)
 const LOCAL_ONLY_TABS = new Set([
-  'diary', 'meals', 'recommend', 'review', 'transit', 'trends',
+  'diary', 'meals', 'recommend', 'transit', 'trends',
   'worklog', 'worklist', 'queue', 'clever-search',
 ]);
 
@@ -1204,7 +1204,6 @@ function switchTab(tab) {
   $('digView').classList.toggle('hidden', tab !== 'dig');
   $('diaryView').classList.toggle('hidden', tab !== 'diary');
   $('mealsView')?.classList.toggle('hidden', tab !== 'meals');
-  $('reviewView')?.classList.toggle('hidden', tab !== 'review');
   $('transitView')?.classList.toggle('hidden', tab !== 'transit');
   $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
@@ -1229,7 +1228,6 @@ function switchTab(tab) {
   if (tab === 'dig') loadDigHistory();
   if (tab === 'diary') loadDiary();
   if (tab === 'meals') loadMeals();
-  if (tab === 'review') loadReviewRepos();
   if (tab === 'transit') loadTransit();
   if (tab === 'queue') renderQueue();
   if (tab === 'notes') void notesLoad();
@@ -5259,12 +5257,11 @@ function hideModal(panelId) {
   const dictOpen = !$('dictDetail').classList.contains('hidden');
   const domOpen  = !$('domainDetail').classList.contains('hidden');
   const appsOpen = $('appsDetail') ? !$('appsDetail').classList.contains('hidden') : false;
-  const reviewTgtOpen = $('reviewTargetModal') ? !$('reviewTargetModal').classList.contains('hidden') : false;
   const taskOpen = $('taskEditorModal') ? !$('taskEditorModal').classList.contains('hidden') : false;
   const workOpen = $('workplaceEditorModal') ? !$('workplaceEditorModal').classList.contains('hidden') : false;
   const apOpen = $('agentProjectEditor') ? !$('agentProjectEditor').classList.contains('hidden') : false;
   const arOpen = $('agentRunModal') ? !$('agentRunModal').classList.contains('hidden') : false;
-  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || reviewTgtOpen || taskOpen || workOpen || apOpen || arOpen);
+  $('modalBackdrop').hidden = !(dictOpen || domOpen || appsOpen || taskOpen || workOpen || apOpen || arOpen);
 }
 function closeAllModals() {
   state.dictDetail = null;
@@ -5274,7 +5271,6 @@ function closeAllModals() {
   hideModal('dictDetail');
   hideModal('domainDetail');
   if ($('appsDetail')) hideModal('appsDetail');
-  if ($('reviewTargetModal')) hideModal('reviewTargetModal');
   hideModal('taskEditorModal');
   hideModal('workplaceEditorModal');
   if ($('agentProjectEditor')) hideModal('agentProjectEditor');
@@ -5315,7 +5311,7 @@ refreshVisitsBadge();
 
 // ── Staleness 監視 ────────────────────────────────────────────────────────
 //
-// 「逐次発行されるけど WS push されてない」 機能 (review / weather /
+// 「逐次発行されるけど WS push されてない」 機能 (weather /
 // transit_rides) を 60s おきに /api/staleness で確認して、 signature
 // (= 不透明文字列) が変わっていたら該当機能だけ再 load する。
 //
@@ -5337,7 +5333,7 @@ async function pingStaleness(): Promise<void> {
   _stalenessPingInFlight = true;
   try {
     const r = await apiSilent('/api/staleness') as Record<string, unknown>;
-    for (const k of ['review', 'weather', 'transit_rides']) {
+    for (const k of ['weather', 'transit_rides']) {
       const v = r[k];
       if (typeof v === 'string') STALE_SIGS[k] = v;
     }
@@ -5347,10 +5343,6 @@ async function pingStaleness(): Promise<void> {
 
 /** 機能 → 「いま画面にその機能が出ているか」 判定 + 再 load。 */
 const STALE_FEATURE_HANDLERS: Record<string, { visible: () => boolean; reload: () => void }> = {
-  review: {
-    visible: () => state.tab === 'review',
-    reload: () => { void loadReviewRepos(); },
-  },
   weather: {
     visible: () => state.tab === 'worklog' && state.worklog?.sub === 'tracks',
     reload: () => { void loadTracksWeather(); },
@@ -11087,444 +11079,6 @@ document.addEventListener('click', (ev) => {
   }).catch(() => {});
 });
 
-// ── review (LUDIARS AIFormat レビュー閲覧、 DB タブ内サブタブ) ─────────────
-//
-// 一覧 = カード形式 (1 カード = 1 リポの最新レビュー)、 リポ = 左サイドの
-// カテゴリとして運用 (= bookmarks タブと同じレイアウト)。 カードをクリックで
-// 詳細ビュー (日付セレクト + 6 ファイルタブ) に切替。
-const REVIEW_FILES_UI = [
-  ['REVIEW.md', '総合'],
-  ['REVIEW_DESIGN.md', '設計'],
-  ['REVIEW_VULNERABILITY.md', '脆弱性'],
-  ['REVIEW_IMPLEMENTATION.md', '実装'],
-  ['REVIEW_MISSING_FEATURES.md', '不足機能'],
-  ['REVIEW_QUALITY.md', '品質'],
-];
-// Foedus (Cernere↔Hub 連結契約レビュー) 形式のファイルタブ。
-const FOEDUS_FILES_UI = [
-  ['REVIEW.md', '総合'],
-  ['REVIEW_DATA_BOUNDARY.md', 'データ境界'],
-  ['REVIEW_LINKAGE_CONTRACT.md', '連結契約'],
-  ['REVIEW_SECURITY.md', 'セキュリティ'],
-  ['REVIEW_FLOW.md', '横断フロー'],
-  ['CONTRACT.md', '契約 (層B)'],
-];
-function reviewFilesUi(format) {
-  return format === 'foedus' ? FOEDUS_FILES_UI : REVIEW_FILES_UI;
-}
-const reviewState = {
-  items: [],
-  availableDates: [],          // 全 repo を横断した「レビューが存在する日」 (新しい順)
-  listDate: null,              // 現在カードを絞り込む日付 (null = 未初期化)
-  filterRepo: null,            // null = 全カテゴリ
-  selected: null,
-  format: 'aiformat',          // 選択中レビューの形式 (aiformat | foedus)
-  dates: [],
-  currentDate: null,
-  currentFile: 'REVIEW.md',
-  fixPr: null,
-};
-
-async function loadReviewRepos() {
-  showReviewList();
-  const cards = document.getElementById('reviewCards');
-  const empty = document.getElementById('reviewEmpty');
-  if (!cards) return;
-  try {
-    // 利用可能な日付を取得 → 既定は最新 (= 今日があれば今日)
-    const ds = await api('/api/review/dates') as { dates?: string[] };
-    reviewState.availableDates = ds.dates || [];
-    if (reviewState.availableDates.length === 0) {
-      reviewState.listDate = null;
-      reviewState.items = [];
-      renderReviewListDateMenu();
-      renderReviewMenu();
-      renderReviewCards();
-      return;
-    }
-    // 既定は「全期間 (各リポの最新)」= listDate 未指定。 ユーザが日付を選んだ
-    // ときだけ絞り込む。 (Foedus 等が repo 固有の新しい日付を増やすと、 最新日を
-    // 自動選択する旧挙動では他リポが日付フィルタから外れて消えて見えるため。)
-    if (reviewState.listDate && !reviewState.availableDates.includes(reviewState.listDate)) {
-      reviewState.listDate = null;
-    }
-    const r = reviewState.listDate
-      ? await api(`/api/review/repos?date=${encodeURIComponent(reviewState.listDate)}`)
-      : await api('/api/review/repos');
-    reviewState.items = (r.items || []).slice().sort((a, b) => a.repo.localeCompare(b.repo));
-    renderReviewListDateMenu();
-    renderReviewMenu();
-    renderReviewCards();
-    stampLoadSig('review');
-  } catch (e) {
-    cards.innerHTML = '';
-    empty?.classList.add('hidden');
-    const menu = document.getElementById('reviewRepoMenu');
-    if (menu) menu.innerHTML = `<option>読み込みエラー: ${escapeHtml(e.message)}</option>`;
-  }
-}
-
-function renderReviewListDateMenu() {
-  const sel = document.getElementById('reviewListDateSel') as HTMLSelectElement | null;
-  if (!sel) return;
-  if (reviewState.availableDates.length === 0) {
-    sel.innerHTML = '<option value="">(レビューなし)</option>';
-    sel.disabled = true;
-    return;
-  }
-  sel.disabled = false;
-  const allOpt = `<option value=""${reviewState.listDate ? '' : ' selected'}>全期間 (最新)</option>`;
-  sel.innerHTML = allOpt + reviewState.availableDates.map((d) =>
-    `<option value="${escapeHtml(d)}"${d === reviewState.listDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
-}
-
-function renderReviewMenu() {
-  const sel = document.getElementById('reviewRepoMenu') as HTMLSelectElement | null;
-  const count = document.getElementById('reviewListCount');
-  if (!sel) return;
-  const total = reviewState.items.length;
-  const opts = [`<option value="">全て (${total})</option>`];
-  for (const it of reviewState.items) {
-    const warn = (it.critical_count > 0 || it.high_count > 0) ? ' ⚠' : '';
-    opts.push(`<option value="${escapeHtml(it.repo)}"${reviewState.filterRepo === it.repo ? ' selected' : ''}>${escapeHtml(it.repo)}${warn}</option>`);
-  }
-  sel.innerHTML = opts.join('');
-  if (count) {
-    const shown = reviewState.filterRepo ? 1 : total;
-    count.textContent = `${shown} / ${total} 件`;
-  }
-}
-
-function renderReviewCards() {
-  const cards = document.getElementById('reviewCards');
-  const empty = document.getElementById('reviewEmpty');
-  if (!cards || !empty) return;
-  const filtered = reviewState.filterRepo
-    ? reviewState.items.filter((it) => it.repo === reviewState.filterRepo)
-    : reviewState.items;
-  if (filtered.length === 0) {
-    cards.innerHTML = '';
-    empty.classList.remove('hidden');
-    return;
-  }
-  empty.classList.add('hidden');
-  cards.innerHTML = filtered.map((it) => {
-    const score = it.weighted_score
-      ? `<span class="badge" title="総合評価">⭐ ${escapeHtml(it.weighted_score)}</span>` : '';
-    const date = it.latest_date ? `<small class="muted">${escapeHtml(it.latest_date)}</small>` : '';
-    const warn = (it.critical_count > 0 || it.high_count > 0)
-      ? `<small style="color:#d97706">⚠ Critical ${it.critical_count} / High ${it.high_count}</small>` : '';
-    // 「現在アクティブな要修正 PR 数」 = latest.json.fix_pr が non-null なら 1。
-    // 履歴 (= 過去日付の fix_pr) を追跡する仕組みは未実装なので暫定で 0 / 1。
-    const activePrCount = it.fix_pr ? 1 : 0;
-    const prBadge = activePrCount > 0
-      ? `<a class="badge review-pr-badge" href="${escapeHtml(it.fix_pr || '#')}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="要修正 PR を開く">🔧 ${activePrCount}</a>`
-      : '';
-    const foedusTag = it.format_key === 'foedus'
-      ? `<span class="badge" title="Foedus 連結契約レビュー (Cernere↔Hub)">🔗 Foedus</span>` : '';
-    return `
-      <article class="card review-card" data-review-card="${escapeHtml(it.repo)}">
-        <header class="review-card-head">
-          <strong class="review-card-repo">${escapeHtml(it.repo)}</strong>
-          ${foedusTag}
-          ${prBadge}
-        </header>
-        <div class="review-card-meta">
-          ${score} ${date} ${warn}
-        </div>
-      </article>`;
-  }).join('');
-  cards.querySelectorAll('article[data-review-card]').forEach((c) => {
-    c.addEventListener('click', () => {
-      const repo = c.getAttribute('data-review-card');
-      if (repo) void openReviewDetail(repo);
-    });
-  });
-}
-
-async function openReviewDetail(repo) {
-  try {
-    const r = await api(`/api/review/repos/${encodeURIComponent(repo)}`);
-    reviewState.selected = repo;
-    reviewState.format = r.format_key || 'aiformat';
-    reviewState.dates = r.dates || [];
-    reviewState.currentDate = r.dates?.[0] ?? null;
-    reviewState.currentFile = reviewFilesUi(reviewState.format)[0][0];
-    reviewState.fixPr = r.latest?.fix_pr ?? null;
-    if (!reviewState.currentDate) {
-      alert(`${repo}: レビューフォルダはありますが日付ディレクトリが見つかりません。`);
-      return;
-    }
-    showReviewDetail();
-    renderReviewDetailHeader();
-    await loadReviewFile();
-  } catch (e) {
-    alert(`読み込みエラー: ${e.message}`);
-  }
-}
-
-function showReviewList() {
-  document.getElementById('reviewListLayout')?.classList.remove('hidden');
-  document.getElementById('reviewDetailLayout')?.classList.add('hidden');
-  document.getElementById('reviewBackBtn')?.setAttribute('hidden', '');
-}
-
-function showReviewDetail() {
-  document.getElementById('reviewListLayout')?.classList.add('hidden');
-  document.getElementById('reviewDetailLayout')?.classList.remove('hidden');
-  document.getElementById('reviewBackBtn')?.removeAttribute('hidden');
-}
-
-function renderReviewDetailHeader() {
-  const repoEl = document.getElementById('reviewDetailRepo');
-  const dateSel = document.getElementById('reviewDateSel');
-  const fileTabs = document.getElementById('reviewFileTabs');
-  const fixLink = document.getElementById('reviewFixPrLink');
-  if (!repoEl || !dateSel || !fileTabs || !fixLink) return;
-  repoEl.textContent = reviewState.selected || '';
-  dateSel.innerHTML = reviewState.dates.map((d) =>
-    `<option value="${escapeHtml(d)}"${d === reviewState.currentDate ? ' selected' : ''}>${escapeHtml(d)}</option>`).join('');
-  fileTabs.innerHTML = reviewFilesUi(reviewState.format).map(([f, label]) =>
-    `<button type="button" class="tab${f === reviewState.currentFile ? ' active' : ''}" data-review-file="${escapeHtml(f)}">${escapeHtml(label)}</button>`).join('');
-  if (reviewState.fixPr) {
-    fixLink.setAttribute('href', reviewState.fixPr);
-    fixLink.removeAttribute('hidden');
-  } else {
-    fixLink.setAttribute('hidden', '');
-  }
-  fileTabs.querySelectorAll('button[data-review-file]').forEach((b) => {
-    b.addEventListener('click', () => {
-      reviewState.currentFile = b.getAttribute('data-review-file') || 'REVIEW.md';
-      fileTabs.querySelectorAll('button[data-review-file]').forEach((x) =>
-        x.classList.toggle('active', x.getAttribute('data-review-file') === reviewState.currentFile));
-      void loadReviewFile();
-    });
-  });
-}
-
-async function loadReviewFile() {
-  const body = document.getElementById('reviewBody');
-  if (!body || !reviewState.selected || !reviewState.currentDate) return;
-  const url = `/api/review/repos/${encodeURIComponent(reviewState.selected)}/${reviewState.currentDate}/${reviewState.currentFile}`;
-  body.textContent = '読み込み中…';
-  try {
-    const res = await fetch(url);
-    if (!res.ok) { body.textContent = `${res.status}: ${await res.text()}`; return; }
-    const md = await res.text();
-    body.innerHTML = renderMarkdownBlock(md);
-    // ファイルが読めたら下に dig セクションを出して、 同じ repo/date/file の
-    // 過去 dig を一覧する。
-    await refreshReviewDigSection();
-  } catch (e) {
-    body.textContent = `読み込みエラー: ${e.message}`;
-  }
-}
-
-// ── レビュー画面の Dig UI ───────────────────────────────────────────────
-// section の表示は currentFile があるときだけ。 切替直後に履歴も読み直す。
-// pending な dig があるときだけ 5 秒おきに自分自身を呼び戻して進捗を反映。
-let _reviewDigPollTimer: number | null = null;
-function clearReviewDigPoll() {
-  if (_reviewDigPollTimer != null) {
-    window.clearTimeout(_reviewDigPollTimer);
-    _reviewDigPollTimer = null;
-  }
-}
-
-async function refreshReviewDigSection() {
-  const section = document.getElementById('reviewDigSection');
-  if (!section) return;
-  // レビュータブ以外に居る間は section を見せず poll も止める。
-  if (state.tab !== 'review'
-    || !reviewState.selected || !reviewState.currentDate || !reviewState.currentFile) {
-    section.classList.add('hidden');
-    clearReviewDigPoll();
-    return;
-  }
-  section.classList.remove('hidden');
-  const list = document.getElementById('reviewDigHistoryList');
-  const countEl = document.getElementById('reviewDigHistoryCount');
-  if (!list) return;
-  list.innerHTML = '<li class="muted">読み込み中…</li>';
-  try {
-    interface ReviewDigItem { id: number; query: string; status: string; created_at: string; error: string | null; preview_json: string | null; result_json: string | null }
-    const r = (await api(`/api/dig/by-review?repo=${encodeURIComponent(reviewState.selected)}&date=${encodeURIComponent(reviewState.currentDate)}&file=${encodeURIComponent(reviewState.currentFile)}`)) as { items: ReviewDigItem[] };
-    const items = r.items || [];
-    if (countEl) countEl.textContent = items.length > 0 ? `(${items.length} 件)` : '';
-    clearReviewDigPoll();
-    const hasPending = items.some((it) => it.status === 'pending');
-    if (hasPending) {
-      // 5 秒後に再 fetch (= status の追従)。 タブを離れていたら refreshReviewDigSection
-      // が冒頭で hidden→return するので空回りしない。
-      _reviewDigPollTimer = window.setTimeout(() => { void refreshReviewDigSection(); }, 5_000);
-    }
-    if (items.length === 0) {
-      list.innerHTML = '<li class="muted" style="font-size:12px">まだディグ履歴はありません。 上の入力欄から始められます。</li>';
-      return;
-    }
-    list.innerHTML = items.map((it) => {
-      const status = it.error ? `<span style="color:#c0392b">⚠ ${escapeHtml(it.error.slice(0, 80))}</span>`
-        : it.status === 'pending' ? '<span class="muted">⏳ 実行中</span>'
-        : it.status === 'done' ? '<span style="color:#059669">✓ 完了</span>'
-        : escapeHtml(it.status);
-      const summary = extractDigSummarySnippet(it.result_json, it.preview_json);
-      const when = new Date(it.created_at).toLocaleString('ja-JP');
-      return `<li class="review-dig-history-item" data-dig-id="${it.id}">
-        <div class="review-dig-history-row1">
-          <strong>${escapeHtml(it.query)}</strong>
-          ${status}
-        </div>
-        <div class="muted" style="font-size:11px">${escapeHtml(when)}</div>
-        ${summary ? `<p class="review-dig-summary">${escapeHtml(summary)}</p>` : ''}
-        <div class="review-dig-history-actions">
-          <button class="ghost review-dig-open" data-dig-id="${it.id}" type="button">▶ Dig タブで開く</button>
-        </div>
-      </li>`;
-    }).join('');
-    list.querySelectorAll('.review-dig-open').forEach((b) => {
-      b.addEventListener('click', () => {
-        const id = Number((b as HTMLElement).dataset.digId);
-        if (Number.isFinite(id)) void openDigSessionFromReview(id);
-      });
-    });
-  } catch (e: unknown) {
-    list.innerHTML = `<li class="muted" style="font-size:12px;color:#c0392b">読み込みエラー: ${escapeHtml((e as Error).message)}</li>`;
-  }
-}
-
-function extractDigSummarySnippet(resultJson: string | null, previewJson: string | null): string {
-  // result_json (深堀完了) > preview_json の順で要約を抽出。 1 行プレビューとして 200 字以内に切る。
-  for (const j of [resultJson, previewJson]) {
-    if (!j) continue;
-    try {
-      const obj = JSON.parse(j) as { summary?: string; ai_overview?: string };
-      const text = (obj.summary || obj.ai_overview || '').trim();
-      if (text) return text.replace(/\s+/g, ' ').slice(0, 200);
-    } catch { /* swallow */ }
-  }
-  return '';
-}
-
-async function openDigSessionFromReview(id: number) {
-  // dig タブに切替えて該当 session を開く。 既存の loadDigSession を再利用。
-  switchTab('dig');
-  // loadDigSession は async function declaration 済み (10ms 後で十分タブ DOM 完成)
-  setTimeout(() => { void loadDigSession(id); }, 50);
-}
-
-async function submitReviewDig() {
-  const ta = $('reviewDigQuery') as HTMLTextAreaElement | null;
-  const errEl = $('reviewDigError');
-  const setErr = (m: string) => { if (errEl) { errEl.textContent = `⚠ ${m}`; errEl.hidden = false; } };
-  if (errEl) errEl.hidden = true;
-  const q = ta?.value.trim() ?? '';
-  if (!q) return setErr('調べたい点を入力してください');
-  if (!reviewState.selected || !reviewState.currentDate || !reviewState.currentFile) {
-    return setErr('レビューファイルが選択されていません');
-  }
-  // dig query には 「どのレビュー由来か」 を先頭に付けて、 dig 側でも文脈が分かるように。
-  const ctx = `[Review ${reviewState.selected}/${reviewState.currentDate}/${reviewState.currentFile}]`;
-  const composedQuery = `${ctx}\n${q}`;
-  const btn = $('reviewDigSubmit') as HTMLButtonElement | null;
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ 起動中…'; }
-  try {
-    const res = await fetch('/api/dig', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: composedQuery,
-        origin: {
-          kind: 'review',
-          repo: reviewState.selected,
-          date: reviewState.currentDate,
-          file: reviewState.currentFile,
-        },
-      }),
-    });
-    if (!res.ok) {
-      const b = await res.json().catch(() => ({})) as { error?: string };
-      return setErr(b.error || `${res.status}`);
-    }
-    if (ta) ta.value = '';
-    flashToast('🔎 ディグを開始しました');
-    await refreshReviewDigSection();
-  } catch (e: unknown) {
-    setErr((e as Error).message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🔎 ディグる'; }
-  }
-}
-
-document.getElementById('reviewDigSubmit')?.addEventListener('click', () => void submitReviewDig());
-// Ctrl/Cmd + Enter で submit
-document.getElementById('reviewDigQuery')?.addEventListener('keydown', (ev) => {
-  const e = ev as KeyboardEvent;
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault();
-    void submitReviewDig();
-  }
-});
-
-document.getElementById('reviewRefresh')?.addEventListener('click', () => void loadReviewRepos());
-document.getElementById('reviewBackBtn')?.addEventListener('click', () => showReviewList());
-document.getElementById('reviewRepoMenu')?.addEventListener('change', (ev) => {
-  const v = (ev.target as HTMLSelectElement).value;
-  reviewState.filterRepo = v || null;
-  renderReviewMenu();
-  renderReviewCards();
-});
-document.getElementById('reviewListDateSel')?.addEventListener('change', (ev) => {
-  const v = (ev.target as HTMLSelectElement).value;
-  // 空 = 「全期間 (最新)」。 日付選択時はその日で絞り込む。
-  reviewState.listDate = v || null;
-  // 日付を切り替えると repo フィルタはリセット (= 別リストに移るため)
-  reviewState.filterRepo = null;
-  void loadReviewRepos();
-});
-
-// ── レビュー対象の追加モーダル ─────────────────────────────────
-function openReviewTargetModal() {
-  ($('reviewTargetName') as HTMLInputElement).value = '';
-  ($('reviewTargetPath') as HTMLInputElement).value = '';
-  ($('reviewTargetFormat') as HTMLSelectElement).value = 'aiformat';
-  const err = $('reviewTargetError');
-  if (err) { err.hidden = true; err.textContent = ''; }
-  showModal('reviewTargetModal');
-}
-
-async function submitReviewTarget() {
-  const name = ($('reviewTargetName') as HTMLInputElement).value.trim();
-  const local_path = ($('reviewTargetPath') as HTMLInputElement).value.trim();
-  const format_key = ($('reviewTargetFormat') as HTMLSelectElement).value;
-  const err = $('reviewTargetError');
-  const showErr = (msg: string) => { if (err) { err.textContent = `⚠ ${msg}`; err.hidden = false; } };
-  if (!name) return showErr('表示名を入力してください');
-  if (!local_path) return showErr('ローカルパスを入力してください');
-  try {
-    const res = await fetch('/api/review/targets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, local_path, format_key }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({})) as { error?: string };
-      return showErr(body.error || `${res.status}`);
-    }
-    hideModal('reviewTargetModal');
-    flashToast('レビュー対象を追加しました');
-    await loadReviewRepos();
-  } catch (e) {
-    showErr((e as Error).message);
-  }
-}
-
-$('reviewAddTargetBtn')?.addEventListener('click', openReviewTargetModal);
-$('reviewTargetSaveBtn')?.addEventListener('click', () => void submitReviewTarget());
-$('reviewTargetCloseBtn')?.addEventListener('click', () => hideModal('reviewTargetModal'));
-document.getElementById('reviewDateSel')?.addEventListener('change', (ev) => {
-  reviewState.currentDate = ev.target.value;
-  void loadReviewFile();
-});
-
 // ── 📋 作業一覧 / 📦 リポジトリ セクション ────────────────────────────────
 //
 // 「作業一覧」 タブ (worklistView) の中の 1 セクション。 登録した GitHub リポの
@@ -13808,7 +13362,7 @@ function scrollPageToTop() {
   const selectors = [
     '.notes-pane', '.notes-comments', '.notes-sidebar',
     '.bookmarks-main', '.bookmarks-categories',
-    '#cards', '#mealsList', '#reviewCards', '#reviewBody',
+    '#cards', '#mealsList',
     '#diaryView', '#trendsView', '#recommendView', '#digView', '#tasksView',
   ];
   document.querySelectorAll(selectors.join(',')).forEach((el) => {
