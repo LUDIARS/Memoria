@@ -49,4 +49,5 @@ spec/api/
 | Amazon Echo / Alexa | [alexa.md](alexa.md) | `/api/alexa/skill` |
 | 傾向 / ログ | [misc.md](misc.md) | `/api/trends/*`, `/api/events`, `/api/uptime`, `/api/recommendations*` |
 | ノート | [note.md](note.md) | `/api/notes*`, `/api/notes/from-chat` |
+| クレバーサーチ | [clever-search.md](clever-search.md) | `/api/clever-search`, `/api/clever-search/reports*` |
 | 拡張ルール | [misc.md](misc.md) | `/api/extension/rules` (拡張 dispatch 設定) |

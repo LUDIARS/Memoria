@@ -18,6 +18,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   
   <link rel="stylesheet" href="style.css?v=20260513k" />
+  <link rel="stylesheet" href="clever-search.css?v=20260806a" />
 </head>
 <body>
   <header class="topbar">
@@ -294,6 +295,9 @@
             <span class="tab-label" data-full="📝 ログ" data-short="📝 ログ">📝 ログ</span>
             <span id="tabQueueCount" class="tab-count hidden">0</span>
           </button>
+          <button class="tab" data-tab="clever-search">
+            <span class="tab-label" data-full="🔭 クレバーサーチ" data-short="🔭 検索">🔭 クレバーサーチ</span>
+          </button>
           <button class="tab" data-tab="trends">
             <span class="tab-label" data-full="📊 傾向" data-short="📊 傾向">📊 傾向</span>
           </button>
@@ -371,6 +375,33 @@
               <button id="bookmarksMore" type="button" class="bookmarks-more-btn" hidden>もっと表示</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div id="cleverSearchView" class="hidden">
+        <div class="clever-search-shell">
+          <section class="clever-search-main foundation-form">
+            <div class="clever-search-intro">
+              <h2>クレバーサーチ</h2>
+              <p class="muted">Memoria 内の開発・会話・知識・日記・タスクを、外部 LLM へ送らず横断検索します。</p>
+            </div>
+            <form id="cleverSearchForm">
+              <div class="clever-search-form-row">
+                <input id="cleverSearchQuery" type="search" maxlength="120" placeholder="探したい単語を入力" autocomplete="off" />
+                <button id="cleverSearchSubmit" type="submit">レポート作成</button>
+              </div>
+              <label class="clever-search-refresh">
+                <input id="cleverSearchRefresh" type="checkbox" />
+                保存済みキャッシュを使わず再作成
+              </label>
+            </form>
+            <p id="cleverSearchStatus" class="muted" aria-live="polite"></p>
+          </section>
+          <aside class="clever-search-history-panel">
+            <h3>保存済みレポート</h3>
+            <ul id="cleverSearchHistory"><li class="muted">読込中…</li></ul>
+          </aside>
+          <div id="cleverSearchResult" hidden></div>
         </div>
       </div>
 
@@ -1939,6 +1970,6 @@
       <button id="aiSettingsSave">保存</button>
     </div>
   </div>
-  <script src="app.js?v=20260620a"></script>
+  <script src="app.js?v=20260806a"></script>
 </body>
 </html>

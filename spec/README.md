@@ -26,10 +26,10 @@ spec/
   そこから型化を進める出発点。Phase 後半で実装側を spec から再生成する形に倒す。
 
 ## カバレッジ（充実度の現状）
-- `data/` — 43 テーブル中 20 を文書化（残りは内部/キャッシュ系。Phase 0 段階移行中、gap）。
-- `interface/` — 24 ルート中 17 を文書化（packet-monitor / transit / weather / repo /
+- `data/` — 46 テーブル中 23 を文書化（残りは内部/キャッシュ系。Phase 0 段階移行中、gap）。
+- `interface/` — 27 ルート中 20 を文書化（packet-monitor / transit / weather / repo /
   staleness / review 等が gap）。
-- `feature/` — 35 ファイル（主要機能を網羅。 Hub 共有サーバ層は `hub-social` /
+- `feature/` — 43 ファイル（主要機能を網羅。 Hub 共有サーバ層は `hub-social` /
   `hub-achievements` / `hub-dig-rooms` の 3 本）。
 - `setup/` `test/` — 整備済（`test/` は本 PR で新設）。
 - 残りの table / route doc は `server/db.ts` / `server/routes/*` から追補する

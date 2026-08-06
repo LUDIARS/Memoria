@@ -1,0 +1,208 @@
+#cleverSearchView {
+  padding: 18px;
+}
+
+.clever-search-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 18px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.clever-search-main,
+.clever-search-history-panel,
+.clever-search-report-head,
+.clever-search-category {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #dfe3ea);
+  border-radius: 14px;
+}
+
+.clever-search-main,
+.clever-search-history-panel {
+  padding: 18px;
+}
+
+.clever-search-intro h2,
+.clever-search-category h3,
+.clever-search-category h4 {
+  margin: 0;
+}
+
+.clever-search-form-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.clever-search-form-row input[type="search"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.clever-search-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.clever-search-history-panel h3 {
+  margin-top: 0;
+}
+
+.clever-search-history-panel ul,
+.clever-search-representatives,
+.clever-search-all-citations ul,
+.clever-search-timeline ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#cleverSearchHistory button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin-bottom: 7px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border, #dfe3ea);
+}
+
+#cleverSearchHistory small {
+  color: var(--muted, #6d7480);
+}
+
+#cleverSearchResult {
+  grid-column: 1 / -1;
+}
+
+.clever-search-report-head {
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.clever-search-report-title h2 {
+  margin: 8px 0;
+}
+
+.clever-search-cache-badge,
+.clever-search-count,
+.clever-search-source {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--accent, #2a6df4) 12%, transparent);
+  color: var(--accent, #2a6df4);
+}
+
+.clever-search-cache-badge[data-cached="true"] {
+  background: color-mix(in srgb, #2f9e44 14%, transparent);
+  color: #2f9e44;
+}
+
+.clever-search-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.clever-search-stats div {
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--surface-2, #f6f8fb);
+}
+
+.clever-search-stats dt {
+  color: var(--muted, #6d7480);
+  font-size: 12px;
+}
+
+.clever-search-stats dd {
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+
+.clever-search-timeline li {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+}
+
+.clever-search-categories {
+  display: grid;
+  gap: 16px;
+}
+
+.clever-search-category {
+  padding: 18px;
+}
+
+.clever-search-category > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.clever-search-category > header p {
+  margin-bottom: 0;
+}
+
+.clever-search-breakdown {
+  color: var(--muted, #6d7480);
+  font-size: 13px;
+  margin: 10px 0 16px;
+}
+
+.clever-search-category h4 {
+  margin-bottom: 8px;
+}
+
+.clever-search-citation {
+  padding: 12px 0;
+  border-top: 1px solid var(--border, #dfe3ea);
+}
+
+.clever-search-citation-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+  color: var(--muted, #6d7480);
+  font-size: 12px;
+}
+
+.clever-search-citation blockquote {
+  margin: 7px 0 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border, #dfe3ea);
+  color: var(--muted, #4e5662);
+}
+
+.clever-search-all-citations {
+  margin-top: 14px;
+}
+
+.clever-search-all-citations summary,
+.clever-search-timeline summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  #cleverSearchView { padding: 10px; }
+  .clever-search-shell { grid-template-columns: 1fr; }
+  #cleverSearchResult { grid-column: 1; }
+  .clever-search-form-row { flex-direction: column; }
+  .clever-search-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .clever-search-category > header,
+  .clever-search-citation-head { flex-direction: column; }
+}

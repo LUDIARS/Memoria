@@ -22,7 +22,10 @@ server/multi/.infisical-creds.json
 # logs / artifacts
 *.log
 *.stackdump
-.anatomia/
+.anatomia/*
+!.anatomia/domains/
+.anatomia/domains/*
+!.anatomia/domains/*.domain.json
 logs/
 server/logs/
 .DS_Store

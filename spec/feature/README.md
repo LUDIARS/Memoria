@@ -33,6 +33,7 @@
 | Memoria Hub プレゼンス | [multi-hub.md](multi-hub.md) | ✓ | この機能自体が Hub 連携の入口 |
 | Legatus → Memoria GPS 転送 | [legatus-subscriber.md](legatus-subscriber.md) | 🏠 | loopback / tailnet 内で完結 |
 | 外部 chat 取り込み | [external-chat.md](external-chat.md) | 🏠 | チャネル名 / 個人発言を含む |
+| クレバーサーチ | [clever-search.md](clever-search.md) | 🏠 | 個人ログを横断検索し、レポートもローカル DB にのみ保存 |
 | MCP server autostart | [mcp-server.md](mcp-server.md) | 🏠 | Claude Desktop / Code 連携 (ローカル stdio) |
 | サーバ稼働 / heartbeat | [uptime.md](uptime.md) | 🏠 | PC 起動時間ログ |
 | LLM プロバイダ設定 | [llm-config.md](llm-config.md) | 🏠 | OpenAI API key 等を含む |

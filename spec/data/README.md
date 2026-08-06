@@ -26,6 +26,7 @@ Memoria ローカルサーバ (`server/db.ts` で初期化される SQLite フ�
 | ワードクラウド | [wordcloud.md](wordcloud.md) | `word_clouds` |
 | ストップワード | [stopwords.md](stopwords.md) | `user_stopwords` |
 | ノート | [note.md](note.md) | `notes` / `note_blocks` |
+| クレバーサーチ | [clever-search.md](clever-search.md) | `clever_search_sources` / `clever_search_fts` / `clever_search_reports` |
 | 実績 (achievements) | [hub-social.md](hub-social.md) §8 | `achievement_sources` / `achievement_entries` / `achievement_redaction_terms` |
 
 ## Hub (Postgres) 側のテーブル

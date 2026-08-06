@@ -169,6 +169,7 @@ import { silentGetPosition, requestPosition, type PositionLike } from './geo.js'
 import { loadRssView } from './rss-view.js';
 import { loadGoalsView } from './goals-view.js';
 import { loadUserApps } from './userapps-view.js';
+import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-view.js';
 import {
   loadAiArticlesView,
   loadAiAdviceView,
@@ -331,7 +332,7 @@ const state: State = {
 //   queue     ⚙ キュー (ローカル AI / 取り込みジョブの待ち行列)
 const LOCAL_ONLY_TABS = new Set([
   'diary', 'meals', 'recommend', 'review', 'transit', 'trends',
-  'worklog', 'worklist', 'queue',
+  'worklog', 'worklist', 'queue', 'clever-search',
 ]);
 
 // `$()` は永らく document.getElementById のショートハンド。
@@ -1212,6 +1213,7 @@ function switchTab(tab) {
   $('rssView')?.classList.toggle('hidden', tab !== 'rss');
   $('goalsView')?.classList.toggle('hidden', tab !== 'goals');
   $('userappsView')?.classList.toggle('hidden', tab !== 'userapps');
+  $('cleverSearchView')?.classList.toggle('hidden', tab !== 'clever-search');
   if (tab === 'database') {
     // Re-show whichever DB sub was last picked.
     const sub = state.database?.sub || 'bookmarks';
@@ -1236,6 +1238,7 @@ function switchTab(tab) {
   if (tab === 'rss') loadRssView();
   if (tab === 'goals') void loadGoalsView();
   if (tab === 'userapps') void loadUserApps();
+  if (tab === 'clever-search') void loadCleverSearchHistory();
   bumpTabUsage(tab);
   closeTabMoreMenu();
   reflowTabsForViewport();
@@ -13777,6 +13780,7 @@ wireLocationEditModal();
 // 本体は tutorial.ts / help-drawer.ts に分離。 app.ts は依存だけ渡して
 // 初期化する。 PAGE_HELP の本文を増やすときは page-help.ts を編集。
 initHelpDrawer();
+initCleverSearchView();
 initTutorial({
   api,
   switchTab,
@@ -13967,11 +13971,16 @@ declare global {
     refreshDetailBox();
   }
 
+  function applyConnectionTransition() {
+    attempt = 0;
+    setState('connected', 'Legatus');
+  }
+
   function connect() {
     if (!enabled) return;
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     try { ws = new WebSocket(url); } catch (_e) { scheduleReconnect(); return; }
-    ws.addEventListener('open', () => { attempt = 0; setState('connected', 'Legatus'); });
+    ws.addEventListener('open', applyConnectionTransition);
     ws.addEventListener('message', (e) => {
       let parsed = null;
       try { parsed = JSON.parse(e.data); } catch { return; }

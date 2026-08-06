@@ -1,0 +1,24 @@
+{
+  "name": "clever-search",
+  "description": "Memoria の local-only 個人ログを SQLite 索引で横断検索し、カテゴリ別レポートとして保存・表示する機能。direct loopback の HTTP 境界、検索投影、集計、履歴、専用 UI を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/clever-search/[^/]+\\.ts$" },
+    { "pathPattern": "(^|/)server/api/types/clever-search\\.ts$" },
+    { "pathPattern": "(^|/)server/public/src/clever-search-view\\.ts$" },
+    {
+      "pathPattern": "(^|/)server/public/src/app\\.ts$",
+      "namePattern": "^switchTab$"
+    }
+  ],
+  "source": "manual",
+  "specRefs": [
+    "spec/feature/clever-search.md#概要",
+    "spec/feature/clever-search.md#データ",
+    "spec/feature/clever-search.md#api",
+    "spec/feature/clever-search.md#プライバシー観点"
+  ],
+  "lockedFields": ["*"]
+}
