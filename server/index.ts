@@ -108,9 +108,11 @@ const HEARTBEAT_FILE = join(DATA_DIR, 'heartbeat.json');
 startUptimeTracking({ db, dataDir: DATA_DIR, heartbeatFile: HEARTBEAT_FILE });
 
 // ── Queues / WS / MCP ─────────────────────────────────────────────────────
+console.log('[startup] composing queues and local services');
 const queues = makeQueues({ db, htmlDir: HTML_DIR, mealDir: MEAL_DIR });
 const ws = makeWsLocations(db);
 const mcp = makeMcpServer({ port: PORT, mcpDir: resolve(__dirname, '..', 'mcp-server') });
+console.log('[startup] queues and local services ready');
 
 // Recover any bookmarks left in 'pending' from a previous run.
 {
@@ -204,6 +206,7 @@ const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSumm
 // 成長型ブラックボックス engine (天気の雨判定 / 行きがち場所推定 + 将来の汎用ルール)。
 // 実体は @ludiars/blackbox (Lapilli)。schema 保証 + 旧テーブルからの migration も内蔵。
 const blackbox = makeSqliteBlackBox(db);
+console.log('[startup] mounting API routers');
 
 app.route('/', makeBookmarkRouter({
   db, htmlDir: HTML_DIR,
@@ -244,7 +247,9 @@ app.route('/', makeDiaryRouter({
 }));
 app.route('/', makeTaskRouter({ db }));
 app.route('/', makeTaskReviewRouter({ db }));
+console.log('[startup] mounting Clever Search');
 app.route('/', makeCleverSearchRouter({ db }));
+console.log('[startup] Clever Search ready');
 app.route('/', makeMetricsRouter());
 app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
@@ -263,9 +268,11 @@ app.route('/', makePushRouter({ db }));
 // 本体 (Discord/MQTT/GPS 等) ごと落としてしまう。 動的 import + try/catch で
 // 隔離し、 起動失敗は best-effort でこの app だけ無効化する。
 try {
+  console.log('[startup] loading Alexa app');
   const { loadAlexaConfig } = await import('./alexa/config.js');
   const { makeAlexaRouter } = await import('./routes/alexa.js');
   app.route('/', makeAlexaRouter({ db, config: loadAlexaConfig() }));
+  console.log('[startup] Alexa app ready');
 } catch (e: unknown) {
   const msg = e instanceof Error ? e.message : String(e);
   console.error(`[alexa] failed to start: ${msg}`);
@@ -273,7 +280,9 @@ try {
 // ユーザーアプリ (プラグイン) を本体プロセスに in-process マウント
 // (submodule server/plugins/memoria-plugin)。 /plugins/<id> を static catch-all
 // より前に登録する必要があるためここで mount し、 manifest を /api/plugins に渡す。
+console.log('[startup] loading user apps');
 const userApps = await mountUserApps(app, { db, dataDir: DATA_DIR });
+console.log('[startup] user apps ready');
 app.route('/', makePluginsRouter({ db, registry: userApps.registry }));
 app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
@@ -361,6 +370,7 @@ app.get('/', serveStatic({ path: './public/index.html' }));
 
 // ---- HTTP server + WebSocket -------------------------------------------
 
+console.log('[startup] binding HTTP server');
 const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Memoria server listening on http://localhost:${info.port}`);
   console.log(`  data dir: ${DATA_DIR}`);
