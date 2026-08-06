@@ -63,7 +63,6 @@ import { makeConfigRouter } from './routes/config.js';
 import { makeMultiRouter } from './routes/multi.js';
 import { makeMultiProxyMiddleware } from './local/multi-proxy.js';
 import { makeMiscRouter } from './routes/misc.js';
-import { makeReviewRouter, seedReviewTargets, seedReviewScopes } from './routes/review.js';
 import { makeRepoRouter } from './routes/repo.js';
 import { makePacketMonitorRouter } from './routes/packet-monitor.js';
 import { makeMetricsRouter } from './routes/metrics.js';
@@ -142,23 +141,6 @@ for (const m of listPendingMeals(db, { limit: 50 })) {
     console.log(`[startup] re-queuing ${pendingDiaries.length} pending diary job(s): ${pendingDiaries.map((d) => d.date).join(', ')}`);
     for (const { date } of pendingDiaries) queues.enqueueDiary(date);
   }
-}
-
-// レビュー対象を LUDIARS clone から自動 seed (= 既存に追加するだけで、 ユーザが
-// UI で追加した行は触らない)。
-try {
-  const seedResult = seedReviewTargets(db);
-  if (seedResult.seeded > 0) {
-    console.log(`[startup] seeded ${seedResult.seeded} review target(s) from LUDIARS clones (${seedResult.skipped} skipped)`);
-  }
-  // git clone ではない仮想スコープ (Foedus の Cernere↔Hub 連結契約レビュー等) も seed。
-  const scopeResult = seedReviewScopes(db);
-  if (scopeResult.seeded > 0) {
-    console.log(`[startup] seeded ${scopeResult.seeded} foedus review scope(s) (${scopeResult.skipped} skipped)`);
-  }
-} catch (e) {
-  const msg = e instanceof Error ? e.message : String(e);
-  console.warn(`[startup] review target seed failed: ${msg}`);
 }
 
 // stations マスタを HeartRails Express から非同期 import (初回起動時のみ)。
@@ -315,7 +297,6 @@ app.route('/', makeMultiRouter({
   triggerResolveAsync: ws.triggerResolveAsync,
 }));
 app.route('/', makeMiscRouter({ db, htmlDir: HTML_DIR, bulkSaveDeps }));
-app.route('/', makeReviewRouter({ db }));
 app.route('/', makeRepoRouter({ db }));
 app.route('/', makePacketMonitorRouter({
   dataDir: DATA_DIR,
