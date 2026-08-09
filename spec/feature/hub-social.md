@@ -383,6 +383,11 @@ UNIQUE (target_kind, target_id, user_id, kind)
 
 ## 9. Local / Multi との関係 (どこにデータが在るか)
 
+> ⚠ **撤回 (neco 指示 2026-07-31)**: 下記の「他人のデータをローカルに持たない」 方針は
+> [`hub-sync.md`](./hub-sync.md) で**撤回された**。 Hub の内容は差分同期でローカルに落ちる
+> (`source_hub_id` で自分の行と分離)。 同期の前提として必要なため。 本節の記述は
+> proxy モデル時代のもので、 Phase 6 の proxy 撤去まで併存する。
+
 social 層は **Hub 専用**。 v0.1 では他人のコメント / いいねを
 ローカル SQLite に永続化しない。
 

@@ -37,6 +37,7 @@ Memoria ローカルサーバ (`server/db.ts` で初期化される SQLite フ�
 | ドメイン | spec | 関連テーブル |
 |---|---|---|
 | 共有サーバ層 | [hub-social.md](hub-social.md) | `subjects` / `comments` / `reactions` / `bookmark_renditions` / `notifications` / `achievement_entries` / `achievement_digests` / `ai_articles` / `dig_rooms` / `dig_contributions` / `dig_room_digests` / `dig_room_jobs` / `hub_members` |
+| 同期 | [hub-sync.md](hub-sync.md) | Hub: `hub_changes` / ローカル: `hub_servers` / `hub_sync_state` / `hub_pushes` + 共有各表への `source_hub_id` |
 
 Hub の既存 7 型テーブル (`bookmarks` / `dig_sessions` / `dictionary_entries` /
 `implementation_notes` / `work_locations` / `domain_catalog` / `notes`) は

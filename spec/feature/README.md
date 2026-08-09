@@ -46,6 +46,7 @@
 | AI ハブ (AIノート / ネタ / 助言) | [ai-hub.md](ai-hub.md) | ✓ / 🏠 | AI記事 (= AIノート) は Hub 共有可 (禁止語スキャン必須)。 記事ネタ / AIアドバイスは local-only |
 | 実績共有 (achievements) | [hub-achievements.md](hub-achievements.md) | ✓ | GitHub / ローカル git / activity から「やった事」 を取り込み。 **既定は非共有**、 repo 単位 opt-in + 禁止語スキャン |
 | 共同 dig (dig room) | [hub-dig-rooms.md](hub-dig-rooms.md) | ✓ | みんなでディグる。 append-only の contribution + rev 付きまとめ |
+| Hub 同期 + ローカル Cernere 認証 | [hub-sync.md](hub-sync.md) | ✓ | 端末を 1 度登録 → 自動ログイン → 差分同期。 表示ソース選択。 **push は常に手動 + 先を選ぶ** |
 
 ## 凡例 (項目)
 各 feature ファイルは以下のセクションを順序固定で持つ:
