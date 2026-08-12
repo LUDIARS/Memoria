@@ -143,7 +143,7 @@ test('dashboard strips saved Local LLM endpoints from historical snapshots', () 
   }
 });
 
-test('LLM usage routes require a direct same-origin loopback request', async () => {
+test('LLM usage routes accept Access-forwarded browser requests without exposing direct remote access', async () => {
   const db = openDb(':memory:');
   try {
     const app = new Hono();
@@ -155,6 +155,13 @@ test('LLM usage routes require a direct same-origin loopback request', async () 
       headers: { Origin: 'https://example.invalid' },
     });
     assert.equal(crossOrigin.status, 403);
+    const access = await requestFrom(app, '127.0.0.1', 'http://memoria.ai-run-do.com/api/llm-usage', {
+      headers: {
+        Origin: 'https://memoria.ai-run-do.com',
+        'X-Forwarded-Proto': 'https',
+      },
+    });
+    assert.equal(access.status, 200);
     const local = await requestFrom(app, '127.0.0.1', 'http://localhost/api/llm-usage', {
       headers: { Origin: 'http://localhost' },
     });

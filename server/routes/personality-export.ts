@@ -1,4 +1,4 @@
-// /api/personality-export/* — Voluptas連携の設定・トークン管理 (ローカル管理画面用)
+// /api/personality-export/* — Voluptas連携の設定・トークン管理 (Access 保護の管理画面用)
 // /api/external/personality-features — Bearerトークンで保護された、Voluptas向けの読み取り専用公開口。
 //
 // 個人データはローカルに閉じる方針 ([[project_personal_data_rule]]) の唯一の例外。
@@ -17,7 +17,7 @@ import {
   gatherPersonalityFeatureInputs,
   PERSONALITY_SAMPLE_WINDOW_DAYS,
 } from '../personality-export/feature-inputs.js';
-import { isDirectLoopbackRequest } from '../lib/local-request.js';
+import { isSameMachineRequest } from '../lib/local-request.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -27,8 +27,15 @@ export function makePersonalityExportRouter(deps: PersonalityExportRouterDeps): 
   const { db } = deps;
   const r = new Hono();
 
-  // ── ローカル管理 ────────────────────────────────────────────────────────
-  // status は表示用。 opt-in と token lifecycle の変更は direct loopback のみに限定する。
+  // ── Access 保護の管理画面 ────────────────────────────────────────────────
+  // Accept the configured Access host, but retain local-peer and same-origin
+  // checks so direct LAN access and cross-site mutations stay blocked.
+  r.use('/api/personality-export/*', async (c, next) => {
+    if (!isSameMachineRequest(c)) {
+      return c.json({ error: 'same-machine access required' }, 403);
+    }
+    await next();
+  });
 
   r.get('/api/personality-export/status', (c: Context) => {
     const priv = privacySettings(db);
@@ -37,10 +44,6 @@ export function makePersonalityExportRouter(deps: PersonalityExportRouterDeps): 
   });
 
   r.patch('/api/personality-export/settings', async (c: Context) => {
-    if (!isDirectLoopbackRequest(c)) {
-      return c.json({ error: 'direct loopback access required' }, 403);
-    }
-
     let body: unknown;
     try {
       body = await c.req.json();
@@ -60,9 +63,6 @@ export function makePersonalityExportRouter(deps: PersonalityExportRouterDeps): 
   // POST /api/personality-export/token — 新規発行 (既存トークンは上書きで失効)。
   // 平文トークンはこのレスポンスでのみ返し、以後は再取得不可 (再発行のみ)。
   r.post('/api/personality-export/token', (c: Context) => {
-    if (!isDirectLoopbackRequest(c)) {
-      return c.json({ error: 'direct loopback access required' }, 403);
-    }
     const priv = privacySettings(db);
     if (!priv.external_share_voluptas_personality_enabled) {
       return c.json({ error: 'external_share_voluptas_personality is disabled' }, 400);
@@ -72,9 +72,6 @@ export function makePersonalityExportRouter(deps: PersonalityExportRouterDeps): 
   });
 
   r.delete('/api/personality-export/token', (c: Context) => {
-    if (!isDirectLoopbackRequest(c)) {
-      return c.json({ error: 'direct loopback access required' }, 403);
-    }
     revokeShareToken(db);
     return c.json({ ok: true });
   });

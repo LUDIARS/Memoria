@@ -106,7 +106,7 @@ test('spending-log sync stores sensitive local-only records and calculates daily
   }
 });
 
-test('spending-log endpoints reject non-loopback access and remote Quaestor URLs', async () => {
+test('spending-log endpoints accept Access-forwarded browsers and reject direct remote access', async () => {
   const db = openDb(':memory:');
   try {
     const app = makeSpendingLogRouter({
@@ -119,6 +119,19 @@ test('spending-log endpoints reject non-loopback access and remote Quaestor URLs
       'http://memoria.lan/api/spending-logs',
     );
     assert.equal(remote.status, 403);
+
+    const access = await requestFrom(
+      app,
+      '127.0.0.1',
+      'http://memoria.ai-run-do.com/api/spending-logs',
+      {
+        headers: {
+          Origin: 'https://memoria.ai-run-do.com',
+          'X-Forwarded-Proto': 'https',
+        },
+      },
+    );
+    assert.equal(access.status, 200);
 
     const sync = await requestFrom(app, '127.0.0.1', 'http://127.0.0.1/api/spending-logs/sync', {
       method: 'POST',

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
-import { isDirectLoopbackRequest } from '../lib/local-request.js';
+import { isSameMachineRequest } from '../lib/local-request.js';
 import { ensureLlmUsageSchema } from './schema.js';
 import { usageDashboard } from './store.js';
 import { UsageSyncCoordinator } from './sync.js';
@@ -14,8 +14,10 @@ export function makeLlmUsageRouter({ db }: { db: Db }): Hono {
 
   router.use('*', async (context, next) => {
     context.header('Cache-Control', 'no-store');
-    if (!isDirectLoopbackRequest(context)) {
-      return context.json({ error: 'direct loopback access required' }, 403);
+    // Accept requests forwarded by the configured Access host while retaining
+    // the local peer and same-origin checks for direct access and CSRF.
+    if (!isSameMachineRequest(context)) {
+      return context.json({ error: 'same-machine access required' }, 403);
     }
     await next();
   });

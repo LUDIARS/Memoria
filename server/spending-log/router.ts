@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type BetterSqlite3 from 'better-sqlite3';
-import { isDirectLoopbackRequest } from '../lib/local-request.js';
+import { isSameMachineRequest } from '../lib/local-request.js';
 import { ensureSpendingLogSchema } from './schema.js';
 import { fetchQuaestorSpendingLogs } from './quaestor-client.js';
 import {
@@ -35,8 +35,10 @@ export function makeSpendingLogRouter(deps: SpendingLogRouterDeps): Hono {
 
   router.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
-    if (!isDirectLoopbackRequest(c)) {
-      return c.json({ error: 'direct loopback access required' }, 403);
+    // Accept requests forwarded by the configured Access host while retaining
+    // the local peer and same-origin checks for direct access and CSRF.
+    if (!isSameMachineRequest(c)) {
+      return c.json({ error: 'same-machine access required' }, 403);
     }
     await next();
   });
