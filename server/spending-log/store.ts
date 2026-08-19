@@ -6,6 +6,12 @@ import {
   type QuaestorSpendingLogExport,
   type SpendingLogRecord,
 } from './contract.js';
+import {
+  DIARY_ONLY_SCOPE,
+  SPENDING_ADVICE_SCOPE,
+  resolveEffectiveRelayScope,
+  type LlmRelayScope,
+} from './relay-policy.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -13,7 +19,7 @@ interface StoredRow {
   id: string;
   privacy_class: typeof SPENDING_LOG_PRIVACY_CLASS;
   retention_scope: 'local_only';
-  llm_relay_scope: 'diary_only';
+  llm_relay_scope: LlmRelayScope;
   source_kind: 'transaction' | 'receipt';
   occurred_on: string;
   occurred_at: string | null;
@@ -38,6 +44,10 @@ interface StoredRow {
 export interface SpendingLogFilter {
   dateFrom?: string;
   dateTo?: string;
+  /** 'receipt' = レシート、 'transaction' = クレカ / 銀行等の取引明細。 */
+  sourceKind?: SpendingLogRecord['source_kind'];
+  /** 指定すると、 その scope で LLM に渡してよい行だけを返す。 */
+  relayScope?: LlmRelayScope;
 }
 
 export interface ReplaceResult {
@@ -49,6 +59,7 @@ export function replaceQuaestorRange(
   db: Db,
   exported: QuaestorSpendingLogExport,
   syncedAt = new Date().toISOString(),
+  hasSpendingAdviceConsent = false,
 ): ReplaceResult {
   const upsert = db.prepare(`
     INSERT INTO sensitive_spending_logs (
@@ -104,7 +115,7 @@ export function replaceQuaestorRange(
       if (!incomingIds.has(row.id)) removed += remove.run(row.id).changes;
     }
     for (const record of exported.records) {
-      upsert.run(toSqlParams(record, syncedAt));
+      upsert.run(toSqlParams(record, syncedAt, hasSpendingAdviceConsent));
     }
     return { inserted_or_updated: exported.records.length, removed };
   })();
@@ -120,6 +131,14 @@ export function listSpendingLogs(db: Db, filter: SpendingLogFilter = {}): Spendi
   if (filter.dateTo) {
     where.push('occurred_on <= @date_to');
     params.date_to = filter.dateTo;
+  }
+  if (filter.sourceKind) {
+    where.push('source_kind = @source_kind');
+    params.source_kind = filter.sourceKind;
+  }
+  if (filter.relayScope) {
+    where.push('llm_relay_scope = @relay_scope');
+    params.relay_scope = filter.relayScope;
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
   const rows = db.prepare(
@@ -166,12 +185,27 @@ export function summarizeSpendingLogs(records: SpendingLogRecord[]): DailySpendi
     }));
 }
 
-function toSqlParams(record: SpendingLogRecord, syncedAt: string): Record<string, unknown> {
+/**
+ * 本人同意の切り替えを保存済みの行にも反映する。 同意 ON で diary_only の行を昇格、
+ * OFF で助言 scope の行を diary_only へ戻す。 戻す方向は取り消しなので許す。
+ */
+export function applyRelayConsent(db: Db, hasSpendingAdviceConsent: boolean): number {
+  const target = hasSpendingAdviceConsent ? SPENDING_ADVICE_SCOPE : DIARY_ONLY_SCOPE;
+  return db.prepare(
+    `UPDATE sensitive_spending_logs SET llm_relay_scope = ? WHERE llm_relay_scope <> ?`,
+  ).run(target, target).changes;
+}
+
+function toSqlParams(
+  record: SpendingLogRecord,
+  syncedAt: string,
+  hasSpendingAdviceConsent: boolean,
+): Record<string, unknown> {
   return {
     id: record.id,
     privacy_class: record.privacy_class,
     retention_scope: record.retention_scope,
-    llm_relay_scope: record.llm_relay_scope,
+    llm_relay_scope: resolveEffectiveRelayScope(hasSpendingAdviceConsent),
     source_kind: record.source_kind,
     occurred_on: record.date,
     occurred_at: record.occurred_at,

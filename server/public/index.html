@@ -860,7 +860,26 @@
           <button class="wl-subtab" data-sub="tracks">🗺 軌跡</button>
           <button class="wl-subtab" data-sub="activity">💻 アプリ</button>
           <button class="wl-subtab" data-sub="games">🎮 ゲーム</button>
+          <button class="wl-subtab" data-sub="receipt">🧾 レシート</button>
+          <button class="wl-subtab" data-sub="card">💳 クレカ</button>
+          <button class="wl-subtab" data-sub="spending">💰 消費傾向</button>
         </nav>
+
+        <section id="wlReceiptView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlReceiptSummary"></div>
+          <ul id="wlReceiptList" class="wl-list"></ul>
+          <div id="wlReceiptEmpty" class="queue-empty hidden">この日のレシートはありません。 (💰 消費傾向 タブから Quaestor 同期を確認してください)</div>
+        </section>
+
+        <section id="wlCardView" class="wl-sub hidden">
+          <div class="wl-summary-row" id="wlCardSummary"></div>
+          <ul id="wlCardList" class="wl-list"></ul>
+          <div id="wlCardEmpty" class="queue-empty hidden">この日のクレカ / 取引明細はありません。</div>
+        </section>
+
+        <section id="wlSpendingTrendView" class="wl-sub hidden">
+          <div class="spending-trend-body"></div>
+        </section>
 
         <section id="wlScheduleView" class="wl-sub">
           <div id="wlUptimeStatus" class="uptime-status"></div>

@@ -171,6 +171,7 @@ import { loadUserApps } from './userapps-view.js';
 import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-view.js';
 import { loadLlmView } from './llm-view.js';
 import { loadShoppingView } from './shopping-view.js';
+import { loadSpendingLogView, loadSpendingTrendView } from './spending-view.js';
 import {
   loadAiArticlesView,
   loadAiAdviceView,
@@ -8229,6 +8230,9 @@ const WL_SUB_VIEWS = {
   tracks: 'tracksView',
   activity: 'wlActivityView',
   games: 'wlGamesView',
+  receipt: 'wlReceiptView',
+  card: 'wlCardView',
+  spending: 'wlSpendingTrendView',
 };
 
 // データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
@@ -8576,7 +8580,8 @@ $('appsSearch')?.addEventListener('input', (ev) => {
 });
 
 // 日付ベースの sub かどうか (date toolbar / summary 表示の有無)
-const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'activity', 'games']);
+// spending (消費傾向) だけは期間集計なので date toolbar を出さない。
+const WL_DATE_BASED = new Set(['schedule', 'github', 'claude', 'gemini', 'codex', 'browsing', 'dig', 'tracks', 'activity', 'games', 'receipt', 'card']);
 
 const WL_KIND_BY_SUB = {
   github: 'git_commit',
@@ -8655,6 +8660,9 @@ async function loadWorklog() {
   if (sub === 'tracks') return loadTracks();
   if (sub === 'activity') return loadWorklogActivityCard(date);
   if (sub === 'games') return loadWorklogGamesView(date);
+  if (sub === 'receipt') return loadSpendingLogView('receipt', date);
+  if (sub === 'card') return loadSpendingLogView('transaction', date);
+  if (sub === 'spending') return loadSpendingTrendView();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);

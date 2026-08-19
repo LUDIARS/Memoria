@@ -7378,3 +7378,19 @@ dialog.loc-edit-modal[open] {
     grid-column: auto;
   }
 }
+
+/* ── 消費ログ (レシート / クレカ / 消費傾向) ──────────────────────────── */
+.spending-trend-body h4 { margin: 16px 0 6px; }
+.spending-currency-select { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.spending-advice-settings { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+.spending-advice-settings label { display: flex; align-items: center; gap: 6px; }
+.spending-advice-settings button { align-self: flex-start; }
+.spending-advice-report { margin-top: 8px; }
+/* 助言は LLM の Markdown をそのまま出す。 長行を折り返して横スクロールさせない。 */
+.spending-advice-markdown {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  line-height: 1.6;
+  margin: 6px 0 0;
+}

@@ -19,6 +19,8 @@ export async function fetchQuaestorSpendingLogs(
   url.searchParams.set('date_to', range.dateTo);
 
   const response = await fetchImpl(url, {
+    // loopback 制約を redirect で迂回させない。 GET でも支出ログ取得先を外へ出さない。
+    redirect: 'error',
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
   });
