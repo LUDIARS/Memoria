@@ -1,0 +1,24 @@
+{
+  "name": "hub-ai-article-sharing",
+  "description": "AIノート (ai_articles) を Memoria Hub へ明示共有する機能。ローカル側の禁止語 redaction ゲート、share / unshare / check の HTTP 境界、Hub 側の ai-articles データ型と migration を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/routes/ai-hub\\.ts$" },
+    { "pathPattern": "(^|/)server/routes/ai-hub-share\\.test\\.ts$" },
+    { "pathPattern": "(^|/)server/local/multi-client\\.ts$" },
+    { "pathPattern": "(^|/)server/shared/redaction\\.ts$" },
+    { "pathPattern": "(^|/)server/shared/redaction\\.test\\.ts$" },
+    { "pathPattern": "(^|/)server/db\\.ts$" },
+    { "pathPattern": "(^|/)server/multi/data\\.js$" },
+    { "pathPattern": "(^|/)server/multi/migrations/011_ai_articles\\.sql$" }
+  ],
+  "source": "manual",
+  "specRefs": [
+    "spec/feature/ai-hub.md#シェア可能か",
+    "spec/feature/hub-social.md#12-aiノート共有で追加が要るもの",
+    "spec/interface/hub-social.md#65-aiノート-ai_articles-の共有"
+  ],
+  "lockedFields": ["*"]
+}

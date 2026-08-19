@@ -72,7 +72,7 @@ AIノートの本文は **commit message / AI prompt / repo 名から LLM が生
 → AIノートの共有は [`hub-achievements.md`](./hub-achievements.md) §4.3 の
 **禁止語スキャンを共用**する。 実装も同じ `server/shared/redaction.ts` を通す
 (achievements 側と別実装にしない)。 スキャン対象は `title` / `body_md` /
-`tags` / `source_refs`。 1 件でも hit したら共有を中止し、 どのフィールドに
+`tags` / `source_refs` / `topic_key`。 1 件でも hit したら共有を中止し、 どのフィールドに
 どの語が出たかを返す (自動書き換えはしない)。
 
 さらに `source_refs` は **既定で共有しない**。 commit sha と repo 名の組は

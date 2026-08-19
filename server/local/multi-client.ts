@@ -62,6 +62,7 @@ interface FetchInit {
   method?: string;
   body?: string;
   headers?: Record<string, string>;
+  redirect?: 'error' | 'follow' | 'manual';
 }
 
 type ConnectedState = MultiState & { url: string; jwt: string; userId: string };

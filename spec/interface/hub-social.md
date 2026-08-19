@@ -194,12 +194,14 @@
 
 - ローカルの `share` は **必ず** `server/shared/redaction.ts` を通る
   ([`../feature/hub-achievements.md`](../feature/hub-achievements.md) §4.3 と同一実装)。
-  スキャン対象は `title` / `body_md` / `tags` / `source_refs`
+  スキャン対象は `title` / `body_md` / `tags` / `source_refs` / `topic_key`
 - `includeSourceRefs=true` は、 参照している repo すべての
   `achievement_sources.share_policy` が `full` **と確認できたとき**のみ許可。
   1 つでも違う / `achievement_sources` に行が無い (= 判定できない) 場合は
   `400 { error: 'source_refs_not_shareable', repos: [...] }`。
   既定 (`includeSourceRefs` 省略時) は `false` で `source_refs` を送らない
+- `プロジェクト` タグと `topic_key` も repo 名を含みうる。前者は `full` の
+  `source_refs` と同じ repo 値だけ、後者は `repo:theme` の repo 部分が同じものだけを送る
 - Hub 側は `redactionScannedAt` が無い / 古い (> 24h) POST を
   `400 { error: 'redaction_scan_required' }` で拒否する
 - 転写済 (`note_id` あり) の記事を share すると、 Hub は `note_subject_id` を埋め

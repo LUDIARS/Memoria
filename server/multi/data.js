@@ -83,6 +83,18 @@ const TYPES = {
       + 'created_at, updated_at, owner_user_id, owner_user_name, shared_at, shared_origin',
     orderBy: 'updated_at DESC',
   },
+  'ai-articles': {
+    table: 'ai_articles', idType: 'int',
+    cols: ['origin_local_id', 'title', 'body_md', 'topic_key', 'for_date', 'tags_json',
+      'source_refs_json', 'note_subject_id', 'share_policy', 'redaction_scanned_at'],
+    jsonCols: ['tags_json', 'source_refs_json'],
+    required: ['origin_local_id', 'title', 'body_md', 'share_policy', 'redaction_scanned_at'],
+    searchCols: ['title', 'body_md'],
+    select: 'id, origin_local_id, title, body_md, topic_key, for_date, tags_json, source_refs_json, '
+      + 'note_subject_id, share_policy, redaction_scanned_at, owner_user_id, owner_user_name, '
+      + 'shared_at, shared_origin',
+    orderBy: 'shared_at DESC',
+  },
 };
 
 export const DATA_TYPES = Object.keys(TYPES);
@@ -187,6 +199,19 @@ export async function getData(type, id) {
 
 export async function createData(type, fields, owner) {
   const s = spec(type);
+  if (type === 'ai-articles') {
+    // 証跡が 24h より古い POST は弾く (spec/interface/hub-social.md §6.5)。
+    // 未来日時も弾く: そうしないと「9999-01-01」 を送るだけで鮮度チェックを
+    // 恒久的に迂回できてしまう。 時計ずれ分だけ許容する。
+    const CLOCK_SKEW_MS = 5 * 60 * 1000;
+    const scannedAt = Date.parse(fields.redaction_scanned_at);
+    const age = Date.now() - scannedAt;
+    if (!Number.isFinite(scannedAt) || age > 24 * 60 * 60 * 1000 || age < -CLOCK_SKEW_MS) {
+      const e = new Error('redaction_scan_required');
+      e.status = 400;
+      throw e;
+    }
+  }
   for (const req of s.required) {
     if (fields[req] == null || fields[req] === '') {
       const e = new Error(`${req} is required`);
@@ -213,6 +238,15 @@ export async function createData(type, fields, owner) {
     );
   } catch (err) {
     if (err?.code === '23505') { // unique_violation
+      // ai_articles は (owner, origin_local_id) を再 push の冪等キーにする。
+      // 既存共有を重複エラーにすると、接続断後にローカルが成功可否を判定できない。
+      if (type === 'ai-articles') {
+        const existing = await query(
+          `SELECT ${s.select} FROM ${s.table} WHERE owner_user_id = $1 AND origin_local_id = $2`,
+          [owner.userId, fields.origin_local_id],
+        );
+        if (existing.rowCount) return existing.rows[0];
+      }
       const e = new Error('duplicate');
       e.status = 409;
       throw e;

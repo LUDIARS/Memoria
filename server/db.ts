@@ -893,6 +893,14 @@ export function openDb(dbPath: string): Db {
     CREATE INDEX IF NOT EXISTS idx_ai_seeds_status ON ai_article_seeds(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 
+    -- 実績 / AIノートを Hub へ出す前の禁止語辞書 (spec/data/hub-social.md §8)。
+    -- private リポ名・顧客名を共有前にスキャンで弾くための正本。
+    CREATE TABLE IF NOT EXISTS achievement_redaction_terms (
+      term       TEXT PRIMARY KEY,
+      origin     TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+
     -- タスク確認 (朝の Sonnet タスク棚卸し)。 同一プロジェクトの近いタスクの統合提案
     -- (cluster) と完了していそうなタスクのクローズ提案 (completed) を pending で積む。
     -- Spec: spec/feature/task-review.md
