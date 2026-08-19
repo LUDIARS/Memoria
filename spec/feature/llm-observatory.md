@@ -51,6 +51,8 @@ repository path、Local LLM endpoint を API に返さない。
 
 ## プライバシー観点
 
+- **SPEC-LLM-OBS-PRIVACY:** Local LLM endpoint、API key、外部リクエストの詳細、
+  およびそれらを含み得る例外メッセージは、スナップショットにも API にも保存・返却しない。
 - DB は差分取込のため source path とプロバイダ由来の session id をローカル保存する。
 - API の repository 表示は末尾の project 名だけに縮退する。
 - Local LLM の API key と endpoint は保存・返却せず、model id と利用可否だけを保存する。

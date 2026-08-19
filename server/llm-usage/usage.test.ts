@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { Hono } from 'hono';
 import { openDb } from '../db.js';
-import { isMemoryFilePath } from './inventory.js';
+import { externalSourceError, isMemoryFilePath } from './inventory.js';
 import { parseNativeLog } from './native-log-reader.js';
 import { estimateEquivalentApiCost } from './price-table.js';
 import { makeLlmUsageRouter } from './router.js';
@@ -38,6 +38,12 @@ test('memory inventory recognizes both provider directory names', () => {
   assert.equal(isMemoryFilePath('C:\\home\\.claude\\projects\\repo\\memory\\notes.md'), true);
   assert.equal(isMemoryFilePath('C:\\home\\.codex\\memories\\notes.md'), true);
   assert.equal(isMemoryFilePath('C:\\home\\.codex\\sessions\\notes.md'), false);
+});
+
+test('inventory errors never expose configured endpoint details', () => {
+  const sensitiveError = new TypeError('Failed to parse configured endpoint with sensitive details');
+  assert.equal(externalSourceError('Local LLM', sensitiveError), 'Local LLM unavailable');
+  assert.equal(externalSourceError('Local LLM', null, 401), 'Local LLM unavailable (HTTP 401)');
 });
 
 test('native log parsers exclude rows before the configured import window', async (context) => {
@@ -118,7 +124,7 @@ test('dashboard strips saved Local LLM endpoints from historical snapshots', () 
       INSERT INTO llm_inventory_snapshots (
         snapshot_date, captured_at, skill_count, memory_count, genius_card_count,
         judgment_log_count, local_llms_json, source_errors_json
-      ) VALUES (?, ?, 0, 0, NULL, 0, ?, '[]')
+      ) VALUES (?, ?, 0, 0, NULL, 0, ?, ?)
     `).run(
       '2026-08-06',
       '2026-08-06T00:00:00Z',
@@ -128,6 +134,7 @@ test('dashboard strips saved Local LLM endpoints from historical snapshots', () 
         available: true,
         models: [{ id: 'local-model', ownedBy: 'private-owner' }],
       }]),
+      JSON.stringify(['Local LLM unavailable: sensitive request details']),
     );
     const dashboard = usageDashboard(db) as {
       inventory: Array<{ local_llms: unknown }>;
@@ -138,6 +145,7 @@ test('dashboard strips saved Local LLM endpoints from historical snapshots', () 
       models: [{ id: 'local-model' }],
     }]);
     assert.equal(JSON.stringify(dashboard).includes('redacted.invalid'), false);
+    assert.equal(JSON.stringify(dashboard).includes('sensitive request details'), false);
   } finally {
     db.close();
   }

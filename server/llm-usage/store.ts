@@ -190,7 +190,7 @@ export function saveInventorySnapshot(db: Db, snapshot: {
 function inventoryHistory(db: Db): Array<Record<string, unknown>> {
   const rows = db.prepare(`
     SELECT snapshot_date, captured_at, skill_count, memory_count, genius_card_count,
-      judgment_log_count, local_llms_json, source_errors_json
+      judgment_log_count, local_llms_json
     FROM llm_inventory_snapshots ORDER BY snapshot_date DESC LIMIT 90
   `).all() as Array<Record<string, unknown>>;
   return rows.map((row, index) => {
@@ -203,7 +203,6 @@ function inventoryHistory(db: Db): Array<Record<string, unknown>> {
       genius_cards: metric(row.genius_card_count, previous?.genius_card_count),
       judgment_logs: metric(row.judgment_log_count, previous?.judgment_log_count),
       local_llms: publicLocalLlms(row.local_llms_json),
-      source_errors: parseJson(row.source_errors_json),
     };
   });
 }

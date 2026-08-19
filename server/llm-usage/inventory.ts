@@ -84,12 +84,18 @@ async function fetchGeniusCardCount(errors: string[]): Promise<number | null> {
     const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/clone/stats`, {
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      errors.push(externalSourceError('Genius stats', null, response.status));
+      return null;
+    }
     const body = await response.json() as { total?: unknown };
-    if (typeof body.total !== 'number') throw new Error('response.total is missing');
+    if (typeof body.total !== 'number') {
+      errors.push('Genius stats unavailable (invalid response)');
+      return null;
+    }
     return body.total;
   } catch (error: unknown) {
-    errors.push(`Genius stats unavailable: ${message(error)}`);
+    errors.push(externalSourceError('Genius stats', error));
     return null;
   }
 }
@@ -106,14 +112,17 @@ async function inspectLocalLlm(errors: string[]): Promise<InventorySnapshot['loc
       headers: config.gamma_api_key ? { Authorization: `Bearer ${config.gamma_api_key}` } : undefined,
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      errors.push(externalSourceError('Local LLM', null, response.status));
+      return [{ configuredModel: config.gamma_model, available: false, models: [] }];
+    }
     const body = await response.json() as { data?: Array<{ id?: unknown }> };
     const models = (body.data ?? []).flatMap((item) => typeof item.id === 'string'
       ? [{ id: item.id }]
       : []);
     return [{ configuredModel: config.gamma_model, available: models.length > 0, models }];
   } catch (error: unknown) {
-    errors.push(`Local LLM unavailable: ${message(error)}`);
+    errors.push(externalSourceError('Local LLM', error));
     return [{ configuredModel: config.gamma_model, available: false, models: [] }];
   }
 }
@@ -122,6 +131,13 @@ function countJudgmentLogs(db: Db): number {
   return (db.prepare('SELECT COUNT(*) AS count FROM blackbox_decisions').get() as { count: number }).count;
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** @implements SPEC-LLM-OBS-PRIVACY Keeps request details out of persisted snapshots and API responses. */
+export function externalSourceError(
+  source: 'Genius stats' | 'Local LLM',
+  _error: unknown,
+  status?: number,
+): string {
+  return Number.isInteger(status)
+    ? `${source} unavailable (HTTP ${status})`
+    : `${source} unavailable`;
 }

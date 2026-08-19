@@ -7,7 +7,6 @@ interface InventoryRow {
   genius_cards: Metric;
   judgment_logs: Metric;
   local_llms: Array<{ configuredModel: string; available: boolean; models: Array<{ id: string }> }>;
-  source_errors: string[];
 }
 interface UsageSummary {
   sessions: number;
@@ -51,9 +50,7 @@ export async function loadLlmView(): Promise<void> {
   try {
     const dashboard = await getJson<Dashboard>('/api/llm-usage');
     render(root, dashboard);
-    if (dashboard.sources.total === 0 && dashboard.sync.state !== 'running') {
-      await startSync(root);
-    } else if (dashboard.sync.state === 'running') {
+    if (dashboard.sync.state === 'running') {
       schedulePoll(root);
     }
   } catch (error: unknown) {
