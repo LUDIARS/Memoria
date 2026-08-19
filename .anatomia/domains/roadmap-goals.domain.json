@@ -1,0 +1,14 @@
+{
+  "name": "roadmap-goals",
+  "description": "roadmap-* リポの data/services.json / data/roadmap.json を集約し、目標タブ (goals-view) にテーマ・達成度・メンバー構成・公開目標を表示する機能。集約ロジック、HTTP 境界、専用 UI を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/roadmap/[^/]+\.ts$" },
+    { "pathPattern": "(^|/)server/public/src/goals-view\.ts$" }
+  ],
+  "source": "manual",
+  "specRefs": [],
+  "lockedFields": ["*"]
+}

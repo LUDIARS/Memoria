@@ -31,7 +31,7 @@ interface RoadmapMonth {
 interface RoadmapMember {
   repo: string; role: string; importance: number;
   status: string; statusLabel?: string;
-  completion: number | null; note?: string; lines?: string[];
+  completion: number | null; mediumTermTarget?: number; note?: string; lines?: string[];
 }
 interface ContractGrade {
   grade: string;
@@ -164,10 +164,21 @@ function renderRoadmapGoals(month: RoadmapMonth | null): string {
   return `<ul class="rm-goals">${items}</ul>`;
 }
 
+function percentageLabel(value: unknown, prefix = ''): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+    return '';
+  }
+  return `${prefix}${value}%`;
+}
+
 function renderMembers(members: RoadmapMember[]): string {
   const chips = members.map(m => {
-    const mat = m.completion == null ? '' : ` <span class="rm-mem-mat">${m.completion}%</span>`;
-    return `<span class="rm-mem rm-mem-i${m.importance}" title="${esc(m.role)}">${esc(m.repo)} <span class="rm-mem-star">${stars(m.importance)}</span>${mat}</span>`;
+    const completion = percentageLabel(m.completion);
+    const targetValue = percentageLabel(m.mediumTermTarget, '中期 ');
+    const mat = completion ? ` <span class="rm-mem-mat">${completion}</span>` : '';
+    const target = targetValue ? ` <span class="rm-mem-mat">${targetValue}</span>` : '';
+    const status = ` <span class="rm-mem-mat">${esc(m.statusLabel ?? m.status)}</span>`;
+    return `<span class="rm-mem rm-mem-i${m.importance}" title="${esc(m.role)}">${esc(m.repo)} <span class="rm-mem-star">${stars(m.importance)}</span>${mat}${target}${status}</span>`;
   }).join('');
   return `<div class="rm-members">${chips}</div>`;
 }

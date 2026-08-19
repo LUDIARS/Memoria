@@ -19,7 +19,7 @@ export interface RoadmapServices {
   members: Array<{
     repo: string; role: string; importance: number;
     status: string; statusLabel?: string;
-    completion: number | null; note?: string; lines?: string[];
+    completion: number | null; mediumTermTarget?: number; note?: string; lines?: string[];
   }>;
 }
 
