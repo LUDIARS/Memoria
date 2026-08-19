@@ -1,0 +1,21 @@
+{
+  "name": "shopping-search",
+  "description": "お買い物検索くん。スーパーのチラシ / ネットスーパー / 通販セールを巡回して日次ニュースと送料込み価格比較を出す local-only 機能。公開 URL 検証 (SSRF 拒否) を伴うクローラ、パーサ、設定、スケジューラ、HTTP 境界、専用 UI を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/shopping/[^/]+\\.ts$" },
+    { "pathPattern": "(^|/)server/routes/shopping\\.ts$" },
+    { "pathPattern": "(^|/)server/shared/public-url\\.ts$" },
+    { "pathPattern": "(^|/)server/public/src/shopping-view\\.ts$" }
+  ],
+  "source": "manual",
+  "specRefs": [
+    "spec/feature/shopping-search.md#目的",
+    "spec/feature/shopping-search.md#構成",
+    "spec/feature/shopping-search.md#送料の扱い",
+    "spec/feature/shopping-search.md#制約"
+  ],
+  "lockedFields": ["*"]
+}

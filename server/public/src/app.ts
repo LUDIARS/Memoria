@@ -170,6 +170,7 @@ import { loadGoalsView } from './goals-view.js';
 import { loadUserApps } from './userapps-view.js';
 import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-view.js';
 import { loadLlmView } from './llm-view.js';
+import { loadShoppingView } from './shopping-view.js';
 import {
   loadAiArticlesView,
   loadAiAdviceView,
@@ -332,7 +333,7 @@ const state: State = {
 //   queue     ⚙ キュー (ローカル AI / 取り込みジョブの待ち行列)
 const LOCAL_ONLY_TABS = new Set([
   'diary', 'meals', 'recommend', 'transit', 'trends',
-  'worklog', 'worklist', 'queue', 'clever-search',
+  'worklog', 'worklist', 'queue', 'clever-search', 'shopping',
 ]);
 
 // `$()` は永らく document.getElementById のショートハンド。
@@ -1211,6 +1212,7 @@ function switchTab(tab) {
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
   $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   $('rssView')?.classList.toggle('hidden', tab !== 'rss');
+  $('shoppingView')?.classList.toggle('hidden', tab !== 'shopping');
   $('goalsView')?.classList.toggle('hidden', tab !== 'goals');
   $('userappsView')?.classList.toggle('hidden', tab !== 'userapps');
   $('cleverSearchView')?.classList.toggle('hidden', tab !== 'clever-search');
@@ -1235,6 +1237,7 @@ function switchTab(tab) {
   if (tab === 'tasks') loadTasks();
   if (tab === 'multi') loadMulti();
   if (tab === 'rss') loadRssView();
+  if (tab === 'shopping') void loadShoppingView();
   if (tab === 'goals') void loadGoalsView();
   if (tab === 'userapps') void loadUserApps();
   if (tab === 'clever-search') void loadCleverSearchHistory();

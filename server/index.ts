@@ -82,6 +82,7 @@ import { makeTaskReviewRouter } from './routes/task-review.js';
 import { makeSpendingLogRouter } from './spending-log/router.js';
 import { makeCleverSearchRouter } from './clever-search/router.js';
 import { makeLlmUsageRouter } from './llm-usage/router.js';
+import { makeShoppingRouter } from './routes/shopping.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
@@ -322,6 +323,7 @@ app.route('/', makeBlackBoxRouter({
 app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
 app.route('/', makeRssRouter({ db }));
+app.route('/', makeShoppingRouter({ db }));
 app.route('/', makeBriefingRouter({ db }));
 app.route('/', makeGoalEvalRouter({ db }));
 app.route('/', makeRoadmapRouter());

@@ -21,6 +21,7 @@ import { startBriefingScheduler } from '../briefing/index.js';
 import { startGoalEvalScheduler } from '../goals/eval-scheduler.js';
 import { startAiHubSchedulers } from '../ai-hub/index.js';
 import { startTaskReviewScheduler } from '../task-review/index.js';
+import { startShoppingScheduler } from '../shopping/scheduler.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -52,6 +53,7 @@ export function startSchedulers(deps: SchedulerDeps): void {
   startGoalEvalScheduler(deps.db);
   startAiHubSchedulers(deps.db);
   startTaskReviewScheduler(deps.db);
+  startShoppingScheduler(deps.db);
 }
 
 // 朝の雨ブリーフィング — 1 分おきに時刻を見て、 設定時刻 (既定 7:00) に当日 1 回だけ、
