@@ -38,3 +38,6 @@ Thumbs.db
 
 # misc test artifacts
 test-payload.json
+
+# generated review results
+/review/
