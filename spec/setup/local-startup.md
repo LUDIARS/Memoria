@@ -36,6 +36,11 @@ npm start          # → http://localhost:5180/
 - `npm start` は内部で `npm run build:frontend` (esbuild で SPA をバンドル) を
   prestart に走らせてから `tsx bootstrap.ts` を起動する (`server/package.json:7-8`)。
 - 開発時は `npm run dev` (`tsx watch` で自動再起動 / `server/package.json:10`)。
+- Excubitor 経由の常駐起動 (`excubitor.catalog.yaml`) は Windows で `npm.cmd` の
+  シェル経由子プロセスが job-breakaway ランチャーを生き残れないため、
+  `node node_modules/tsx/dist/cli.mjs ... excubitor-bootstrap.ts` で tsx を直接起動する。
+  `server/excubitor-bootstrap.ts` が prestart 相当のフロントエンドビルドを行ってから
+  `bootstrap.ts` を読み込むので、`npm start` と同じ結果になる。
 
 ポート・データ保存先を変えたいときだけ env を渡す:
 

@@ -1,0 +1,17 @@
+{
+  "name": "service-bootstrap",
+  "description": "Memoria ローカルサーバのプロセス起動入口。npm start / Excubitor 経由 (job-breakaway 対応の tsx 直起動) の両経路で、フロントエンドビルドと index.ts の読み込み順序を所有する。アプリ機能は持たない。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/bootstrap\.ts$" },
+    { "pathPattern": "(^|/)server/excubitor-bootstrap\.ts$" }
+  ],
+  "source": "manual",
+  "specRefs": [
+    "spec/setup/local-startup.md#手順",
+    "spec/setup/local-startup.md#注意点"
+  ],
+  "lockedFields": ["*"]
+}
