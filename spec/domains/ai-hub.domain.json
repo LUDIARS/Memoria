@@ -1,0 +1,17 @@
+{
+  "name": "ai-hub",
+  "description": "AI 実行の集約点。 LLM 呼び出しの入口、 エージェント起動、 Claude 連携と共有設定。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/ai-hub/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:ai-hub|ai-hub-share\\.test|agent)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/(?:llm|claude|agent-dispatch)\\.ts$"
+    }
+  ]
+}

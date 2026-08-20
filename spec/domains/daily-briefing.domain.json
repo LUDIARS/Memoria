@@ -1,0 +1,23 @@
+{
+  "name": "daily-briefing",
+  "description": "その日の要約を組み立てて届ける層。 各ドメインの材料を集約し、 朝の briefing とレコメンドを生成する。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/briefing/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/briefing\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/recommendations-ai\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/roadmap/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:activity|metrics)\\.ts$"
+    }
+  ]
+}

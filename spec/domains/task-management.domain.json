@@ -1,0 +1,23 @@
+{
+  "name": "task-management",
+  "description": "タスクの正本。 登録・期限・カテゴリ・完了と、 残作業の棚卸し (task-review) と目標評価 (goals) を持つ。 タスクを起点にした自動化の入口でもある。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/task-review/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/goals/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:task|task\\.test|task-review|impl|staleness)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/shared/task-registration\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/queue\\.ts$"
+    }
+  ]
+}

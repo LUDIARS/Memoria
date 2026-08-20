@@ -1,0 +1,20 @@
+{
+  "name": "environment-sensing",
+  "description": "生活環境の取り込み。 天気、 食事記録など、 外界の状態を日々の記録に取り込む。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/weather/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/meals\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:weather|meal)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/wordcloud\\.ts$"
+    }
+  ]
+}

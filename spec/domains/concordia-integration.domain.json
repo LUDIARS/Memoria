@@ -1,0 +1,17 @@
+{
+  "name": "concordia-integration",
+  "description": "Concordia 連携。 セッション起動の依頼、 転送、 判断ブラックボックスの受け渡し。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/concordia-(?:forward|spawn-client|spawn-loader)(?:\\.test)?\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:blackbox|repo|domain)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/domain-catalog\\.ts$"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "discord-integration",
+  "description": "Discord 連携。 通知の配信先、 コマンド受口、 チャンネル運用。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/discord/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/discord\\.ts$"
+    }
+  ]
+}

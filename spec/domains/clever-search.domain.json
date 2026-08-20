@@ -5,20 +5,26 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
-    { "pathPattern": "(^|/)server/clever-search/[^/]+\\.ts$" },
-    { "pathPattern": "(^|/)server/api/types/clever-search\\.ts$" },
-    { "pathPattern": "(^|/)server/public/src/clever-search-view\\.ts$" },
     {
-      "pathPattern": "(^|/)server/public/src/app\\.ts$",
+      "pathPattern": "(^|/)server/clever-search/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/api/types/clever-search\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/clever-search-view\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/app\\.ts$"
+    },
+    {
       "namePattern": "^switchTab$"
     }
   ],
-  "source": "manual",
   "specRefs": [
     "spec/feature/clever-search.md#概要",
     "spec/feature/clever-search.md#データ",
     "spec/feature/clever-search.md#api",
     "spec/feature/clever-search.md#プライバシー観点"
-  ],
-  "lockedFields": ["*"]
+  ]
 }

@@ -1,0 +1,20 @@
+{
+  "name": "persistence",
+  "description": "永続化。 SQLite スキーマと接続、 一括保存、 型定義。 個人ログの唯一の置き場。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/db/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/db\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/types/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/lib/bulk-save\\.ts$"
+    }
+  ]
+}

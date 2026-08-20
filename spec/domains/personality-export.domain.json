@@ -1,0 +1,14 @@
+{
+  "name": "personality-export",
+  "description": "人格特徴の書き出し。 個人ログから特徴量を作り、 共有トークン付きで外部へ渡す。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/personality-export/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/personality-export(?:\\.test)?\\.ts$"
+    }
+  ]
+}

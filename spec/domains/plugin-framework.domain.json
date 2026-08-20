@@ -1,0 +1,26 @@
+{
+  "name": "plugin-framework",
+  "description": "プラグイン機構。 ホスト側の読み込みと登録、 プラグイン定義、 ブラウザ拡張・デスクトップ常駐からの連携。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/plugins/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/plugins\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)extension/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)desktop/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)mcp-server/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)service/(?:.*/)?[^/]+$"
+    }
+  ]
+}

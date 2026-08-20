@@ -1,0 +1,14 @@
+{
+  "name": "spending-log",
+  "description": "支出ログ。 レシート/明細の取り込み、 費目分類、 消費傾向の集計と助言。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/spending-log/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/spending-view\\.ts$"
+    }
+  ]
+}

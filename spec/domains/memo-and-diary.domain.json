@@ -1,0 +1,20 @@
+{
+  "name": "memo-and-diary",
+  "description": "個人の記録そのもの。 メモ・日記・ノート・辞書項目・ブックマークの保存と参照。 検索は clever-search が担う。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/memo/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/diary\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:note|diary|dict|bookmark|misc)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/parsers/[^/]+$"
+    }
+  ]
+}

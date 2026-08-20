@@ -1,0 +1,14 @@
+{
+  "name": "voice-assistant",
+  "description": "音声アシスタント連携 (Alexa)。 発話意図の受け取りと応答生成。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/alexa/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/alexa(?:\\.test)?\\.ts$"
+    }
+  ]
+}

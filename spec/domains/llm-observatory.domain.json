@@ -5,19 +5,23 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
-    { "pathPattern": "(^|/)server/llm-usage/[^/]+\\.ts$" },
-    { "pathPattern": "(^|/)server/public/src/llm-view\\.ts$" },
     {
-      "pathPattern": "(^|/)server/public/src/app\\.ts$",
+      "pathPattern": "(^|/)server/llm-usage/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/llm-view\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/app\\.ts$"
+    },
+    {
       "namePattern": "^switchTab$"
     }
   ],
-  "source": "manual",
   "specRefs": [
     "spec/feature/llm-observatory.md#概要",
     "spec/feature/llm-observatory.md#データ",
     "spec/feature/llm-observatory.md#api",
     "spec/feature/llm-observatory.md#プライバシー観点"
-  ],
-  "lockedFields": ["*"]
+  ]
 }

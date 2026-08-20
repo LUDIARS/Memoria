@@ -1,0 +1,26 @@
+{
+  "name": "service-runtime",
+  "description": "プロセスとしての Memoria。 起動シーケンス、 Excubitor 連携、 通知/push 配送、 定期ジョブ、 共有ユーティリティ。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/(?:index|bootstrap|app-catalog|excubitor-bootstrap|notifications|push|browser-host-config)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/lib/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/shared/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/core/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/hooks/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/[^/]+\\.(?:ts|mjs|js)$"
+    }
+  ]
+}

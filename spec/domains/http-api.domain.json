@@ -1,0 +1,17 @@
+{
+  "name": "http-api",
+  "description": "HTTP の受口。 ルータ登録、 リクエスト/レスポンス型、 設定画面向けエンドポイント。 個々の機能の中身は各ドメインが持つ。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/api/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:config|config-setup-docs\\.test)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/[^/]+$"
+    }
+  ]
+}

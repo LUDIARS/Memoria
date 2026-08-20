@@ -1,0 +1,17 @@
+{
+  "name": "feed-ingestion",
+  "description": "外部フィードの取り込み。 RSS 購読、 ページ取得とメタデータ抽出、 URL プレビュー、 検索エンジン経由の調査 (dig)。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/rss/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:rss|dig)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/(?:dig|dig-serp|url-preview|page-metadata)\\.ts$"
+    }
+  ]
+}

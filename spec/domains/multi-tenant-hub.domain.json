@@ -1,0 +1,17 @@
+{
+  "name": "multi-tenant-hub",
+  "description": "Memoria Hub (複数ユーザ共有) の側。 Cernere 認証ブリッジ、 テナントごとのデータ分離、 共有サーバとしての起動。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/multi/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/local/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/multi\\.ts$"
+    }
+  ]
+}

@@ -5,17 +5,23 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
-    { "pathPattern": "(^|/)server/shopping/[^/]+\\.ts$" },
-    { "pathPattern": "(^|/)server/routes/shopping\\.ts$" },
-    { "pathPattern": "(^|/)server/shared/public-url\\.ts$" },
-    { "pathPattern": "(^|/)server/public/src/shopping-view\\.ts$" }
+    {
+      "pathPattern": "(^|/)server/shopping/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/shopping\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/shared/public-url\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/shopping-view\\.ts$"
+    }
   ],
-  "source": "manual",
   "specRefs": [
     "spec/feature/shopping-search.md#目的",
     "spec/feature/shopping-search.md#構成",
     "spec/feature/shopping-search.md#送料の扱い",
     "spec/feature/shopping-search.md#制約"
-  ],
-  "lockedFields": ["*"]
+  ]
 }

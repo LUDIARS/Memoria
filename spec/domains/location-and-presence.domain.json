@@ -1,0 +1,23 @@
+{
+  "name": "location-and-presence",
+  "description": "位置と在席。 OwnTracks の受信、 Wi-Fi 由来の位置推定、 訪問先・移動・勤務地の記録。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/owntracks/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/owntracks-server\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/wifi-location\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/mqtt/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/routes/(?:visit|transit|workplace|attendance|packet-monitor)\\.ts$"
+    }
+  ]
+}

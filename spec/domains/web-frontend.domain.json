@@ -1,0 +1,11 @@
+{
+  "name": "web-frontend",
+  "description": "ブラウザ側の画面。 タブ構成と各機能のビュー、 フロント用の共有スクリプト。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/public/(?:.*/)?[^/]+$"
+    }
+  ]
+}
