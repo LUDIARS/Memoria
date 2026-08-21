@@ -19,4 +19,7 @@ async function bootstrap(): Promise<void> {
   await import('./bootstrap.js');
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  console.error('[excubitor-bootstrap] fatal:', error);
+  process.exitCode = 1;
+});
