@@ -69,6 +69,14 @@ export async function runLocalLlm(request: LocalLlmRequest): Promise<LocalLlmRes
   return { text, model: request.model, provider_label: `ローカル LLM (${base.host})` };
 }
 
+/**
+ * 設定保存時にも同じ制約で弾くための入口。 送信直前 (parseLoopbackBaseUrl) が最終防衛線で、
+ * ここは「保存できたのに生成時だけ失敗する」状態を作らないための前段チェック。
+ */
+export function assertLoopbackBaseUrl(value: string): void {
+  parseLoopbackBaseUrl(value);
+}
+
 function parseLoopbackBaseUrl(value: string): URL {
   let url: URL;
   try {

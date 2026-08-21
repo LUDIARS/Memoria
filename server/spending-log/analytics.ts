@@ -12,6 +12,13 @@ const OUTLIER_MEDIAN_MULTIPLIER = 3;
 /** 上位いくつまで返すか (店・突出支出)。 */
 const TOP_N = 10;
 
+/**
+ * 複合キーの区切り。 label / 店名に現れない NUL を使う。 生の NUL をソースへ直接
+ * 埋め込むと git がこのファイルを binary 扱いして diff も grep も効かなくなるため、
+ * リテラルではなく fromCharCode で組み立てる。
+ */
+const KEY_SEPARATOR = String.fromCharCode(0);
+
 export interface AmountBucket {
   key: string;
   label: string;
@@ -128,8 +135,12 @@ export function analyzeSpending(
     by_payment: bucketize(
       target,
       total,
-      (record) => record.payment.label ?? record.payment.kind,
-      (key, record) => record.payment.label ?? PAYMENT_KIND_LABELS[key] ?? key,
+      // kind を必ず key に含める。 label だけだと、 別 kind の label と生 kind 文字列が
+      // 衝突したときに別々の支払手段が 1 バケットに混ざる。
+      (record) => `${record.payment.kind}${KEY_SEPARATOR}${record.payment.label ?? ''}`,
+      (_key, record) => record.payment.label
+        ?? PAYMENT_KIND_LABELS[record.payment.kind]
+        ?? record.payment.kind,
     ),
     by_place: bucketize(
       target,
@@ -214,7 +225,7 @@ function detectRecurringCharges(records: SpendingLogRecord[]): RecurringCharge[]
   const groups = new Map<string, RecurringCharge>();
   for (const record of records) {
     if (!record.place.name) continue;
-    const key = `${record.place.name ?? ''}\u0000${record.amount}`;
+    const key = `${record.place.name ?? ''}${KEY_SEPARATOR}${record.amount}`;
     const group = groups.get(key) ?? {
       place_name: record.place.name,
       amount: record.amount,

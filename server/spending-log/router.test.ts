@@ -359,7 +359,23 @@ test('同意を取り消すと昇格済みの行が diary_only に戻る', async
   }
 });
 
-test('助言の送信先が loopback でなければ生成しない', async () => {
+test('loopback 以外の送信先は設定時点で拒否する', async () => {
+  const db = openDb(':memory:');
+  try {
+    const app = syncedApp(quaestorFetch(), db);
+    const res = await requestFrom(app, '127.0.0.1', 'http://localhost/api/spending-logs/advice/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ consent: true, base_url: 'https://api.openai.com/v1' }),
+    });
+    assert.equal(res.status, 400);
+    assert.match(await res.text(), /loopback/);
+  } finally {
+    db.close();
+  }
+});
+
+test('設定を直接書き換えても loopback 以外へは送信しない', async () => {
   const db = openDb(':memory:');
   try {
     const app = syncedApp(quaestorFetch(), db);
@@ -367,8 +383,14 @@ test('助言の送信先が loopback でなければ生成しない', async () =
     await requestFrom(app, '127.0.0.1', 'http://localhost/api/spending-logs/advice/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ consent: true, base_url: 'https://api.openai.com/v1' }),
+      body: JSON.stringify({ consent: true }),
     });
+    // API を迂回して不正な送信先が入っていても、 送信直前の検証で止まること。
+    db.prepare(`
+      INSERT INTO app_settings (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run('spending_advice.local_llm_base_url', 'https://api.openai.com/v1');
+
     const advice = await requestFrom(app, '127.0.0.1', 'http://localhost/api/spending-logs/advice', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

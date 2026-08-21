@@ -101,6 +101,19 @@ test('件数が 3 件未満の分類では突出支出を出さない', () => {
   assert.equal(analytics.outliers.length, 0);
 });
 
+test('label が別 kind の生 key と衝突しても支払手段を混ぜない', () => {
+  const analytics = analyzeSpending([
+    // label が別 kind の生 key と同じ文字列になるケース。
+    record({ id: 'a', date: '2026-07-01', amount: 100, payment: { kind: 'credit_card', label: 'cash' } }),
+    record({ id: 'b', date: '2026-07-02', amount: 200, payment: { kind: 'cash', label: null } }),
+  ], 'JPY', RANGE);
+  assert.equal(analytics.by_payment.length, 2);
+  assert.deepEqual(
+    analytics.by_payment.map((bucket) => bucket.amount).sort((x, y) => x - y),
+    [100, 200],
+  );
+});
+
 test('予定 / 想定外の内訳', () => {
   const analytics = analyzeSpending([
     record({ id: 'a', date: '2026-07-01', amount: 100, expense: { planned: true, rate: null, rule_id: null } }),

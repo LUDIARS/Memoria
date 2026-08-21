@@ -6,6 +6,7 @@ import {
   listSpendingAdviceReports,
   SpendingAdviceConsentError,
 } from './advice.js';
+import { assertLoopbackBaseUrl } from './local-llm.js';
 import { readSpendingAdviceSettings, writeSpendingAdviceSettings } from './settings.js';
 import { applyRelayConsent, listSpendingLogs } from './store.js';
 import {
@@ -47,6 +48,15 @@ export function makeSpendingAdviceRouter(deps: SpendingLogRouterDeps): Hono {
     if ('error' in body) return c.json({ error: body.error }, 400);
     const parsed = AdviceSettingsSchema.safeParse(body.value);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    // 保存できてしまうと「同意 ON なのに生成だけ毎回失敗する」状態になるので、
+    // 送信先の loopback 制約は設定時にも同じ判定で弾く。
+    if (parsed.data.base_url !== undefined) {
+      try {
+        assertLoopbackBaseUrl(parsed.data.base_url);
+      } catch (error: unknown) {
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+    }
 
     const settings = writeSpendingAdviceSettings(deps.db, parsed.data);
     const relayScopeUpdated = parsed.data.consent === undefined

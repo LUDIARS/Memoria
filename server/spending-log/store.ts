@@ -190,10 +190,13 @@ export function summarizeSpendingLogs(records: SpendingLogRecord[]): DailySpendi
  * OFF で助言 scope の行を diary_only へ戻す。 戻す方向は取り消しなので許す。
  */
 export function applyRelayConsent(db: Db, hasSpendingAdviceConsent: boolean): number {
-  const target = hasSpendingAdviceConsent ? SPENDING_ADVICE_SCOPE : DIARY_ONLY_SCOPE;
+  const target = resolveEffectiveRelayScope(hasSpendingAdviceConsent);
+  // 昇格/降格の対象は同意で切り替わるこの 2 値だけに限定する。 `<> target` で広く
+  // 書き換えると、 将来別の scope を足したときにその行まで巻き込んで書き換えてしまう。
+  const source = hasSpendingAdviceConsent ? DIARY_ONLY_SCOPE : SPENDING_ADVICE_SCOPE;
   return db.prepare(
-    `UPDATE sensitive_spending_logs SET llm_relay_scope = ? WHERE llm_relay_scope <> ?`,
-  ).run(target, target).changes;
+    `UPDATE sensitive_spending_logs SET llm_relay_scope = ? WHERE llm_relay_scope = ?`,
+  ).run(target, source).changes;
 }
 
 function toSqlParams(

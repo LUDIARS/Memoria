@@ -133,10 +133,11 @@ export async function loadSpendingLogView(kind: SourceKind, date: string): Promi
   if (!listEl || !summaryEl || !emptyEl) return;
 
   try {
-    const query = `date_from=${date}&date_to=${date}&source_kind=${kind}`;
+    const day = encodeURIComponent(date);
+    const query = `date_from=${day}&date_to=${day}&source_kind=${encodeURIComponent(kind)}`;
     const [list, stays] = await Promise.all([
       fetchJson<SpendingListResponse>(`/api/spending-logs?${query}`),
-      fetchJson<StaysResponse>(`/api/spending-logs/stays?date_from=${date}&date_to=${date}`),
+      fetchJson<StaysResponse>(`/api/spending-logs/stays?date_from=${day}&date_to=${day}`),
     ]);
     cachedStays = new Map(
       stays.days.flatMap((day) => day.entries).map((entry) => [entry.record_id, entry]),
@@ -226,7 +227,7 @@ export async function loadSpendingTrendView(): Promise<void> {
     selectedSpendingCurrency = analyticsResp.currencies.includes(activeCurrency) ? activeCurrency : null;
     body.innerHTML = renderCurrencySelector(analyticsResp.currencies, activeCurrency)
       + renderTrend(analyticsResp.analytics)
-      + renderAdvicePanel(adviceResp.settings, adviceResp.reports, activeCurrency);
+      + renderAdvicePanel(adviceResp.settings, adviceResp.reports, analyticsResp.analytics);
     bindCurrencySelector();
     bindAdviceControls(activeCurrency);
   } catch (err: unknown) {
@@ -304,8 +305,19 @@ function renderBuckets(title: string, buckets: AmountBucket[], currency: string)
   `;
 }
 
-function renderAdvicePanel(settings: AdviceSettings, reports: AdviceReport[], currency: string): string {
+function renderAdvicePanel(
+  settings: AdviceSettings,
+  reports: AdviceReport[],
+  analytics: SpendingAnalytics,
+): string {
+  const currency = analytics.currency;
   const latest = reports.find((report) => report.currency === currency);
+  // 助言は生成時の期間に対する内容なので、 いま表示している集計期間と違うなら
+  // 上の数字の説明として読ませない。
+  const staleNote = latest
+    && (latest.date_from !== analytics.date_from || latest.date_to !== analytics.date_to)
+    ? '<div class="muted" style="font-size:11px">⚠ 上の集計とは別の期間に対する助言です。</div>'
+    : '';
   return `
     <h4>消費傾向の助言 (ローカル LLM)</h4>
     <div class="foundation-form spending-advice-settings">
@@ -323,6 +335,7 @@ function renderAdvicePanel(settings: AdviceSettings, reports: AdviceReport[], cu
     </div>
     ${latest ? `
       <div class="spending-advice-report">
+        ${staleNote}
         <div class="muted" style="font-size:11px">
           ${escapeHtml(latest.date_from)} 〜 ${escapeHtml(latest.date_to)} ·
           ${escapeHtml(latest.provider_label)} / ${escapeHtml(latest.model)} ·
