@@ -198,14 +198,19 @@ CLI の詳細は Tailscale 公式の
 
 ## GitHub Release への配布
 
-`.github/workflows/desktop-release.yml` がタグ push をトリガに
+`.github/workflows/desktop-publish.yml` がタグ push をトリガに
 
 - Windows: NSIS `.exe` インストーラ
 - macOS arm64: `.dmg`
 - Linux x64: `.AppImage` + `.deb`
 
-をビルドし、それぞれ **zip に固めて** GitHub Release にアタッチします
-(ユーザの要望: 生 exe をそのまま置かない)。
+を各OSのランナーでビルドし、GitHub Release にアタッチします。自動更新に必要な
+installer / package と `latest*.yml` は raw asset のまま維持し、それら一式をまとめた
+次の配布用 ZIP も同じ Release に追加します。
+
+- `Memoria-vX.Y.Z-windows-x64.zip`
+- `Memoria-vX.Y.Z-macos-arm64.zip`
+- `Memoria-vX.Y.Z-linux-x64.zip`
 
 ### リリース手順
 
@@ -216,16 +221,16 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-タグが push された瞬間に GitHub Actions の `Desktop Release` ワークフロー
-が起動し、 3 OS で並列ビルド → アーティファクトを集約 →
-`Memoria-v0.1.0-windows-x64.zip` 等の名前で Release にアップロード
-されます。
+タグが push された瞬間に GitHub Actions の `Desktop Publish
+(electron-builder)` ワークフローが起動し、3 OS で並列ビルドして raw asset と
+OS 別 ZIP を Release にアップロードします。
 
 ### 手動トリガ
 
-リリースを切らずに動作確認したい場合は Actions タブから **Run
-workflow** で `tag` を指定すれば、 タグが無くても作成 + Release を建てて
-zip を貼り付けます (`v0.0.0-dev` がデフォルト)。
+Actions タブから **Run workflow** で `tag` を指定すると、既存 Release への
+再 publish、または指定タグの作成と Release 配布を実行できます。既存タグを
+指定した場合はそのタグのソースを checkout します。タグは
+`desktop/package.json` の version に `v` を付けた値と一致している必要があります。
 
 ## 既知の制約
 

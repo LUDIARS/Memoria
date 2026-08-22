@@ -15,6 +15,7 @@ name: Desktop Publish (electron-builder)
 #   Memoria Setup <version>.exe         + latest.yml          (Windows)
 #   Memoria-<version>-arm64.dmg         + latest-mac.yml      (macOS)
 #   Memoria-<version>.AppImage / .deb   + latest-linux.yml    (Linux)
+#   Memoria-<tag>-<platform>.zip                              (OS 別配布アーカイブ)
 
 on:
   push:
@@ -24,7 +25,6 @@ on:
       tag:
         description: 'Release tag (例: v1.0.1). 既存 Release があれば追記、 なければ作成。'
         required: true
-        default: 'v0.0.0-dev'
 
 permissions:
   contents: write
@@ -51,10 +51,49 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        env:
+          TAG_INPUT: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "$TAG_INPUT" ]; then
+            echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            # tag push trigger: GITHUB_REF = refs/tags/v1.0.1
+            echo "tag=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout existing release tag
+        shell: bash
+        env:
+          # 式展開を run 本文に直接埋めると tag input 経由で shell injection になるため env 渡し
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          tag="$RELEASE_TAG"
+          if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
+            git checkout --detach "$tag"
+          fi
 
       - uses: actions/setup-node@v4
         with:
           node-version-file: '.node-version'
+
+      - name: Validate release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          tag="$RELEASE_TAG"
+          version="$(node -p "require('./desktop/package.json').version")"
+          expected="v$version"
+          if [ "$tag" != "$expected" ]; then
+            echo "Release tag $tag does not match desktop/package.json version $version (expected $expected)." >&2
+            exit 1
+          fi
 
       - name: Install desktop deps
         working-directory: desktop
@@ -76,25 +115,13 @@ jobs:
         working-directory: desktop
         run: npx --no-install tsx scripts/bundle-server.ts --platform=${{ matrix.bundle_target }}
 
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        env:
-          TAG_INPUT: ${{ github.event.inputs.tag }}
-        run: |
-          if [ -n "$TAG_INPUT" ]; then
-            echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
-          else
-            # tag push trigger: GITHUB_REF = refs/tags/v1.0.1
-            echo "tag=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Ensure tag exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         shell: bash
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
+          tag="$RELEASE_TAG"
           if ! git rev-parse "$tag" >/dev/null 2>&1; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -113,12 +140,87 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           # publish 先の tag を明示 (workflow_dispatch でも tag push でも同じ値)
           EP_PRE_RELEASE: 'false'
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         shell: bash
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
+          tag="$RELEASE_TAG"
           # version は package.json の "version" を採用、 Release tag は CLI で固定
           npx --no-install electron-builder ${{ matrix.builder_flag }} \
             --publish=always \
             -c.publish.provider=github \
             -c.publish.releaseType=release \
             -c.releaseInfo.releaseName="Memoria $tag"
+
+      - name: Create Windows release archive
+        if: runner.os == 'Windows'
+        id: archive_windows
+        working-directory: desktop
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath dist -File -Filter 'Memoria Setup *.exe')
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installers.Count)."
+          }
+
+          $metadata = Get-Item -LiteralPath 'dist/latest.yml' -ErrorAction Stop
+          $blockmap = Get-Item -LiteralPath ($installers[0].FullName + '.blockmap') -ErrorAction Stop
+          $archive = "dist/Memoria-$env:RELEASE_TAG-windows-x64.zip"
+          Compress-Archive -LiteralPath @($installers[0].FullName, $blockmap.FullName, $metadata.FullName) `
+            -DestinationPath $archive -Force
+          "path=$archive" >> $env:GITHUB_OUTPUT
+
+      - name: Create macOS release archive
+        if: runner.os == 'macOS'
+        id: archive_macos
+        working-directory: desktop
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          packages=(dist/*.dmg)
+          blockmaps=(dist/*.blockmap)
+          metadata=dist/latest-mac.yml
+          if [ "${#packages[@]}" -ne 1 ] || [ ! -f "$metadata" ]; then
+            echo "Expected exactly one DMG and latest-mac.yml." >&2
+            exit 1
+          fi
+          archive="dist/Memoria-$RELEASE_TAG-macos-arm64.zip"
+          zip -j "$archive" "${packages[@]}" "${blockmaps[@]}" "$metadata"
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Create Linux release archive
+        if: runner.os == 'Linux'
+        id: archive_linux
+        working-directory: desktop
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          packages=(dist/*.AppImage dist/*.deb)
+          blockmaps=(dist/*.blockmap)
+          metadata=dist/latest-linux.yml
+          if [ "${#packages[@]}" -ne 2 ] || [ ! -f "$metadata" ]; then
+            echo "Expected one AppImage, one deb, and latest-linux.yml." >&2
+            exit 1
+          fi
+          archive="dist/Memoria-$RELEASE_TAG-linux-x64.zip"
+          zip -j "$archive" "${packages[@]}" "${blockmaps[@]}" "$metadata"
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release archive
+        working-directory: desktop
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          ARCHIVE_PATH: ${{ steps.archive_windows.outputs.path || steps.archive_macos.outputs.path || steps.archive_linux.outputs.path }}
+        run: |
+          if [ ! -f "$ARCHIVE_PATH" ]; then
+            echo "Release archive was not created: ${ARCHIVE_PATH:-<empty>}" >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "$ARCHIVE_PATH" --clobber
