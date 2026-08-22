@@ -1,0 +1,24 @@
+{
+  "name": "release-watch",
+  "description": "更新クローラー。登録した公式サイト (GitHub Releases / Tags / RSS / 公式ページ) の更新履歴を日次で巡回し、直近 N バージョンを日本語要約して 🤖 AI タブに表示する local-only 機能。SSRF ガード付き取得、ソース別正規化、要約キャッシュ、スケジューラ、HTTP 境界、専用 UI を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/release-watch/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/shared/public-fetch\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/release-watch-view\\.ts$"
+    }
+  ],
+  "specRefs": [
+    "spec/feature/release-watch.md#目的",
+    "spec/feature/release-watch.md#構成",
+    "spec/feature/release-watch.md#ソース種類",
+    "spec/feature/release-watch.md#制約"
+  ]
+}

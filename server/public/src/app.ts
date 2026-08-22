@@ -171,6 +171,7 @@ import { loadUserApps } from './userapps-view.js';
 import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-view.js';
 import { loadLlmView } from './llm-view.js';
 import { loadShoppingView } from './shopping-view.js';
+import { loadReleaseWatchView } from './release-watch-view.js';
 import { loadSpendingLogView, loadSpendingTrendView } from './spending-view.js';
 import {
   loadAiArticlesView,
@@ -8291,6 +8292,7 @@ const AI_SUB_VIEWS = {
   articles: 'aiArticlesView',
   seeds: 'aiSeedsView',
   advice: 'aiAdviceView',
+  releases: 'aiReleaseWatchView',
 };
 
 state.ai = state.ai || { sub: 'recommend' };
@@ -8323,6 +8325,7 @@ function switchAiSub(sub) {
   if (sub === 'articles') void loadAiArticlesView();
   if (sub === 'seeds') void loadAiSeedsView();
   if (sub === 'advice') void loadAiAdviceView();
+  if (sub === 'releases') void loadReleaseWatchView();
 }
 
 interface ApplicationCatalogRow {

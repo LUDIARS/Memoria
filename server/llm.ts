@@ -18,6 +18,7 @@ export type LlmTaskName =
   | 'weather_rain_verify' | 'weather_likely_place'
   | 'article_topics' | 'article_write' | 'article_tags' | 'ai_advice'
   | 'task_review'
+  | 'release_extract' | 'release_summarize'
   | 'plugin_llm';
 
 export const TASKS: LlmTaskName[] = [
@@ -33,6 +34,7 @@ export const TASKS: LlmTaskName[] = [
   'weather_rain_verify', 'weather_likely_place',
   'article_topics', 'article_write', 'article_tags', 'ai_advice',
   'task_review',
+  'release_extract', 'release_summarize',
   'plugin_llm',
 ];
 
@@ -58,6 +60,8 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   article_tags: 'haiku',             // 完成記事から分類タグ (言語/技術領域 等) を抽出。 短文・安価。
   ai_advice: 'sonnet',               // 週次データから助言 (Markdown)。
   task_review: 'sonnet',             // todo/doing タスクから統合候補・完了候補を JSON 抽出。
+  release_extract: 'sonnet',         // 更新クローラー: RSS/API の無い公式ページ本文からバージョン一覧を JSON 抽出。
+  release_summarize: 'haiku',        // 更新クローラー: 1 バージョンの変更点を日本語 3〜6 行に。 数が出るので安価に。
   plugin_llm: 'sonnet',               // 「ユーザーアプリ」プラグイン共通の汎用 LLM 呼び出し (ctx.memoria.llm)。
 };
 
