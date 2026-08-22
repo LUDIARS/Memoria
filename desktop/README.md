@@ -105,6 +105,62 @@ npm run build:linux     # Linux x64 (AppImage + .deb)
 
 成果物は `desktop/dist/` 以下に出力されます。
 
+### Tailscale で別の Windows 端末へ転送して試す
+
+[Taildrop](https://tailscale.com/kb/1106/taildrop) を使うと、ビルドした
+インストーラを tailnet 内の別端末へ直接転送できます。事前に次を確認してください。
+
+- 送信元と受信先の両方へ Tailscale をインストールし、同じ Tailscale ユーザーで
+  ログインして接続している
+- Tailscale Admin Console の General settings で **Send Files** を有効にしている
+- 受信先がタグ付き node ではない（Taildrop は同じユーザーが所有する個人端末間のみ対応）
+
+送信元の PowerShell で、最新の Windows インストーラを選んで送信します。
+
+```powershell
+cd desktop   # リポジトリルートから
+
+# Taildrop で選べる送信先名を確認
+tailscale file cp --targets
+
+$installer = Get-ChildItem -LiteralPath .\dist -Filter 'Memoria Setup *.exe' |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if (-not $installer) { throw 'dist/ にインストーラがありません。先に npm run build:win を実行してください' }
+
+# receiver-device は --targets に表示された受信先名へ置き換える。末尾の : は必須
+tailscale file cp $installer.FullName receiver-device:
+
+# 後で受信先と照合する値
+(Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash
+```
+
+受信先の Windows 端末では、PowerShell から Taildrop inbox のファイルを取り出します。
+
+```powershell
+$receiveDir = Join-Path $env:USERPROFILE 'Downloads\Memoria-test'
+New-Item -ItemType Directory -Path $receiveDir -Force | Out-Null
+tailscale file get --conflict=rename $receiveDir
+
+Get-ChildItem -LiteralPath $receiveDir -Filter 'Memoria Setup *.exe' |
+  Get-FileHash -Algorithm SHA256
+```
+
+送信元と受信先の SHA256 が一致してからインストーラを実行してください。開発ビルドは
+コード署名されていない場合があり、Windows SmartScreen が警告を表示することがあります。
+ハッシュが一致し、送信元が自分のビルドであることを確認できた場合だけ続行します。
+
+インストール後は次を確認します。
+
+1. Memoria が起動し、画面が表示される
+2. タスクトレイに Memoria が常駐する
+3. Memoria を終了して再起動できる
+4. AI 機能を使う場合は、対象 CLI の設定・認証がその端末にも用意されている
+
+CLI の詳細は Tailscale 公式の
+[`tailscale file` リファレンス](https://tailscale.com/kb/1080/cli#file)
+を参照してください。
+
 ### 解決順 (env override)
 
 | 設定 | 解決順 |
