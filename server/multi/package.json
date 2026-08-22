@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "description": "Memoria Hub — multi-server (Cernere SSO + /api/shared/*)",
   "scripts": {
     "start": "node --env-file-if-exists=.env --env-file-if-exists=../../.env bootstrap.js",

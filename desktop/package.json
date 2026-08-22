@@ -2,6 +2,9 @@
   "name": "memoria-desktop",
   "version": "1.0.1",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "description": "Memoria desktop wrapper — Electron shell that runs the Memoria Node server as a child process and shows its UI in a Chromium window.",
   "homepage": "https://github.com/LUDIARS/Memoria",
   "author": {
@@ -27,7 +30,7 @@
     "build:linux": "npm run icons && npm run build:ts && npm run bundle:server -- --platform=linux-x64 && electron-builder --linux"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",
     "tsx": "^4.19.0",

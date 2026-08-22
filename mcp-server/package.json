@@ -3,6 +3,9 @@
   "version": "1.0.1",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "description": "MCP server bridging Memoria's local HTTP API to MCP-aware clients.",
   "bin": {
     "memoria-mcp": "./index.js"

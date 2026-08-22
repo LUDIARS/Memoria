@@ -107,8 +107,8 @@ function findNodeOnPath(): string | null {
   // Sync `which`-equivalent so we never start the server with Electron's
   // own Node binary unless we deliberately mean to. Native modules in
   // server/node_modules (better-sqlite3) are compiled against a specific
-  // NODE_MODULE_VERSION; mixing host Node 22 with Electron's bundled
-  // Node 20 throws ERR_DLOPEN_FAILED at startup.
+  // NODE_MODULE_VERSION; mixing the supported Node 24 runtime with Electron's
+  // embedded Node ABI throws ERR_DLOPEN_FAILED at startup.
   const pathEnv = process.env.PATH || process.env.Path || '';
   const sep = process.platform === 'win32' ? ';' : ':';
   const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];

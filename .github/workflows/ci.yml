@@ -27,7 +27,7 @@ jobs:
       # 組織内パッケージ @ludiars/blackbox はビルトイン GITHUB_TOKEN (packages:read) で取得。
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: '.node-version'
           cache: npm
           cache-dependency-path: server/package-lock.json
           registry-url: 'https://npm.pkg.github.com'
@@ -57,7 +57,7 @@ jobs:
           # node_modules without touching package-lock.json so tsc can
           # resolve @types/* via the standard typeRoots path.
           npm install --no-save --no-package-lock --no-audit --no-fund \
-            typescript@5.6 @types/node@20 @types/better-sqlite3@7
+            typescript@5.6 @types/node@24 @types/better-sqlite3@7
           npx tsc --noEmit -p tsconfig.json
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -168,7 +168,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 

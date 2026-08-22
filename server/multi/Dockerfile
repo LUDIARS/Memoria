@@ -10,7 +10,7 @@
 # Fix: sparse-clone LUDIARS/Cernere in a build stage and materialize the
 # adapter at the relative path the package.json points to.
 
-FROM node:20-alpine AS adapter-fetch
+FROM node:24-alpine AS adapter-fetch
 RUN apk add --no-cache git
 WORKDIR /tmp
 RUN git clone --depth 1 --filter=blob:none --sparse https://github.com/LUDIARS/Cernere.git
@@ -23,7 +23,7 @@ RUN git sparse-checkout set packages/service-adapter packages/id-cache packages/
 
 # The sparse clone only ships source; package.json points to dist/index.js,
 # so we compile both adapters here before the deps stage consumes them.
-FROM node:20-alpine AS adapter-build
+FROM node:24-alpine AS adapter-build
 WORKDIR /tmp
 COPY --from=adapter-fetch /tmp/Cernere /tmp/Cernere
 WORKDIR /tmp/Cernere/packages/service-adapter
@@ -37,7 +37,7 @@ WORKDIR /tmp/Cernere/packages/composite
 RUN node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8')); p.dependencies['@ludiars/cernere-service-adapter']='file:../service-adapter'; fs.writeFileSync('package.json', JSON.stringify(p,null,2));"
 RUN npm install --no-audit --no-fund && npm run build
 
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 # package.json references `file:../../../Cernere/packages/*`.
 # Resolved from /app, that points to /Cernere/packages/*.
@@ -47,7 +47,7 @@ COPY --from=adapter-build /tmp/Cernere/packages/composite /Cernere/packages/comp
 COPY package.json ./
 RUN npm install --omit=dev
 
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 ENV MEMORIA_HUB_PORT=5280

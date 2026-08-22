@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.node-version'
 
       - name: Install desktop deps
         working-directory: desktop
@@ -74,7 +74,7 @@ jobs:
 
       - name: Bundle Memoria server + Node runtime
         working-directory: desktop
-        run: npx --no-install tsx scripts/bundle-server.ts --node-version=22.11.0 --platform=${{ matrix.bundle_target }}
+        run: npx --no-install tsx scripts/bundle-server.ts --platform=${{ matrix.bundle_target }}
 
       - name: Resolve release tag
         id: tag

@@ -15,7 +15,7 @@
 // with a normal argv) Just Work without being aware of Electron.
 //
 // Re-run before each release:
-//   tsx scripts/bundle-server.ts --node-version=22.11.0
+//   tsx scripts/bundle-server.ts
 //
 // Defaults are tuned for the current Memoria layout. Node tarballs are
 // fetched from nodejs.org/dist; the script verifies the tarball SHA256
@@ -29,6 +29,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
@@ -51,7 +52,13 @@ const args: Record<string, string> = Object.fromEntries(
     return m ? [[m[1], m[2]]] : [];
   })
 );
-const NODE_VERSION = args['node-version'] || '22.11.0';
+const NODE_VERSION_FILE = resolve(REPO_ROOT, '.node-version');
+const DEFAULT_NODE_VERSION = readFileSync(NODE_VERSION_FILE, 'utf8').trim();
+const NODE_VERSION = args['node-version'] || DEFAULT_NODE_VERSION;
+if (!/^\d+\.\d+\.\d+$/.test(NODE_VERSION)) {
+  const src = args['node-version'] ? '--node-version' : NODE_VERSION_FILE;
+  throw new Error(`invalid Node version from ${src}: ${NODE_VERSION}`);
+}
 const targetPlatform: Platform = (args['platform'] as Platform | undefined) || hostPlatform();
 const SKIP_NODE = args['skip-node'] === 'true' || process.env.MEMORIA_SKIP_NODE === '1';
 
@@ -66,6 +73,13 @@ function hostPlatform(): Platform {
   throw new Error(`unsupported host platform ${p}/${a}`);
 }
 
+// hostPlatform() throws on host/arch combos we don't ship a runtime for.
+// The cross-compile guard only needs a best-effort answer, so degrade to
+// null there rather than turning an otherwise-valid build into a crash.
+function safeHostPlatform(): Platform | null {
+  try { return hostPlatform(); } catch { return null; }
+}
+
 const NODE_DIST_BASE = `https://nodejs.org/dist/v${NODE_VERSION}`;
 const NODE_TARBALLS: Record<Platform, string> = {
   'win-x64':       `node-v${NODE_VERSION}-win-x64.zip`,
@@ -78,6 +92,22 @@ const NODE_TARBALLS: Record<Platform, string> = {
 function log(...m: unknown[]): void { console.log('[bundle-server]', ...m); }
 function fatal(msg: string): never { console.error('[bundle-server] FATAL', msg); process.exit(1); }
 
+// The snapshot's native modules (better-sqlite3) are resolved and loaded by
+// *this* process, so the host only has to share an ABI (NODE_MODULE_VERSION)
+// with the pinned runtime — that is fixed by the major version. Compare
+// against `.node-version` rather than NODE_VERSION: `--node-version` selects
+// the runtime to *bundle*, which is deliberately allowed to differ (e.g.
+// shipping a newer patch than the builder happens to run).
+function assertHostNodeVersion(): void {
+  const wantMajor = DEFAULT_NODE_VERSION.split('.')[0];
+  const gotMajor = process.versions.node.split('.')[0];
+  if (gotMajor !== wantMajor) {
+    fatal(
+      `bundle-server requires Node ${wantMajor}.x (per ${NODE_VERSION_FILE}); running ${process.versions.node}`
+    );
+  }
+}
+
 function run(cmd: string, argv: string[], opts: SpawnSyncOptions = {}): void {
   log('$', cmd, argv.join(' '));
   const r = spawnSync(cmd, argv, { stdio: 'inherit', shell: process.platform === 'win32', ...opts });
@@ -86,6 +116,18 @@ function run(cmd: string, argv: string[], opts: SpawnSyncOptions = {}): void {
 
 // ── 1. snapshot server/ into resources/server/ ────────────────────────────
 function snapshotServer(): void {
+  // npm resolves native prebuilds for the *host*, so a snapshot is only valid
+  // for a target that matches it. Cross-compiling would pair a host-native
+  // better-sqlite3 with a foreign portable Node and fail at ERR_DLOPEN_FAILED
+  // on the user's machine — refuse before doing any work.
+  const host = args['platform'] ? safeHostPlatform() : targetPlatform;
+  if (host && targetPlatform !== host) {
+    fatal(
+      `cannot bundle server for ${targetPlatform} from host ${host}: `
+      + 'better-sqlite3 prebuilds are host-specific. Build each platform on its own runner.'
+    );
+  }
+
   const dst = join(RESOURCES, 'server');
   log('clearing', dst);
   rmSync(dst, { recursive: true, force: true });
@@ -103,8 +145,17 @@ function snapshotServer(): void {
     return true;
   });
 
-  log('npm install --omit=dev', dst);
-  run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: dst });
+  // better-sqlite3 ships platform prebuilds. npm can nevertheless infer a
+  // node-gyp install from binding.gyp, so suppress lifecycle scripts and then
+  // prove that the bundled native module loads under the pinned host runtime.
+  log('npm install --omit=dev --ignore-scripts', dst);
+  run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: dst });
+
+  const requireFromSnapshot = createRequire(join(dst, 'package.json'));
+  const Database = requireFromSnapshot('better-sqlite3') as new (filename: string) => { close(): void };
+  const db = new Database(':memory:');
+  db.close();
+  log('better-sqlite3 native module OK on Node', process.versions.node);
 }
 
 function copyTree(src: string, dst: string, accept: (rel: string) => boolean): void {
@@ -194,6 +245,7 @@ function moveContents(srcDir: string, dstDir: string): void {
   log('repo root:', REPO_ROOT);
   log('target platform:', targetPlatform);
   log('node version:', NODE_VERSION);
+  assertHostNodeVersion();
   mkdirSync(RESOURCES, { recursive: true });
   snapshotServer();
   if (SKIP_NODE) {

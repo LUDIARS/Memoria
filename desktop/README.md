@@ -38,7 +38,7 @@ Memoria サーバは **ログイン中だけ常駐** する設計です:
 
 ## 必要なもの
 
-- Node 22 LTS+
+- Node 24 LTS (`../.node-version` が正本)
 - Windows: 不要 (Chromium 同梱)
 - macOS: 不要 (Chromium 同梱)
 - Linux: AppImage 実行に `libfuse2` が必要な場合あり
@@ -115,9 +115,14 @@ npm run build:linux     # Linux x64 (AppImage + .deb)
 
 ### bundle-server.mjs オプション
 
-- `--node-version=<x.y.z>` (default `22.11.0`)
+- `--node-version=<x.y.z>` (default は `../.node-version`)
+  — **同梱する**ポータブル Node のバージョン。 ホスト側は
+  `.node-version` と同じ major であることが必須 (native module の
+  NODE_MODULE_VERSION 整合のため)。
 - `--platform=<win-x64|darwin-arm64|darwin-x64|linux-x64|linux-arm64>`
-  (default: ホスト)
+  (default: ホスト) — `better-sqlite3` の prebuild はホスト固有なので、
+  ホストと異なる platform を指定すると失敗する。 各 OS は自身の runner で
+  ビルドすること。
 - `--skip-node` または `MEMORIA_SKIP_NODE=1` で Node 同梱をスキップ。
   この場合 `main.cjs` は Electron を Node として実行 (`ELECTRON_RUN_AS_NODE`)
   にフォールバックします — 配布サイズが小さくなる代わりに、 Claude /

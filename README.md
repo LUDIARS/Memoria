@@ -108,7 +108,7 @@ CI を回したり、コードを触ったり、複数台で運用したいと�
 
 | ツール | バージョン | 備考 |
 |---|---|---|
-| Node.js | 22 LTS+ | `--env-file-if-exists` を使う |
+| Node.js | 24 LTS | `.node-version` を全実行環境の正本とする |
 | npm | 10+ | Node 同梱 |
 | Claude Code CLI | 最新 | `claude -p "hi"` が動くこと |
 | Chrome | MV3 対応版 | 拡張を読み込むときだけ |
