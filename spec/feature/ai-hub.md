@@ -111,6 +111,15 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
 - `POST /api/ai/articles/share/check` (body `{ ids? }`) → スキャンだけ実行 → `{ ok, blocked }`
 - `POST /api/ai/articles/:id/unshare` → Hub 側の共有を取り下げ → `{ ok }`
   (契約の詳細は [`../interface/hub-social.md`](../interface/hub-social.md) §6.5)
+- `npm run ai-notes:check-notion-transfer -- --db <memoria.db> [--json]` → Notion 転送候補を
+  SQLite 原本から全件・読み取り専用で検査する。既存の `achievement_redaction_terms` に加え、
+  秘密鍵・アクセストークン・メールアドレス・ローカルパスと R18 表現を検出し、転送可否件数と
+  転送不可タイトルを返す。禁止語そのものや一致本文は出力せず、タイトル自身が検査に一致した
+  場合はタイトルも伏せる。禁止語辞書が空の場合は
+  built-in 検査だけを実行したことを stderr と集計値で明示する
+- **SPEC-AI-NOTION-TRANSFER-SAFETY:** Notion 転送判定は title/body_md に対して禁止語・一般的な
+  機密情報・R18 表現をすべて検査し、いずれかの一致で転送不可とする。レポートには一致値や
+  一致本文を含めず、タイトルで一致した記事はタイトルも伏せる
 - `GET  /api/ai/seeds?status=pending` → `{ seeds: AiSeed[] }`
 - `POST /api/ai/seeds/:id/request` → seed を LLM で本記事化、ai_articles に insert、seed.status='done'+article_id 設定 → `{ article }`
 - `POST /api/ai/seeds/:id/dismiss` → seed.status='dismissed' → `{ ok: true }`
