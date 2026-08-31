@@ -27,3 +27,35 @@ test('暗号化秘密鍵と macOS のユーザーパスも検出する', () => {
   assert.equal(scanSensitiveContent({ key: '-----BEGIN ENCRYPTED PRIVATE KEY-----' })[0]?.rule, 'private-key');
   assert.equal(scanSensitiveContent({ path: '/Users/alice/work' })[0]?.rule, 'local-user-path');
 });
+
+test('環境設定、任意ユーザー以外の絶対パス、loopback endpoint、個人環境文脈を検出する', () => {
+  const findings = scanSensitiveContent({
+    environment: 'process.env.MEMORIA_TOKEN',
+    path: '/etc/memoria/config.json',
+    endpoint: 'http://[::1]:4321/api',
+    context: '手元のPCでのみ再現する。',
+  });
+
+  assert.deepEqual(
+    findings.map((finding) => finding.rule).sort(),
+    [
+      'absolute-local-path',
+      'environment-configuration',
+      'local-runtime-endpoint',
+      'personal-environment-context',
+    ],
+  );
+});
+
+test('IPv4 loopback のアドレス範囲全体を検出する', () => {
+  assert.equal(
+    scanSensitiveContent({ endpoint: 'http://127.12.34.56:80/' })[0]?.rule,
+    'local-runtime-endpoint',
+  );
+});
+
+test('通常の home と公開 URL のパスをローカル環境として誤検出しない', () => {
+  assert.deepEqual(scanSensitiveContent({
+    body: 'Return to the home page at https://example.com/etc/reference.',
+  }), []);
+});

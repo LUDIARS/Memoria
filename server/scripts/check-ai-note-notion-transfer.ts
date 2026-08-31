@@ -33,7 +33,7 @@ function main(): void {
     ensureTable(db, 'achievement_redaction_terms');
 
     const articles = db.prepare(`
-      SELECT id, title, body_md
+      SELECT id, title, body_md, source_refs
       FROM ai_articles
       ORDER BY id
     `).all() as NotionTransferArticle[];

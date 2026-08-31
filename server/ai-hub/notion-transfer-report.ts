@@ -7,6 +7,7 @@ export interface NotionTransferReport {
   checks: {
     configuredRedactionTerms: number;
     redactionBlocked: number;
+    projectConfidentialityBlocked: number;
     sensitiveContentBlocked: number;
     r18Blocked: number;
   };
@@ -36,6 +37,7 @@ export function buildNotionTransferReport(
     checks: {
       configuredRedactionTerms,
       redactionBlocked: countBlockedBy('redaction'),
+      projectConfidentialityBlocked: countBlockedBy('project-confidentiality'),
       sensitiveContentBlocked: countBlockedBy('sensitive-content'),
       r18Blocked: countBlockedBy('r18'),
     },
@@ -57,6 +59,7 @@ export function formatNotionTransferReport(report: NotionTransferReport): string
     `Blocked: ${report.blocked}`,
     `Configured redaction terms: ${report.checks.configuredRedactionTerms}`,
     `Redaction blocked: ${report.checks.redactionBlocked}`,
+    `Project confidentiality blocked: ${report.checks.projectConfidentialityBlocked}`,
     `Sensitive content blocked: ${report.checks.sensitiveContentBlocked}`,
     `R18 blocked: ${report.checks.r18Blocked}`,
     'Blocked articles:',

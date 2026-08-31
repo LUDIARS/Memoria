@@ -1,14 +1,20 @@
 import { scanForbiddenTerms } from '../shared/redaction.js';
 import { scanR18Content } from '../shared/r18-content.js';
 import { scanSensitiveContent } from '../shared/sensitive-content.js';
+import { scanProjectConfidentiality } from './project-confidentiality.js';
 
 export interface NotionTransferArticle {
   id: number;
   title: string;
   body_md: string;
+  source_refs?: string | null;
 }
 
-export type NotionTransferCheck = 'redaction' | 'sensitive-content' | 'r18';
+export type NotionTransferCheck =
+  | 'redaction'
+  | 'project-confidentiality'
+  | 'sensitive-content'
+  | 'r18';
 
 export interface NotionTransferFinding {
   check: NotionTransferCheck;
@@ -40,6 +46,10 @@ export function checkNotionTransfer(
       // 禁止語辞書自体が機密になり得るため、結果へ原語を出さない。
       rule: 'configured-forbidden-term',
       index: finding.index,
+    })),
+    ...scanProjectConfidentiality(fields, article.source_refs).map((finding) => ({
+      check: 'project-confidentiality' as const,
+      ...finding,
     })),
     ...scanSensitiveContent(fields).map((finding) => ({
       check: 'sensitive-content' as const,

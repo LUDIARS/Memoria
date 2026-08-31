@@ -3,7 +3,11 @@ export type SensitiveContentRule =
   | 'access-token'
   | 'email-address'
   | 'local-user-path'
-  | 'local-workspace-path';
+  | 'local-workspace-path'
+  | 'absolute-local-path'
+  | 'environment-configuration'
+  | 'local-runtime-endpoint'
+  | 'personal-environment-context';
 
 export interface SensitiveContentFinding {
   field: string;
@@ -37,6 +41,26 @@ const SENSITIVE_CONTENT_PATTERNS: readonly SensitiveContentPattern[] = [
     rule: 'local-workspace-path',
     pattern: /[A-Z]:[\\/]+Document[\\/]+Ars(?:[\\/]|\b)/i,
   },
+  {
+    rule: 'absolute-local-path',
+    pattern: /(?<![A-Z0-9])(?:[A-Z]:[\\/]|\/(?:Applications|Library|Users|bin|etc|home|lib|mnt|opt|private|root|sbin|srv|tmp|usr|var|Volumes)\/)/i,
+  },
+  {
+    rule: 'environment-configuration',
+    pattern: /(?:環境変数|environment variable|(?:^|[\/\s])\.env(?:\.[A-Za-z0-9_-]+)?\b|(?:process|import\.meta)\.env\b|os\.environ|getenv\s*\(|\$env:[A-Z_][A-Z0-9_]*|%[A-Z_][A-Z0-9_]*%)/imu,
+  },
+  {
+    rule: 'environment-configuration',
+    pattern: /(?:^|[^A-Za-z0-9_])(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|USERNAME|COMPUTERNAME|CODEX_HOME|ANATOMIA_HOME|CLAUDE_CONFIG_DIR)(?:[^A-Za-z0-9_]|$)/mu,
+  },
+  {
+    rule: 'local-runtime-endpoint',
+    pattern: /(?<![A-Z0-9.-])(?:localhost|127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}|\[?::1\]?)(?::\d{1,5})?(?![A-Z0-9.-])/i,
+  },
+  {
+    rule: 'personal-environment-context',
+    pattern: /(?:個人環境|ローカル環境|自分のPC|個人PC|手元のPC|開発機|マシン固有)/iu,
+  },
 ];
 
 /**
@@ -52,6 +76,15 @@ export function scanSensitiveContent(
     if (!value) continue;
     for (const { rule, pattern } of SENSITIVE_CONTENT_PATTERNS) {
       const match = pattern.exec(value);
+      if (
+        match
+        && rule === 'absolute-local-path'
+        && findings.some((finding) => (
+          finding.field === field
+          && finding.index === match.index
+          && (finding.rule === 'local-user-path' || finding.rule === 'local-workspace-path')
+        ))
+      ) continue;
       if (match) findings.push({ field, rule, index: match.index });
     }
   }

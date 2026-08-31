@@ -53,6 +53,7 @@ test('人向け出力に全検査の集計を含め、機密タイトルを再�
   const output = formatNotionTransferReport(buildNotionTransferReport(RESULTS, 4));
 
   assert.match(output, /Redaction blocked: 0/);
+  assert.match(output, /Project confidentiality blocked: 0/);
   assert.match(output, /Sensitive content blocked: 1/);
   assert.match(output, /R18 blocked: 1/);
   assert.doesNotMatch(output, /person@example\.com/);
