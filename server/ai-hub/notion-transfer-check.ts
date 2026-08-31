@@ -2,6 +2,10 @@ import { scanForbiddenTerms } from '../shared/redaction.js';
 import { scanR18Content } from '../shared/r18-content.js';
 import { scanSensitiveContent } from '../shared/sensitive-content.js';
 import { scanProjectConfidentiality } from './project-confidentiality.js';
+import {
+  classifyNotionTransferDisposition,
+  type NotionTransferDisposition,
+} from './notion-transfer-disposition.js';
 
 export interface NotionTransferArticle {
   id: number;
@@ -27,6 +31,7 @@ export interface NotionTransferResult {
   id: number;
   title: string;
   transferable: boolean;
+  disposition: NotionTransferDisposition;
   findings: NotionTransferFinding[];
 }
 
@@ -37,6 +42,7 @@ export interface NotionTransferResult {
 export function checkNotionTransfer(
   article: NotionTransferArticle,
   forbiddenTerms: readonly string[],
+  projectNames: readonly string[] = [],
 ): NotionTransferResult {
   const fields = { title: article.title, body_md: article.body_md };
   const findings: NotionTransferFinding[] = [
@@ -47,7 +53,7 @@ export function checkNotionTransfer(
       rule: 'configured-forbidden-term',
       index: finding.index,
     })),
-    ...scanProjectConfidentiality(fields, article.source_refs).map((finding) => ({
+    ...scanProjectConfidentiality(fields, article.source_refs, projectNames).map((finding) => ({
       check: 'project-confidentiality' as const,
       ...finding,
     })),
@@ -61,10 +67,12 @@ export function checkNotionTransfer(
     })),
   ];
 
+  const disposition = classifyNotionTransferDisposition(findings);
   return {
     id: article.id,
     title: article.title,
-    transferable: findings.length === 0,
+    transferable: disposition === 'transferable',
+    disposition,
     findings,
   };
 }

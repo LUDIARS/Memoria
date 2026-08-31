@@ -113,16 +113,19 @@ CREATE INDEX IF NOT EXISTS idx_ai_advice_for_date ON ai_advice(for_date DESC);
   (契約の詳細は [`../interface/hub-social.md`](../interface/hub-social.md) §6.5)
 - `npm run ai-notes:check-notion-transfer -- --db <memoria.db> [--json]` → Notion 転送候補を
   SQLite 原本から全件・読み取り専用で検査する。既存の `achievement_redaction_terms` に加え、
-  案件プロジェクトの本文言及と `source_refs` provenance、秘密鍵・アクセストークン・メールアドレス、
+  `source_refs` から導出した案件名の本文言及と provenance、秘密鍵・アクセストークン・メールアドレス、
   環境変数・絶対ローカルパス・loopback endpoint・個人環境への言及、および R18 表現を検出し、
-  転送可否件数と転送不可タイトルを返す。案件 provenance が不正な JSON または
-  不正なデータ構造の場合も安全側で遮断する。
+  そのまま転送可・汎用化候補・転送不可の件数と対象タイトルを返す。案件名・個人環境情報だけの
+  一致は汎用化候補とし、固有情報を除去した書き直しを同じゲートで再検査する。禁止語・実秘密値・
+  メールアドレス・R18、または不正な JSON・データ構造の案件 provenance は汎用化候補にせず
+  安全側で遮断する。
   禁止語そのものや一致本文は出力せず、タイトル自身が検査に一致した場合はタイトルも伏せる。
   禁止語辞書が空の場合は built-in 検査だけを実行したことを stderr と集計値で明示する
 - **SPEC-AI-NOTION-TRANSFER-SAFETY:** Notion 転送判定は title/body_md と source_refs provenance に
-  対して禁止語・案件機密・一般的な機密情報・個人環境情報・R18 表現をすべて検査し、いずれかの
-  一致で転送不可とする。レポートには一致値や一致本文を含めず、タイトルで一致した記事は
-  タイトルも伏せる
+  対して禁止語・案件機密・一般的な機密情報・個人環境情報・R18 表現をすべて検査する。一致なしは
+  転送可、案件名・個人環境情報だけの一致は汎用化候補、それ以外は転送不可とする。汎用化候補も
+  原文のまま転送せず、書き直し後の再検査通過を必須とする。レポートには一致値や一致本文を含めず、
+  タイトルで一致した記事はタイトルも伏せる
 - `GET  /api/ai/seeds?status=pending` → `{ seeds: AiSeed[] }`
 - `POST /api/ai/seeds/:id/request` → seed を LLM で本記事化、ai_articles に insert、seed.status='done'+article_id 設定 → `{ article }`
 - `POST /api/ai/seeds/:id/dismiss` → seed.status='dismissed' → `{ ok: true }`

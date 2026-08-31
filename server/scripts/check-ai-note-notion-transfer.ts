@@ -8,6 +8,7 @@ import {
   buildNotionTransferReport,
   formatNotionTransferReport,
 } from '../ai-hub/notion-transfer-report.js';
+import { collectProjectNamesFromSourceRefs } from '../ai-hub/project-confidentiality.js';
 
 function readOption(args: readonly string[], name: string): string | null {
   const index = args.indexOf(name);
@@ -42,8 +43,13 @@ function main(): void {
       FROM achievement_redaction_terms
       ORDER BY term
     `).all() as { term: string }[]).map((row) => row.term);
+    const projectNames = collectProjectNamesFromSourceRefs(articles);
     const report = buildNotionTransferReport(
-      articles.map((article) => checkNotionTransfer(article, forbiddenTerms)),
+      articles.map((article) => checkNotionTransfer(
+        article,
+        forbiddenTerms,
+        projectNames,
+      )),
       forbiddenTerms.length,
     );
 
