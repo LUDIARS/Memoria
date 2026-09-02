@@ -4,7 +4,7 @@
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import { listTaskReviews, getTaskReview, setTaskReviewStatus } from '../db.js';
-import { runTaskReview, applyTaskReview } from '../task-review/index.js';
+import { runTaskReview, applyTaskReview, parseTaskReviewScope } from '../task-review/index.js';
 import { formatLocalDate } from '../diary.js';
 
 type Db = BetterSqlite3.Database;
@@ -26,12 +26,13 @@ export function makeTaskReviewRouter(deps: TaskReviewRouterDeps): Hono {
     return c.json({ items: listTaskReviews(db, { status }) });
   });
 
-  // いま棚卸し (手動実行)。 pending を作り直す。
+  // いま棚卸し (手動実行)。 pending を作り直す。 scope 既定 'overdue' (期限超過のみ)、 'all' で全未完。
   r.post('/api/task-reviews/run-now', async (c: Context) => {
-    const body = await c.req.json().catch(() => ({})) as { date?: unknown };
+    const body = await c.req.json().catch(() => ({})) as { date?: unknown; scope?: unknown };
     const date = typeof body.date === 'string' && body.date.trim() ? body.date.trim() : formatLocalDate();
+    const scope = parseTaskReviewScope(body.scope);
     try {
-      const result = await runTaskReview(db, date);
+      const result = await runTaskReview(db, date, { scope });
       return c.json(result);
     } catch (e: unknown) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);

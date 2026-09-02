@@ -1,4 +1,4 @@
-// task-review — 朝のタスク棚卸し tick。 ai-hub scheduler と同形:
+// task-review — 朝のタスク棚卸し tick (対象は期限超過のみ)。 ai-hub scheduler と同形:
 // 毎分 setInterval で時刻を見て、 設定時刻 + 当日未実行 (app_settings の last_date
 // ガード) のときだけ runTaskReview を走らせる。 try/catch で全体を止めない。
 // Spec: spec/feature/task-review.md §トリガー
@@ -38,7 +38,8 @@ export function startTaskReviewScheduler(db: Db): void {
           && appS['task_review.last_date'] !== today) {
         // 先にガードを立て (二重実行防止)、 非同期処理を投げる。
         setAppSettings(db, { 'task_review.last_date': today });
-        void runTaskReview(db, today).catch((e: unknown) => {
+        // 朝は期限超過だけを見る。 期限未設定の山は task-triage セッションで人が捌く。
+        void runTaskReview(db, today, { scope: 'overdue', now }).catch((e: unknown) => {
           console.warn('[task-review] run failed:', e instanceof Error ? e.message : String(e));
         });
       }

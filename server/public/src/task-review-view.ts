@@ -1,4 +1,4 @@
-// 🔁 タスク確認キュー — 朝の Sonnet 棚卸し提案 (統合 cluster / 完了 completed) を
+// 🔁 タスク確認キュー — 朝の Sonnet 棚卸し提案 (対象は期限超過のみ。 統合 cluster / 完了 completed) を
 // 表示し、適用 / 却下 / いま棚卸し を扱う自己完結モジュール。
 // app.ts からは loadTaskReviewView() を呼ぶだけ。state/DOM 内部には依存しない。
 // Spec: spec/feature/task-review.md §UI
@@ -98,24 +98,24 @@ export async function loadTaskReviewView(): Promise<void> {
       <strong>🔁 タスク確認</strong>
       ${items.length ? `<span class="muted">${items.length} 件の提案</span>` : '<span class="muted">提案なし</span>'}
       <span class="grow"></span>
-      <button class="ghost" id="taskReviewRunNow">いま棚卸し</button>
+      <button class="ghost" id="taskReviewRunNow" title="期限を過ぎた未完タスクだけを対象に統合/完了候補を出す">期限超過を棚卸し</button>
     </div>`;
   const body = items.length
     ? `<div class="task-review-list">${items.map(reviewCard).join('')}</div>`
-    : '<div class="task-review-empty muted">近いタスクの統合候補・完了候補はいまありません。毎朝の棚卸しか「いま棚卸し」で生成されます。</div>';
+    : '<div class="task-review-empty muted">期限超過タスクの統合候補・完了候補はいまありません。毎朝の棚卸し (期限超過のみ) か「期限超過を棚卸し」で生成されます。期限のないタスクは下の棚卸しセッションで捌きます。</div>';
   root.innerHTML = header + body;
 
   root.querySelector('#taskReviewRunNow')?.addEventListener('click', async () => {
     const btn = root.querySelector('#taskReviewRunNow') as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = '棚卸し中…'; }
     try {
-      const { status, body: b } = await postJson('/api/task-reviews/run-now', {});
+      const { status, body: b } = await postJson('/api/task-reviews/run-now', { scope: 'overdue' });
       if (status >= 400) throw new Error((b as { error?: string }).error || `${status}`);
-      const created = (b as { created?: number }).created ?? 0;
-      toast(`タスク棚卸し完了: ${created} 件の提案`);
+      const { created = 0, scanned = 0 } = b as { created?: number; scanned?: number };
+      toast(`期限超過 ${scanned} 件を棚卸し: ${created} 件の提案`);
       await loadTaskReviewView();
     } catch (e) {
-      if (btn) { btn.disabled = false; btn.textContent = 'いま棚卸し'; }
+      if (btn) { btn.disabled = false; btn.textContent = '期限超過を棚卸し'; }
       toast(`棚卸しに失敗しました: ${e instanceof Error ? e.message : String(e)}`);
     }
   });

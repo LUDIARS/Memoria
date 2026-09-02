@@ -17,7 +17,7 @@ export type LlmTaskName =
   | 'rss_score' | 'rss_summarize' | 'rss_digest'
   | 'weather_rain_verify' | 'weather_likely_place'
   | 'article_topics' | 'article_write' | 'article_tags' | 'ai_advice'
-  | 'task_review'
+  | 'task_review' | 'task_triage'
   | 'release_extract' | 'release_summarize'
   | 'plugin_llm';
 
@@ -33,7 +33,7 @@ export const TASKS: LlmTaskName[] = [
   'rss_score', 'rss_summarize', 'rss_digest',
   'weather_rain_verify', 'weather_likely_place',
   'article_topics', 'article_write', 'article_tags', 'ai_advice',
-  'task_review',
+  'task_review', 'task_triage',
   'release_extract', 'release_summarize',
   'plugin_llm',
 ];
@@ -59,7 +59,8 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   article_write: 'claude-opus-4-7[1m]', // 1 トピックを本記事 (Markdown) に。 品質寄り + 長文。
   article_tags: 'haiku',             // 完成記事から分類タグ (言語/技術領域 等) を抽出。 短文・安価。
   ai_advice: 'sonnet',               // 週次データから助言 (Markdown)。
-  task_review: 'sonnet',             // todo/doing タスクから統合候補・完了候補を JSON 抽出。
+  task_review: 'sonnet',             // 期限超過の todo/doing タスクから統合候補・完了候補を JSON 抽出。
+  task_triage: 'sonnet',             // 期限未設定タスクのバッチに 期限/完了/据え置き を JSON で提案。
   release_extract: 'sonnet',         // 更新クローラー: RSS/API の無い公式ページ本文からバージョン一覧を JSON 抽出。
   release_summarize: 'haiku',        // 更新クローラー: 1 バージョンの変更点を日本語 3〜6 行に。 数が出るので安価に。
   plugin_llm: 'sonnet',               // 「ユーザーアプリ」プラグイン共通の汎用 LLM 呼び出し (ctx.memoria.llm)。

@@ -1,5 +1,6 @@
-// task-review — todo/doing タスクを Sonnet で棚卸しし、 統合候補 (cluster) と
+// task-review — 期限超過の todo/doing タスクを Sonnet で棚卸しし、 統合候補 (cluster) と
 // 完了候補 (completed) を task_reviews に pending で積む。
+// 既定 scope は 'overdue' (期限超過のみ)。 期限未設定は task-triage セッションで扱う。
 // Spec: spec/feature/task-review.md
 
 import type BetterSqlite3 from 'better-sqlite3';
@@ -11,13 +12,25 @@ import type { TaskRow } from '../db/types/task.js';
 import type {
   TaskReview, TaskReviewSuggestions, ClusterSuggestion, CompletedSuggestion, TaskSnapshotEntry,
 } from './types.js';
+import { selectReviewTasks, type TaskReviewScope } from './scope.js';
 
 type Db = BetterSqlite3.Database;
 
 export interface RunTaskReviewResult {
   created: number;
+  /** 棚卸し対象に入ったタスク数 (scope 適用後)。 */
+  scanned: number;
+  scope: TaskReviewScope;
   items: TaskReview[];
 }
+
+export interface RunTaskReviewOptions {
+  scope?: TaskReviewScope;
+  now?: Date;
+}
+
+/** 対象タスクを全件読む上限。 listTasks の既定 (100) では 400 件規模を取りこぼす。 */
+const FETCH_LIMIT = 10_000;
 
 /** LLM 出力 (```json フェンス等) から JSON オブジェクトを抜き出す。 失敗時 null。 */
 function extractJsonObject(raw: string): Record<string, unknown> | null {
@@ -75,7 +88,7 @@ function coerceSuggestions(obj: Record<string, unknown> | null): TaskReviewSugge
   return { clusters, completed };
 }
 
-function buildPrompt(tasks: TaskRow[]): string {
+function buildPrompt(tasks: TaskRow[], scope: TaskReviewScope): string {
   // プロジェクト (category) ごとにまとめて提示。 category は複数値 (カンマ区切り) なので
   // 先頭値をグループキーにする。 未分類は「(未分類)」。
   const groups = new Map<string, TaskRow[]>();
@@ -90,13 +103,17 @@ function buildPrompt(tasks: TaskRow[]): string {
     lines.push(`### プロジェクト: ${proj}`);
     for (const t of arr) {
       const detail = (t.details ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
-      lines.push(`- #${t.id} [${t.status}] ${t.title}${detail ? ` — ${detail}` : ''}`);
+      const due = t.due_at ? ` (期限 ${t.due_at})` : '';
+      lines.push(`- #${t.id} [${t.status}]${due} ${t.title}${detail ? ` — ${detail}` : ''}`);
     }
     lines.push('');
   }
 
+  const intro = scope === 'overdue'
+    ? 'あなたはタスク管理の整理係だ。 以下は **期限を過ぎた** 未完 (todo/doing) のタスク一覧をプロジェクト別に並べたものだ。'
+    : 'あなたはタスク管理の整理係だ。 以下は未完 (todo/doing) のタスク一覧をプロジェクト別に並べたものだ。';
   return [
-    'あなたはタスク管理の整理係だ。 以下は未完 (todo/doing) のタスク一覧をプロジェクト別に並べたものだ。',
+    intro,
     '2 種類の整理候補を JSON で出せ。 確証が持てるものだけ。 推測で増やさない。',
     '',
     '1. clusters: **同じプロジェクト内**で内容が近い/重複しているタスクのまとまり。',
@@ -116,19 +133,23 @@ function buildPrompt(tasks: TaskRow[]): string {
 }
 
 /**
- * タスク棚卸しを実行する。 todo/doing タスクを Sonnet に渡して整理候補を得、
- * 既存 pending を作り直して task_reviews に積む。
+ * タスク棚卸しを実行する。 scope (既定 'overdue' = 期限超過のみ) で絞った todo/doing タスクを
+ * Sonnet に渡して整理候補を得、 既存 pending を作り直して task_reviews に積む。
  */
-export async function runTaskReview(db: Db, dateStr: string): Promise<RunTaskReviewResult> {
-  const tasks = listTasks(db, { kind: 'task', limit: 200 }).filter((t) => t.status !== 'done');
+export async function runTaskReview(
+  db: Db, dateStr: string, opts: RunTaskReviewOptions = {},
+): Promise<RunTaskReviewResult> {
+  const scope: TaskReviewScope = opts.scope ?? 'overdue';
+  const now = opts.now ?? new Date();
+  const tasks = selectReviewTasks(listTasks(db, { kind: 'task', limit: FETCH_LIMIT }), scope, now);
   if (tasks.length < 2) {
     // 整理対象がほぼ無い。 pending を一掃するだけ (古い提案を残さない)。
     deletePendingTaskReviews(db);
-    return { created: 0, items: [] };
+    return { created: 0, scanned: tasks.length, scope, items: [] };
   }
 
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const raw = await runLlm({ task: 'task_review', prompt: buildPrompt(tasks) });
+  const raw = await runLlm({ task: 'task_review', prompt: buildPrompt(tasks, scope) });
   const { clusters, completed } = coerceSuggestions(extractJsonObject(raw));
 
   const snapshotOf = (ids: number[]): TaskSnapshotEntry[] =>
@@ -172,5 +193,5 @@ export async function runTaskReview(db: Db, dateStr: string): Promise<RunTaskRev
     created++;
   }
 
-  return { created, items: listTaskReviews(db, { status: 'pending' }) };
+  return { created, scanned: tasks.length, scope, items: listTaskReviews(db, { status: 'pending' }) };
 }

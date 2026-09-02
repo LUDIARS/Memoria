@@ -1,11 +1,15 @@
 {
   "name": "task-management",
-  "description": "タスクの正本。 登録・期限・カテゴリ・完了と、 残作業の棚卸し (task-review) と目標評価 (goals) を持つ。 タスクを起点にした自動化の入口でもある。",
+  "description": "タスクの正本。 登録・期限・カテゴリ・完了と、 期限超過の棚卸し (task-review)・期限未設定の棚卸しセッション (task-triage) と目標評価 (goals) を持つ。 タスクを起点にした自動化の入口でもある。",
+  "role": "semantic",
   "presetRules": [],
   "templateRules": [],
   "membership": [
     {
       "pathPattern": "(^|/)server/task-review/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/task-triage/[^/]+$"
     },
     {
       "pathPattern": "(^|/)server/goals/[^/]+$"
@@ -17,7 +21,21 @@
       "pathPattern": "(^|/)server/shared/task-registration\\.ts$"
     },
     {
+      "pathPattern": "(^|/)server/shared/task-mutation\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/task-(?:review|triage)-view\\.ts$"
+    },
+    {
       "pathPattern": "(^|/)server/queue\\.ts$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/task.md#概要",
+    "spec/feature/task-review.md#対象範囲-scope",
+    "spec/feature/task-review.md#api-serverroutestask-reviewts-mount-apitask-reviews",
+    "spec/feature/task-triage.md#セッション-servertask-triagesessionts",
+    "spec/feature/task-triage.md#ai-提案-servertask-triagesuggestts",
+    "spec/feature/task-triage.md#api-servertask-triagerouterts-mount-apitask-triage"
   ]
 }

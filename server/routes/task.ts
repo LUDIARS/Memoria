@@ -7,13 +7,12 @@ import {
   listTasks, listTaskCategories, registerTaskCategory, unregisterTaskCategory,
   getTask, updateTask, deleteTask,
   insertExternalChatMessage, listExternalChatMessages,
-  getDiary, upsertDiary, recordActivityEvent,
   listRepoWatch,
 } from '../db.js';
-import { formatLocalDate } from '../diary.js';
 import { privacySettings } from '../lib/privacy.js';
 import { postTaskToDiscord } from '../discord/index.js';
 import { registerTask } from '../shared/task-registration.js';
+import { updateTaskWithJournal } from '../shared/task-mutation.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -24,17 +23,6 @@ export interface TaskRouterDeps {
 export function makeTaskRouter(deps: TaskRouterDeps): Hono {
   const { db } = deps;
   const r = new Hono();
-
-  function appendTaskDiaryLog(line: string): void {
-    const date = formatLocalDate(new Date());
-    const row = getDiary(db, date);
-    const prev = String(row?.notes ?? '').trimEnd();
-    const now = new Date();
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mm = String(now.getMinutes()).padStart(2, '0');
-    const next = prev ? `${prev}\n${hh}:${mm} ${line}` : `${hh}:${mm} ${line}`;
-    upsertDiary(db, { date, notes: next, status: row?.status ?? 'pending' });
-  }
 
   async function shareTaskToActio(task: {
     id: number;
@@ -148,31 +136,9 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
     if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
     if (typeof body.category === 'string' || body.category === null) patch.category = body.category;
-    if (before.creator_type === 'ai' && Object.hasOwn(patch, 'due_at') && patch.due_at !== before.due_at) {
-      patch.creator_type = 'human';
-    }
-    updateTask(db, id, patch);
-    const after = getTask(db, id);
-    if (!after) return c.json({ error: 'task disappeared' }, 500);
-    const isGoal = after.kind === 'goal';
-    const noun = isGoal ? '目標' : 'タスク';
-    const completedNow = before.status !== 'done' && after.status === 'done';
-    if (completedNow) {
-      appendTaskDiaryLog(`${noun}完了: ${after.title}`);
-      recordActivityEvent(db, { kind: isGoal ? 'goal_done' : 'task_done', content: after.title });
-    } else {
-      const changed = ['title', 'details', 'status', 'due_at', 'share_actio', 'kind'].some((k) => Object.hasOwn(patch, k));
-      const isHumanChange = before.creator_type === 'human' || (before.creator_type === 'ai' && after.creator_type === 'human');
-      if (changed && isHumanChange) {
-        appendTaskDiaryLog(`${noun}更新: ${after.title}${after.due_at ? ` (期日: ${after.due_at})` : ''}`);
-        recordActivityEvent(db, {
-          kind: isGoal ? 'goal_updated' : 'task_updated',
-          content: after.title,
-          metadata: patch.status ? { status: after.status } : undefined,
-        });
-      }
-    }
-    return c.json({ task: after });
+    const result = updateTaskWithJournal(db, id, patch);
+    if (!result) return c.json({ error: 'task disappeared' }, 500);
+    return c.json({ task: result.after });
   });
 
   r.delete('/api/tasks/:id', (c: Context) => {

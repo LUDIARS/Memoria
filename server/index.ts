@@ -79,6 +79,7 @@ import { makeGoalEvalRouter } from './goals/router.js';
 import { makeRoadmapRouter } from './roadmap/router.js';
 import { makeAiHubRouter } from './routes/ai-hub.js';
 import { makeTaskReviewRouter } from './routes/task-review.js';
+import { makeTaskTriageRouter } from './task-triage/index.js';
 import { makeSpendingLogRouter } from './spending-log/router.js';
 import { makeCleverSearchRouter } from './clever-search/router.js';
 import { makeLlmUsageRouter } from './llm-usage/router.js';
@@ -250,6 +251,7 @@ app.route('/', makeDiaryRouter({
 }));
 app.route('/', makeTaskRouter({ db }));
 app.route('/', makeTaskReviewRouter({ db }));
+app.route('/', makeTaskTriageRouter({ db }));
 console.log('[startup] mounting Clever Search');
 app.route('/', makeCleverSearchRouter({ db }));
 console.log('[startup] Clever Search ready');

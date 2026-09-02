@@ -2,7 +2,7 @@
 
 ## 概要
 
-毎朝、Memoria 内で Sonnet を起動して当日のタスクを棚卸しし、人間に「確認」を促すキューを積む。
+毎朝、Memoria 内で Sonnet を起動して **期限を過ぎた** タスクを棚卸しし、人間に「確認」を促すキューを積む。
 2 種類の提案を出す:
 
 1. **クラスタ (cluster)** — 同じプロジェクト (category) 内の **近い / 重複しているタスク** を 1 グループにまとめ、代表 1 件への統合を提案する。
@@ -12,6 +12,15 @@
 
 > Concordia / Delegation は使わない。完全に Memoria 内 (scheduler + LLM + DB + UI) で完結する。
 > 朝タスクの「実装系を AI が自走する」フロー (Concordia MorningScheduler) とは別物で、これは **人間が確認するための整理キュー** に限定する。
+
+## 対象範囲 (scope)
+
+- **`overdue` (既定 / 朝の自動実行)**: `status != 'done'` かつ `due_at` が設定されていて現在時刻より前のタスクだけ。
+  期限未設定のタスクは **対象にしない** (2026-09-03: 未完 400 件のほとんどが期限なしで、 毎朝全件を Sonnet に流しても人が捌けないため)。
+- **`all`**: 旧来どおり未完すべて。 `POST /run-now` に `{ scope: 'all' }` を明示したときだけ。
+- 期限未設定タスクの棚卸しは別機能 [task-triage](task-triage.md) (セッション形式、 人が 1 件ずつ判断) で行う。
+- 選別は `server/task-review/scope.ts` の純関数 `selectReviewTasks(tasks, scope, now)`。 `due_at` は local `'YYYY-MM-DDTHH:MM'` / ISO どちらも `new Date()` で解釈し、 不正値は超過扱いしない。
+- 対象タスクの読み出し上限は 10,000 件 (以前の 200 件では取りこぼしていた)。
 
 ## トリガー
 
@@ -69,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_task_reviews_status ON task_reviews(status, creat
 ## API (server/routes/task-review.ts, mount `/api/task-reviews`)
 
 - `GET  /api/task-reviews?status=pending` → `{ items: TaskReview[] }` (既定 pending、`all` で全件)
-- `POST /api/task-reviews/run-now` → 即時に Sonnet 解析を実行し pending を作り直す → `{ created, items }`
+- `POST /api/task-reviews/run-now` `{ date?, scope? }` → 即時に Sonnet 解析を実行し pending を作り直す → `{ created, scanned, scope, items }` (scope 既定 `overdue`)
 - `POST /api/task-reviews/:id/apply` → 提案を適用する。**実行直前に対象タスクの存在 + (title,status) をスナップショットと突き合わせ**、消えている / 変更されていたら `409 { error, conflicts }` でブロック (朝の解析後にタスク修正が入っても安全)。
   - **cluster**: `primary_id` を統合先に残し、それ以外の task_ids を `status='done'` にクローズ。代表タスクの details 末尾に「統合: #id タイトル」を追記。
   - **completed**: 対象タスクを `status='done'` にする。
@@ -85,7 +94,7 @@ conflict があれば一切変更せず 409。ユーザは UI で「再解析」
 ## UI (server/public/src/task-review-view.ts)
 
 - 📝 タスクタブの上部に「🔁 タスク確認」パネル (`#taskReviewPanel`)。`loadTasks()` から `loadTaskReviewView()` を呼んで board と一緒に更新する。
-- pending が 0 件ならパネルは控えめな空表示 + 「いま棚卸し」ボタン (run-now)。
+- pending が 0 件ならパネルは控えめな空表示 + 「期限超過を棚卸し」ボタン (run-now, scope=overdue)。
 - 各 review カード: 種別バッジ (まとめる / 完了確認) + 対象タスク `#id タイトル` 一覧 + 理由 + [適用] / [却下]。
 - 適用が 409 (conflict) のときはトーストで「タスクが変更されたため再解析してください」と出し、run-now を促す。
 - 自己完結モジュール (ai-view.ts と同形)。app.ts の state/DOM 内部に依存しない。

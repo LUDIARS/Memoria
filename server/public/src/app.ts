@@ -184,6 +184,11 @@ import {
   setTaskReviewToast,
   setTaskReviewOnChange,
 } from './task-review-view.js';
+import {
+  loadTaskTriageView,
+  setTaskTriageToast,
+  setTaskTriageOnChange,
+} from './task-triage-view.js';
 
 // 旧 JS の動的オブジェクト用の緩い型 (record-y values)。 値型は `unknown`
 // でフラット。 配列メソッドや特定 key 値の narrow が必要な callsite では
@@ -7988,6 +7993,7 @@ ensureMemoriaFeatureViews = function () {
           <div id="tasksGoalsList" class="simple-list"></div>
         </section>
         <div id="taskReviewPanel" class="task-review-panel"></div>
+        <div id="taskTriagePanel" class="task-review-panel task-triage-panel"></div>
         <div class="tasks-three-pane">
           <aside id="tasksMenu" class="tasks-menu">
             <div class="tasks-menu-section">
@@ -8120,6 +8126,7 @@ loadTasks = async function () {
   renderTaskBoard();
   renderTaskDetail();
   void loadTaskReviewView();
+  void loadTaskTriageView();
 };
 
 addTaskFromForm = async function () {
@@ -8635,6 +8642,9 @@ setAiToast((msg) => flashToast(msg));
 // task-review-view.ts のトースト + 変更時タスク再読込を接続。
 setTaskReviewToast((msg) => flashToast(msg));
 setTaskReviewOnChange(() => { void loadTasks(); });
+// task-triage-view.ts (期限未設定の棚卸しセッション) も同様に接続。
+setTaskTriageToast((msg) => flashToast(msg));
+setTaskTriageOnChange(() => { void loadTasks(); });
 $('appsRefresh')?.addEventListener('click', () => void loadApplicationsCatalog());
 
 function switchWorklogSub(sub) {

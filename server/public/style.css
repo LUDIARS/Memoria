@@ -4531,6 +4531,32 @@ dialog.meal-modal[open] {
 .task-review-primary-tag { color: #1f56c0; font-size: 11px; }
 .task-review-reason { font-size: 12px; margin: 4px 0 8px; }
 .task-review-actions { display: flex; gap: 8px; }
+
+/* 📅 期限未設定の棚卸しセッション (task-triage-view.ts) */
+.task-triage-progress { display: flex; align-items: center; gap: 10px; margin: 2px 0 8px; font-size: 12px; }
+.task-triage-progress-bar {
+  flex: 0 0 160px; height: 6px; border-radius: 3px;
+  background: rgba(0,0,0,0.08); overflow: hidden;
+}
+.task-triage-progress-fill { height: 100%; background: #1f56c0; transition: width 0.2s; }
+.task-triage-card {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; background: rgba(0,0,0,0.015);
+}
+.task-triage-head { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.task-triage-head .grow { flex: 1; }
+.task-triage-status { color: var(--muted); }
+.task-triage-title { font-size: 14px; font-weight: 600; margin: 4px 0 2px; }
+.task-triage-detail { font-size: 12px; margin-bottom: 4px; }
+.task-triage-suggest {
+  font-size: 12px; margin: 4px 0 6px; padding: 4px 8px;
+  border-left: 3px solid #b48a00; background: #fff8e1; border-radius: 4px;
+}
+.task-triage-suggest[data-suggest-action="done"] { border-left-color: #1f8a4c; background: #e7f6ec; }
+.task-triage-suggest[data-suggest-action="keep"] { border-left-color: #8a8a8a; background: #f2f2f2; }
+.task-triage-suggest-label { font-weight: 600; }
+.task-triage-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.task-triage-actions .task-triage-due { width: 150px; }
 .task-origin {
   display: inline-flex;
   align-items: center;
