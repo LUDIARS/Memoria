@@ -5,6 +5,7 @@ import type { Client } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
+import { installDiscordProcessGuard } from './process-guard.js';
 import { postAnnouncement, postToChannel } from './notifier.js';
 import { findTrigger } from './notify/config.js';
 import { fireTrigger } from './notify/engine.js';
@@ -25,6 +26,7 @@ export async function startDiscordBot(db: Db): Promise<void> {
     console.log(`[discord] 起動 skip: ${ready.reason}`);
     return;
   }
+  installDiscordProcessGuard();
   current = await createDiscordClient(db);
 }
 
