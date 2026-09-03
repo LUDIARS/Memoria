@@ -20,7 +20,9 @@ Amazon の「データのリクエスト」で書き出した履歴を年 1 で�
 - `server/books/config.ts`: zod スキーマ、既定値、`app_settings` への設定と取り込み状態の保存。楽天アプリ ID のマスク往復。
 - `server/books/store.ts`: DAO。SQL はここだけに置く。
 - `server/books/sources/`: `google-books.ts` / `openbd.ts` / `ndl.ts` / `rakuten.ts` / `http.ts` (SSRF ガード付き取得)。
-- `server/books/lookup.ts`: 登録フォーム用の書誌検索。Google Books → (失敗時) NDL のフォールバックと警告文の組み立て。
+- `server/books/lookup.ts`: 登録フォーム用の書誌検索。Google Books → NDL → LLM のフォールバック、候補の選定 (`pickBestMatch`)、警告文の組み立て。
+- `server/books/llm-bib.ts`: 書誌 API が引けなかったときの LLM 補完。ISBN は openBD で裏取り。
+- `server/books/enrich.ts`: 既存行の空欄だけを埋め直す。
 - `server/books/watch.ts`: 良かった本から著者・シリーズのウォッチ対象を導出 (永続化しない)。
 - `server/books/new-release.ts`: ソース横断で候補を集め、発売日・所持・著者一致で新刊に絞る。
 - `server/books/suggest-prompt.ts` / `suggest.ts`: LLM 推薦のプロンプトとパース / 3 系統のマージとスコアリング。
@@ -77,8 +79,25 @@ Google Books はキー無しで使える代わりに共有 IP の quota に当�
 1 ソースの失敗で登録経路を止めないため、`/api/books/lookup` は次の順で降りる。
 
 1. Google Books → 0 件または失敗なら、タイトルと著者を別パラメータにして NDL サーチ
-2. 取れた候補を openBD で肉付け (失敗したら素の候補を返す)
-3. 全滅しても `candidates: []` + `warning` を返す (500 にしない)
+2. どちらも 0 件なら **LLM に書誌を尋ねる** (`book_bib_lookup`)
+3. 取れた候補を openBD で肉付け (失敗したら素の候補を返す)
+4. 全滅しても `candidates: []` + `warning` を返す (500 にしない)
+
+候補の採用は `pickBestMatch` を通す。NDL は部分一致で返すため、「トリリオンゲーム」の
+検索に「劇場版トリリオンゲーム : 岡山ロケ地MAP」が混ざる。タイトルキーが完全一致 →
+前方一致の順で選び、**一致しなければ採らない** (別の本の書誌で埋めるより空のほうがまし)。
+
+### LLM 補完の扱い
+
+LLM の書誌は裏を取ってから使う。
+
+- **ISBN は openBD に実在したものだけ**採用する。無ければ捨てる (幻の ISBN を登録しない)。
+- **出版社・発売日は採らない。** 実測で「トリリオンゲーム」の版元を集英社 (正: 小学館) と
+  答えたため、裏の取れない値は保存しない。
+- 採るのは**著者だけ**。著者はウォッチ対象の導出に要り、表記ゆれは照合側で吸収できる。
+- 補完で入った行は `source = 'llm_inferred'` として残す。
+- タイトル・著者は未信頼入力として扱い、CLI provider でもツールを無効化する
+  (Codex は read-only sandbox)。
 
 画面は warning を登録完了メッセージに添えるだけで、手入力の登録自体は通す。
 warning には失敗したソース名だけを含め、外部応答本文・URL・例外詳細はブラウザへ返さない。
@@ -93,12 +112,25 @@ NDL は典拠形 (`かわぐち, かいじ, 1948-`) で著者を返す。生没�
 
 | コマンド | 動作 |
 |---|---|
-| `/book <title> [author] [rating] [memo]` | 良かった本を登録 (書誌 API で著者・書影・ISBN を補完) |
+| `/book <title> [author] [rating] [memo]` | 良かった本を登録 (書誌 API で著者・書影・ISBN を補完)。`rating` を省くと★1〜5 のボタンで訊く |
 | `/books [query]` | 本棚を見る (引数なし = お気に入り) |
 | `/book-new` | 新刊チェックを今すぐ実行 |
 | `/book-suggest [refresh]` | サジェストを見る / 生成し直す |
 
 新刊通知は `#announce` に投稿する。コマンドはすべて self ユーザ限定。
+
+★ボタンの `customId` は `book-rate:<bookId>:<rating>`。押下は評価の後付けなので、
+その場で `updateBook` してメッセージを差し替える (ボタンは消す)。評価が★4 以上に
+なった時点で、その著者・シリーズはウォッチ対象に入る。ボタンもコマンドと同じ self 限定。
+
+## 既存行の書誌補完
+
+登録時に書誌が引けないと「タイトルだけ・著者空」の行が残り、ウォッチにもサジェストにも
+使えない。`POST /api/books/:id/enrich` と `POST /api/books/enrich-missing` で後から埋める
+(📚 本タブの「書誌を補完」ボタン)。対象は**著者も ISBN も無い行**だけ。
+
+埋めるのは空欄だけで、**評価・感想・読了日・タイトルは触らない**。1 冊の失敗で全体を
+止めず、失敗した行の試行時刻を進めて後続を次回に回す。
 
 ## 制約
 
@@ -113,7 +145,8 @@ NDL は典拠形 (`かわぐち, かいじ, 1948-`) で著者を返す。生没�
 
 ## プライバシー観点
 
-- 登録時の書誌補完では、入力したタイトル・著者を有効な Google Books へ送り、0 件または失敗時は NDL サーチへ送る。
+- 登録時の書誌補完では、入力したタイトル・著者を有効な Google Books へ送り、0 件または失敗時は NDL サーチ、
+  さらに 0 件なら設定済み LLM へ送る。
 - 読書サジェスト生成時は、本のタイトル・著者・評価・タグと感想の先頭 80 文字を設定済み LLM へ送る。実在確認用の Google Books / NDL を両方無効にした場合は LLM を呼び出さない。
 - ブラウザ API は同一端末 + same-origin に限定し、Discord コマンドは self user 限定かつ ephemeral で返す。新刊の自動通知だけは設定済み `#announce` へ投稿する。
 - 楽天アプリ ID は GET とログに原文を出さず、Discord 投稿では外部書誌内の任意メンションを展開しない。

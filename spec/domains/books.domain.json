@@ -33,6 +33,8 @@
     "spec/feature/books.md#読破記録の取り込み",
     "spec/feature/books.md#制約",
     "spec/feature/books.md#シェア可能か",
-    "spec/feature/books.md#プライバシー観点"
+    "spec/feature/books.md#プライバシー観点",
+    "spec/feature/books.md#書誌検索-登録フォーム",
+    "spec/feature/books.md#既存行の書誌補完"
   ]
 }

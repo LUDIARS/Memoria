@@ -11,7 +11,10 @@ import { isSelf } from './user-map.js';
 import { createTask, createMemo } from './actions/task.js';
 import { runRecommend } from './actions/recommend.js';
 import { startDailyTaskReview } from './notify/daily-review.js';
-import { BOOK_COMMANDS, BOOK_COMMAND_NAMES, handleBookCommand } from './book-commands.js';
+import {
+  BOOK_COMMANDS, BOOK_COMMAND_NAMES, handleBookCommand,
+  handleBookRatingButton, isBookRatingButton,
+} from './book-commands.js';
 import { listTasks } from '../db.js';
 
 type Db = BetterSqlite3.Database;
@@ -39,6 +42,21 @@ export async function registerSlashCommands(guild: Guild): Promise<void> {
 
 export function registerInteractions(client: Client, db: Db): void {
   client.on(Events.InteractionCreate, (interaction) => {
+    // 本の★評価ボタン。 コマンドと同じ self 限定で受ける。
+    if (interaction.isButton() && isBookRatingButton(interaction.customId)) {
+      void (async () => {
+        try {
+          if (!isSelf(discordSettings(db), interaction.user.id)) {
+            await interaction.reply({ content: 'この操作は許可されていません。', flags: MessageFlags.Ephemeral });
+            return;
+          }
+          await handleBookRatingButton(interaction, db);
+        } catch {
+          try { await interaction.reply({ content: '処理に失敗しました', flags: MessageFlags.Ephemeral }); } catch { /* swallow */ }
+        }
+      })();
+      return;
+    }
     if (!interaction.isChatInputCommand()) return;
     void (async () => {
       const cfg = discordSettings(db);

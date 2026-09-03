@@ -4,12 +4,10 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   booksJobCoordinator, checkNewReleases, countBooks, generateSuggestions,
-  getBooksConfig, insertBook, listBooks, listSuggestions,
+  getBooksConfig, insertBook, listBooks, listSuggestions, updateBook,
 } from '../../books/index.js';
-import { titleKey } from '../../books/bib.js';
-import { enrichWithOpenBd } from '../../books/sources/openbd.js';
-import { searchGoogleBooks } from '../../books/sources/google-books.js';
-import type { Book, NewRelease, Suggestion } from '../../books/index.js';
+import { lookupBibliography, pickBestMatch } from '../../books/lookup.js';
+import type { Book, BookCandidate, NewRelease, Suggestion } from '../../books/index.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -40,52 +38,74 @@ function bookLine(book: Book): string {
  * 良かった本を 1 冊登録する。 タイトルだけ渡せば書誌 API で著者・出版社・書影を補う。
  * 見つからなければタイトルだけで登録する (登録を落とさないほうが大事)。
  */
+export interface AddedBook {
+  book: Book;
+  message: string;
+  /** 評価が未設定なら true。 Discord 側は★ボタンを出す。 */
+  needsRating: boolean;
+}
+
+/**
+ * 良かった本を 1 冊登録する。 タイトルだけ渡せば書誌を引いて著者・ISBN・書影を補う。
+ * 書誌が引けなくてもタイトルだけで登録する (登録を落とさないほうが大事)。
+ */
 export async function addFavoriteBook(
   db: Db,
   input: { title: string; author?: string | null; rating?: number | null; memo?: string | null },
-): Promise<string> {
+): Promise<AddedBook> {
   const config = getBooksConfig(db);
-  let enriched: Awaited<ReturnType<typeof searchGoogleBooks>>[number] | null = null;
-  if (config.sources.googleBooks) {
-    try {
-      const hits = await searchGoogleBooks({
-        title: input.title,
-        author: input.author || undefined,
-        limit: 3,
-      });
-      const withCovers = config.sources.openbd ? await enrichWithOpenBd(hits) : hits;
-      const wanted = titleKey(input.title);
-      enriched = withCovers.find((candidate) => {
-        const candidateKey = titleKey(candidate.title);
-        return wanted.length > 0 && candidateKey.length > 0
-          && (candidateKey === wanted || candidateKey.startsWith(wanted) || wanted.startsWith(candidateKey));
-      }) ?? null;
-    } catch {
-      // 書誌が引けなくても登録は続ける。
-    }
+  let found: BookCandidate | null = null;
+  let warning: string | null = null;
+  try {
+    // Google Books → NDL → AI 補完 まで面倒を見るのは lookup 側。 ここは結果を選ぶだけ。
+    const result = await lookupBibliography(config, { title: input.title, author: input.author || undefined });
+    warning = result.warning;
+    found = pickBestMatch(result.candidates, input.title);
+  } catch {
+    // 書誌が引けなくても登録は続ける。
   }
 
   const book = insertBook(db, {
-    title: enriched?.title ?? input.title,
-    authors: input.author ? [input.author] : enriched?.authors ?? [],
-    isbn13: enriched?.isbn13 ?? null,
-    publisher: enriched?.publisher ?? null,
-    series: enriched?.series ?? null,
-    publishedOn: enriched?.publishedOn ?? null,
-    coverUrl: enriched?.coverUrl ?? null,
+    title: found?.title ?? input.title,
+    authors: input.author ? [input.author] : found?.authors ?? [],
+    isbn13: found?.isbn13 ?? null,
+    publisher: found?.publisher ?? null,
+    series: found?.series ?? null,
+    publishedOn: found?.publishedOn ?? null,
+    coverUrl: found?.coverUrl ?? null,
     rating: input.rating ?? null,
     review: input.memo ?? null,
-    source: enriched ? 'google_books' : 'manual',
+    source: found?.source ?? 'manual',
   });
 
-  const watched = book.rating !== null && book.rating >= config.watchMinRating;
   const authors = book.authors.length > 0 ? ` / ${book.authors.join(', ')}` : '';
-  return [
-    `📚 登録しました — **${book.title}**${authors} ${starText(book.rating)}`,
-    watched
-      ? 'この著者・シリーズは新刊チェックの対象になりました。'
-      : `★${config.watchMinRating} 以上を付けると新刊チェックの対象になります。`,
-  ].join('\n');
+  const lines = [`📚 登録しました — **${book.title}**${authors}`];
+  if (book.isbn13) lines.push(`ISBN ${book.isbn13}${book.publisher ? ` · ${book.publisher}` : ''}`);
+  if (found?.source === 'llm_inferred') lines.push('(書誌 API が引けなかったため AI の推定で補いました)');
+  else if (warning) lines.push(`(${warning})`);
+  lines.push(ratingLine(book, config.watchMinRating));
+
+  return { book, message: lines.join('\n'), needsRating: book.rating === null };
+}
+
+/** 評価と、 それがウォッチ対象になるかどうかの一言。 */
+export function ratingLine(book: Book, watchMinRating: number): string {
+  if (book.rating === null) return `評価は？ ★${watchMinRating} 以上で新刊チェックの対象になります。`;
+  return book.rating >= watchMinRating
+    ? `${starText(book.rating)} — この著者・シリーズは新刊チェックの対象になりました。`
+    : `${starText(book.rating)} — 新刊チェックの対象は★${watchMinRating} 以上です。`;
+}
+
+/** ★ボタンから評価を後付けする。 対象が無ければ null。 */
+export function rateBook(db: Db, id: number, rating: number | null): { book: Book; message: string } | null {
+  const config = getBooksConfig(db);
+  const book = updateBook(db, id, { rating });
+  if (!book) return null;
+  const authors = book.authors.length > 0 ? ` / ${book.authors.join(', ')}` : '';
+  return {
+    book,
+    message: [`📚 **${book.title}**${authors}`, ratingLine(book, config.watchMinRating)].join('\n'),
+  };
 }
 
 /** 蔵書一覧。 query 無しならお気に入り (★watchMinRating 以上)。 */

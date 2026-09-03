@@ -19,6 +19,8 @@ interface Book {
   coverUrl: string | null;
 }
 
+type BookSource = 'google_books' | 'openbd' | 'ndl' | 'rakuten' | 'manual' | 'import' | 'llm_inferred';
+
 interface NewRelease {
   id: number;
   watchKind: 'author' | 'series';
@@ -296,14 +298,14 @@ async function addBook(): Promise<void> {
   setStatus('booksAddStatus', '書誌を照会中…');
   // 書影・出版社・ISBN はサーバの lookup で補う。 見つからなければ入力値のまま登録する。
   let found: { title: string; authors: string[]; isbn13: string | null; publisher: string | null;
-    publishedOn: string | null; coverUrl: string | null } | null = null;
+    series: string | null; publishedOn: string | null; coverUrl: string | null; source: BookSource } | null = null;
   let lookupWarning: string | null = null;
   try {
-    const body = await postJson<{ candidates: typeof found[]; warning?: string | null }>('/api/books/lookup', {
+    const body = await postJson<{ match: typeof found; warning?: string | null }>('/api/books/lookup', {
       query: title,
       ...(author ? { author } : {}),
     });
-    found = body.candidates?.[0] ?? null;
+    found = body.match;
     lookupWarning = body.warning ?? null;
   } catch {
     found = null;
@@ -315,8 +317,10 @@ async function addBook(): Promise<void> {
     authors: author ? [author] : found?.authors ?? [],
     isbn13: found?.isbn13 ?? null,
     publisher: found?.publisher ?? null,
+    series: found?.series ?? null,
     publishedOn: found?.publishedOn ?? null,
     coverUrl: found?.coverUrl ?? null,
+    source: found?.source ?? 'manual',
     rating: ratingValue > 0 ? ratingValue : null,
     review: review || null,
   });
@@ -355,6 +359,7 @@ function template(): string {
       <div class="bk-header-actions">
         <button id="booksCheckNew" type="button">新刊をチェック</button>
         <button id="booksRefreshSuggest" type="button">サジェストを作る</button>
+        <button id="booksEnrichMissing" type="button" class="ghost">書誌を補完</button>
         <span id="booksJobStatus" class="muted"></span>
       </div>
     </header>
@@ -450,6 +455,17 @@ function bindEvents(element: HTMLElement): void {
       const warning = body.result.errors.length > 0 ? ` / 取得失敗 ${body.result.errors.length} 件` : '';
       setStatus('booksJobStatus', `${body.result.checkedTargets} 対象を確認 / 新刊 ${body.result.found.length} 件${warning}`);
       await loadNewReleases();
+    });
+  });
+
+  document.getElementById('booksEnrichMissing')?.addEventListener('click', () => {
+    void withBusy('booksEnrichMissing', '書誌を補完', async () => {
+      const body = await postJson<{ result: { targets: number; results: { filled: string[] }[] } }>(
+        '/api/books/enrich-missing', {},
+      );
+      const filled = body.result.results.filter((r) => r.filled.length > 0).length;
+      setStatus('booksJobStatus', `書誌の欠けた ${body.result.targets} 冊を照会 / ${filled} 冊を補完`);
+      await loadShelf();
     });
   });
 

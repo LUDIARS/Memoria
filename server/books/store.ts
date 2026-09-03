@@ -129,7 +129,7 @@ export function insertBook(db: Db, input: BookInput, now: Date = new Date()): Bo
 const UPDATABLE: Record<string, string> = {
   isbn13: 'isbn13', asin: 'asin', publisher: 'publisher', series: 'series',
   publishedOn: 'published_on', rating: 'rating', review: 'review',
-  readOn: 'read_on', coverUrl: 'cover_url',
+  readOn: 'read_on', coverUrl: 'cover_url', source: 'source',
 };
 
 export function updateBook(db: Db, id: number, patch: Partial<BookInput>, now: Date = new Date()): Book | null {
@@ -152,6 +152,11 @@ export function updateBook(db: Db, id: number, patch: Partial<BookInput>, now: D
   params.push(now.toISOString(), id);
   db.prepare(`UPDATE books SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   return getBook(db, id);
+}
+
+/** 補完候補が得られなかった行を、次回の対象選定では後ろへ回す。 */
+export function markBookEnrichmentAttempt(db: Db, id: number, now: Date = new Date()): void {
+  db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').run(now.toISOString(), id);
 }
 
 export function deleteBook(db: Db, id: number): boolean {

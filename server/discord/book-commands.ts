@@ -6,10 +6,13 @@
 //
 // slash-commands.ts を膨らませないよう、 books 関連はこのファイルに閉じる。
 
-import { type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder } from 'discord.js';
+import {
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, type ButtonInteraction,
+  type ChatInputCommandInteraction, MessageFlags, SlashCommandBuilder,
+} from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
-  addFavoriteBook, listBooksMessage, runNewReleaseCheck, runSuggest, showSuggestions,
+  addFavoriteBook, listBooksMessage, rateBook, runNewReleaseCheck, runSuggest, showSuggestions,
 } from './actions/book.js';
 
 type Db = BetterSqlite3.Database;
@@ -40,12 +43,17 @@ export async function handleBookCommand(
   switch (interaction.commandName) {
     case 'book': {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      await interaction.editReply(await addFavoriteBook(db, {
+      const added = await addFavoriteBook(db, {
         title: interaction.options.getString('title', true),
         author: interaction.options.getString('author'),
         rating: interaction.options.getInteger('rating'),
         memo: interaction.options.getString('memo'),
-      }));
+      });
+      // 評価を省いたときは★ボタンで訊く (コマンド引数より押しやすい)。
+      await interaction.editReply({
+        content: added.message,
+        components: added.needsRating ? [ratingRow(added.book.id)] : [],
+      });
       return true;
     }
     case 'books': {
@@ -72,4 +80,43 @@ export async function handleBookCommand(
     default:
       return false;
   }
+}
+
+
+const RATING_PREFIX = 'book-rate';
+
+/** ★1〜5 のボタン列。 customId に book id を埋める。 */
+export function ratingRow(bookId: number): ActionRowBuilder<ButtonBuilder> {
+  const buttons = [1, 2, 3, 4, 5].map((value) => new ButtonBuilder()
+    .setCustomId(`${RATING_PREFIX}:${bookId}:${value}`)
+    .setLabel('★'.repeat(value))
+    .setStyle(value >= 4 ? ButtonStyle.Primary : ButtonStyle.Secondary));
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+}
+
+/** customId を (bookId, rating) に戻す。 books のボタンでなければ null。 */
+export function parseRatingCustomId(customId: string): { bookId: number; rating: number } | null {
+  const parts = customId.split(':');
+  if (parts.length !== 3 || parts[0] !== RATING_PREFIX) return null;
+  const bookId = Number(parts[1]);
+  const rating = Number(parts[2]);
+  if (!Number.isInteger(bookId) || bookId <= 0) return null;
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return null;
+  return { bookId, rating };
+}
+
+export function isBookRatingButton(customId: string): boolean {
+  return parseRatingCustomId(customId) !== null;
+}
+
+/** ★ボタンの押下を反映する。 担当外なら false。 */
+export async function handleBookRatingButton(interaction: ButtonInteraction, db: Db): Promise<boolean> {
+  const parsed = parseRatingCustomId(interaction.customId);
+  if (!parsed) return false;
+  const result = rateBook(db, parsed.bookId, parsed.rating);
+  await interaction.update({
+    content: result?.message ?? 'その本は見つかりませんでした (削除された可能性があります)。',
+    components: [],
+  });
+  return true;
 }

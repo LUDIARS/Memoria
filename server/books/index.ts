@@ -10,9 +10,12 @@ export { importReadingRecords, shouldRemindImport, markImportReminded } from './
 export { booksJobCoordinator } from './coordinator.js';
 export {
   countBooks, insertBook, listBooks, listNewReleases, listPendingNotifications,
-  listSuggestions, markNotified,
+  listSuggestions, markNotified, updateBook, getBook,
 } from './store.js';
 export { deriveWatchTargets } from './watch.js';
+export { lookupBibliography } from './lookup.js';
+export { enrichBook, enrichMissingBooks, needsEnrichment } from './enrich.js';
+export { inferBibliography } from './llm-bib.js';
 export type {
-  Book, BookInput, BooksConfig, NewRelease, Suggestion, WatchTarget,
+  Book, BookCandidate, BookInput, BooksConfig, NewRelease, Suggestion, WatchTarget,
 } from './types.js';

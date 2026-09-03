@@ -6,7 +6,7 @@
 //   3. 人気の本サジェスト   — LLM 推薦 + 楽天売れ筋 + Google Books 評価
 
 /** 書誌の取得元。 `manual` は手入力、 `import` は CSV / My Clippings 取り込み。 */
-export type BookSourceKind = 'google_books' | 'openbd' | 'ndl' | 'rakuten' | 'manual' | 'import';
+export type BookSourceKind = 'google_books' | 'openbd' | 'ndl' | 'rakuten' | 'manual' | 'import' | 'llm_inferred';
 
 /** 新刊ウォッチの単位。 良かった本から自動導出する。 */
 export type WatchKind = 'author' | 'series';

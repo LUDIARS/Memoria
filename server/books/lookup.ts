@@ -9,6 +9,7 @@ import { searchGoogleBooks } from './sources/google-books.js';
 import { searchNdl } from './sources/ndl.js';
 import { enrichWithOpenBd } from './sources/openbd.js';
 import { titleKey } from './bib.js';
+import { inferBibliography } from './llm-bib.js';
 import type { BookCandidate, BooksConfig } from './types.js';
 
 /** 差し替え可能なソース (テストと、 将来のソース追加のため)。 */
@@ -16,6 +17,7 @@ export interface LookupDeps {
   searchGoogleBooks?: typeof searchGoogleBooks;
   searchNdl?: typeof searchNdl;
   enrichWithOpenBd?: typeof enrichWithOpenBd;
+  inferBibliography?: typeof inferBibliography;
 }
 
 export interface LookupResult {
@@ -73,6 +75,16 @@ export async function lookupBibliography(
     }
   }
 
+  // 書誌 API が 1 件も返せなかったときだけ LLM に尋ねる。 タイトルだけの空行を作らない。
+  if (collected.length === 0) {
+    try {
+      const inferred = await (deps.inferBibliography ?? inferBibliography)(query.title, query.author);
+      if (inferred) collected.push(inferred);
+    } catch {
+      failures.push('AI 補完');
+    }
+  }
+
   const candidates = dedupe(collected);
   if (sources.openbd && candidates.length > 0) {
     try {
@@ -87,4 +99,27 @@ export async function lookupBibliography(
 function warningOf(failures: string[]): string | null {
   if (failures.length === 0) return null;
   return `一部の書誌ソースが応答しませんでした (${failures.join(' / ')})`;
+}
+
+
+/**
+ * 候補からその本らしいものを 1 件選ぶ。
+ *
+ * NDL は部分一致で返すので、 「トリリオンゲーム」 の検索に 「劇場版トリリオンゲーム
+ * ：岡山ロケ地MAP」 が混ざる。 先頭をそのまま採ると別の本の書誌で埋めてしまうので、
+ * タイトルキーが一致 (完全 → 前方) するものだけを採り、 無ければ null を返す。
+ */
+export function pickBestMatch(candidates: BookCandidate[], title: string): BookCandidate | null {
+  const wanted = titleKey(title);
+  if (!wanted) return null;
+  const exact = candidates.find((candidate) => titleKey(candidate.title) === wanted);
+  if (exact) return exact;
+  return candidates.find((candidate) => {
+    const key = titleKey(candidate.title);
+    // 副題の付き外れ (「◯◯ : 副題」) は許すが、 前に何か付いた別の本は許さない。
+    if (!key.startsWith(wanted)) return false;
+    const suffix = key.slice(wanted.length);
+    // 「作品 1」に「作品 10」を当てるような巻数の部分一致は別巻なので除外する。
+    return suffix.length > 0 && !(/\d$/.test(wanted) && /^\d/.test(suffix));
+  }) ?? null;
 }

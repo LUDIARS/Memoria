@@ -11,13 +11,14 @@ import {
 } from './config.js';
 import { booksJobCoordinator } from './coordinator.js';
 import { importReadingRecords } from './import.js';
-import { lookupBibliography } from './lookup.js';
+import { lookupBibliography, pickBestMatch } from './lookup.js';
+import { enrichBook, enrichMissingBooks } from './enrich.js';
 import { ensureBooksSchema } from './schema.js';
 import { runWeeklyBooksJob } from './scheduler.js';
 import { checkNewReleases } from './new-release.js';
 import { generateSuggestions } from './suggest.js';
 import {
-  countBooks, deleteBook, dismissNewRelease, dismissSuggestion, insertBook,
+  countBooks, deleteBook, dismissNewRelease, dismissSuggestion, getBook, insertBook,
   listBooks, listNewReleases, listSuggestions, updateBook,
 } from './store.js';
 import { deriveWatchTargets } from './watch.js';
@@ -50,9 +51,10 @@ const bookInputSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   readOn: z.string().trim().max(20).nullable().optional(),
   coverUrl: httpUrlSchema.nullable().optional(),
+  source: z.enum(['google_books', 'openbd', 'ndl', 'rakuten', 'manual', 'import', 'llm_inferred']).optional(),
 });
 
-const bookPatchSchema = bookInputSchema.partial();
+const bookPatchSchema = bookInputSchema.omit({ source: true }).partial();
 
 const importSchema = z.object({
   text: z.string().min(1).max(20 * 1024 * 1024),
@@ -133,10 +135,31 @@ export function makeBooksRouter(deps: BooksRouterDeps): Hono {
   router.post('/api/books/lookup', async (context: Context) => {
     const parsed = searchSchema.safeParse(await context.req.json().catch(() => null));
     if (!parsed.success) return context.json({ error: '検索語を1〜200文字で入力してください' }, 400);
-    return context.json(await lookupBibliography(getBooksConfig(deps.db), {
+    const result = await lookupBibliography(getBooksConfig(deps.db), {
       title: parsed.data.query,
       author: parsed.data.author,
-    }));
+    });
+    return context.json({
+      ...result,
+      match: pickBestMatch(result.candidates, parsed.data.query),
+    });
+  });
+
+  /** 1 冊の書誌を引き直して空欄だけ埋める。 */
+  router.post('/api/books/:id/enrich', async (context: Context) => {
+    const id = positiveId(context.req.param('id'));
+    if (id === null) return context.json({ error: 'invalid book id' }, 400);
+    const result = await enrichBook(deps.db, id, getBooksConfig(deps.db));
+    if (!result) return context.json({ error: 'book not found' }, 404);
+    return context.json({ result, book: getBook(deps.db, result.id) });
+  });
+
+  /** 著者も ISBN も無い行をまとめて補完する。 */
+  router.post('/api/books/enrich-missing', async (context: Context) => {
+    const db = deps.db;
+    const request = booksJobCoordinator.request('enrich', () => enrichMissingBooks(db, getBooksConfig(db)));
+    if (request.status === 'busy') return context.json({ error: '書誌の補完が実行中です' }, 409);
+    return context.json({ result: await request.promise });
   });
 
   // ── 新刊 ──────────────────────────────────────────────────────

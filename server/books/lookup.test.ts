@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_BOOKS_CONFIG } from './config.js';
-import { lookupBibliography } from './lookup.js';
+import { lookupBibliography, pickBestMatch } from './lookup.js';
 import { NDL_MEDIATYPE_BOOKS, buildNdlUrl } from './sources/ndl.js';
 import type { BookCandidate } from './types.js';
 
@@ -66,10 +66,13 @@ test('Google Books が返ったら NDL は叩かない', async () => {
 });
 
 test('全ソースが落ちても 候補 0 件 + 警告で返す (登録は止めない)', async () => {
+  let inferCalled = false;
   const result = await lookupBibliography(DEFAULT_BOOKS_CONFIG, { title: 'テスト' }, {
     searchGoogleBooks: async () => { throw new Error('offline'); },
     searchNdl: async () => { throw new Error('offline'); },
+    inferBibliography: async () => { inferCalled = true; return null; },
   });
+  assert.equal(inferCalled, true);
   assert.deepEqual(result.candidates, []);
   assert.match(result.warning ?? '', /Google Books/);
   assert.match(result.warning ?? '', /NDL サーチ/);
@@ -83,4 +86,29 @@ test('openBD が落ちても素の候補は返す', async () => {
   assert.deepEqual(result.candidates.map((c) => c.title), ['本']);
   assert.match(result.warning ?? '', /openBD/);
   assert.doesNotMatch(result.warning ?? '', /openbd down/);
+});
+
+test('pickBestMatch は部分一致の別の本を採らない', () => {
+  const candidates = [
+    candidate('劇場版トリリオンゲーム : 岡山ロケ地MAP'),
+    candidate('トリリオンゲーム 1'),
+  ];
+  // NDL は部分一致で返すので、前に語が付いた別物が先頭に来ることがある。
+  assert.equal(pickBestMatch(candidates, 'トリリオンゲーム')?.title, 'トリリオンゲーム 1');
+  assert.equal(pickBestMatch([candidates[0]], 'トリリオンゲーム'), null);
+});
+
+test('pickBestMatch は完全一致を副題付きより優先する', () => {
+  const candidates = [candidate('沈黙の艦隊 : 完全版'), candidate('沈黙の艦隊')];
+  assert.equal(pickBestMatch(candidates, '沈黙の艦隊')?.title, '沈黙の艦隊');
+});
+
+test('pickBestMatch は巻数の数字が途中まで一致する別巻を採らない', () => {
+  assert.equal(pickBestMatch([candidate('作品 10')], '作品 1'), null);
+  assert.equal(pickBestMatch([candidate('作品 1 : 完全版')], '作品 1')?.title, '作品 1 : 完全版');
+});
+
+test('pickBestMatch は候補が無ければ null', () => {
+  assert.equal(pickBestMatch([], 'なにか'), null);
+  assert.equal(pickBestMatch([candidate('別の本')], 'なにか'), null);
 });

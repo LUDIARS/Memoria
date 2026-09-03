@@ -1,7 +1,7 @@
 // 巡回・サジェスト生成の single-flight。 手動実行 (画面 / Discord) と
 // 週次スケジューラが重なっても外部 API を二重に叩かないようにする。
 
-export type BooksJobKind = 'new_release' | 'suggest';
+export type BooksJobKind = 'new_release' | 'suggest' | 'enrich';
 
 export type BooksJobRequest<T> =
   | { status: 'started'; promise: Promise<T> }
