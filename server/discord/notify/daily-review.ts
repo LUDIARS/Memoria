@@ -1,3 +1,7 @@
+// Discord の朝のタスク棚卸し (1 件ずつボタンで決めるセッション)。
+// 対象は「期限超過」だけ。 期限未設定は Memoria 本体の task-triage
+// セッション (spec/feature/task-triage.md) で人が捌く。
+// Spec: spec/feature/discord-task-notify.md §朝のタスク棚卸し
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -23,7 +27,8 @@ type Db = BetterSqlite3.Database;
 const STATE_KEY = 'features.discord.notify.daily_task_review';
 const CUSTOM_ID_PREFIX = 'memoria_task_review:';
 
-type ReviewBucket = 'overdue' | 'unscheduled';
+/** 棚卸し対象は期限超過のみ (期限未設定は task-triage へ)。 */
+type ReviewBucket = 'overdue';
 type ReviewChoice = 'done' | 'today' | 'tomorrow' | 'week' | 'unset';
 
 interface ReviewItem {
@@ -48,12 +53,22 @@ export interface StartDailyTaskReviewResult {
   reason?: 'already_running' | 'empty' | 'channel_missing';
 }
 
+function isOverdueItem(item: ReviewItem | null | undefined): item is ReviewItem {
+  return !!item && item.bucket === 'overdue';
+}
+
 function loadState(db: Db): ReviewState | null {
   const raw = getAppSettings(db)[STATE_KEY];
   if (!raw) return null;
   try {
     const state = JSON.parse(raw) as ReviewState;
-    if (typeof state?.sessionId === 'string' && Array.isArray(state.pending)) return state;
+    if (typeof state?.sessionId !== 'string' || !Array.isArray(state.pending)) return null;
+    // 期限未設定を対象外にしたので、 旧セッションが積んだ分は読み込み時に捨てる。
+    return {
+      ...state,
+      pending: state.pending.filter(isOverdueItem),
+      current: isOverdueItem(state.current) ? state.current : null,
+    };
   } catch {
     // ignore invalid persisted state
   }
@@ -88,21 +103,24 @@ function startOfTodayMs(now: Date): number {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
 }
 
-function selectReviewItems(db: Db, filter: NotifyFilter, now: Date): ReviewItem[] {
-  const tasks = activeTasks(db).filter((task) => matchCategory(task, filter.categories));
-  const overdue: ReviewItem[] = [];
-  const unscheduled: ReviewItem[] = [];
+/**
+ * 期限が今日の 0:00 より前のタスクだけを選ぶ (純関数)。
+ * 期限未設定・不正な due_at・今日締切は対象外。
+ */
+export function selectOverdueReviewItems(tasks: TaskRow[], filter: NotifyFilter, now: Date): ReviewItem[] {
   const start = startOfTodayMs(now);
-
+  const items: ReviewItem[] = [];
   for (const task of tasks) {
-    if (!task.due_at) {
-      unscheduled.push({ taskId: task.id, bucket: 'unscheduled' });
-      continue;
-    }
+    if (!matchCategory(task, filter.categories)) continue;
+    if (!task.due_at) continue;
     const due = new Date(task.due_at).getTime();
-    if (Number.isFinite(due) && due < start) overdue.push({ taskId: task.id, bucket: 'overdue' });
+    if (Number.isFinite(due) && due < start) items.push({ taskId: task.id, bucket: 'overdue' });
   }
-  return [...overdue, ...unscheduled];
+  return items;
+}
+
+function selectReviewItems(db: Db, filter: NotifyFilter, now: Date): ReviewItem[] {
+  return selectOverdueReviewItems(activeTasks(db), filter, now);
 }
 
 function localDueAt(daysFromToday: number, now: Date = new Date()): string {
@@ -120,11 +138,7 @@ function dueAtForChoice(choice: ReviewChoice): string | undefined {
   return undefined;
 }
 
-function bucketLabel(bucket: ReviewBucket): string {
-  return bucket === 'overdue'
-    ? '\u671f\u9650\u8d85\u904e\u30bf\u30b9\u30af'
-    : '\u671f\u9650\u672a\u8a2d\u5b9a\u30bf\u30b9\u30af';
-}
+const REVIEW_LABEL = '\u671f\u9650\u8d85\u904e\u30bf\u30b9\u30af';
 
 function reviewPrompt(db: Db, task: TaskRow, state: ReviewState): string {
   const mention = selfMention(db);
@@ -132,7 +146,7 @@ function reviewPrompt(db: Db, task: TaskRow, state: ReviewState): string {
   const total = state.done + remainingIncludingCurrent;
   const prefix = mention ? `${mention} ` : '';
   return [
-    `${prefix}**${bucketLabel(state.current?.bucket ?? 'unscheduled')}** \u306e\u78ba\u8a8d (${state.done + 1}/${total})`,
+    `${prefix}**${REVIEW_LABEL}** \u306e\u78ba\u8a8d (${state.done + 1}/${total})`,
     formatTaskLine(task),
     '',
     '\u3044\u3064\u3084\u308a\u307e\u3059\u304b\uff1f',

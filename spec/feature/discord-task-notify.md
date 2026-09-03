@@ -85,6 +85,25 @@ Bot の ready 時 (`client.ts`) に `startNotifyScheduler(client, db)` を起動
 `actions/task.ts` の createTask が category/details を受け、登録後に
 `card.ts` の単一タスクカードを reply する。
 
+## 朝のタスク棚卸し (Discord セッション)
+
+`deadline = due_today_or_overdue` の time トリガーが発火すると、カード通知に続けて
+**1 件ずつボタンで決める棚卸しセッション** を同じチャンネルへ流す
+(`server/discord/notify/daily-review.ts`)。
+
+- **対象は期限超過 (due_at がローカル今日 0:00 より前) だけ**。 期限未設定・今日締切・
+  不正な `due_at` は対象外。 期限未設定タスクの山は Memoria 本体の
+  [task-triage](./task-triage.md) セッションで人が 1 件ずつ捌く
+  ([task-review](./task-review.md) と同じ方針)。
+- 選別は純関数 `selectOverdueReviewItems(tasks, filter, now)`。 category フィルタも適用する。
+- ボタンは `完了 / 今日 / 明日 / 来週 / 未定`。 `未定` は何も変えずに次の 1 件へ送る
+  (期限超過のままなので翌朝また出る)。
+- 進行状態は `app_settings` の `features.discord.notify.daily_task_review` に JSON で保存。
+  読み込み時に `bucket !== 'overdue'` の項目 (期限未設定を積んでいた旧セッションの残骸) は捨てる。
+- 手動起動は `/task-review` スラッシュコマンド (force、 実行したチャンネルへ送る)。
+- 走っているセッションを止める操作は未実装 (2026-09-04 時点)。 止めるときは同キーを
+  完了済み状態 (`pending: []` / `current: null`) に書き換える。
+
 ## 非対象 (この PR では作らない)
 
 - 通知の既読/snooze 管理、 通知履歴 UI。
