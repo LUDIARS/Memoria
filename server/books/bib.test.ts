@@ -47,3 +47,13 @@ test('guessSeries は巻数付きタイトルからシリーズ名を取る', ()
   assert.equal(guessSeries('よくわかる指標 第3巻'), 'よくわかる指標');
   assert.equal(guessSeries('単発の本'), null);
 });
+
+test('NDL の典拠形 (姓, 名, 生没年) を照合できる形に直す', () => {
+  assert.deepEqual(cleanAuthors(['かわぐち, かいじ, 1948-']), ['かわぐち かいじ']);
+  assert.deepEqual(cleanAuthors(['小池, 一夫, 1936-2019']), ['小池 一夫']);
+  assert.deepEqual(cleanAuthors(['かわぐち, かいじ']), ['かわぐち かいじ']);
+  // 生没年の付き外れで同じ著者が 2 人に割れない。
+  assert.deepEqual(cleanAuthors(['かわぐち, かいじ, 1948-', 'かわぐち, かいじ']), ['かわぐち かいじ']);
+  // 洋書のミドルネーム入りやカンマの無い表記は触らない。
+  assert.deepEqual(cleanAuthors(['Jane Doe']), ['Jane Doe']);
+});

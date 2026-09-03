@@ -297,13 +297,17 @@ async function addBook(): Promise<void> {
   // 書影・出版社・ISBN はサーバの lookup で補う。 見つからなければ入力値のまま登録する。
   let found: { title: string; authors: string[]; isbn13: string | null; publisher: string | null;
     publishedOn: string | null; coverUrl: string | null } | null = null;
+  let lookupWarning: string | null = null;
   try {
-    const body = await postJson<{ candidates: typeof found[] }>('/api/books/lookup', {
-      query: [title, author].filter(Boolean).join(' '),
+    const body = await postJson<{ candidates: typeof found[]; warning?: string | null }>('/api/books/lookup', {
+      query: title,
+      ...(author ? { author } : {}),
     });
     found = body.candidates?.[0] ?? null;
+    lookupWarning = body.warning ?? null;
   } catch {
     found = null;
+    lookupWarning = '書誌情報を取得できませんでした';
   }
 
   await postJson('/api/books', {
@@ -322,7 +326,8 @@ async function addBook(): Promise<void> {
   if (authorInput) authorInput.value = '';
   const reviewInput = document.getElementById('booksAddReview') as HTMLTextAreaElement | null;
   if (reviewInput) reviewInput.value = '';
-  setStatus('booksAddStatus', '登録しました');
+  // 書誌が引けなくても登録は通る。 失敗したソースだけを添える。
+  setStatus('booksAddStatus', lookupWarning ? `登録しました — ${lookupWarning}` : '登録しました');
   await Promise.all([loadShelf(), loadNewReleases()]);
 }
 

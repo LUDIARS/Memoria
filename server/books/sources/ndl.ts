@@ -9,6 +9,9 @@ import { fetchXml } from './http.js';
 
 const ENDPOINT = 'https://ndlsearch.ndl.go.jp/api/opensearch';
 
+/** NDL サーチ (v2) の図書メディア種別。 数値ではなくこの文字列でないと 0 件になる。 */
+export const NDL_MEDIATYPE_BOOKS = 'books';
+
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
@@ -79,16 +82,23 @@ export interface NdlQuery {
   limit?: number;
 }
 
-export async function searchNdl(query: NdlQuery): Promise<BookCandidate[]> {
-  if (!query.creator && !query.title) return [];
+/** 問い合わせ URL を組む。 パラメータの取り違えを直接テストできるよう切り出す。 */
+export function buildNdlUrl(query: NdlQuery): string {
   const url = new URL(ENDPOINT);
   if (query.creator) url.searchParams.set('creator', query.creator);
   if (query.title) url.searchParams.set('title', query.title);
   if (query.from) url.searchParams.set('from', query.from);
   url.searchParams.set('cnt', String(Math.min(query.limit ?? 30, 100)));
-  // 図書 (mediatype=1) に絞る。 雑誌・電子資料まで拾うとノイズが多い。
-  url.searchParams.set('mediatype', '1');
-  const xml = await fetchXml(url.toString());
+  // 図書に絞る。 雑誌・電子資料まで拾うとノイズが多い。
+  // 値は文字列 'books'。 旧 API の数値 (mediatype=1) を送ると
+  // エラーにならず totalResults=0 が返るだけなので、 取りこぼしに気づけない。
+  url.searchParams.set('mediatype', NDL_MEDIATYPE_BOOKS);
+  return url.toString();
+}
+
+export async function searchNdl(query: NdlQuery): Promise<BookCandidate[]> {
+  if (!query.creator && !query.title) return [];
+  const xml = await fetchXml(buildNdlUrl(query));
   const parsed = parser.parse(xml) as Node;
   const channel = (parsed.rss as Node | undefined)?.channel as Node | undefined;
   const items = asArray(channel?.item) as Node[];

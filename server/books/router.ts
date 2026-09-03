@@ -11,8 +11,7 @@ import {
 } from './config.js';
 import { booksJobCoordinator } from './coordinator.js';
 import { importReadingRecords } from './import.js';
-import { searchGoogleBooks } from './sources/google-books.js';
-import { enrichWithOpenBd } from './sources/openbd.js';
+import { lookupBibliography } from './lookup.js';
 import { ensureBooksSchema } from './schema.js';
 import { runWeeklyBooksJob } from './scheduler.js';
 import { checkNewReleases } from './new-release.js';
@@ -62,6 +61,7 @@ const importSchema = z.object({
 
 const searchSchema = z.object({
   query: z.string().trim().min(1).max(200),
+  author: z.string().trim().min(1).max(120).optional(),
 });
 
 const listQuerySchema = z.object({
@@ -129,14 +129,14 @@ export function makeBooksRouter(deps: BooksRouterDeps): Hono {
     return ok ? context.json({ ok: true }) : context.json({ error: 'book not found' }, 404);
   });
 
-  /** 書誌検索 — 登録フォームの補完用。 タイトル/著者/ISBN をまとめて投げる。 */
+  /** 書誌検索 — 登録フォームの補完用。 タイトルと著者を分けて投げる。 */
   router.post('/api/books/lookup', async (context: Context) => {
     const parsed = searchSchema.safeParse(await context.req.json().catch(() => null));
     if (!parsed.success) return context.json({ error: '検索語を1〜200文字で入力してください' }, 400);
-    const sources = getBooksConfig(deps.db).sources;
-    if (!sources.googleBooks) return context.json({ candidates: [] });
-    const hits = await searchGoogleBooks({ freeText: parsed.data.query, limit: 10 });
-    return context.json({ candidates: sources.openbd ? await enrichWithOpenBd(hits) : hits });
+    return context.json(await lookupBibliography(getBooksConfig(deps.db), {
+      title: parsed.data.query,
+      author: parsed.data.author,
+    }));
   });
 
   // ── 新刊 ──────────────────────────────────────────────────────

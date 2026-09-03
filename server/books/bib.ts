@@ -81,11 +81,25 @@ export function dateFloor(raw: string | null): Date | null {
 
 /** 「著者名／著」 「山田 太郎, 訳」 のような NDL 表記から人名だけ取り出す。 */
 export function cleanAuthor(raw: string): string {
-  return foldWidth(raw)
+  return joinFamilyGiven(stripLifespan(foldWidth(raw)
     .replace(/[／/]\s*(著|訳|編|監修|作|画|イラスト|原作)\s*$/g, '')
     .replace(/[,、]\s*(著|訳|編|監修|作|画|イラスト|原作)\s*$/g, '')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()));
+}
+
+/**
+ * NDL の典拠形に付く生没年 (`かわぐち, かいじ, 1948-`) を落とす。
+ * これが残ると著者ウォッチの名前一致が外れて、 新刊を丸ごと取りこぼす。
+ */
+function stripLifespan(name: string): string {
+  return name.replace(/[,、]?\s*\d{3,4}\s*-\s*\d{0,4}\s*$/, '').trim();
+}
+
+/** 典拠形の `姓, 名` を `姓 名` に戻す。 名が 2 つ以上に割れている表記は触らない。 */
+function joinFamilyGiven(name: string): string {
+  const match = name.match(/^([^,、]+)[,、]\s*([^,、]+)$/);
+  return match ? `${match[1].trim()} ${match[2].trim()}` : name;
 }
 
 export function cleanAuthors(raw: (string | null | undefined)[]): string[] {

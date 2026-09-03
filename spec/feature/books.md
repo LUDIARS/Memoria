@@ -20,6 +20,7 @@ Amazon の「データのリクエスト」で書き出した履歴を年 1 で�
 - `server/books/config.ts`: zod スキーマ、既定値、`app_settings` への設定と取り込み状態の保存。楽天アプリ ID のマスク往復。
 - `server/books/store.ts`: DAO。SQL はここだけに置く。
 - `server/books/sources/`: `google-books.ts` / `openbd.ts` / `ndl.ts` / `rakuten.ts` / `http.ts` (SSRF ガード付き取得)。
+- `server/books/lookup.ts`: 登録フォーム用の書誌検索。Google Books → (失敗時) NDL のフォールバックと警告文の組み立て。
 - `server/books/watch.ts`: 良かった本から著者・シリーズのウォッチ対象を導出 (永続化しない)。
 - `server/books/new-release.ts`: ソース横断で候補を集め、発売日・所持・著者一致で新刊に絞る。
 - `server/books/suggest-prompt.ts` / `suggest.ts`: LLM 推薦のプロンプトとパース / 3 系統のマージとスコアリング。
@@ -33,7 +34,7 @@ Amazon の「データのリクエスト」で書き出した履歴を年 1 で�
 
 | ソース | キー | 役割 |
 |---|---|---|
-| NDL サーチ (OpenSearch) | 不要 | 和書の新刊網羅。著者・タイトル + `from` で巡回する主軸 |
+| NDL サーチ (OpenSearch) | 不要 | 和書の新刊網羅。著者・タイトル + `from` で巡回する主軸。**`mediatype` は文字列 `books`** — 旧 API の数値 (`1`) を送るとエラーにならず `totalResults=0` が返るだけで、取りこぼしに気づけない |
 | Google Books | 不要 | 洋書と著者検索、**平均評価** (`averageRating` / `ratingsCount`) の唯一の取得元 |
 | openBD | 不要 | ISBN 引き専用。書影・出版社・発売日の肉付け |
 | 楽天ブックス | applicationId | **売れ筋順** (`sort=sales`) の唯一の取得元。ID 未設定なら自動的に無効 |
@@ -70,6 +71,24 @@ Kindle の読破記録には公式 API が無い (Amazon PA-API は商品情報�
 - `read_on` には「読了日」「completion date」など明示的な完了列だけを入れ、購入日・登録日・My Clippings のハイライト日時は読了とみなさない。**既存の `rating` / `review` は絶対に触らない。**
 - 前回取り込みから 365 日経つと Discord に 1 回だけ催促を出す。
 
+## 書誌検索 (登録フォーム)
+
+Google Books はキー無しで使える代わりに共有 IP の quota に当たりやすく `429` を返す。
+1 ソースの失敗で登録経路を止めないため、`/api/books/lookup` は次の順で降りる。
+
+1. Google Books → 0 件または失敗なら、タイトルと著者を別パラメータにして NDL サーチ
+2. 取れた候補を openBD で肉付け (失敗したら素の候補を返す)
+3. 全滅しても `candidates: []` + `warning` を返す (500 にしない)
+
+画面は warning を登録完了メッセージに添えるだけで、手入力の登録自体は通す。
+warning には失敗したソース名だけを含め、外部応答本文・URL・例外詳細はブラウザへ返さない。
+
+## 著者名の正規化
+
+NDL は典拠形 (`かわぐち, かいじ, 1948-`) で著者を返す。生没年とカンマを落として
+`かわぐち かいじ` に直さないと、著者ウォッチの名前一致が外れて**新刊を丸ごと取りこぼす**。
+`cleanAuthor` で生没年除去 → `姓, 名` の結合まで行う。
+
 ## Discord
 
 | コマンド | 動作 |
@@ -94,6 +113,7 @@ Kindle の読破記録には公式 API が無い (Amazon PA-API は商品情報�
 
 ## プライバシー観点
 
+- 登録時の書誌補完では、入力したタイトル・著者を有効な Google Books へ送り、0 件または失敗時は NDL サーチへ送る。
 - 読書サジェスト生成時は、本のタイトル・著者・評価・タグと感想の先頭 80 文字を設定済み LLM へ送る。実在確認用の Google Books / NDL を両方無効にした場合は LLM を呼び出さない。
 - ブラウザ API は同一端末 + same-origin に限定し、Discord コマンドは self user 限定かつ ephemeral で返す。新刊の自動通知だけは設定済み `#announce` へ投稿する。
 - 楽天アプリ ID は GET とログに原文を出さず、Discord 投稿では外部書誌内の任意メンションを展開しない。
