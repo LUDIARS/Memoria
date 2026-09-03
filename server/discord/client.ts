@@ -15,6 +15,7 @@ import { startMonitor } from './monitor.js';
 import { startNewsScheduler } from './news.js';
 import { startDiarySummaryScheduler } from './diary-summary.js';
 import { startRecommendScheduler } from './recommend-scheduler.js';
+import { startBookNotifyScheduler } from './notify/books.js';
 
 type Db = BetterSqlite3.Database;
 type ReadyTask = () => void | Promise<void>;
@@ -67,6 +68,7 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
       runReadyTask('news scheduler start', () => startNewsScheduler(c, db));
       runReadyTask('diary summary scheduler start', () => startDiarySummaryScheduler(c, db));
       runReadyTask('recommend scheduler start', () => startRecommendScheduler(c, db));
+      runReadyTask('book notify scheduler start', () => startBookNotifyScheduler(c, db));
     } catch (e: unknown) {
       console.warn(`[discord] ready handler failed: ${errorMessage(e)}`);
     }

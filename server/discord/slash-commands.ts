@@ -11,6 +11,7 @@ import { isSelf } from './user-map.js';
 import { createTask, createMemo } from './actions/task.js';
 import { runRecommend } from './actions/recommend.js';
 import { startDailyTaskReview } from './notify/daily-review.js';
+import { BOOK_COMMANDS, BOOK_COMMAND_NAMES, handleBookCommand } from './book-commands.js';
 import { listTasks } from '../db.js';
 
 type Db = BetterSqlite3.Database;
@@ -29,6 +30,7 @@ const COMMANDS = [
     .addStringOption((o) =>
       o.setName('query').setDescription('\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u30b3\u30fc\u30c9 / \u30ab\u30c6\u30b4\u30ea / \u30ad\u30fc\u30ef\u30fc\u30c9'),
     ),
+  ...BOOK_COMMANDS,
 ].map((c) => c.toJSON());
 
 export async function registerSlashCommands(guild: Guild): Promise<void> {
@@ -41,7 +43,13 @@ export function registerInteractions(client: Client, db: Db): void {
     void (async () => {
       const cfg = discordSettings(db);
       try {
-        if (interaction.commandName === 'recommend') {
+        if (BOOK_COMMAND_NAMES.has(interaction.commandName)) {
+          if (!isSelf(cfg, interaction.user.id)) {
+            await interaction.reply({ content: 'この操作は許可されていません。', flags: MessageFlags.Ephemeral });
+            return;
+          }
+          await handleBookCommand(interaction, db);
+        } else if (interaction.commandName === 'recommend') {
           if (!cfg.autoRecommend) { await interaction.reply({ content: 'おすすめは無効化されています', flags: MessageFlags.Ephemeral }); return; }
           await interaction.deferReply();
           await interaction.editReply(await runRecommend(db));

@@ -32,6 +32,7 @@ import { NOTE_BLOCK_TYPES } from './db/types/note.js';
 import type { AiArticle, AiSeed, AiAdvice, SourceRef, ArticleTag, AiArticleFilter, ArticleTagCount } from './ai-hub/types.js';
 import type { TaskReview, InsertTaskReviewInput, TaskReviewStatus, TaskSnapshotEntry } from './task-review/types.js';
 import { ensureTaskTriageSchema } from './task-triage/schema.js';
+import { ensureBooksSchema } from './books/schema.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -1193,6 +1194,7 @@ export function openDb(dbPath: string): Db {
   // RSS リーダー + トレンド取り込みドメインのスキーマ (自己完結モジュール)。
   ensureRssSchema(db);
   ensureTaskTriageSchema(db);
+  ensureBooksSchema(db);
 
   return db;
 }

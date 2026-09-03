@@ -1,0 +1,38 @@
+{
+  "name": "books",
+  "description": "本棚ドメイン。良かった本のリストを正本とし、そこから導出した著者・シリーズの新刊を週次で巡回して Discord に通知し、傾向から次の 1 冊を提案する local-only 機能。書誌ソース (NDL サーチ / Google Books / openBD / 楽天ブックス) の正規化、新刊判定、3 系統サジェストのスコアリング、読破記録の年次取り込み、スケジューラ、HTTP 境界、Discord コマンド、専用 UI を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/books/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/books/sources/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/discord/book-commands\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/discord/actions/book\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/discord/notify/books\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/books-view\\.ts$"
+    }
+  ],
+  "specRefs": [
+    "spec/feature/books.md#目的",
+    "spec/feature/books.md#構成",
+    "spec/feature/books.md#書誌ソース",
+    "spec/feature/books.md#新刊チェック",
+    "spec/feature/books.md#サジェスト",
+    "spec/feature/books.md#読破記録の取り込み",
+    "spec/feature/books.md#制約",
+    "spec/feature/books.md#シェア可能か",
+    "spec/feature/books.md#プライバシー観点"
+  ]
+}

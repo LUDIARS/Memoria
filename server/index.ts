@@ -84,6 +84,7 @@ import { makeSpendingLogRouter } from './spending-log/router.js';
 import { makeCleverSearchRouter } from './clever-search/router.js';
 import { makeLlmUsageRouter } from './llm-usage/router.js';
 import { makeShoppingRouter } from './routes/shopping.js';
+import { makeBooksRouter } from './books/index.js';
 import { makeReleaseWatchRouter } from './release-watch/router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -327,6 +328,7 @@ app.route('/', makeTransitRouter({ db }));
 app.route('/', makeStalenessRouter({ db }));
 app.route('/', makeRssRouter({ db }));
 app.route('/', makeShoppingRouter({ db }));
+app.route('/', makeBooksRouter({ db }));
 app.route('/', makeReleaseWatchRouter({ db }));
 app.route('/', makeBriefingRouter({ db }));
 app.route('/', makeGoalEvalRouter({ db }));

@@ -7457,3 +7457,46 @@ dialog.loc-edit-modal[open] {
 .rw-source-wide { grid-column: 1 / -1; }
 .rw-source-row .rw-source-remove { grid-column: -2 / -1; justify-self: end; }
 @media (max-width: 640px) { .rw-source-row { grid-template-columns: 1fr 1fr; } .rw-source-grid { grid-template-columns: 1fr; } }
+
+/* 📚 本タブ (books-view.ts) */
+.bk-view { display: grid; gap: 16px; padding: 6px 0; }
+.bk-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.bk-header h2 { margin: 0; }
+.bk-header p { margin: 4px 0 0; color: var(--muted, #667085); }
+.bk-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bk-section { border: 1px solid var(--border, #d9dee8); border-radius: 12px; background: var(--surface, #fff); padding: 14px 16px; }
+.bk-section h3 { margin: 0 0 10px; font-size: 15px; }
+.bk-add { display: grid; grid-template-columns: 2fr 1.4fr auto auto; gap: 8px; align-items: center; }
+.bk-add input, .bk-view textarea { width: 100%; }
+.bk-filters { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.bk-filters label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.bk-filters input[type="search"] { flex: 1 1 240px; }
+.bk-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.bk-card { display: grid; grid-template-columns: 48px 1fr auto; gap: 12px; align-items: start; border-top: 1px solid var(--border, #e5e9f0); padding-top: 10px; }
+.bk-card:first-child { border-top: 0; padding-top: 0; }
+.bk-cover { width: 48px; height: 68px; object-fit: cover; border-radius: 4px; background: var(--surface-2, #f3f4f6); }
+.bk-cover-empty { display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.bk-title { font-weight: 600; }
+.bk-authors { font-size: 13px; }
+.bk-meta { font-size: 12px; color: var(--muted, #667085); margin-top: 2px; }
+.bk-review { font-size: 13px; line-height: 1.55; margin: 4px 0 0; }
+.bk-stars { color: #f59e0b; letter-spacing: 1px; }
+.bk-origin { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--accent, #2563eb); color: #fff; }
+.bk-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.bk-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2, #f1f5f9); color: var(--muted, #475569); }
+.bk-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.bk-actions .ghost { font-size: 12px; padding: 3px 8px; white-space: nowrap; }
+.bk-rate { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted, #667085); }
+.bk-settings { border: 1px solid var(--border, #d9dee8); border-radius: 12px; background: var(--surface, #fff); padding: 12px 16px; }
+.bk-settings > summary { cursor: pointer; font-weight: 600; }
+.bk-settings-head, .bk-settings-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+.bk-settings-head label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.bk-settings-head input[type="number"] { width: 70px; }
+.bk-rakuten { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.bk-rakuten input { flex: 1 1 260px; }
+.bk-caution { color: var(--muted, #667085); font-size: 12px; }
+@media (max-width: 640px) {
+  .bk-add { grid-template-columns: 1fr 1fr; }
+  .bk-card { grid-template-columns: 40px 1fr; }
+  .bk-actions { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; }
+}

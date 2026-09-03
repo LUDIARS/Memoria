@@ -14,6 +14,7 @@
 | 機能名 | ファイル | 共有レベル | 備考 |
 |---|---|---|---|
 | Web ブックマーク | [bookmark.md](bookmark.md) | ✓ | url + title + summary + memo + categories のみ。 HTML スナップショットは出ない |
+| 本棚 / 新刊 / 読書サジェスト | [books.md](books.md) | 🏠 | 蔵書・感想・読了履歴はローカル保存。サジェスト生成時だけ読書傾向を設定済み LLM へ送る |
 | 調査セッション (Dig) | [dig.md](dig.md) | ✓ | query + Phase 2 result のみ。 raw SERP / preview は出ない |
 | 個人辞書 | [dictionary.md](dictionary.md) | ✓ | term + definition + notes。 出典 (dictionary_links) は出ない。 受信側は `term (@owner)` で namespace 化 |
 | ワードクラウド | [wordcloud.md](wordcloud.md) | 🏠 | 元 bookmark / dig のシェア経由で各自再生成 |
