@@ -79,15 +79,26 @@ function runRepro(mode: 'no-guard' | 'with-guard'): Promise<ReproResult> {
     );
     let stdout = '';
     let stderr = '';
+    let exitCode: number | null | undefined;
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    const resolveIfComplete = () => {
+      if (exitCode === undefined || !stdoutEnded || !stderrEnded) return;
+      clearTimeout(killTimer);
+      resolve({ code: exitCode, stdout, stderr });
+    };
     child.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
     child.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
+    child.stdout.on('end', () => { stdoutEnded = true; resolveIfComplete(); });
+    child.stderr.on('end', () => { stderrEnded = true; resolveIfComplete(); });
     const killTimer = setTimeout(() => {
       child.kill();
       reject(new Error(`repro (${mode}) timed out. stdout=${stdout} stderr=${stderr}`));
     }, 20_000);
-    child.on('close', (code) => {
-      clearTimeout(killTimer);
-      resolve({ code, stdout, stderr });
+    // aggregate close は待たず、終了コードと stdio の読み切りが揃った時点で判定する。
+    child.on('exit', (code) => {
+      exitCode = code;
+      resolveIfComplete();
     });
     child.on('error', (e) => { clearTimeout(killTimer); reject(e); });
   });

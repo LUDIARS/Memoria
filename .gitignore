@@ -19,6 +19,13 @@ server/multi/.infisical-creds.json
 *.db-wal
 *.db-shm
 
+# Electron のビルド成果物。 追跡もされず ignore もされていない状態だと、 Anatomia は
+# 「未追跡だが無視もされていない」ファイルを解析対象に含めるので、 server/ 以下の
+# コピーが丸ごと二重に解析され、 未分類 anchor が実体の倍近くまで膨らむ。
+desktop/dist/
+desktop/dist-release/
+desktop/out/
+
 # logs / artifacts
 *.log
 *.stackdump
@@ -26,6 +33,9 @@ server/multi/.infisical-creds.json
 !.anatomia/domains/
 .anatomia/domains/*
 !.anatomia/domains/*.domain.json
+# 層宣言はリポジトリが持つ設定 (解析キャッシュではない)。 追跡しないと Revisor の
+# プログラムドメインゲートが層を読めず、 変更 anchor が全部「未分類」になる。
+!.anatomia/layers.json
 logs/
 server/logs/
 .DS_Store
