@@ -2,6 +2,9 @@
 services:
   - code: memoria-server
     name: Memoria (server)
+    viewer:
+      enabled: true
+      entry_path: /
     tier: personal
     project_code: Mm
     component: backend
