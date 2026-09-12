@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { resolveServiceVersion } from '../service-version.js';
 
 /**
  * メモリ計測エンドポイント (Excubitor Tier2 監視の供給元)。
@@ -14,8 +15,13 @@ export function makeMetricsRouter(): Hono {
 
   r.get('/api/health', (c: Context) => {
     return c.json({
+      // AIFormat RULE_SRE.md §2 は ok / service / version を求める。 version が無いと
+      // Excubitor もサービス版の横断照会も 「ビルドしたが再起動していない」 を
+      // 機械的に検出できない。 既存の status は読んでいる側があるので残す。
+      ok: true,
       status: 'ok',
       service: 'memoria-server',
+      version: resolveServiceVersion(),
     });
   });
 
