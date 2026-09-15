@@ -56,6 +56,7 @@ import { makePersonalityExportRouter } from './routes/personality-export.js';
 import { configureActivitySamplers } from './lib/activity-sampler.js';
 import { makeImplRouter } from './routes/impl.js';
 import { makePushRouter } from './routes/push.js';
+import { makeNotificationsRouter } from './routes/notifications.js';
 import { makePluginsRouter } from './routes/plugins.js';
 import { mountUserApps } from './plugins/host.js';
 import { makeNoteRouter } from './routes/note.js';
@@ -267,6 +268,8 @@ app.route('/', makePersonalityExportRouter({ db }));
 app.route('/', makeSpendingLogRouter({ db }));
 app.route('/', makeImplRouter({ db }));
 app.route('/', makePushRouter({ db }));
+// 他サービス (Actio) からの個人宛て通知。 配送は WebPush + Alexa に任せる。
+app.route('/', makeNotificationsRouter({ db }));
 // ── Alexa (Echo) skill 連携 ─────────────────────────────────────────────
 //
 // zod / ask-sdk-* 等、 他 domain とは独立した重い依存を抱える単体 "app"。
