@@ -12,6 +12,12 @@
     },
     {
       "pathPattern": "(^|/)server/(?:dig|dig-serp|url-preview|page-metadata)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/rail-status/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "^spec/feature/rail-status\\.md$"
     }
   ]
 }

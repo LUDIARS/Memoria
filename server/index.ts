@@ -75,6 +75,8 @@ import { DOMAIN_WILL_RAIN, DOMAIN_LIKELY_PLACE } from './weather/domains.js';
 import { makeTransitRouter } from './routes/transit.js';
 import { makeStalenessRouter } from './routes/staleness.js';
 import { makeRssRouter } from './routes/rss.js';
+import { RailStatusCache } from './rail-status/cache.js';
+import { makeRailStatusRouter } from './rail-status/router.js';
 import { makeBriefingRouter } from './routes/briefing.js';
 import { makeGoalEvalRouter } from './goals/router.js';
 import { makeRoadmapRouter } from './roadmap/router.js';
@@ -334,6 +336,8 @@ app.route('/', makeShoppingRouter({ db }));
 app.route('/', makeBooksRouter({ db }));
 app.route('/', makeReleaseWatchRouter({ db }));
 app.route('/', makeBriefingRouter({ db }));
+const railStatus = new RailStatusCache();
+app.route('/', makeRailStatusRouter(railStatus));
 app.route('/', makeGoalEvalRouter({ db }));
 app.route('/', makeRoadmapRouter());
 app.route('/', makeAiHubRouter({ db }));
@@ -435,9 +439,9 @@ wss.on('connection', (sock) => {
 
 // MCP autostart sync (privacy.mcp_autostart_enabled に従う)
 mcp.sync(privacySettings(db).mcp_autostart_enabled);
-process.on('exit', () => mcp.stop());
-process.on('SIGINT', () => { mcp.stop(); process.exit(0); });
-process.on('SIGTERM', () => { mcp.stop(); process.exit(0); });
+process.on('exit', () => { railStatus.stop(); mcp.stop(); });
+process.on('SIGINT', () => { railStatus.stop(); mcp.stop(); process.exit(0); });
+process.on('SIGTERM', () => { railStatus.stop(); mcp.stop(); process.exit(0); });
 
 // keep-alive: 30s ごとに ping。 Cloudflare の idle timeout (100s 程度) を超えない。
 setInterval(() => {
@@ -449,6 +453,7 @@ setInterval(() => {
 }, 30_000).unref?.();
 
 // ── schedulers ────────────────────────────────────────────────────────────
+railStatus.start();
 startSchedulers({
   db,
   blackbox: blackbox.engine,
