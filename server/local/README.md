@@ -1,3 +1,5 @@
+> Historical architecture: Memoria-Hub has been retired. Current sharing uses Tabula; see spec/feature/tabula-extraction.md.
+
 # `server/local/` — Local-only features
 
 Everything that the multi server (Memoria Hub) does **not** ship lives here.

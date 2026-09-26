@@ -3,7 +3,7 @@
 
 import { detectChatSourceByUrl, extractChatMessages, extractChatTitle } from './chat.js';
 import { isNotionUrl, extractNotionTitle, extractNotionPageId, extractNotionBlocks } from './notion.js';
-import type { ChatExtractionSource, ChatExtractedMessage, NotionExtractedBlock } from '../api/types/note.js';
+import type { ChatExtractionSource, ChatExtractedMessage, NotionExtractedBlock } from '../api/types/extraction.js';
 
 export type ReparseKind = 'chat' | 'notion';
 

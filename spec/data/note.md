@@ -1,5 +1,7 @@
 # note — ノート (markdown ライク WYSIWYG ドキュメント)
 
+> 移行元スキーマの履歴資料。Memoriaはこのテーブルを新規作成・更新しない。既存データはTabulaへの読み取り専用移行のため保持する。現行仕様は [切り出し仕様](../feature/tabula-extraction.md) を参照。
+
 esa / DocBase 風の WYSIWYG ノート。 Notion 同様 1 ノート = ヘッダ (`notes`) + N 個のブロック (`note_blocks`) で表現するブロックベース構造。
 
 ノート ID は **UUID** で管理し、 マルチサーバ間で同じ note を一意に識別できるようにする。 ノートに対する各個人のコメントは `note_comment_sets` (per note × user) + `note_comments` (1 行 1 コメント) の 2 段構成で別 UUID 名前空間を持つ。

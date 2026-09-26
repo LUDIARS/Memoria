@@ -15,9 +15,6 @@ import type { EnvCliConfig } from "../../Cernere/packages/env-cli/src/types.js";
  *     `tsx --env-file-if-exists=.env.secrets bootstrap.ts` がそれを読んで起動。
  *   - アプリ secret (CERNERE_BASE_URL / 各種 API key) は Infisical 側に置く。
  *     bootstrap.ts の env-bootstrap が起動時に Infisical から fetch + inject する。
- *   - Hub (server/multi/) とは別の env-cli.config.ts。 同じ Infisical project を
- *     共有しても OK だが、 使うキーは別 (Hub は MEMORIA_PG_URL 等のサーバ系、
- *     local は MEMORIA_GH_TOKEN 等のクライアント系)。
  *   - Google Maps/Places key は env ではなく設定 UI (app_settings `maps.api_key`) で管理。
  */
 

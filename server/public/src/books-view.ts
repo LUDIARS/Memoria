@@ -3,7 +3,7 @@
 // 表示は 3 セクション + 設定。 サーバの /api/books/* を叩くだけで、
 // 判断ロジック (スコア・重複排除) はすべてサーバ側に置く。
 
-import { escapeHtml } from './notes/sanitize.js';
+import { escapeHtml } from './shared/sanitize.js';
 
 interface Book {
   id: number;

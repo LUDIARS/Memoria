@@ -3,7 +3,7 @@
 // 日次で巡回し、 直近 N バージョンの日本語要約をソース別カードで表示する。
 
 import { renderMarkdownBlock } from './markdown-block.js';
-import { escapeHtml } from './notes/sanitize.js';
+import { escapeHtml } from './shared/sanitize.js';
 
 type SourceKind = 'github_releases' | 'github_tags' | 'rss' | 'html';
 

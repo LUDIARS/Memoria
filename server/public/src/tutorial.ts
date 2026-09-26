@@ -11,7 +11,6 @@
 //     localStorage を消してから再表示する (= 同じ端末で何度でも見直せる)。
 //
 // app.ts から initTutorial(deps) を 1 回呼ぶ。 共通関数 (api / switchTab /
-// pushSubscribeFlow / refreshMultiStatus) は deps で受け取って、 このファイル
 // 単体で動かす。 HTML 構造は index.html の #tutorialOverlay に依存。
 
 const TOTAL_STEPS = 6;
@@ -34,8 +33,6 @@ export interface TutorialDeps {
   switchTab: (tab: string) => void;
   /** 通知サブスクライブ (= app.ts の pushSubscribeFlow)。 */
   pushSubscribeFlow: () => Promise<void>;
-  /** Multi-server status をリフレッシュ。 Hub 登録後に呼ぶ。 */
-  refreshMultiStatus: () => Promise<void>;
   /** ヘルプ drawer を開く (= help-drawer.ts の openHelpFor)。 */
   openHelpFor: (tab: string) => void;
   /** state 取得 (worklog / database のサブタブ状態を反映するため)。 */
@@ -363,31 +360,6 @@ function wireStep3(): void {
   if (note && info.note) note.textContent = info.note;
 }
 
-// ── Step 4: 共有サーバ (Memoria Hub) 登録 ────────────────────────────
-function wireStep4(): void {
-  $id('tutorialHubAddBtn')?.addEventListener('click', async () => {
-    const input = $id<HTMLInputElement>('tutorialHubUrl');
-    const status = $id('tutorialHubStatus');
-    if (!input || !status) return;
-    const url = (input.value || '').trim();
-    if (!url) { status.textContent = 'URL を入力してください'; return; }
-    status.textContent = '登録中…';
-    try {
-      const r = await call<TutorialApiResponse>('/api/multi/servers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
-      status.textContent = (r?.ok || r?.server)
-        ? '✓ 登録しました (設定 → 📦 データ / Hub から認証してください)'
-        : '⚠ 登録できませんでした';
-      await deps!.refreshMultiStatus();
-    } catch (e) {
-      status.textContent = `⚠ ${(e as Error).message}`;
-    }
-  });
-}
-
 // ── Step 5: 追加 API (OwnTracks ingest key + Maps API key) ────────────
 function wireStep5(): void {
   // OwnTracks ingest key (= 合言葉) の生成
@@ -503,7 +475,6 @@ export function initTutorial(d: TutorialDeps): void {
   wireStep1();
   wireStep2();
   wireStep3();
-  wireStep4();
   wireStep5();
   wireStep6();
   wireReopenButton();

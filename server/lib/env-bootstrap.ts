@@ -15,7 +15,6 @@
 
 /** Infisical から取れていてほしい設定キー。 揃わなければ起動ログで警告。 */
 const WANTED_KEYS: readonly string[] = [
-  'CERNERE_BASE_URL',          // Memoria Hub の認証で叩く Cernere の base URL
   // Google Maps/Places key は env ではなく設定 UI (app_settings `maps.api_key`) で管理する。
 ];
 

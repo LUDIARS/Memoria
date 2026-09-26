@@ -1,3 +1,4 @@
+import {appendTabulaFeed,setupTabulaFeed} from './tabula-feed.js';
 // このファイルは esbuild で `app.js` (browser bundle) に bundle される。
 // declare global を有効にするため、 module 化のための `export {}` を末尾
 // に置いてある (TS は 1 つでも import/export があるとファイルを module
@@ -154,9 +155,8 @@ declare global {
   }
 }
 
-// notes module — esa / DocBase 風 WYSIWYG エディタ。
-// switchTab('notes') で loadNotes() を呼ぶ。
-import { loadNotes as notesLoad } from './notes/index.js';
+// The legacy notes tab now links to the independent Tabula service.
+import { loadTabula } from './tabula-view.js';
 
 // 起動チュートリアル / ページヘルプ drawer。 app.ts 肥大化対策で分離。
 // PAGE_HELP の本文を増やす場合は page-help.ts を編集する。
@@ -324,25 +324,7 @@ const state: State = {
   domainEntries: [],
   domainDetail: null,
   domainSearch: '',
-  // 二層設計: データソース (Local / 特定 Hub)。 ログ下のスイッチャで排他切替。
-  dataSource: { mode: 'local', hubUrl: null },
-  // Multi モードで Local + Hub データを mix 表示する時の絞り込み:
-  //   'all'        — 全件表示
-  //   'unshared'   — Local item で shared_at が null
-  //   'user:<uid>' — その owner_user_id の item のみ
-  multiFilter: 'all' as string,
 };
-
-// Multi モードで触れないタブ (= 個人ログ系。 [個人データ保管禁止])。
-// Multi 対応は database (bookmark/dict/domain/impl) / dig / notes のみ。
-// 以下は Hub に対応データ source が無いため Multi モードで非活性:
-//   worklog   📝 ログ (アクティビティ / アプリ / GPS 等の個人ログ)
-//   worklist  📋 作業一覧 (タスク + repo 監視ダッシュボード)
-//   queue     ⚙ キュー (ローカル AI / 取り込みジョブの待ち行列)
-const LOCAL_ONLY_TABS = new Set([
-  'diary', 'meals', 'recommend', 'transit', 'trends',
-  'worklog', 'worklist', 'queue', 'clever-search', 'shopping', 'books',
-]);
 
 // `$()` は永らく document.getElementById のショートハンド。
 //
@@ -574,6 +556,8 @@ async function load(opts: Loose = {}) {
 }
 
 function render() {
+  const feed=document.getElementById('tabulaBookmarkFeed');
+  if(feed)void appendTabulaFeed(feed,state.search??'');
   renderCategories();
   renderCards();
   renderBulk();
@@ -633,9 +617,7 @@ function renderCards() {
   // Search filtering now happens server-side (?q=...). The full page is
   // already what we want to render — no local re-filtering.
   const rawItems = state.bookmarks as Loose[];
-  // Multi モード時のフィルタ chip を描画し、 predicate を取得して絞り込む。
-  const filter = renderMultiFilterChips($('bookmarksMultiFilter'), rawItems);
-  const items = rawItems.filter(filter);
+  const items = rawItems;
   renderBookmarksMore();
   if (items.length === 0) {
     wrap.innerHTML = '';
@@ -648,11 +630,10 @@ function renderCards() {
     const isSel = state.selected.has(b.id);
     const statusBadge = b.status === 'pending' ? '<span class="status-pending">要約中</span>'
       : b.status === 'error' ? '<span class="status-error">要約失敗</span>' : '';
-    const usersHeader = multiUsersHeader(b);
     return `
       <div class="card ${isSel ? 'selected' : ''}" data-id="${b.id}">
         <input type="checkbox" class="check" data-id="${b.id}" ${isSel ? 'checked' : ''} />
-        ${usersHeader}
+
         <div class="title">${escapeHtml(b.title)}</div>
         <div class="url">${escapeHtml(b.url)}</div>
         <div class="summary">${escapeHtml(b.summary || '')}</div>
@@ -751,29 +732,13 @@ async function renderDetail() {
   state.detailCloud = b.wordcloud || null;
   renderDetailCloud();
 
-  // ノート化 (再パース) ボタンは chat / notion ドメインの bookmark でのみ表示する
+  // Every saved HTML bookmark can be registered, including ordinary Web pages.
   const reparseBtn = $('dReparse');
   const reparseStatus = $('dReparseStatus');
   if (reparseBtn) {
-    const kind = detectReparseKindLocal(b.url);
-    reparseBtn.hidden = !kind;
-    if (kind) reparseBtn.dataset.kind = kind;
-    else delete reparseBtn.dataset.kind;
+    reparseBtn.hidden = !b.html_path;
   }
   if (reparseStatus) reparseStatus.textContent = '';
-}
-
-/// URL host から chat/notion を判定 (server `detectReparseKind` の縮約版)。 UI 表示判定だけ
-/// に使い、 実際のパースはサーバ側 reparse endpoint で再判定される。
-function detectReparseKindLocal(url: string): 'chat' | 'notion' | null {
-  if (!url) return null;
-  let host = '';
-  try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
-  if (host.endsWith('chatgpt.com') || host.endsWith('chat.openai.com')) return 'chat';
-  if (host.endsWith('claude.ai')) return 'chat';
-  if (host.endsWith('gemini.google.com')) return 'chat';
-  if (host.endsWith('notion.so') || host.endsWith('notion.site')) return 'notion';
-  return null;
 }
 
 async function reparseDetail() {
@@ -792,17 +757,19 @@ async function reparseDetail() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
-    if (status) {
-      const count = res.kind === 'chat'
-        ? `messages=${res.messages_count}`
-        : `blocks=${res.blocks_inserted}`;
-      status.textContent = `✓ ${res.kind} note を作成 (${count}) — 「📓 ノート」 タブで確認できます`;
+    if (status && state.detailId === id) {
+      const target = new URL(res.url);
+      if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Tabula の URL が不正です');
+      const link = document.createElement('a');
+      link.href = target.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.textContent = '登録済み — Tabulaで開く ↗';
+      status.replaceChildren(link);
     }
   } catch (e) {
-    if (status) status.textContent = `失敗: ${(e as Error).message}`;
+    if (status && state.detailId === id) status.textContent = `失敗: ${(e as Error).message}`;
   } finally {
     btn.disabled = false;
-    btn.textContent = orig || '📄 ノート化 (再パース)';
+    btn.textContent = orig || '📄 Tabulaに登録';
   }
 }
 
@@ -1169,12 +1136,6 @@ const DATABASE_REDIRECT_TABS = new Set(['bookmarks', 'dict', 'domain', 'workplac
 const AI_REDIRECT_TABS = new Set(['recommend']);
 
 function switchTab(tab) {
-  // Multi モード時、 個人ログ系タブはグレーアウト = 切替を弾く。
-  const ds = state.dataSource as { mode: string; hubUrl: string | null };
-  if (ds?.mode === 'multi' && LOCAL_ONLY_TABS.has(tab)) {
-    showShareToast('この機能は Local モード専用です');
-    return;
-  }
   if (WORKLOG_REDIRECT_TABS.has(tab)) {
     const sub = tab;
     if (state.worklog) state.worklog.sub = sub;
@@ -1218,7 +1179,6 @@ function switchTab(tab) {
   $('queueView')?.classList.toggle('hidden', tab !== 'queue');
   $('notesView')?.classList.toggle('hidden', tab !== 'notes');
   $('tasksView')?.classList.toggle('hidden', tab !== 'tasks');
-  $('multiView')?.classList.toggle('hidden', tab !== 'multi');
   $('rssView')?.classList.toggle('hidden', tab !== 'rss');
   $('shoppingView')?.classList.toggle('hidden', tab !== 'shopping');
   $('booksView')?.classList.toggle('hidden', tab !== 'books');
@@ -1242,9 +1202,8 @@ function switchTab(tab) {
   if (tab === 'meals') loadMeals();
   if (tab === 'transit') loadTransit();
   if (tab === 'queue') renderQueue();
-  if (tab === 'notes') void notesLoad();
+  if (tab === 'notes') void loadTabula();
   if (tab === 'tasks') loadTasks();
-  if (tab === 'multi') loadMulti();
   if (tab === 'rss') loadRssView();
   if (tab === 'shopping') void loadShoppingView();
   if (tab === 'books') void loadBooksView();
@@ -1272,7 +1231,7 @@ function bumpTabUsage(tab) {
 // よう、 default score は 1 click 未満に収めている。
 const TAB_DEFAULT_PRIORITY = [
   'bookmarks', 'dig', 'diary', 'tracks', 'dict', 'domain',
-  'notes', 'visits', 'trends', 'recommend', 'queue', 'events', 'multi',
+  'notes', 'visits', 'trends', 'recommend', 'queue', 'events',
 ];
 function tabDefaultScore(name) {
   const idx = TAB_DEFAULT_PRIORITY.indexOf(name);
@@ -2691,7 +2650,7 @@ function renderDictionaryList() {
   }
   ul.innerHTML = state.dictEntries.map(e => `
     <li class="dict-item ${state.dictDetail?.id === e.id ? 'selected' : ''}" data-id="${e.id}">
-      ${multiUsersHeader(e as Loose)}
+
       <div class="dict-term">${escapeHtml(e.term)}</div>
       <div class="dict-snippet">${escapeHtml((e.definition || e.notes || '').slice(0, 320))}</div>
       <div class="dict-meta">
@@ -2863,7 +2822,7 @@ let renderDomainList = function () {
     const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
     return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
-      ${multiUsersHeader(e as Loose)}
+
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
       <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">
@@ -3984,7 +3943,7 @@ const REC_AGENT_LABELS = {
   git_commits: 'git',
   claude_prompts: 'Claude',
   games_apps: 'ゲーム/アプリ',
-  notes_digs: 'ノート+Dig',
+  notes_digs: 'Dig',
   news: 'ニュース',
   ai_articles: 'AI記事',
 };
@@ -4919,21 +4878,9 @@ document.querySelectorAll('.tabs-scroll .tab[data-tab]').forEach(t => {
   reflowTabsForViewport();
 }
 setupCategoriesDrawer();
+setupTabulaFeed(()=>switchTab(state.tab));
 setupExtensionBadge();
 setupHowToBookmark();
-
-// Multi モードの filter chip が変わったら、 該当タブの list を再描画する。
-// 各 list の renderer は state.multiFilter を読んで絞り込むので、 ここでは
-// 「現在表示中のタブの再描画関数」 を呼べば良い。 起点は最小限 bookmark のみ
-// 接続。 他 6 型 (notes/dig/dict/impl/work-locations/domain-catalog) も同じ
-// パターンで wire 可能 (TODO)。
-window.addEventListener('multi-filter-changed', () => {
-  const tab = state.tab as string;
-  if (tab === 'database') {
-    // 現在の sub-view に応じて renderer を切替
-    renderCards();
-  }
-});
 
 // 💡 やり方 (スマホでブックマークする方法) — 旧 topbar の howToBookmarkBtn は
 // 廃止し、 設定 → 🔔 通知 / 端末 内の howToBookmarkBtnInSettings に移動。
@@ -5558,360 +5505,9 @@ async function openAiSettings() {
     console.error(e);
     alert(`設定取得失敗: ${e.message}`);
   }
-  await refreshMultiStatus();
 }
 
-// ── Multi-server (Memoria Hub) connection ─────────────────────────────────
-async function refreshMultiStatus() {
-  try {
-    const s = await api('/api/multi/status');
-    state.multi = s;
-    renderMultiSwitch(s);
-    renderMultiServersList(s);
-    const status = $('multiStatus');
-    if (status) {
-      const activeCount = (s.servers || []).filter(x => x.active && x.connected).length;
-      if (activeCount > 0) {
-        status.innerHTML = `✓ ${activeCount} サーバが接続中`;
-      } else if ((s.servers || []).length === 0) {
-        status.textContent = '(URL を追加してください)';
-      } else {
-        status.textContent = '未接続';
-      }
-    }
-    if (typeof refreshMultiTabVisibility === 'function') refreshMultiTabVisibility();
-    // 二層モード状態を読み直してスイッチャ + タブ gating に反映。
-    void refreshDataSource();
-  } catch (e) { console.error(e); }
-}
-
-// 二層設計のデータソース セレクタ。 排他選択 (= ローカル か、 特定 Hub 1 つ)。
-function renderMultiSwitch(s) {
-  const root = $('multiSwitch');
-  if (!root) return;
-  const servers = s?.servers || [];
-  if (!servers.length) {
-    root.hidden = true;
-    root.innerHTML = '';
-    return;
-  }
-  root.hidden = false;
-  const ds = state.dataSource as { mode: string; hubUrl: string | null };
-  const localActive = !ds || ds.mode !== 'multi';
-  const items = [
-    `<button type="button" class="ms-pill ms-local ${localActive ? 'active' : ''}" data-local="1" title="ローカル SQLite を使う">🏠 ローカル</button>`,
-    ...servers.map(sv => {
-      const active = ds?.mode === 'multi' && ds.hubUrl === sv.url;
-      const labelTxt = sv.label || sv.url;
-      const tip = sv.connected
-        ? `${sv.url} (${sv.user?.name || ''})`
-        : `${sv.url} — 未ログイン (クリックでログイン)`;
-      return `<button type="button" class="ms-pill ${active ? 'active' : ''}" data-url="${escapeHtml(sv.url)}" title="${escapeHtml(tip)}">${escapeHtml(labelTxt)}</button>`;
-    }),
-  ];
-  root.innerHTML = items.join('');
-  const localBtn = root.querySelector('.ms-pill[data-local]');
-  if (localBtn) localBtn.addEventListener('click', () => selectDataSource(null));
-  root.querySelectorAll('.ms-pill[data-url]').forEach(btn => {
-    btn.addEventListener('click', () => selectDataSource(btn.dataset.url));
-  });
-}
-
-// データソースを切り替える。 url=null で Local、 url 指定で その Hub。
-// 未ログイン Hub を選んだら Multi タブのログインフォームへ誘導する。
-async function selectDataSource(url) {
-  try {
-    const res = await fetch('/api/multi/mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(url ? { mode: 'multi', url } : { mode: 'local' }),
-    });
-    const j = await res.json() as {
-      ok?: boolean; mode?: string; hubUrl?: string | null;
-      needs_login?: boolean; url?: string; error?: string;
-    };
-    if (j.needs_login) {
-      const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
-      if (urlInput && j.url) urlInput.value = j.url;
-      const urlDisplay = $('multiLoginUrlDisplay');
-      if (urlDisplay && j.url) urlDisplay.textContent = j.url;
-      switchTab('multi');
-      return;
-    }
-    if (!res.ok || !j.ok) {
-      alert(`データソース切替に失敗: ${j.error || res.status}`);
-      return;
-    }
-    state.dataSource = { mode: j.mode || 'local', hubUrl: j.hubUrl ?? null };
-    applyModeGating();
-    renderMultiSwitch(state.multi);
-    // 現タブを Multi モードで触れないなら database に逃がしつつ、 データを再取得。
-    const cur = state.tab as string;
-    if (state.dataSource.mode === 'multi' && LOCAL_ONLY_TABS.has(cur)) {
-      switchTab('database');
-    } else {
-      switchTab(cur);
-    }
-  } catch (e: unknown) {
-    alert(`データソース切替に失敗: ${(e as Error).message}`);
-  }
-}
-
-// Multi モードで Local + Hub データを mix 表示している list 用の フィルタ chip。
-// 呼び出し側 (list renderer) は:
-//   1. fetch 後の items を渡して `renderMultiFilterChips(container, items)` を呼ぶ
-//   2. 返り値の predicate で items を filter して描画
-//   3. chip クリック時に 'multi-filter-changed' event が発火するので、 そこで再描画
-// Multi モードでない時は何もせず、 全件を通す predicate を返す。
-function renderMultiFilterChips(container: HTMLElement | null, items: Loose[]): (it: Loose) => boolean {
-  if (!container) return () => true;
-  const multi = document.body.dataset.multiMode === 'on';
-  if (!multi) {
-    container.innerHTML = '';
-    return () => true;
-  }
-  // owner_user_id → 表示名 を集計。 unshared (= local + shared_at なし) も判別。
-  const owners = new Map<string, string>();
-  let hasUnshared = false;
-  let hasMine = false;
-  for (const it of items || []) {
-    const uid = it.owner_user_id != null ? String(it.owner_user_id) : null;
-    if (uid) {
-      owners.set(uid, String(it.owner_user_name || uid));
-    } else if (it._origin === 'local') {
-      hasMine = true;
-      if (!it.shared_at) hasUnshared = true;
-    }
-  }
-  const cur = String(state.multiFilter || 'all');
-  const chip = (key: string, label: string): string =>
-    `<button class="mf-chip ${cur === key ? 'active' : ''}" data-mf="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
-  const chips: string[] = [chip('all', 'すべて')];
-  if (hasMine) chips.push(chip('mine', '自分のローカル'));
-  if (hasUnshared) chips.push(chip('unshared', '未シェア'));
-  for (const [uid, name] of owners) chips.push(chip(`user:${uid}`, name));
-
-  container.innerHTML = `<div class="multi-filter-bar"><span class="muted" style="font-size:12px;margin-right:6px">表示:</span>${chips.join('')}</div>`;
-  container.querySelectorAll('.mf-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      state.multiFilter = (btn as HTMLElement).dataset.mf || 'all';
-      window.dispatchEvent(new CustomEvent('multi-filter-changed', { detail: state.multiFilter }));
-    });
-  });
-
-  // predicate
-  return (it: Loose) => {
-    if (cur === 'all') return true;
-    if (cur === 'mine') return it._origin === 'local';
-    if (cur === 'unshared') return it._origin === 'local' && !it.shared_at;
-    if (cur.startsWith('user:')) return String(it.owner_user_id ?? '') === cur.slice(5);
-    return true;
-  };
-}
-
-// Hub mode のとき、 各エントリの 「頭」 に出す関係ユーザ chip 列。
-// 「誰が書いた / 登録した / コメントしたか」 を 1 行に並べる。
-//
-// 入力フィールド:
-//   it.owner_user_id / it.owner_user_name           ─ 単一所有者 (作成・登録者)
-//   it._origin: 'hub' | 'local'                     ─ Hub から来たか自分のローカルか
-//   it.shared_at                                     ─ ローカル item が Hub に publish 済か
-//   it.contributors: Array<{                         ─ 将来の複数ユーザデータ用
-//     user_id, user_name, role: 'author'|'registrar'|'editor'|'commenter'
-//   }>
-//
-// 単一所有者しか無いデータでも chip は 1 個出る。 contributors が増えれば
-// dedup した上で並べる。 Hub mode 以外では空文字。
-type HubUserRole = 'author' | 'registrar' | 'editor' | 'commenter';
-interface HubUserChip { id: string; name: string; role: HubUserRole; self: boolean; }
-
-function collectHubUsers(it: Loose): HubUserChip[] {
-  const out: HubUserChip[] = [];
-  const seen = new Set<string>();
-
-  const push = (chip: HubUserChip) => {
-    const key = `${chip.role}:${chip.id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(chip);
-  };
-
-  if (it._origin === 'hub') {
-    const id = it.owner_user_id != null ? String(it.owner_user_id) : '';
-    const name = String(it.owner_user_name || id || '他ユーザ');
-    push({ id: id || name, name, role: 'author', self: false });
-  } else if (it._origin === 'local') {
-    const shared = !!it.shared_at;
-    push({
-      id: 'self',
-      name: shared ? '自分' : '自分 (未シェア)',
-      role: 'author',
-      self: true,
-    });
-  }
-
-  // Future-ready: 別ユーザの編集・コメント・登録履歴。 現状は backend が
-  // 出さないが、 array で来るなら全部 chip 化する (重複は role+id で排除)。
-  const extras = Array.isArray(it.contributors) ? it.contributors as Array<Record<string, unknown>> : [];
-  for (const c of extras) {
-    const id = c.user_id != null ? String(c.user_id) : '';
-    const name = String(c.user_name || id || '他ユーザ');
-    const roleRaw = String(c.role || 'editor');
-    const role: HubUserRole = (['author', 'registrar', 'editor', 'commenter'].includes(roleRaw)
-      ? roleRaw
-      : 'editor') as HubUserRole;
-    push({ id: id || name, name, role, self: false });
-  }
-
-  return out;
-}
-
-function multiUsersHeader(it: Loose): string {
-  if (document.body.dataset.multiMode !== 'on') return '';
-  const users = collectHubUsers(it);
-  if (users.length === 0) return '';
-  const chips = users.map(u => {
-    const icon = u.role === 'commenter' ? '💬'
-      : u.role === 'editor'    ? '✎'
-      : u.role === 'registrar' ? '📌'
-      : '👤';
-    const tip = u.role === 'commenter' ? 'コメント'
-      : u.role === 'editor'    ? '編集'
-      : u.role === 'registrar' ? '登録'
-      : '作成・登録';
-    const cls = `mu-chip mu-chip-${u.role}${u.self ? ' mu-chip-self' : ''}`;
-    return `<span class="${cls}" title="${escapeHtml(tip)}: ${escapeHtml(u.name)}">`
-      + `<span class="mu-chip-icon">${icon}</span>`
-      + `<span class="mu-chip-name">${escapeHtml(u.name)}</span>`
-      + `</span>`;
-  }).join('');
-  return `<div class="mu-header" role="group" aria-label="関係ユーザ">${chips}</div>`;
-}
-
-// Multi モード時、 個人ログ系タブは非表示にする (旧仕様の gray-out から変更)。
-// 同時に share 系 control (= Hub に publish するチェックボックス) も、 Multi
-// モードでなければ意味が無いので非表示にする。
-function applyModeGating() {
-  const multi = (state.dataSource as { mode?: string })?.mode === 'multi';
-  document.body.dataset.multiMode = multi ? 'on' : 'off';
-  document.querySelectorAll('.tab[data-tab]').forEach(t => {
-    const el = t as HTMLElement;
-    const hide = multi && LOCAL_ONLY_TABS.has(el.dataset.tab || '');
-    el.hidden = hide;
-    // 旧 mode-locked クラスは下位互換のため残す (CSS が opacity 等で参照)
-    el.classList.toggle('mode-locked', hide);
-  });
-  // モバイル strip / More メニューはタブの活性化集合に依存するので、 mode が
-  // 切り替わったタイミングで再計算する。 でないと Hub に切り替えても古い
-  // More メニューが非活性タブを抱え続けるし、 4-rule の境界も古いまま。
-  reflowTabsForViewport();
-  // share checkbox は親 label / row 単位で hide。 CSS で
-  // body[data-multi-mode="off"] .multi-only-control { display: none; } 経由。
-}
-
-// 現在のモードを backend から読んで state に反映。 起動時 + status 更新時に呼ぶ。
-async function refreshDataSource() {
-  try {
-    const m = await api('/api/multi/mode') as { mode?: string; hubUrl?: string | null };
-    state.dataSource = { mode: m.mode || 'local', hubUrl: m.hubUrl ?? null };
-  } catch {
-    state.dataSource = { mode: 'local', hubUrl: null };
-  }
-  applyModeGating();
-  renderMultiSwitch(state.multi);
-}
-
-function renderMultiServersList(s) {
-  const list = $('multiServersList');
-  if (!list) return;
-  const servers = s?.servers || [];
-  if (!servers.length) {
-    list.innerHTML = '<li class="multi-server-empty">登録されたマルチサーバはありません。下のフォームから追加してください。</li>';
-    return;
-  }
-  list.innerHTML = servers.map(sv => {
-    const status = sv.connected
-      ? `<span class="ms-status ok">✓ ${escapeHtml(sv.user?.name || '')} (${escapeHtml(sv.user?.role || '')})</span>`
-      : '<span class="ms-status">未認証</span>';
-    const ds = state.dataSource as { mode: string; hubUrl: string | null };
-    const isCurrent = ds?.mode === 'multi' && ds.hubUrl === sv.url;
-    return `<li class="multi-server-row" data-url="${escapeHtml(sv.url)}">
-      <label class="ms-active-toggle">
-        <input type="checkbox" data-url="${escapeHtml(sv.url)}" ${isCurrent ? 'checked' : ''} />
-        使用中
-      </label>
-      <div class="ms-row-body">
-        <div class="ms-label">${escapeHtml(sv.label)}</div>
-        <div class="ms-url"><code>${escapeHtml(sv.url)}</code></div>
-        <div>${status}</div>
-      </div>
-      <div class="ms-row-actions">
-        <button class="ghost ghost-sm" data-action="connect" data-url="${escapeHtml(sv.url)}">${sv.connected ? '再接続' : 'ログイン'}</button>
-        <button class="ghost ghost-sm" data-action="disconnect" data-url="${escapeHtml(sv.url)}" ${sv.connected ? '' : 'disabled'}>ログアウト</button>
-        <button class="danger ghost-sm" data-action="remove" data-url="${escapeHtml(sv.url)}">削除</button>
-      </div>
-    </li>`;
-  }).join('');
-  // チェックボックス: ON でその Hub をデータソースに、 OFF で Local に戻す。
-  list.querySelectorAll('input[type=checkbox][data-url]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const el = cb as HTMLInputElement;
-      selectDataSource(el.checked ? el.dataset.url : null);
-    });
-  });
-  list.querySelectorAll('button[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => multiServerAction(btn.dataset.action, btn.dataset.url));
-  });
-}
-
-async function multiServerAction(action, url) {
-  if (action === 'connect') {
-    // Cernere ログインは Multi タブのフォームで行う (= OAuth dance 廃止)。
-    // URL を hidden field と display に流して タブを切り替える。
-    const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
-    if (urlInput) urlInput.value = url;
-    const urlDisplay = $('multiLoginUrlDisplay');
-    if (urlDisplay) urlDisplay.textContent = url;
-    switchTab('multi');
-    return;
-  }
-  if (action === 'disconnect') {
-    if (!confirm(`「${url}」からログアウトしますか?`)) return;
-    await api('/api/multi/logout', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-    await refreshMultiStatus();
-    await refreshDataSource();
-    return;
-  }
-  if (action === 'remove') {
-    if (!confirm(`「${url}」を登録解除しますか?`)) return;
-    await api('/api/multi/servers', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-    await refreshMultiStatus();
-    return;
-  }
-}
-
-async function multiAddServer() {
-  const url = ($('multiAddUrl')?.value || '').trim();
-  const label = ($('multiAddLabel')?.value || '').trim();
-  if (!url) { alert('URL を入力してください'); return; }
-  await api('/api/multi/servers', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, label: label || url }),
-  });
-  $('multiAddUrl').value = '';
-  $('multiAddLabel').value = '';
-  await refreshMultiStatus();
-}
-
+// Share notifications
 function showShareToast(text) {
   const div = document.createElement('div');
   div.className = 'share-toast';
@@ -5920,8 +5516,6 @@ function showShareToast(text) {
   setTimeout(() => div.remove(), 4000);
 }
 
-// 二層設計では「Hub へ個別 share」 は廃止。 Multi モードに切り替えると
-// bookmark / dict / dig タブはそのまま Hub のデータを編集する。
 
 async function saveAiSettings() {
   const tasks = {};
@@ -6020,7 +5614,7 @@ const SETTINGS_STAB_LABELS: Record<string, string> = {
   ai: '🤖 AI / モデル',
   api: '🔌 連携 / API key',
   profile: '🧍 プロフィール',
-  data: '📦 データ / Hub',
+  data: '📦 データ',
   privacy: '🔒 プライバシー / 表示',
   discord: '🤖 Discord',
 };
@@ -6123,10 +5717,8 @@ document.getElementById('mapsApiKeyAutoBtn')?.addEventListener('click', async ()
 });
 document.getElementById('pushSubscribeBtn')?.addEventListener('click', () => pushSubscribeFlow().catch(e => setPushStatus(e.message, true)));
 document.getElementById('pushTestBtn')?.addEventListener('click', () => pushTestSend().catch(e => setPushStatus(e.message, true)));
-document.getElementById('multiAddBtn')?.addEventListener('click', multiAddServer);
 
-// Hub 登録一覧 + モード状態を初期描画。
-refreshMultiStatus();
+
 
 // Legatus 連携の初期 ON/OFF を取得し、 watcher / 右上バッジを早期に整える。
 // 設定 OFF (default) なら watcher は WS を張らないし、 バッジも hidden のまま。
@@ -6447,7 +6039,7 @@ let ensureMemoriaFeatureViews = function () {
             <button id="workplaceNewBtn" type="button">+ 場所を追加</button>
           </div>
         </div>
-        <p class="diary-settings-help">よく作業するカフェ・コワーキング・図書館などをまとめ、Hub にシェアしてチームでナレッジ共有できます。GPS と Place API (OpenStreetMap Nominatim) で現在地を取得して登録/チェックインできます。</p>
+        <p class="diary-settings-help">よく作業するカフェ・コワーキング・図書館などを記録できます。GPS と Place API (OpenStreetMap Nominatim) で現在地を取得して登録/チェックインできます。</p>
         <div id="workplaceCurrentBanner" class="muted" style="margin:6px 0 10px"></div>
         <div id="workplaceList" class="simple-list"></div>
         <section id="workplaceEditorModal" class="dict-detail modal-panel hidden foundation-form">
@@ -6506,10 +6098,6 @@ let ensureMemoriaFeatureViews = function () {
             <span>GPS 誤差許容半径 (m、 空欄 = global 既定)</span>
             <input id="workplaceEditorRadius" type="number" min="1" max="50000" step="1" placeholder="50 (空欄: 設定の既定値を使う)" />
             <small class="muted">場所の物理的な大きさに応じて個別に設定。 例: 自宅 = 30m / 駅前広場 = 200m / 大学キャンパス = 500m。 0 や空欄なら全体設定の値 (設定 → プライバシー → 場所判定の半径) を使う。</small>
-          </label>
-          <label class="simple-check-row multi-only-control">
-            <input id="workplaceEditorShareable" type="checkbox" />
-            <span>シェア可能にする</span>
           </label>
           <div class="simple-actions">
             <button id="workplaceEditorSaveBtn">保存</button>
@@ -6577,9 +6165,8 @@ let ensureMemoriaFeatureViews = function () {
       <button id="alexaSetupHelpBtn" type="button" class="ghost">📖 Amazon側の設定手順を開く</button>
       <h4 style="margin-top:12px">MCP サーバ</h4>
       <label class="check-inline"><input id="mcpAutostartEnabled" type="checkbox" /> Memoria 起動時に MCP サーバを同時起動する (任意)</label>
-      <h4 style="margin-top:12px">作業場所 (GPS / Hub 共有)</h4>
+      <h4 style="margin-top:12px">作業場所 (GPS)</h4>
       <label class="check-inline"><input id="workplaceGeoEnabled" type="checkbox" /> GPS で現在地を取得して作業場所をマッチする</label>
-      <label class="check-inline"><input id="workplaceAutoShareEnabled" type="checkbox" /> 作業場所が切り替わったとき Hub に共有する (オプトイン)</label>
       <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px">マッチ半径 (作業場所判定 / 1 日の作業セッション検出):
         <input id="workplaceMatchRadiusM" type="number" min="20" max="2000" step="10" style="width:80px" />
         m (= global 既定)
@@ -6592,7 +6179,7 @@ let ensureMemoriaFeatureViews = function () {
         場所ごとに <code>radius_m</code> を個別設定すると、 そちらが優先されます (= 作業場所編集画面で入力)。
       </p>
       <p class="diary-settings-help" style="margin-top:6px">「移動速度の閾値」 はプロフィール タブに移動しました。</p>
-      <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。GPS 共有は Hub 接続済みのときのみ動作します。</p>`;
+      <p class="diary-settings-help" style="margin-top:6px">iOS で受け取る場合はホーム画面に追加 + 通知を許可してください。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer && !$('discordSettingsBody')) {
@@ -6968,7 +6555,7 @@ renderDomainList = function () {
     const body = desc + (desc && can ? '\n\n' : '') + (can ? `できること:\n${can}` : '');
     return `
     <li class="dict-item ${state.domainDetail?.domain === e.domain ? 'selected' : ''}" data-domain="${escapeHtml(e.domain)}">
-      ${multiUsersHeader(e as Loose)}
+
       <div class="dict-term">${escapeHtml(e.site_name || e.domain)}</div>
       <div class="dict-snippet">${escapeHtml(body.slice(0, 320))}</div>
       <div class="dict-meta">
@@ -7160,7 +6747,6 @@ function openWorkplaceEditor(w = null) {
   if ($('workplaceEditorIsHome')) $('workplaceEditorIsHome').checked = !!w?.is_home;
   if ($('workplaceEditorRadius')) $('workplaceEditorRadius').value = (w?.radius_m == null ? '' : String(w.radius_m));
   $('workplaceEditorDescription').value = w?.description || '';
-  $('workplaceEditorShareable').checked = !!w?.shareable;
   // 「現在の WiFi を追加」 ボタンは server 側 /api/wifi/current が返してくれる
   // のでブラウザ単体でも表示してよい。 サーバ未対応時はボタン押下時に 404 で
   // 静かに失敗する。
@@ -7575,8 +7161,7 @@ async function _silentCheckin() {
     _workplaceLastSilentMs = Date.now();
     const banner = $('workplaceCurrentBanner');
     if (banner && r.matched) {
-      const broadcast = r.changed && r.broadcast?.ok ? ' ・ Hub に共有しました' : '';
-      banner.textContent = `📍 ${r.workplace.name}${broadcast}`;
+      banner.textContent = `📍 ${r.workplace.name}`;
     }
   } catch (e) {
     console.debug('[workplace] silent checkin skipped:', e.message);
@@ -7618,8 +7203,7 @@ async function workplaceCheckinNow() {
     if (banner) {
       if (r.matched) {
         const dist = r.distance_m != null ? ` (${r.distance_m}m)` : '';
-        const broadcast = r.broadcast?.ok ? ' ・ Hub に共有済み' : (r.changed && r.broadcast?.error ? ` ・ Hub 共有失敗: ${r.broadcast.error}` : '');
-        banner.textContent = `📍 ${r.workplace.name}${dist}${broadcast}`;
+        banner.textContent = `📍 ${r.workplace.name}${dist}`;
       } else {
         banner.textContent = '近くに登録済みの作業場所がありません。「現在地から登録」で追加できます。';
       }
@@ -9404,142 +8988,6 @@ $('wlGeminiWebContent')?.addEventListener('keydown', (e) => {
     });
   }
 });
-
-// ── 🌐 Multi (Memoria Hub) 接続管理ビュー ─────────────────────────────────
-//
-// 二層設計では #multiView は「Hub への接続管理」 ビュー。 Infisical セットアップ
-// または Hub ログインフォームを出すだけ。 旧 Multi browse タブ (共有データの
-// 一覧 / download / moderation) は Phase 6 で撤去した — Hub のデータはモードを
-// 切り替えると通常のタブに proxy 経由でそのまま出る。
-
-function refreshMultiTabVisibility() {
-  const visible = !!state.multi?.connected;
-  document.querySelectorAll('.tab-multi-only').forEach(t => { (t as HTMLElement).hidden = !visible; });
-  // 未接続でも multi タブに居る場合 (= Hub login をしようとしている) はそのまま居らせる。
-  // 旧仕様では database へ自動リダイレクトしていたが、 二層設計では multi タブは
-  // login フォーム専用ビューなので、 未接続 = 表示すべき状態 になる。
-  if (visible) {
-    const badge = $('multiUserBadge');
-    if (badge) badge.textContent = `🌐 ${state.multi.user.name} (${state.multi.user.role})`;
-  }
-}
-
-// #multiView を開いたとき: Infisical 未設定なら setup フォーム、 設定済なら
-// Hub ログインフォームを出す。 旧 browse 部 (#multiMainContent) は常に隠す。
-async function loadMulti() {
-  refreshMultiTabVisibility();
-  // Local Memoria は Infisical を使わないので、 旧 multiInfisicalSetup の
-  // 出し分けは廃止。 Hub ログインフォームを常に表示する。
-  const loginEl = $('multiCernereLogin');
-  const mainEl = $('multiMainContent');
-  mainEl?.classList.add('hidden');
-  loginEl?.classList.remove('hidden');
-  // Hub URL は hidden field に保持。 表示は #multiLoginUrlDisplay に流す。
-  const urlInput = $('multiLoginUrl') as HTMLInputElement | null;
-  const urlDisplay = $('multiLoginUrlDisplay');
-  const firstUrl = state.multi?.servers?.[0]?.url;
-  if (urlInput && firstUrl && !urlInput.value) urlInput.value = firstUrl;
-  if (urlDisplay) urlDisplay.textContent = (urlInput?.value || firstUrl || '— (Hub が未登録)');
-}
-
-// Hub ログインフォーム (#multiView 内) の送信。 成功したら selectDataSource で
-// その Hub を Multi モードのデータソースに切り替える。
-// Cernere Composite SSO popup flow.
-// 1) Local /api/multi/login-url で Cernere popup URL を取得
-// 2) window.open() で popup を開く
-// 3) postMessage({ type: 'cernere:auth', authCode }) を Cernere popup から受け取る
-// 4) Local /api/multi/exchange に authCode を渡して session を確立
-document.getElementById('multiLoginSubmit')?.addEventListener('click', async () => {
-  const btn = $('multiLoginSubmit') as HTMLButtonElement | null;
-  const msg = $('multiLoginMsg');
-  const setMsg = (text: string, ok = false) => {
-    if (!msg) return;
-    msg.textContent = text;
-    msg.style.color = ok ? '#1f7a1f' : '#c0392b';
-    msg.hidden = false;
-  };
-  const url = (($('multiLoginUrl') as HTMLInputElement)?.value || state.multi?.servers?.[0]?.url || '').trim().replace(/\/$/, '');
-  if (!url) return setMsg('⚠ Hub が登録されていません。 設定タブから Hub を追加してください');
-  if (btn) { btn.disabled = true; btn.textContent = 'ログイン中…'; }
-  let popup: Window | null = null;
-  let onMessage: ((ev: MessageEvent) => void) | null = null;
-  let popupWatch: number | null = null;
-  const cleanup = () => {
-    if (onMessage) window.removeEventListener('message', onMessage);
-    if (popupWatch != null) clearInterval(popupWatch);
-    if (popup && !popup.closed) { try { popup.close(); } catch { /* ignore */ } }
-    if (btn) { btn.disabled = false; btn.textContent = '🔐 Cernere でログイン'; }
-  };
-  try {
-    // 1. Cernere の popup URL を Local server 経由で取得 (= Hub に問い合わせ)
-    const luQs = `url=${encodeURIComponent(url)}&origin=${encodeURIComponent(window.location.origin)}`;
-    const luRes = await fetch(`/api/multi/login-url?${luQs}`);
-    const luData = await luRes.json() as { url?: string; error?: string };
-    if (!luRes.ok || !luData.url) {
-      setMsg(`⚠ ${luData.error || `login-url 取得失敗: ${luRes.status}`}`);
-      cleanup();
-      return;
-    }
-    // 2. popup を中央寄せで開く (500x700)
-    const w = 500, h = 700;
-    const x = Math.max(0, window.screenX + (window.outerWidth - w) / 2);
-    const y = Math.max(0, window.screenY + (window.outerHeight - h) / 2);
-    popup = window.open(
-      luData.url, 'cernere-login',
-      `width=${w},height=${h},left=${x},top=${y}`,
-    );
-    if (!popup) {
-      setMsg('⚠ popup が開けませんでした (ブラウザのポップアップブロック?)');
-      cleanup();
-      return;
-    }
-    setMsg('Cernere ログインを popup で開きました');
-
-    // 3. postMessage で authCode を受け取る
-    const expectedOrigin = new URL(luData.url).origin;
-    await new Promise<void>((resolve, reject) => {
-      onMessage = (ev: MessageEvent) => {
-        if (ev.origin !== expectedOrigin) return;
-        const m = ev.data as { type?: string; authCode?: string };
-        if (m?.type !== 'cernere:auth' || !m.authCode) return;
-        (async () => {
-          try {
-            const exRes = await fetch('/api/multi/exchange', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ url, authCode: m.authCode }),
-            });
-            const exData = await exRes.json() as { user?: { displayName?: string }; error?: string };
-            if (!exRes.ok) {
-              setMsg(`⚠ ${exData.error || `exchange 失敗: ${exRes.status}`}`);
-              return reject(new Error('exchange failed'));
-            }
-            setMsg(`✓ ${exData.user?.displayName || ''} としてログインしました`, true);
-            await refreshMultiStatus();
-            setTimeout(() => { void selectDataSource(url); }, 400);
-            resolve();
-          } catch (e) { reject(e); }
-        })();
-      };
-      window.addEventListener('message', onMessage);
-      // popup が閉じられたら abort
-      popupWatch = window.setInterval(() => {
-        if (popup && popup.closed) reject(new Error('popup closed by user'));
-      }, 500);
-    });
-  } catch (e: unknown) {
-    setMsg(`⚠ ${(e as Error).message}`);
-  } finally {
-    cleanup();
-  }
-});
-
-// Infisical setup フォーム (Multi view 内) の送信。 成功したら loadMulti を
-// 呼び直して通常の Hub 内容に切り替える。
-// Local Memoria は Infisical を直接知らない設計に統一済 — 旧 infiSetupSubmit
-// ハンドラ + /api/setup/infisical 経路は撤去された。
-
-// First paint: surface the multi tab if we're already connected.
-refreshMultiTabVisibility();
 
 // ── Tracks (GPS overlay on Google Maps) ───────────────────────────────────
 //
@@ -13368,7 +12816,6 @@ initTutorial({
   api,
   switchTab,
   pushSubscribeFlow,
-  refreshMultiStatus,
   openHelpFor,
   getState: () => state,
   closeSettingsPanel: () => $('aiSettingsPanel')?.classList.add('hidden'),

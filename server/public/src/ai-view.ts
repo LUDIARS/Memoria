@@ -8,6 +8,7 @@
 // Markdown 描画は app.ts と共通の markdown-block.ts を流用する。
 
 import { renderMarkdownBlock } from './markdown-block.js';
+import { appendTabulaFeed } from './tabula-feed.js';
 
 // ── API 型 (server/ai-hub/types.ts に対応) ───────────────────────────────────
 
@@ -168,8 +169,8 @@ function articleCard(a: AiArticle): string {
       <div class="ai-article-body hidden" data-article-body="${a.id}"></div>
       <div class="ai-article-actions">
         <button class="ghost" data-article-toggle="${a.id}">📖 表示</button>
-        <button class="ghost" data-article-transcribe="${a.id}" ${transcribed ? 'disabled' : ''}>
-          ${transcribed ? '📓 転写済み' : '📓 ノートへ転写'}
+        <button class="ghost" data-article-transcribe="${a.id}">
+          ${transcribed ? '📓 Tabulaに登録・開く' : '📓 Tabulaに登録'}
         </button>
         <button class="ghost" data-article-export="${a.id}">📥 .md</button>
       </div>
@@ -217,12 +218,16 @@ function bindArticleActions(container: HTMLElement, articles: AiArticle[]): void
       btn.disabled = true;
       btn.textContent = '転写中…';
       try {
-        await sendJson<{ note: { id: number } }>(`/api/ai/articles/${id}/transcribe`, 'POST', {});
-        btn.textContent = '📓 転写済み';
-        toast('ノートに転写しました');
+        const result = await sendJson<{ note: { id: string }; url: string }>(`/api/ai/articles/${id}/transcribe`, 'POST', {});
+        const link = document.createElement('a');
+        const target = new URL(result.url);
+        if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Tabula の URL が不正です');
+        link.href = target.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        link.textContent = 'Tabula で開く ↗'; btn.replaceWith(link);
+        toast('Tabula に転写しました');
       } catch (e) {
         btn.disabled = false;
-        btn.textContent = '📓 ノートへ転写';
+        btn.textContent = '📓 Tabulaに登録';
         toast(`転写に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
       }
     });
@@ -390,6 +395,7 @@ export async function loadAiArticlesView(): Promise<void> {
     root.innerHTML = filterBar + list;
     bindArticleFilter(root);
     if (articles.length) bindArticleActions(root, articles);
+    void appendTabulaFeed(root);
   } catch (e) {
     root.innerHTML = `<div class="empty">読み込みに失敗しました: ${esc(e instanceof Error ? e.message : String(e))}</div>`;
   }

@@ -1,5 +1,7 @@
 # note — ノート (markdown ライク WYSIWYG ドキュメント)
 
+> 旧実装の履歴資料。現行の所有先は Tabula (Tb)。[切り出し仕様](tabula-extraction.md) を参照。以下のブロック構造は旧保存形式の記録であり、Tabulaの設計思想・現行仕様ではない。
+
 ## 概要
 esa / DocBase ライクな WYSIWYG markdown エディタ。 Notion 同様 1 行 = 1 ブロックのブロックベース構造で、 markdown 書式 + フォントの色変え + テーブル + Mermaid に対応。
 

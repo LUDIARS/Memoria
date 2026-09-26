@@ -16,5 +16,5 @@ export * from './multi.js';
 export * from './push.js';
 export * from './config.js';
 export * from './misc.js';
-export * from './note.js';
+export * from './extraction.js';
 export * from './clever-search.js';

@@ -4,11 +4,11 @@
 // (block_type を DB が持つ) とは別軸で、 ここでは「Markdown ファイル全体を
 // 一括で HTML に変換する」 用途。
 //
-// インライン (**bold**, *italic*, `code`, [text](url)) は notes/markdown.ts の
+// インライン (**bold**, *italic*, `code`, [text](url)) は shared/markdown.ts の
 // renderInline をそのまま流用する。
 
-import { renderInline } from './notes/markdown.js';
-import { escapeHtml } from './notes/sanitize.js';
+import { renderInline } from './shared/markdown.js';
+import { escapeHtml } from './shared/sanitize.js';
 
 export function renderMarkdownBlock(md: string): string {
   if (!md) return '';

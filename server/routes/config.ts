@@ -69,7 +69,7 @@ export const SETUP_DOCS: Record<string, { title: string; body: string }> = {
   },
   sharing: {
     title: 'シェアするための設定',
-    body: '# シェアするための設定\n\n1. 設定 -> データ / Hub を開きます。\n2. Memoria Hub の URL を追加し、Cernere で接続します。\n3. 公開したい Hub だけを有効にします。\n4. ブックマーク、ディグ、辞書、実装自慢は各画面のシェア操作から共有します。\n5. タスクを Actio にシェアする場合は、設定 -> プライバシー / 表示 で Actio シェアを許可し、Actio シェア URL を設定します。\n6. シェア前に内容を確認し、秘密情報や個人情報を含めないでください。',
+    body: '# シェアするための設定\n\n1. Tabulaの記事も表示をONにすると、共有ページを追加取得します。\n2. AI記事やブックマークのTabulaに登録から文書を登録できます。\n3. 共有する文書はTabulaで公開範囲を設定します。\n4. タスクのActioシェアは設定のプライバシー / 表示から許可します。',
   },
   mcp: {
     title: 'MCPサーバの設定方法',

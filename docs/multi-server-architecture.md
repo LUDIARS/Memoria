@@ -1,3 +1,5 @@
+> 2026-09-26: Memoria-Hubは廃止。旧Hubの記述は履歴資料です。現在の連携はTabulaを使用します（spec/feature/tabula-extraction.md）。
+
 # Memoria 二層アーキテクチャ — Local Server / Multi Server
 
 ## 目的

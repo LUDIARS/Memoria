@@ -51,7 +51,6 @@ Memoria は **個人データはすべて手元の SQLite に留まる** のが�
 |---|---|---|
 | **デスクトップアプリ** | ふつうのユーザ | インストーラを実行するだけ。Node もサーバも同梱、設定はアプリ内 UI |
 | **server 直起動** | 開発者 / カスタム運用 | `npm install && npm start`。Chrome 拡張は別途 |
-| **マルチサーバ (Memoria Hub)** | 共有ハブを建てたい人 | `docker compose up`。Cernere SSO 必須、ローカルとは別物 |
 
 ふつうの利用は **デスクトップアプリ** で完結する。サーバを直に立てる
 必要はない。
@@ -162,7 +161,6 @@ Memoria/
 │  ├ routes/        Hono router 群 (/api/* — domain ごとに 1 ファイル)
 │  ├ lib/           横断ヘルパ (queues / scheduler / samplers 等)
 │  ├ local/         ローカル専用 (uptime, multi-client)
-│  ├ multi/         マルチサーバ (Memoria Hub) — 別 Node プロセス
 │  ├ types/         JSDoc から参照する .d.ts (TS migration の中間成果物)
 │  └ public/        SPA (vanilla TS → esbuild で public/app.js にバンドル)
 │
@@ -174,41 +172,9 @@ Memoria/
 
 ---
 
-## C. マルチサーバ (Memoria Hub) を建てる
+## C. Tabulaとの連携
 
-辞書 / ディグ / ブックマークを **複数ユーザで共有** するハブ。Cernere
-SSO で認証する別プロセス、Postgres 必須。個人利用の Memoria を 1 人で
-動かすぶんにはいらない。
-
-詳細は [`server/multi/README.md`](server/multi/README.md) と
-[`docs/multi-server-architecture.md`](docs/multi-server-architecture.md)。
-
-### docker compose で建てる (Phase 7)
-
-```bash
-cd server/multi
-cp .env.example .env
-# 編集: MEMORIA_CERNERE_*, MEMORIA_JWT_SECRET, MEMORIA_HUB_BASE,
-#       POSTGRES_PASSWORD は最低限変更
-
-docker compose up -d --build
-docker compose logs -f hub
-curl http://localhost:5280/healthz
-```
-
-ローカル Memoria の AI 設定 → 🌐 マルチサーバ にこの URL を入れて接続
-すると、
-
-- 自分のブックマーク / ディグ / 辞書を **📤 シェア**
-- ハブの公開エントリを **🌐 マルチタブ** で閲覧
-- 気に入ったエントリを **📥 ダウンロード** してローカルに取り込む
-- admin / mod ロールがあれば **🛡 モデレーション** タブで非表示処理
-
-ができる。本番 Cernere OAuth クライアント登録は
-[`server/multi/README.md`](server/multi/README.md#cernere-oauth-クライアント登録ランブック)
-の手順を参照。
-
----
+Memoria-Hubは廃止しました。上部の「Tabulaの記事も表示」をONにすると、ローカルの記事を残したままTabulaの共有ページを取得します。OFFで追加表示と取得を停止します。AI記事・保存済みブックマークの登録もTabulaへ送ります。設定は[連携仕様](spec/feature/tabula-extraction.md)を参照してください。
 
 ## 主な機能 (学習効率化 × 可視化の観点で)
 

@@ -4,7 +4,7 @@
 // extractNotionBlocks をサーバ側で再現したもの。
 
 import { parse as parseHtml, type HTMLElement } from 'node-html-parser';
-import type { NotionExtractedBlock } from '../api/types/note.js';
+import type { NotionExtractedBlock } from '../api/types/extraction.js';
 
 export function isNotionUrl(url: string): boolean {
   if (!url) return false;

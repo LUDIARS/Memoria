@@ -2,7 +2,7 @@
 //
 // Picks an adapter at runtime so the rest of the server can stay agnostic.
 // Default is SQLite (local server). Phase 2 will register a Postgres
-// adapter for the multi server (Memoria Hub).
+// adapter from the retired Memoria-Hub design.
 import * as sqlite from './sqlite.js';
 
 const ADAPTER = (process.env.MEMORIA_DB_KIND || 'sqlite').toLowerCase();

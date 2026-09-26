@@ -8,6 +8,22 @@ import { openDb } from '../db.js';
 import type { CleverSearchResponse } from '../api/types/clever-search.js';
 import { makeCleverSearchRouter } from './router.js';
 import { normalizeCleverSearchQuery, searchCleverDocuments } from './store.js';
+import { ensureCleverSearchSchema } from './schema.js';
+
+test('note extraction removes derived search data but preserves legacy source rows',()=>{
+  const db=openDb(':memory:');
+  try {
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='notes'").get(),undefined);
+    ensureCleverSearchSchema(db);
+    db.exec("CREATE TABLE notes(id TEXT PRIMARY KEY,title TEXT); INSERT INTO notes VALUES('legacy','Keep original')");
+    db.prepare("INSERT INTO clever_search_sources(source_type,source_id,report_category,title,content,occurred_at,source_subtype) VALUES('note','legacy','knowledge','Old note','Retired content','2026-09-26','doc')").run();
+    db.prepare('INSERT INTO clever_search_reports(query,normalized_query,total_hits,report_json,search_elapsed_ms) VALUES(?,?,?,?,?)').run('old','old',1,JSON.stringify({citations:[{sourceType:'note',sourceId:'legacy'}]}),1);
+    ensureCleverSearchSchema(db);
+    assert.equal((db.prepare("SELECT title FROM notes WHERE id='legacy'").get() as {title:string}).title,'Keep original');
+    assert.equal(db.prepare("SELECT id FROM clever_search_sources WHERE source_type='note'").get(),undefined);
+    assert.equal(db.prepare("SELECT id FROM clever_search_reports WHERE query='old'").get(),undefined);
+  } finally {db.close();}
+});
 
 function requestFrom(
   app: Hono,
@@ -162,32 +178,6 @@ test('clever search index follows source and related-row mutations', () => {
     assert.equal(hitCount(db, '更新カテゴリ'), 0);
 
     db.prepare(`
-      INSERT INTO notes (id, title) VALUES ('trigger-note', '関連行テスト')
-    `).run();
-    db.prepare(`
-      INSERT INTO note_blocks (uuid, note_id, position, text)
-      VALUES ('trigger-block', 'trigger-note', 10, '追加ブロック')
-    `).run();
-    assert.match(sourceContent(db, 'note', 'trigger-note'), /追加ブロック/);
-    assert.equal(hitCount(db, '追加ブロック'), 1);
-    db.prepare(`
-      INSERT INTO note_blocks (uuid, note_id, position, text)
-      VALUES ('earlier-block', 'trigger-note', 0, '先頭ブロック')
-    `).run();
-    const orderedNoteContent = sourceContent(db, 'note', 'trigger-note');
-    assert.ok(
-      orderedNoteContent.indexOf('先頭ブロック') < orderedNoteContent.indexOf('追加ブロック'),
-      'note blocks should be projected in position order',
-    );
-    db.prepare("UPDATE note_blocks SET text = '更新ブロック' WHERE uuid = 'trigger-block'").run();
-    assert.match(sourceContent(db, 'note', 'trigger-note'), /更新ブロック/);
-    assert.equal(hitCount(db, '追加ブロック'), 0);
-    assert.equal(hitCount(db, '更新ブロック'), 1);
-    db.prepare("DELETE FROM note_blocks WHERE uuid = 'trigger-block'").run();
-    assert.doesNotMatch(sourceContent(db, 'note', 'trigger-note'), /更新ブロック/);
-    assert.equal(hitCount(db, '更新ブロック'), 0);
-
-    db.prepare(`
       INSERT INTO bookmark_categories (bookmark_id, category)
       VALUES (?, 'cascade-bookmark-marker')
     `).run(bookmarkId);
@@ -201,16 +191,6 @@ test('clever search index follows source and related-row mutations', () => {
     );
     assert.equal(hitCount(db, 'cascade-bookmark-marker'), 0);
 
-    db.prepare("UPDATE note_blocks SET text = 'cascade-note-marker' WHERE uuid = 'earlier-block'").run();
-    db.prepare("DELETE FROM notes WHERE id = 'trigger-note'").run();
-    assert.equal(
-      db.prepare(`
-        SELECT 1 FROM clever_search_sources
-         WHERE source_type = ? AND source_id = ?
-      `).get('note', 'trigger-note'),
-      undefined,
-    );
-    assert.equal(hitCount(db, 'cascade-note-marker'), 0);
   } finally {
     db.close();
   }

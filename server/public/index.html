@@ -35,9 +35,7 @@
     </div>
   </header>
 
-  <!-- Multi-server (Memoria Hub) スイッチ — Memoria ロゴの下、 機能タブの上の独立行。
-       hub に 1 件も登録が無いときは hidden、 1 件以上で表示される。 -->
-  <div id="multiSwitch" class="multi-switch multi-switch-row" hidden></div>
+  <div class="multi-switch multi-switch-row"><label><input type="checkbox" id="tabulaInclude" /> Tabulaの記事も表示</label><span id="tabulaFeedStatus" role="status"></span></div>
 
   <!-- ── 起動チュートリアル (5 step wizard) ────────────────────────────
        初回起動時 (= app_settings.tutorial.completed_at が空) で自動表示。
@@ -135,21 +133,7 @@
           <p class="tutorial-help" id="tutorialExtBrowserNote">💡 スマホで使う場合: スマホには Chrome 拡張がないので、 Memoria を「ホーム画面に追加」 して PWA として開き、 OS の共有メニューから保存します。</p>
         </section>
 
-        <!-- Step 4: Memoria Hub (シェアサーバ) -->
-        <section class="tutorial-step-body hidden" data-step="4">
-          <h3>🌐 共有サーバ (Memoria Hub) — オプション</h3>
-          <p>1 人で使う場合は、 このステップはスキップしてかまいません。</p>
-          <p>複数の PC や他のユーザーと <b>辞書 / 調べもの / ブックマーク</b> を共有したい場合だけ、 共有サーバ (Hub) の URL をここに登録します。</p>
-          <p class="tutorial-help">🔒 日記 / GPS / 訪問履歴などの個人ログは、 共有サーバには送信されません。 ローカルにのみ保存されます。</p>
-          <div class="tutorial-form">
-            <label>Hub URL:
-              <input id="tutorialHubUrl" type="url" placeholder="https://hub.example.com" />
-            </label>
-            <button id="tutorialHubAddBtn" type="button">登録</button>
-            <span id="tutorialHubStatus" class="tutorial-status"></span>
-          </div>
-          <p class="tutorial-help">後から 設定 → 📦 データ / Hub でも追加できます。</p>
-        </section>
+        <section class="tutorial-step-body hidden" data-step="4"><h3>Tabulaの記事</h3><p>上部の「Tabulaの記事も表示」をONにすると、Memoriaの記事にTabulaの共有記事が加わります。ローカルの記事はそのまま使えます。</p></section>
 
         <!-- Step 5: 追加 API -->
         <section class="tutorial-step-body hidden" data-step="5">
@@ -375,6 +359,7 @@
           <div class="bookmarks-main">
             <div id="bookmarksMultiFilter" class="multi-filter-slot"></div>
             <div id="cards" class="cards"></div>
+            <div id="tabulaBookmarkFeed"></div>
             <div id="empty" class="empty hidden">ブックマークがありません。Chrome 拡張からページを保存してください。</div>
             <div class="bookmarks-more-bar">
               <span id="bookmarksMoreStatus" class="bookmarks-more-status"></span>
@@ -1202,31 +1187,10 @@
         <div id="mealsList" class="meals-list"></div>
       </div>
 
-      <!-- 📓 ノート — esa / DocBase 風 WYSIWYG ブロックエディタ + bookmark base + comment sets。 spec/feature/note.md -->
+      <!-- Tabula is the owner of pages and collaborative editing. -->
       <div id="notesView" class="hidden">
-        <div class="notes-toolbar">
-          <button id="notesSidebarToggle" type="button" class="ghost notes-sidebar-toggle"
-            title="ノート一覧の表示切替" aria-label="ノート一覧の表示切替">☰</button>
-          <input id="notesSearch" type="search" placeholder="ノート検索 (タイトル / 本文)" />
-          <span class="grow"></span>
-          <button id="notesFromBookmarkBtn" type="button" class="ghost">🔖 bookmark から</button>
-          <button id="notesNewBtn" type="button">+ 新規ノート</button>
-        </div>
-        <div class="notes-layout" id="notesLayout">
-          <div class="notes-sidebar-backdrop" aria-hidden="true"></div>
-          <aside class="notes-sidebar" id="notesSidebar">
-            <ul id="notesList" class="notes-list"></ul>
-          </aside>
-          <section class="notes-pane" id="noteEditor">
-            <div class="notes-empty muted">左のリストから選択するか「+ 新規ノート」 で作成してください</div>
-          </section>
-          <aside class="notes-comments" id="notesComments">
-            <div class="muted">ノートを選択するとコメントが表示されます</div>
-          </aside>
-          <!-- スマホ専用フローティングボタン: ブロックを「いま居るブロックの次」 に挿入する。
-               PC では CSS @media で非表示。 ノート未選択時も JS で hidden=true。 -->
-          <button id="notesMobileFab" class="notes-mobile-fab" type="button" hidden aria-label="ブロックを追加">＋</button>
-        </div>
+        <h2>Tabula</h2><p id="tabulaStatus">Tabula の接続先を確認しています…</p>
+        <a id="tabulaOpen" target="_blank" rel="noopener noreferrer" hidden>Tabula でページを書く ↗</a>
       </div>
 
       <!-- 軌跡タブ用の「📖 設定方法」 モーダル — OwnTracks (内蔵 MQTT broker)
@@ -1439,37 +1403,6 @@
         </div>
       </dialog>
 
-      <div id="multiView" class="hidden">
-        <!-- Local Memoria は Infisical を知らない (= 全機能ローカル完結) — 旧
-             multiInfisicalSetup ブロックは撤去された。 Hub の Infisical 設定は
-             Hub 側 (server/multi/) の env-cli で完結する。 -->
-
-        <!-- Hub ログイン — スイッチャで未ログイン Hub を選んだとき表示。
-             Local は email/password を持たない (= Cernere Composite SSO)。
-             Hub から Cernere の login URL を取得 → popup で開く → postMessage で
-             auth_code を受け取り Hub に exchange する。 -->
-        <section id="multiCernereLogin" class="multi-infisical-setup foundation-form hidden">
-          <h3 style="margin:0 0 4px">🔐 Hub ログイン</h3>
-          <p class="muted" style="font-size:12px;margin:0 0 8px;line-height:1.6">
-            Cernere の Composite SSO で接続します。 「ログイン」 を押すと Cernere の
-            ログイン画面が popup で開き、 Face ID / Touch ID / Windows Hello /
-            Password / Google / GitHub のいずれかで認証できます。
-            Memoria 側で password を入力する必要はありません。
-          </p>
-          <p class="muted" style="font-size:12px;margin:0 0 12px">
-            接続先: <code id="multiLoginUrlDisplay" style="font-size:12px">—</code>
-          </p>
-          <input id="multiLoginUrl" type="hidden" />
-          <div class="simple-actions" style="margin-top:14px">
-            <button id="multiLoginSubmit" type="button">🔐 Cernere でログイン</button>
-          </div>
-          <div id="multiLoginMsg" class="muted" style="font-size:12px;margin-top:8px" hidden></div>
-        </section>
-
-        <!-- 旧 Multi browse タブ (#multiMainContent) は二層設計で撤去。
-             Hub のデータはモード切替後、 通常のタブに proxy 経由で出る。
-             #multiView は Infisical 設定 / Hub ログインフォーム専用ビュー。 -->
-      </div>
     </section>
 
     <aside id="detail" class="detail hidden foundation-form">
@@ -1495,8 +1428,8 @@
       <div class="detail-actions">
         <button id="dSave">保存</button>
         <button id="dResummarize" class="ghost">再要約</button>
-        <button id="dReparse" class="ghost" title="保存済 HTML を再パースして note 化 (Gemini / ChatGPT / Claude / Notion)"
-          hidden>📄 ノート化 (再パース)</button>
+        <button id="dReparse" class="ghost" title="保存済みページの本文・メモ・元HTMLを非公開のTabulaページに登録"
+          hidden>📄 Tabulaに登録</button>
         <a id="dViewHtml" href="#" target="_blank" class="ghost">保存 HTML を開く</a>
         <button id="dDelete" class="danger">削除</button>
       </div>
@@ -1667,7 +1600,7 @@
       <button type="button" class="settings-tab active" data-stab="ai" role="tab">🤖 AI / モデル</button>
       <button type="button" class="settings-tab" data-stab="api" role="tab">🔌 連携 / API key</button>
       <button type="button" class="settings-tab" data-stab="profile" role="tab">🧍 プロフィール</button>
-      <button type="button" class="settings-tab" data-stab="data" role="tab">📦 データ / Hub</button>
+      <button type="button" class="settings-tab" data-stab="data" role="tab">📦 データ</button>
     </nav>
 
     <!-- ── 🤖 AI / モデル ── -->
@@ -1894,7 +1827,7 @@
       <textarea id="aiDiaryGlobalMemo" rows="6" placeholder="例: 自分の役割は LUDIARS の AI/フルスタック開発。Memoria, Synergos, Cernere を主軸に動く。日記は事実+推測で書き、断定口調を維持。"></textarea>
     </section>
 
-    <!-- ── 📦 データ / Hub ── -->
+    <!-- ── 📦 データ ── -->
     <section class="settings-tab-body hidden" data-stab="data">
       <h4>📤 エクスポート / 📥 インポート</h4>
       <p class="ai-settings-help">ブックマークを JSON で書き出し / 取り込み (URL 重複はスキップ)。エクスポートはチェックを入れたカードのみ。</p>
@@ -1905,15 +1838,7 @@
         </label>
       </div>
 
-      <h4>🌐 マルチサーバ (Memoria Hub)</h4>
-      <p class="ai-settings-help">辞書 / ディグ / ブックマークを共有できるハブを複数登録できます。各エントリは独立した Cernere ログインを持ち、左の topbar スイッチで個別 ON/OFF (複数同時 ON 可)。</p>
-      <ul id="multiServersList" class="multi-servers"></ul>
-      <div class="multi-add-row">
-        <input id="multiAddLabel" type="text" placeholder="ラベル (例: 社内ハブ)" />
-        <input id="multiAddUrl" type="text" placeholder="https://memoria-hub.example.com" />
-        <button id="multiAddBtn">＋ 追加</button>
-      </div>
-      <div id="multiStatus" class="multi-status"></div>
+      <h4>Tabula連携</h4><p>記事の登録は各記事・ブックマークの「Tabulaに登録」、取得は上部のチェックから行います。</p>
     </section>
 
     <!-- ── 共通 footer (どの tab でも見える) ── -->

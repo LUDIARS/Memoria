@@ -1,3 +1,5 @@
+> Historical architecture: Memoria-Hub has been retired. Current sharing uses Tabula; see spec/feature/tabula-extraction.md.
+
 # `server/core/` — Shareable resources
 
 The three resource types that can be shared between the local server and the

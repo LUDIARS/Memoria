@@ -20,14 +20,14 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   recRecentBookmarks, recBrowserHistory, recGitCommits, recClaudePrompts,
-  recGamesLastWeek, recAppsLastWeek, recRecentNotes, recRecentDigs,
+  recGamesLastWeek, recAppsLastWeek, recRecentDigs,
   insertRecommendationRun, completeRecommendationRun, failRecommendationRun,
   findRunningRecommendationRun, cancelRunningRecommendationRuns,
   listAiArticles,
   listRecommendationNotUseful,
   type RecSourceBookmark, type RecBrowserDomain, type RecGitCommit,
   type RecClaudePrompt, type RecGameSummary, type RecAppSummary,
-  type RecNoteSummary, type RecDigSummary, type RecommendationNotUsefulRow,
+  type RecDigSummary, type RecommendationNotUsefulRow,
 } from './db.js';
 import {
   listRecentTopArticles, listEnabledInterests,
@@ -65,7 +65,7 @@ const REC_AGENT_LABELS: Record<RecAgentKind, string> = {
   git_commits:     'git commit',
   claude_prompts:  'Claude prompt',
   games_apps:      'ゲーム / アプリ',
-  notes_digs:      'ノート + Dig',
+  notes_digs:      'Dig',
   news:            'ニュース',
   ai_articles:     'AI 記事',
 };
@@ -146,7 +146,6 @@ function buildAgentJobs(db: Db): AgentJob[] {
   const prompts = recClaudePrompts(db, SINCE_DAYS, 80);
   const games = recGamesLastWeek(db, SINCE_DAYS, 20);
   const apps = recAppsLastWeek(db, SINCE_DAYS, 25);
-  const notes = recRecentNotes(db, SINCE_DAYS, 25);
   const digs = recRecentDigs(db, SINCE_DAYS, 20);
 
   // ── 軸B: ニュースアンテナ (外界の新出情報) ────────────────────────────────
@@ -154,7 +153,7 @@ function buildAgentJobs(db: Db): AgentJob[] {
   const aiArticles = listAiArticles(db, 20);
   const interests = listEnabledInterests(db);
   // 軸B が「ユーザに不足しているもの」 を判定するための、 ユーザの関心・作業領域サマリ。
-  const focus = userFocusSummary(interests, commits, notes);
+  const focus = userFocusSummary(interests, commits);
 
   const jobs: AgentJob[] = [
     {
@@ -199,10 +198,10 @@ function buildAgentJobs(db: Db): AgentJob[] {
       kind: 'notes_digs',
       axis: REC_AGENT_AXIS.notes_digs,
       label: REC_AGENT_LABELS.notes_digs,
-      inputSummary: `${notes.length} notes / ${digs.length} digs`,
+      inputSummary: `${digs.length} digs`,
       prompt: agentPromptStagnation(
-        '最近書いたノート + Dig (深掘り検索) ログ',
-        formatNotes(notes) + '\n\n' + formatDigs(digs),
+        'Dig (深掘り検索) ログ',
+        formatDigs(digs),
       ),
     },
     {
@@ -227,15 +226,12 @@ function buildAgentJobs(db: Db): AgentJob[] {
 function userFocusSummary(
   interests: RssInterestRow[],
   commits: RecGitCommit[],
-  notes: RecNoteSummary[],
 ): string {
   const interestLabels = interests.map(i => i.label).filter(Boolean).slice(0, 20);
   const repos = Array.from(new Set(commits.map(c => c.source).filter(Boolean))).slice(0, 15);
-  const noteTitles = notes.map(n => n.title).filter(Boolean).slice(0, 12);
   const lines: string[] = [];
   if (interestLabels.length) lines.push(`関心テーマ: ${interestLabels.join(' / ')}`);
   if (repos.length) lines.push(`作業中リポ/領域: ${repos.join(' / ')}`);
-  if (noteTitles.length) lines.push(`最近のノート: ${noteTitles.join(' / ')}`);
   return lines.length ? lines.join('\n') : '(関心・作業領域の手がかりなし)';
 }
 
@@ -405,13 +401,6 @@ function formatApps(items: RecAppSummary[]): string {
   if (items.length === 0) return 'アプリ: (ログなし)';
   return 'アプリ:\n' + items.map(a =>
     `- ${a.app_name ?? a.process_name} [${a.kind ?? '?'}]  ${a.minutes_7d} min  titles: ${a.sample_titles.slice(0, 3).join(' | ').slice(0, 200)}`
-  ).join('\n');
-}
-
-function formatNotes(items: RecNoteSummary[]): string {
-  if (items.length === 0) return 'ノート: (なし)';
-  return 'ノート:\n' + items.map(n =>
-    `- ${n.updated_at} [${n.kind}] ${n.title}\n  ${n.preview.replace(/\n/g, ' ').slice(0, 300)}`
   ).join('\n');
 }
 

@@ -1,6 +1,4 @@
-// /api/multi/* (Hub 連携) + /api/legatus/location-summary + /api/locations* (GPS)
-// + /api/tracks/settings + /api/work-sessions の GPS 取込部分。
-// Spec: spec/interface/multi.md
+// GPS ingestion, location history and track settings.
 
 import { Hono, type Context } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -9,12 +7,6 @@ import {
   listGpsLocationsForDate, deleteGpsLocationsOlderThan, compressGpsHistory,
   getAppSettings, setAppSettings,
 } from '../db.js';
-import {
-  readMultiState, isConnected,
-  readMultiServers, persistServers, upsertServer, removeServer, findServerByUrl,
-  saveServerSession, clearServerSession, setActive,
-  readMode, setMode, hubFetch,
-} from '../local/multi-client.js';
 import { resolveUnresolvedBatch, getResolverDebug } from '../lib/place-resolver.js';
 import { featureEnabled } from '../lib/privacy.js';
 import { checkIngestKey } from '../lib/ingest-auth.js';
@@ -22,218 +14,17 @@ import type { LocationBroadcastPoint, PlaceResolveResult } from '../lib/ws-locat
 
 type Db = BetterSqlite3.Database;
 
-export interface MultiRouterDeps {
+export interface LocationRouterDeps {
   db: Db;
   broadcastLocation: (point: LocationBroadcastPoint) => void;
   broadcastLocationResolved: (id: number, result: PlaceResolveResult | null) => void;
   triggerResolveAsync: (id: number, lat: number, lon: number) => void;
 }
 
-export function makeMultiRouter(deps: MultiRouterDeps): Hono {
+export function makeLocationRouter(deps: LocationRouterDeps): Hono {
   const { db, broadcastLocation, broadcastLocationResolved, triggerResolveAsync } = deps;
   const r = new Hono();
 
-  // ---- multi server (Memoria Hub) integration --------------------------------
-
-  r.get('/api/multi/status', (c: Context) => {
-    // Returns every registered server + which are active. The legacy
-    // `connected/url/user` triple is kept on the response so existing
-    // callers keep working: they reflect the FIRST active+connected one.
-    const { servers, active } = readMultiServers(db);
-    const list = servers.map((s) => ({
-      label: s.label, url: s.url,
-      active: active.has(s.url),
-      connected: !!(s.jwt && s.userId),
-      user: s.userId ? { id: s.userId, name: s.userName, role: s.role } : null,
-      connected_at: s.connectedAt,
-    }));
-    const primary = readMultiState(db);
-    return c.json({
-      servers: list,
-      connected: isConnected(primary),
-      url: primary.url,
-      user: isConnected(primary) ? { id: primary.userId, name: primary.userName, role: primary.role } : null,
-      connected_at: primary.connectedAt,
-    });
-  });
-
-  r.post('/api/multi/servers', async (c: Context) => {
-    // Add or update a registered server entry (label + url). Doesn't
-    // touch JWT — that's set by the OAuth /finish handler.
-    const body = await c.req.json().catch(() => null) as { url?: unknown; label?: unknown } | null;
-    if (!body?.url || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
-    const { servers, active } = readMultiServers(db);
-    const updated = upsertServer(servers, { label: typeof body.label === 'string' ? body.label : body.url, url: body.url });
-    persistServers(db, updated, active);
-    return c.json({ ok: true });
-  });
-
-  r.delete('/api/multi/servers', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
-    if (!body?.url || typeof body.url !== 'string') return c.json({ error: 'url required' }, 400);
-    const { servers, active } = readMultiServers(db);
-    active.delete(String(body.url).replace(/\/$/, ''));
-    persistServers(db, removeServer(servers, body.url), active);
-    return c.json({ ok: true });
-  });
-
-  r.post('/api/multi/active', async (c: Context) => {
-    // Body: { urls: string[] } — replaces the active set.
-    const body = await c.req.json().catch(() => null) as { urls?: unknown } | null;
-    if (!Array.isArray(body?.urls)) return c.json({ error: 'urls[] required' }, 400);
-    setActive(db, body.urls);
-    return c.json({ ok: true });
-  });
-
-  // ── 二層設計: Hub に対するログイン ────────────────────────────────────
-  //
-  // Cernere Composite SSO flow:
-  //   1) フロントが GET /api/multi/login-url?url=<hub> で Cernere popup URL を取得
-  //   2) フロントが popup を開く → ユーザが Cernere の native UI (Passkey / Password /
-  //      OAuth / MFA) でログイン → popup が postMessage({ authCode }) を投げる
-  //   3) フロントが POST /api/multi/exchange { url, authCode } → Local server 経由で
-  //      Hub /api/auth/exchange に code を渡す → service_token を取得して per-hub に保存
-  //
-  // Local は Cernere も email/password も触らない (= 「ログイン処理の独自実装ゼロ」)。
-
-  r.get('/api/multi/login-url', async (c: Context) => {
-    const hubUrl = (c.req.query('url') || '').trim().replace(/\/$/, '');
-    if (!hubUrl) return c.json({ error: 'url required' }, 400);
-    // popup の postMessage 戻り先は Local Memoria の origin (= ブラウザの window.location.origin)。
-    // Local server 側からは知れないので、 フロントが追加 query で渡してもらう。
-    const origin = (c.req.query('origin') || '').trim();
-    try {
-      const qs = origin ? `?origin=${encodeURIComponent(origin)}` : '';
-      const res = await fetch(`${hubUrl}/api/auth/login-url${qs}`);
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        return c.json({ error: `Hub login-url 取得失敗: ${res.status}`, detail: body.slice(0, 200) }, 502);
-      }
-      const data = await res.json() as { url?: string };
-      if (!data.url) return c.json({ error: 'Hub が login url を返しませんでした' }, 502);
-      return c.json({ url: data.url });
-    } catch (e: unknown) {
-      return c.json({ error: `Hub に到達できません: ${(e as Error).message}` }, 502);
-    }
-  });
-
-  r.post('/api/multi/exchange', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as
-      { url?: unknown; authCode?: unknown; label?: unknown } | null;
-    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
-    const authCode = typeof body?.authCode === 'string' ? body.authCode.trim() : '';
-    if (!url) return c.json({ error: 'url required' }, 400);
-    if (!authCode) return c.json({ error: 'authCode required' }, 400);
-
-    // 1. server を登録 (未登録なら)
-    const { servers, active } = readMultiServers(db);
-    const label = typeof body?.label === 'string' && body.label
-      ? body.label : (findServerByUrl(servers, url)?.label || url);
-    persistServers(db, upsertServer(servers, { url, label }), active);
-
-    // 2. Hub に authCode を渡して service_token を取得
-    let result;
-    try {
-      const res = await fetch(`${url}/api/auth/exchange`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ authCode }),
-      });
-      const data = await res.json().catch(() => ({})) as {
-        sessionToken?: string;
-        user?: { userId?: string | null; displayName?: string; role?: string };
-        error?: string;
-      };
-      if (!res.ok || !data.sessionToken) {
-        return c.json({ error: data.error || `Hub exchange 失敗: HTTP ${res.status}` }, res.status as 401);
-      }
-      result = {
-        sessionToken: data.sessionToken,
-        user: {
-          userId: data.user?.userId ?? null,
-          displayName: data.user?.displayName || '(unknown)',
-          role: data.user?.role || 'general',
-        },
-      };
-    } catch (e: unknown) {
-      return c.json({ error: `Hub に到達できません: ${(e as Error).message}` }, 502);
-    }
-
-    // 3. session token を per-hub に保存
-    saveServerSession(db, url, {
-      jwt: result.sessionToken,
-      userId: result.user.userId,
-      userName: result.user.displayName,
-      role: result.user.role,
-    });
-    return c.json({ ok: true, url, user: result.user });
-  });
-
-  // ── 二層モード: データソース (Local / Multi) の状態 ───────────────────
-
-  r.get('/api/multi/mode', (c: Context) => c.json(readMode(db)));
-
-  // Body: { mode: 'local' | 'multi', url? }
-  // Multi にしたい Hub が未ログインなら切り替えず { needs_login: true } を返す。
-  r.post('/api/multi/mode', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as { mode?: unknown; url?: unknown } | null;
-    const mode = body?.mode === 'multi' ? 'multi' : body?.mode === 'local' ? 'local' : null;
-    if (!mode) return c.json({ error: "mode は 'local' か 'multi'" }, 400);
-    if (mode === 'local') {
-      setMode(db, 'local');
-      return c.json({ ok: true, mode: 'local', hubUrl: null });
-    }
-    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
-    if (!url) return c.json({ error: 'multi モードには url が必要' }, 400);
-    const { servers } = readMultiServers(db);
-    const s = findServerByUrl(servers, url);
-    if (!s || !s.jwt || !s.userId) {
-      // 未ログイン — モードは切り替えず frontend にログインを促す
-      return c.json({ ok: false, needs_login: true, url });
-    }
-    setMode(db, 'multi', url);
-    return c.json({ ok: true, mode: 'multi', hubUrl: url });
-  });
-
-  // 指定 Hub にログイン済か。 ?url=<hub>
-  r.get('/api/multi/session', (c: Context) => {
-    const url = c.req.query('url') || '';
-    if (!url) return c.json({ error: 'url query required' }, 400);
-    const { servers } = readMultiServers(db);
-    const s = findServerByUrl(servers, url);
-    if (s && s.jwt && s.userId) {
-      return c.json({
-        connected: true,
-        user: { id: s.userId, name: s.userName, role: s.role },
-      });
-    }
-    return c.json({ connected: false });
-  });
-
-  // Body: { url? } — 指定 Hub の session を破棄。 そのモードに居たら Local に戻す。
-  r.post('/api/multi/logout', async (c: Context) => {
-    const body = await c.req.json().catch(() => null) as { url?: unknown } | null;
-    const url = typeof body?.url === 'string' ? body.url.trim().replace(/\/$/, '') : '';
-    if (!url) return c.json({ error: 'url required' }, 400);
-    const { servers } = readMultiServers(db);
-    const s = findServerByUrl(servers, url);
-    if (s && s.jwt) {
-      try {
-        await hubFetch(s.url, s.jwt, '/api/auth/logout', { method: 'POST' });
-      } catch { /* Hub 側破棄はステートレスなので失敗しても続行 */ }
-    }
-    clearServerSession(db, url);
-    const m = readMode(db);
-    if (m.mode === 'multi' && m.hubUrl === url) setMode(db, 'local');
-    return c.json({ ok: true });
-  });
-
-  // ---- GPS locations (OwnTracks) -------------------------------------------
-
-  /**
-   * Legatus が 60 秒ごとにまとめて投げる location summary を受ける。
-   * loopback / tailnet 内のみ。 認証なし (Memoria 自体が同じ範囲で公開)。
-   */
   r.post('/api/legatus/location-summary', async (c: Context) => {
     if (!featureEnabled(db, 'tracks_enabled')) return c.json({ error: 'tracks are disabled' }, 403);
     const body = await c.req.json().catch(() => null) as

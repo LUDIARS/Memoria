@@ -59,10 +59,10 @@ import { makePushRouter } from './routes/push.js';
 import { makeNotificationsRouter } from './routes/notifications.js';
 import { makePluginsRouter } from './routes/plugins.js';
 import { mountUserApps } from './plugins/host.js';
-import { makeNoteRouter } from './routes/note.js';
+import { makeTabulaRouter } from './tabula/routes.js';
+import { makeExtensionRulesRouter } from './routes/extension-rules.js';
 import { makeConfigRouter } from './routes/config.js';
-import { makeMultiRouter } from './routes/multi.js';
-import { makeMultiProxyMiddleware } from './local/multi-proxy.js';
+import { makeLocationRouter } from './routes/location.js';
 import { makeMiscRouter } from './routes/misc.js';
 import { makeRepoRouter } from './routes/repo.js';
 import { makePacketMonitorRouter } from './routes/packet-monitor.js';
@@ -197,16 +197,7 @@ app.use('*', async (c, next) => {
   }
 });
 
-// Local Memoria は Infisical / Cernere を直接知らない設計に統一済。
-// 旧 /api/setup/infisical* と writeEnvSecrets() は撤去 — Hub 連携は Hub 側 (server/multi/)
-// の Infisical 設定 (= env-cli) で完結する。
-
-// ── Multi モード proxy 層 ─────────────────────────────────────────────────
-//
-// Multi モード時、 Multi 対応 7 型の CRUD を Hub の /api/data/* に転送し、
-// 個人ログ系は 503 local_only を返す。 Local モードでは素通り。 feature
-// router より前に置く必要がある (= router に届く前に横取りする)。
-app.use('/api/*', makeMultiProxyMiddleware(db));
+// Memoria-Hub mode switching and proxying have been retired.
 
 // ── routers (mount with absolute /api/... paths inside each) ──────────────
 const bulkSaveDeps = { db, htmlDir: HTML_DIR, enqueueSummary: queues.enqueueSummary };
@@ -296,7 +287,8 @@ console.log('[startup] loading user apps');
 const userApps = await mountUserApps(app, { db, dataDir: DATA_DIR });
 console.log('[startup] user apps ready');
 app.route('/', makePluginsRouter({ db, registry: userApps.registry }));
-app.route('/', makeNoteRouter({ db, htmlDir: HTML_DIR }));
+app.route('/', makeExtensionRulesRouter(db));
+app.route('/', makeTabulaRouter({ db, htmlDir: HTML_DIR }));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
   onMcpAutostartChange: (enabled) => mcp.sync(enabled),
@@ -311,7 +303,7 @@ app.route('/', makeConfigRouter({
   mealVisionQueue: queues.mealVisionQueue,
   aiAnalysisQueue: queues.aiAnalysisQueue,
 }));
-app.route('/', makeMultiRouter({
+app.route('/', makeLocationRouter({
   db,
   broadcastLocation: ws.broadcastLocation,
   broadcastLocationResolved: ws.broadcastLocationResolved,
@@ -393,9 +385,6 @@ const httpServer = serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`  data dir: ${DATA_DIR}`);
   console.log(`  claude bin: ${CLAUDE_BIN}`);
 });
-
-// 二層設計では起動時の Cernere 事前認証は廃止。 ローカルは Cernere を直接
-// 叩かず、 Multi モード時に Hub の session token を使うだけ (= Hub が代理認証)。
 
 // 起動時に未解決 GPS の backfill を 1 batch だけ走らせる. listen 直後でなく
 // 5 秒遅延させて、 Memoria 起動直後のバタつき (server / WS / RAG init) と

@@ -1,3 +1,5 @@
+> 2026-09-26: Memoria-Hubは廃止。旧Hubの記述は履歴資料です。現在の連携はTabulaを使用します（spec/feature/tabula-extraction.md）。
+
 # ユーザが手動で設定する必要があるもの
 
 Memoria は単体で動くが、 外部サービス / 自分の端末 と連携する機能は **ユーザが

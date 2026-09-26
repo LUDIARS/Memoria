@@ -103,27 +103,6 @@ const SOURCE_SPECS: SourceSpec[] = [
     subtype: () => `'dictionary'`,
   },
   {
-    key: 'note',
-    table: 'notes',
-    sourceType: 'note',
-    category: 'knowledge',
-    id: (r) => `${r}.id`,
-    title: (r) => text(`${r}.title`),
-    content: (r) => joinText(
-      `${r}.tags_json`,
-      `${r}.bookmark_url`,
-      `(SELECT group_concat(ordered.text, char(10))
-          FROM (
-            SELECT nb.text
-              FROM note_blocks nb
-             WHERE nb.note_id = ${r}.id
-             ORDER BY nb.position ASC, nb.id ASC
-          ) ordered)`,
-    ),
-    occurredAt: (r) => `COALESCE(${r}.updated_at, ${r}.created_at)`,
-    subtype: (r) => text(`${r}.kind`),
-  },
-  {
     key: 'task',
     table: 'tasks',
     sourceType: 'task',
@@ -251,13 +230,20 @@ function refreshRelatedSourceSql(spec: SourceSpec, sourceId: string): string {
 
 function ensureRelatedTableTriggers(db: Db): void {
   const bookmark = SOURCE_SPECS.find((spec) => spec.key === 'bookmark');
-  const note = SOURCE_SPECS.find((spec) => spec.key === 'note');
-  if (!bookmark || !note) throw new Error('clever search source specification missing');
+  if (!bookmark) throw new Error('clever search source specification missing');
 
   db.exec(`
     DROP TRIGGER IF EXISTS clever_search_bookmark_category_ai;
     DROP TRIGGER IF EXISTS clever_search_bookmark_category_au;
     DROP TRIGGER IF EXISTS clever_search_bookmark_category_ad;
+    DROP TRIGGER IF EXISTS clever_search_note_ai;
+    DROP TRIGGER IF EXISTS clever_search_note_au;
+    DROP TRIGGER IF EXISTS clever_search_note_ad;
+    DELETE FROM clever_search_sources WHERE source_type = 'note';
+    DELETE FROM clever_search_reports WHERE EXISTS (
+      SELECT 1 FROM json_tree(clever_search_reports.report_json)
+      WHERE key = 'sourceType' AND value = 'note'
+    );
     DROP TRIGGER IF EXISTS clever_search_note_block_ai;
     DROP TRIGGER IF EXISTS clever_search_note_block_au;
     DROP TRIGGER IF EXISTS clever_search_note_block_ad;
@@ -281,24 +267,6 @@ function ensureRelatedTableTriggers(db: Db): void {
       ${refreshRelatedSourceSql(bookmark, 'OLD.bookmark_id')}
     END;
 
-    CREATE TRIGGER clever_search_note_block_ai
-    AFTER INSERT ON note_blocks
-    BEGIN
-      ${refreshRelatedSourceSql(note, 'NEW.note_id')}
-    END;
-
-    CREATE TRIGGER clever_search_note_block_au
-    AFTER UPDATE ON note_blocks
-    BEGIN
-      ${refreshRelatedSourceSql(note, 'OLD.note_id')}
-      ${refreshRelatedSourceSql(note, 'NEW.note_id')}
-    END;
-
-    CREATE TRIGGER clever_search_note_block_ad
-    AFTER DELETE ON note_blocks
-    BEGIN
-      ${refreshRelatedSourceSql(note, 'OLD.note_id')}
-    END;
   `);
 }
 

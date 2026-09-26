@@ -8,7 +8,7 @@
 // だが JS は走らない静的 HTML) を node-html-parser で解析する。
 
 import { parse as parseHtml, type HTMLElement } from 'node-html-parser';
-import type { ChatExtractionSource, ChatExtractedMessage } from '../api/types/note.js';
+import type { ChatExtractionSource, ChatExtractedMessage } from '../api/types/extraction.js';
 
 export function detectChatSourceByUrl(url: string): ChatExtractionSource | null {
   if (!url) return null;
