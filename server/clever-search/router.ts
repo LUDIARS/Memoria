@@ -1,3 +1,4 @@
+import { searchLiveDocuments } from './live-search.js';
 import { performance } from 'node:perf_hooks';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -16,7 +17,6 @@ import {
   normalizeCleverSearchQuery,
   parseStoredCleverSearchReport,
   saveCleverSearchReport,
-  searchCleverDocuments,
 } from './store.js';
 
 type Db = BetterSqlite3.Database;
@@ -92,7 +92,7 @@ export function makeCleverSearchRouter(deps: CleverSearchRouterDeps): Hono {
     }
 
     const searchStartedAt = performance.now();
-    const hits = searchCleverDocuments(db, normalizedQuery);
+    const hits = await searchLiveDocuments(db, normalizedQuery);
     const report = buildCleverSearchReport(query, normalizedQuery, hits, {
       now,
       random,

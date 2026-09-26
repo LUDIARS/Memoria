@@ -106,7 +106,7 @@ export function registerInteractions(client: Client, db: Db): void {
             return;
           }
           const query = interaction.options.getString('query');
-          let rows = listTasks(db, { limit: 200 }).filter((t) => t.status !== 'done');
+          let rows = (await listTasks(db, { limit: 200 })).filter((t) => t.status !== 'done');
 
           let label: string;
           if (query) {

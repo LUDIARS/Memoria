@@ -28,16 +28,16 @@ function appendTaskDiaryLog(db: Db, line: string, now: Date): void {
   upsertDiary(db, { date, notes: next, status: row?.status ?? 'pending' });
 }
 
-export function registerTask(
+export async function registerTask(
   db: Db,
   input: InsertTaskInput,
   now: Date = new Date(),
-): TaskRow {
+): Promise<TaskRow> {
   const title = input.title.trim();
   if (!title) throw new Error('task title is required');
 
-  const id = insertTask(db, { ...input, title });
-  const created = getTask(db, id);
+  const id = (await insertTask(db, { ...input, title }));
+  const created = (await getTask(db, id));
   if (!created) throw new Error('failed to read inserted task');
 
   const label = created.kind === 'goal' ? '目標発行' : 'タスク発行';

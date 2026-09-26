@@ -6,7 +6,7 @@ import type { AlexaRequestEnvelope, AlexaResponseEnvelope } from './types.js';
 const HELP_TEXT = 'タスクを追加するには、買い物をタスクに追加、と話してください。通知を読むこともできます。';
 
 export interface AlexaSkillDeps {
-  createTask: (input: { requestId: string; title: string }) => AlexaTaskRegistrationResult;
+  createTask: (input: { requestId: string; title: string }) => AlexaTaskRegistrationResult | Promise<AlexaTaskRegistrationResult>;
   takeNotifications: (limit: number) => { items: AlexaPendingNotification[]; remaining: number };
   applySubscriptionChange: (input: {
     userId: string;
@@ -51,10 +51,10 @@ function notificationSpeech(
   return `${items.length + remaining}件の未読通知があります。${messages.join('。')}${remainingText}`;
 }
 
-function handleIntentRequest(
+async function handleIntentRequest(
   envelope: AlexaRequestEnvelope,
   deps: AlexaSkillDeps,
-): AlexaResponseEnvelope {
+): Promise<AlexaResponseEnvelope> {
   const intentName = envelope.request.intent?.name;
   if (!intentName) return speechResponse('インテントを確認できませんでした。もう一度お願いします。');
 
@@ -68,7 +68,7 @@ function handleIntentRequest(
       const prompt = 'タスク名が長すぎます。200文字以内で、もう一度お願いします。';
       return speechResponse(prompt, { shouldEndSession: false, reprompt: prompt });
     }
-    const result = deps.createTask({ requestId: envelope.request.requestId, title });
+    const result = await deps.createTask({ requestId: envelope.request.requestId, title });
     return result.created
       ? speechResponse(`「${result.task.title}」をタスクに追加しました。`)
       : speechResponse(`「${result.task.title}」はすでにタスクへ追加済みです。`);
@@ -110,10 +110,10 @@ function handleSubscriptionChange(
   return emptyResponse();
 }
 
-export function handleAlexaRequest(
+export async function handleAlexaRequest(
   envelope: AlexaRequestEnvelope,
   deps: AlexaSkillDeps,
-): AlexaResponseEnvelope {
+): Promise<AlexaResponseEnvelope> {
   switch (envelope.request.type) {
     case 'LaunchRequest': {
       const pending = deps.takeNotifications(5);

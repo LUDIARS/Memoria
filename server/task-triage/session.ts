@@ -40,8 +40,8 @@ export function orderUndatedTasks(tasks: TaskRow[]): TaskRow[] {
 }
 
 /** 期限未設定の未完タスク件数 (セッション開始前の表示用)。 */
-export function countUndatedTasks(db: Db): number {
-  return orderUndatedTasks(listTasks(db, { kind: 'task', limit: FETCH_LIMIT })).length;
+export async function countUndatedTasks(db: Db): Promise<number> {
+  return orderUndatedTasks((await listTasks(db, { kind: 'task', limit: FETCH_LIMIT }))).length;
 }
 
 /**
@@ -94,9 +94,12 @@ export function computeProgress(
   return { total, decided: total - remaining, deferred, remaining, counts };
 }
 
-function loadCurrent(db: Db, ids: number[]): Map<number, TaskRow | undefined> {
+async function loadCurrent(db: Db, ids: number[]): Promise<Map<number, TaskRow | undefined>> {
   const m = new Map<number, TaskRow | undefined>();
-  for (const id of ids) m.set(id, getTask(db, id));
+  // A triage can contain thousands of tasks; fetch one current snapshot instead
+  // of issuing one HTTP request per legacy ID.
+  const current = new Map((await listTasks(db, { kind: 'all', limit: Number.MAX_SAFE_INTEGER })).map(task => [task.id, task]));
+  for (const id of ids) m.set(id, current.get(id));
   return m;
 }
 
@@ -106,9 +109,9 @@ function decisionMap(db: Db, sessionId: number): Map<number, TaskTriageDecisionK
   return m;
 }
 
-export function buildState(db: Db, session: TaskTriageSession, batchSize = DEFAULT_BATCH_SIZE): TaskTriageState {
+export async function buildState(db: Db, session: TaskTriageSession, batchSize = DEFAULT_BATCH_SIZE): Promise<TaskTriageState> {
   const decisions = decisionMap(db, session.id);
-  const current = loadCurrent(db, session.task_ids);
+  const current = (await loadCurrent(db, session.task_ids));
   return {
     session,
     progress: computeProgress(session, decisions, current),
@@ -116,26 +119,26 @@ export function buildState(db: Db, session: TaskTriageSession, batchSize = DEFAU
   };
 }
 
-export function getCurrentState(db: Db, batchSize = DEFAULT_BATCH_SIZE): TaskTriageState | null {
+export async function getCurrentState(db: Db, batchSize = DEFAULT_BATCH_SIZE): Promise<TaskTriageState | null> {
   const session = getActiveTriageSession(db);
-  return session ? buildState(db, session, batchSize) : null;
+  return session ? (await buildState(db, session, batchSize)) : null;
 }
 
 /**
  * セッションを開始する。 active があればそれを返す (再開)。 restart=true なら active を
  * finished にして新しく対象を集め直す。
  */
-export function startSession(db: Db, opts: { restart?: boolean; batchSize?: number } = {}): TaskTriageState {
+export async function startSession(db: Db, opts: { restart?: boolean; batchSize?: number } = {}): Promise<TaskTriageState> {
   const batchSize = opts.batchSize ?? DEFAULT_BATCH_SIZE;
   const active = getActiveTriageSession(db);
-  if (active && !opts.restart) return buildState(db, active, batchSize);
+  if (active && !opts.restart) return (await buildState(db, active, batchSize));
   if (active) setTriageSessionStatus(db, active.id, 'finished', new Date().toISOString());
 
-  const ids = orderUndatedTasks(listTasks(db, { kind: 'task', limit: FETCH_LIMIT })).map((t) => t.id);
+  const ids = orderUndatedTasks((await listTasks(db, { kind: 'task', limit: FETCH_LIMIT }))).map((t) => t.id);
   const id = insertTriageSession(db, 'undated', ids);
   const session = getTriageSession(db, id);
   if (!session) throw new Error('failed to create triage session');
-  return buildState(db, session, batchSize);
+  return (await buildState(db, session, batchSize));
 }
 
 export type DecideResult =
@@ -161,7 +164,7 @@ export function normalizeDueAt(raw: unknown): string | null {
 }
 
 /** 1 タスクを判断し、 タスク本体へ反映してから記録する。 */
-export function decideTask(
+export async function decideTask(
   db: Db,
   sessionId: number,
   taskId: number,
@@ -169,12 +172,12 @@ export function decideTask(
   dueAtRaw: unknown,
   batchSize = DEFAULT_BATCH_SIZE,
   now: Date = new Date(),
-): DecideResult {
+): Promise<DecideResult> {
   const session = getTriageSession(db, sessionId);
   if (!session) return { ok: false, code: 'not_found', error: 'session not found' };
   if (session.status !== 'active') return { ok: false, code: 'not_active', error: 'session is finished' };
   if (!session.task_ids.includes(taskId)) return { ok: false, code: 'not_in_session', error: 'task not in session' };
-  const task = getTask(db, taskId);
+  const task = (await getTask(db, taskId));
   if (!task) return { ok: false, code: 'invalid', error: 'task no longer exists' };
   if (task.status === 'done' || task.due_at) {
     return { ok: false, code: 'conflict', error: 'task changed since this triage session was displayed' };
@@ -185,18 +188,18 @@ export function decideTask(
     dueAt = normalizeDueAt(dueAtRaw);
     if (!dueAt) return { ok: false, code: 'invalid', error: 'due_at is required (YYYY-MM-DD or YYYY-MM-DDTHH:MM)' };
   }
-  db.transaction(() => {
-    if (decision === 'due') updateTaskWithJournal(db, taskId, { due_at: dueAt }, now);
-    else if (decision === 'done') updateTaskWithJournal(db, taskId, { status: 'done' }, now);
-    upsertTriageDecision(db, sessionId, taskId, decision, dueAt);
-  })();
-  return { ok: true, state: buildState(db, session, batchSize) };
+  // Remote mutation must finish before recording the local decision. SQLite cannot
+  // make a transaction atomic across Actio; never keep it open across an await.
+  if (decision === 'due') await updateTaskWithJournal(db, taskId, { due_at: dueAt }, now);
+  else if (decision === 'done') await updateTaskWithJournal(db, taskId, { status: 'done' }, now);
+  upsertTriageDecision(db, sessionId, taskId, decision, dueAt);
+  return { ok: true, state: (await buildState(db, session, batchSize)) };
 }
 
-export function finishSession(db: Db, sessionId: number): TaskTriageState | null {
+export async function finishSession(db: Db, sessionId: number): Promise<TaskTriageState | null> {
   const session = getTriageSession(db, sessionId);
   if (!session) return null;
   if (session.status === 'active') setTriageSessionStatus(db, sessionId, 'finished', new Date().toISOString());
   const after = getTriageSession(db, sessionId) ?? session;
-  return buildState(db, after);
+  return (await buildState(db, after));
 }

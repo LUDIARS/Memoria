@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS task_triage_decisions (
 - `pickBatch(session, decisions, current, size)`: 提示順に「判断なし」→「later」の順で、 **現時点でも未完かつ期限なし** のものだけを最大 size 件。 セッション外で完了/期限付与されたタスクは解決済みとして飛ばす。 純関数。
 - `computeProgress(...)`: `total` / `decided` (最終判断済み + 外部解決) / `deferred` (later 中) / `remaining` / 判断種別ごとの `counts`。 純関数。
 - `decideTask(db, sessionId, taskId, decision, dueAt)`: タスク本体へ反映 (due → 期限設定、 done → 完了) してから決定を upsert。更新は `server/shared/task-mutation.ts` を通し、通常のタスク API と同じく AI 作成タスクの期限変更を human 扱いにし、日記・活動ログも記録する。`due_at` は実在する `'YYYY-MM-DD'` (18:00 を補う) か `'YYYY-MM-DDTHH:MM'`。セッション外の id / finished セッション / 不正な暦日・時刻は拒否する。
-- 表示後にタスクが完了または期限付きへ変わっていた場合は stale action として `409` にし、新しい状態を上書きしない。タスク更新・副作用・判断記録は 1 SQLite transaction で適用する。
+- 表示後にタスクが完了または期限付きへ変わっていた場合は stale action として `409` にし、新しい状態を上書きしない。タスク更新は Actio API で適用してから、Memoria の副作用・判断記録を保存する。HTTP と SQLite を単一 transaction にはできないため、後続記録の失敗時は Actio の適用状態を照合する（[Actio task source](actio-task-source.md)）。
 
 ## AI 提案 (server/task-triage/suggest.ts)
 

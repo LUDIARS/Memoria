@@ -1,3 +1,4 @@
+import '../tasks/test-backend.js';
 // /api/task-triage の結合テスト (in-memory SQLite + Hono app.request)。
 
 import { test } from 'node:test';
@@ -30,12 +31,12 @@ function localRequest(app: Hono, path: string, init?: RequestInit): Promise<Resp
   return requestFrom(app, '127.0.0.1', path, init);
 }
 
-function build() {
+async function build() {
   const db = openDb(':memory:');
   const ids = [
-    insertTask(db, { title: 'one', category: 'A' }),
-    insertTask(db, { title: 'two', category: 'A' }),
-    insertTask(db, { title: 'dated', category: 'A', due_at: '2026-09-10T18:00' }),
+    (await insertTask(db, { title: 'one', category: 'A' })),
+    (await insertTask(db, { title: 'two', category: 'A' })),
+    (await insertTask(db, { title: 'dated', category: 'A', due_at: '2026-09-10T18:00' })),
   ];
   const app = new Hono();
   app.route('/', makeTaskTriageRouter({
@@ -46,7 +47,7 @@ function build() {
 }
 
 test('GET session は未開始で null + 期限未設定件数', async () => {
-  const { app } = build();
+  const { app } = (await build());
   const res = await localRequest(app, '/api/task-triage/session');
   const body = await res.json() as { state: TaskTriageState | null; undated_total: number };
   assert.equal(body.state, null);
@@ -54,7 +55,7 @@ test('GET session は未開始で null + 期限未設定件数', async () => {
 });
 
 test('開始 → decide → suggest → finish の一連が通る', async () => {
-  const { app, db, ids } = build();
+  const { app, db, ids } = (await build());
   const started = await (await localRequest(app, '/api/task-triage/session', { method: 'POST', headers: json, body: '{}' })).json() as { state: TaskTriageState };
   const sid = started.state.session.id;
   assert.equal(started.state.batch.length, 2);
@@ -68,7 +69,7 @@ test('開始 → decide → suggest → finish の一連が通る', async () => 
     method: 'POST', headers: json, body: JSON.stringify({ task_id: ids[0], decision: 'due', due_at: '2026-09-30' }),
   });
   assert.equal(due.status, 200);
-  assert.equal(getTask(db, ids[0])?.due_at, '2026-09-30T18:00');
+  assert.equal((await getTask(db, ids[0]))?.due_at, '2026-09-30T18:00');
 
   const stale = await localRequest(app, `/api/task-triage/session/${sid}/decide`, {
     method: 'POST', headers: json, body: JSON.stringify({ task_id: ids[0], decision: 'keep' }),
@@ -92,13 +93,13 @@ test('開始 → decide → suggest → finish の一連が通る', async () => 
 });
 
 test('存在しないセッションは 404', async () => {
-  const { app } = build();
+  const { app } = (await build());
   assert.equal((await localRequest(app, '/api/task-triage/session/999')).status, 404);
   assert.equal((await localRequest(app, '/api/task-triage/session/999/finish', { method: 'POST' })).status, 404);
 });
 
 test('同一端末・同一 origin だけが個人タスク API にアクセスできる', async () => {
-  const { app } = build();
+  const { app } = (await build());
   const local = await localRequest(app, '/api/task-triage/session', {
     headers: { Origin: 'http://localhost' },
   });

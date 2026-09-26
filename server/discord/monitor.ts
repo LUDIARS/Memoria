@@ -33,12 +33,12 @@ function nextTimeTriggerMs(db: Db, now: Date): number | null {
 }
 
 /** 今日が締切 (or 期限超過) のアクティブタスク数。 通知エンジンと同じ select を再利用。 */
-function dueTodayCount(db: Db, now: Date): number {
-  return selectTasks(db, { categories: ['all'], deadline: 'due_today_or_overdue' }, now).length;
+async function dueTodayCount(db: Db, now: Date): Promise<number> {
+  return (await selectTasks(db, { categories: ['all'], deadline: 'due_today_or_overdue' }, now)).length;
 }
 
-function buildEmbed(db: Db, now: Date): Record<string, unknown> {
-  const due = dueTodayCount(db, now);
+async function buildEmbed(db: Db, now: Date): Promise<Record<string, unknown>> {
+  const due = (await dueTodayCount(db, now));
   const nextMs = nextTimeTriggerMs(db, now);
   const fields: { name: string; value: string; inline?: boolean }[] = [
     { name: '状態', value: '🟢 稼働中', inline: true },
@@ -70,7 +70,7 @@ async function updateMonitorCard(client: Client, db: Db): Promise<void> {
   if (!ch || ch.type !== ChannelType.GuildText) return;
   const channel = ch as TextChannel;
 
-  const embed = buildEmbed(db, new Date());
+  const embed = (await buildEmbed(db, new Date()));
   const messageId = getAppSettings(db)[MESSAGE_ID_KEY];
   if (messageId) {
     const msg = await channel.messages.fetch(messageId).catch(() => null);

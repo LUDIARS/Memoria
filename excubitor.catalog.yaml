@@ -17,6 +17,7 @@ services:
     # The entrypoint also performs npm start's required frontend build (prestart).
     command: node node_modules/tsx/dist/cli.mjs --env-file-if-exists=.env.secrets excubitor-bootstrap.ts
     allow_hot_reload: false
+    depends_on: [actio]
     autostart: false
     restart_policy: on-failure
     max_restart: 5

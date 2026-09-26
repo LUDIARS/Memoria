@@ -96,7 +96,7 @@ export function makeAgentRouter(deps: AgentRouterDeps): Hono {
   // Body: { project_id, agent?, model? }
   r.post('/api/tasks/:id/agent-run', async (c: Context) => {
     const taskId = Number(c.req.param('id'));
-    const task = getTask(db, taskId);
+    const task = (await getTask(db, taskId));
     if (!task) return c.json({ error: 'task not found' }, 404);
     const body = await c.req.json().catch(() => ({})) as
       { project_id?: unknown; agent?: unknown; model?: unknown };

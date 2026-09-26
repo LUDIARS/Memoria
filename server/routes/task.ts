@@ -56,7 +56,8 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     return res.json().catch(() => ({}));
   }
 
-  r.get('/api/tasks', (c: Context) => {
+  r.get('/api/tasks', async (c: Context) => {
+    c.header('X-Memoria-Task-Backend', process.env.MEMORIA_TASK_BACKEND ?? 'actio');
     const limit = Math.min(Number(c.req.query('limit') || 100), 200);
     const offset = Math.max(0, Number(c.req.query('offset') || 0));
     const statusQ = c.req.query('status');
@@ -70,11 +71,11 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     const kind = kindQ && (validKinds as readonly string[]).includes(kindQ)
       ? kindQ as typeof validKinds[number]
       : null;
-    return c.json({ items: listTasks(db, { status, kind, limit, offset }) });
+    return c.json({ items: (await listTasks(db, { status, kind, limit, offset })) });
   });
 
-  r.get('/api/tasks/categories', (c: Context) => {
-    const items = listTaskCategories(db);
+  r.get('/api/tasks/categories', async (c: Context) => {
+    const items = (await listTaskCategories(db));
     // サジェスト用に登録済リポを `owner/name` 形式で返す。 登録済カテゴリと
     // 被ったものは items 側にも残り、 datalist 側で union 表示すれば良い。
     const repos = listRepoWatch(db).map((r) => `${r.owner}/${r.name}`);
@@ -85,14 +86,14 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     const body = await c.req.json().catch(() => ({})) as { name?: unknown };
     const name = String(body.name ?? '').trim();
     if (!name) return c.json({ error: 'name required' }, 400);
-    registerTaskCategory(db, name);
-    return c.json({ items: listTaskCategories(db) }, 201);
+    (await registerTaskCategory(db, name));
+    return c.json({ items: (await listTaskCategories(db)) }, 201);
   });
 
-  r.delete('/api/tasks/categories/:name', (c: Context) => {
+  r.delete('/api/tasks/categories/:name', async (c: Context) => {
     const name = decodeURIComponent(c.req.param('name') ?? '');
-    unregisterTaskCategory(db, name);
-    return c.json({ items: listTaskCategories(db) });
+    (await unregisterTaskCategory(db, name));
+    return c.json({ items: (await listTaskCategories(db)) });
   });
 
   r.post('/api/tasks', async (c: Context) => {
@@ -105,7 +106,7 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
       ? body.status as 'todo' | 'doing' | 'done'
       : 'todo';
     const kind: 'task' | 'goal' = body.kind === 'goal' ? 'goal' : 'task';
-    const created = registerTask(db, {
+    const created = (await registerTask(db, {
       title,
       details: String(body.details ?? '').trim(),
       status,
@@ -114,7 +115,7 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
       due_at: typeof body.due_at === 'string' ? body.due_at : null,
       share_actio: !!body.share_actio,
       category: typeof body.category === 'string' ? body.category.trim() : null,
-    });
+    }));
     if (!body._skip_discord_notify) {
       void postTaskToDiscord(db, created).catch(() => {});
     }
@@ -123,7 +124,7 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
 
   r.patch('/api/tasks/:id', async (c: Context) => {
     const id = Number(c.req.param('id'));
-    const before = getTask(db, id);
+    const before = (await getTask(db, id));
     if (!before) return c.json({ error: 'not found' }, 404);
     const body = await c.req.json().catch(() => ({})) as
       { title?: unknown; details?: unknown; status?: unknown; kind?: unknown; due_at?: unknown;
@@ -136,30 +137,34 @@ export function makeTaskRouter(deps: TaskRouterDeps): Hono {
     if (body.due_at === null || typeof body.due_at === 'string') patch.due_at = body.due_at || null;
     if (typeof body.share_actio === 'boolean') patch.share_actio = body.share_actio;
     if (typeof body.category === 'string' || body.category === null) patch.category = body.category;
-    const result = updateTaskWithJournal(db, id, patch);
+    const result = (await updateTaskWithJournal(db, id, patch));
     if (!result) return c.json({ error: 'task disappeared' }, 500);
     return c.json({ task: result.after });
   });
 
-  r.delete('/api/tasks/:id', (c: Context) => {
+  r.delete('/api/tasks/:id', async (c: Context) => {
     const id = Number(c.req.param('id'));
-    if (!getTask(db, id)) return c.json({ error: 'not found' }, 404);
-    deleteTask(db, id);
+    if (!(await getTask(db, id))) return c.json({ error: 'not found' }, 404);
+    (await deleteTask(db, id));
     return c.json({ ok: true });
   });
 
   r.post('/api/tasks/:id/share/actio', async (c: Context) => {
     const id = Number(c.req.param('id'));
-    const task = getTask(db, id);
+    const task = (await getTask(db, id));
     if (!task) return c.json({ error: 'not found' }, 404);
+    if ((process.env.MEMORIA_TASK_BACKEND ?? 'actio') === 'actio') {
+      // Already owned by Actio: old clients must not create a second task.
+      return c.json({ ok: true, already_in_actio: true, task });
+    }
     try {
       const result = await shareTaskToActio(task);
-      updateTask(db, id, {
+      (await updateTask(db, id, {
         share_actio: 1,
         shared_at: new Date().toISOString(),
         shared_origin: privacySettings(db).actio_share_url || 'actio',
-      });
-      return c.json({ ok: true, result, task: getTask(db, id) });
+      }));
+      return c.json({ ok: true, result, task: (await getTask(db, id)) });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       return c.json({ error: msg }, 502);

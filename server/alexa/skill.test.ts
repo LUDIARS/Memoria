@@ -48,9 +48,9 @@ function deps(overrides: Partial<AlexaSkillDeps> = {}): AlexaSkillDeps {
   };
 }
 
-test('CreateTaskIntentからタスクを登録する', () => {
+test('CreateTaskIntentからタスクを登録する', async () => {
   let received: { requestId: string; title: string } | null = null;
-  const response = handleAlexaRequest(envelope({
+  const response = (await handleAlexaRequest(envelope({
     type: 'IntentRequest',
     intent: {
       name: 'CreateTaskIntent',
@@ -61,14 +61,14 @@ test('CreateTaskIntentからタスクを登録する', () => {
       received = input;
       return deps().createTask(input);
     },
-  }));
+  })));
   assert.deepEqual(received, { requestId: 'request-1', title: '牛乳を買う' });
   assert.match(response.response.outputSpeech?.text ?? '', /タスクに追加しました/);
 });
 
-test('空のタスク名は登録せず再入力を促す', () => {
+test('空のタスク名は登録せず再入力を促す', async () => {
   let called = false;
-  const response = handleAlexaRequest(envelope({
+  const response = (await handleAlexaRequest(envelope({
     type: 'IntentRequest',
     intent: { name: 'CreateTaskIntent', slots: {} },
   }), deps({
@@ -76,14 +76,14 @@ test('空のタスク名は登録せず再入力を促す', () => {
       called = true;
       return deps().createTask(input);
     },
-  }));
+  })));
   assert.equal(called, false);
   assert.equal(response.response.shouldEndSession, false);
   assert.ok(response.response.reprompt);
 });
 
-test('LaunchRequestは取得した未読通知を読み上げる', () => {
-  const response = handleAlexaRequest(envelope({ type: 'LaunchRequest' }), deps({
+test('LaunchRequestは取得した未読通知を読み上げる', async () => {
+  const response = (await handleAlexaRequest(envelope({ type: 'LaunchRequest' }), deps({
     takeNotifications: () => ({
       items: [{
         id: 'n1',
@@ -93,18 +93,18 @@ test('LaunchRequestは取得した未読通知を読み上げる', () => {
       }],
       remaining: 2,
     }),
-  }));
+  })));
   const speech = response.response.outputSpeech?.text ?? '';
   assert.match(speech, /雨のお知らせ/);
   assert.match(speech, /残り2件/);
 });
 
-test('購読変更イベントを保存依頼へ変換する', () => {
+test('購読変更イベントを保存依頼へ変換する', async () => {
   let received: Parameters<AlexaSkillDeps['applySubscriptionChange']>[0] | null = null;
-  handleAlexaRequest(envelope({
+  (await handleAlexaRequest(envelope({
     type: 'AlexaSkillEvent.ProactiveSubscriptionChanged',
     body: { subscriptions: [{ eventName: 'AMAZON.MessageAlert.Activated' }] },
-  }), deps({ applySubscriptionChange: (input) => { received = input; } }));
+  }), deps({ applySubscriptionChange: (input) => { received = input; } })));
   assert.deepEqual(received, {
     userId: 'user-1',
     apiEndpoint: 'https://api.fe.amazon.com',

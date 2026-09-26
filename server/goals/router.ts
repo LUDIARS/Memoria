@@ -13,10 +13,10 @@ export function makeGoalEvalRouter(deps: GoalEvalRouterDeps): Hono {
   const { db } = deps;
   const r = new Hono();
 
-  r.get('/api/goal-evals', (c: Context) => {
+  r.get('/api/goal-evals', async (c: Context) => {
     const now = new Date();
     const month = c.req.query('month') ?? formatLocalDate(now).slice(0, 7);
-    const logs = listGoalEvalLogs(db, month);
+    const logs = await listGoalEvalLogs(db, month);
     return c.json(logs);
   });
 

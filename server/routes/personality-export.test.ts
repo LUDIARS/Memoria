@@ -1,3 +1,4 @@
+import '../tasks/test-backend.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb, setAppSettings } from '../db.js';

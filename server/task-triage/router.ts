@@ -41,26 +41,26 @@ export function makeTaskTriageRouter(deps: TaskTriageRouterDeps): Hono {
   r.use('/api/task-triage/*', requireSameMachine);
 
   // 現在の active セッション (無ければ null) + 期限未設定の総数。
-  r.get('/api/task-triage/session', (c: Context) => {
+  r.get('/api/task-triage/session', async (c: Context) => {
     const batchSize = clampBatchSize(c.req.query('batch'));
-    return c.json({ state: getCurrentState(db, batchSize), undated_total: countUndatedTasks(db) });
+    return c.json({ state: (await getCurrentState(db, batchSize)), undated_total: (await countUndatedTasks(db)) });
   });
 
   // 開始 (active があれば再開)。 { restart: true } で集め直す。
   r.post('/api/task-triage/session', async (c: Context) => {
     const body = await c.req.json().catch(() => ({})) as { restart?: unknown; batch?: unknown };
-    const state = startSession(db, { restart: body.restart === true, batchSize: clampBatchSize(body.batch) });
+    const state = (await startSession(db, { restart: body.restart === true, batchSize: clampBatchSize(body.batch) }));
     return c.json({ state });
   });
 
   r.get('/api/task-triage/sessions', (c: Context) => c.json({ items: listTriageSessions(db) }));
 
-  r.get('/api/task-triage/session/:id', (c: Context) => {
+  r.get('/api/task-triage/session/:id', async (c: Context) => {
     const id = parseId(c);
     if (id == null) return c.json({ error: 'invalid id' }, 400);
     const session = getTriageSession(db, id);
     if (!session) return c.json({ error: 'not found' }, 404);
-    return c.json({ state: buildState(db, session, clampBatchSize(c.req.query('batch'))) });
+    return c.json({ state: (await buildState(db, session, clampBatchSize(c.req.query('batch')))) });
   });
 
   // 1 タスクの判断。 { task_id, decision: 'due'|'done'|'keep'|'later', due_at? }
@@ -73,7 +73,7 @@ export function makeTaskTriageRouter(deps: TaskTriageRouterDeps): Hono {
     if (!TRIAGE_DECISION_KINDS.includes(body.decision as TaskTriageDecisionKind)) {
       return c.json({ error: `decision must be one of ${TRIAGE_DECISION_KINDS.join('/')}` }, 400);
     }
-    const result = decideTask(db, id, taskId, body.decision as TaskTriageDecisionKind, body.due_at, clampBatchSize(body.batch));
+    const result = (await decideTask(db, id, taskId, body.decision as TaskTriageDecisionKind, body.due_at, clampBatchSize(body.batch)));
     if (result.ok) return c.json({ ok: true, state: result.state });
     if (result.code === 'not_found') return c.json({ error: result.error }, 404);
     if (result.code === 'not_active' || result.code === 'conflict') return c.json({ error: result.error }, 409);
@@ -88,7 +88,7 @@ export function makeTaskTriageRouter(deps: TaskTriageRouterDeps): Hono {
     if (!session) return c.json({ error: 'not found' }, 404);
     if (session.status !== 'active') return c.json({ error: 'session is finished' }, 409);
     const body = await c.req.json().catch(() => ({})) as { batch?: unknown };
-    const state = buildState(db, session, clampBatchSize(body.batch));
+    const state = (await buildState(db, session, clampBatchSize(body.batch)));
     try {
       const suggestions = await suggest(state.batch);
       return c.json({ suggestions });
@@ -98,10 +98,10 @@ export function makeTaskTriageRouter(deps: TaskTriageRouterDeps): Hono {
     }
   });
 
-  r.post('/api/task-triage/session/:id/finish', (c: Context) => {
+  r.post('/api/task-triage/session/:id/finish', async (c: Context) => {
     const id = parseId(c);
     if (id == null) return c.json({ error: 'invalid id' }, 400);
-    const state = finishSession(db, id);
+    const state = (await finishSession(db, id));
     if (!state) return c.json({ error: 'not found' }, 404);
     return c.json({ ok: true, state });
   });

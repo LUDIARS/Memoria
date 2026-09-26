@@ -25,7 +25,7 @@ export async function fireTrigger(
   trigger: NotifyTrigger,
   opts: { postWhenEmpty?: boolean } = {},
 ): Promise<FireResult> {
-  const tasks = selectTasks(db, trigger.filter);
+  const tasks = (await selectTasks(db, trigger.filter));
   if (!tasks.length && !opts.postWhenEmpty) return { posted: false, count: 0 };
   const card = formatTaskListCard(trigger.name, tasks);
   await postToChannel(client, db, trigger.channel, card);

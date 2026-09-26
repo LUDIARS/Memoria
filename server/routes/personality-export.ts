@@ -78,7 +78,7 @@ export function makePersonalityExportRouter(deps: PersonalityExportRouterDeps): 
 
   // ── Voluptas向け公開口 (Bearerトークン検証。存在を匂わせないため失敗は一律404) ──
 
-  r.get('/api/external/personality-features', (c: Context) => {
+  r.get('/api/external/personality-features', async (c: Context) => {
     const priv = privacySettings(db);
     if (!priv.external_share_voluptas_personality_enabled) {
       return c.json({ error: 'not found' }, 404);
@@ -90,7 +90,7 @@ export function makePersonalityExportRouter(deps: PersonalityExportRouterDeps): 
     }
 
     const now = new Date();
-    const inputs = gatherPersonalityFeatureInputs(db, now);
+    const inputs = (await gatherPersonalityFeatureInputs(db, now));
     const features = computePersonalityFeatures(inputs, {
       sampleWindowDays: PERSONALITY_SAMPLE_WINDOW_DAYS,
       now: () => now,

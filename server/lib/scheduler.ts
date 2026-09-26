@@ -193,8 +193,8 @@ function startTaskReminderInterval(deps: SchedulerDeps): void {
       if (appS['tasks.reminder.last_sent_date'] === today) return;
 
       const tasks = [
-        ...listTasks(deps.db, { status: 'todo', limit: 20 }),
-        ...listTasks(deps.db, { status: 'doing', limit: 20 }),
+        ...(await listTasks(deps.db, { status: 'todo', limit: 20 })),
+        ...(await listTasks(deps.db, { status: 'doing', limit: 20 })),
       ];
       if (!tasks.length) {
         setAppSettings(deps.db, { 'tasks.reminder.last_sent_date': today });

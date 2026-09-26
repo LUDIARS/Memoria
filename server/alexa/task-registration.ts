@@ -14,29 +14,27 @@ export interface AlexaTaskRegistrationResult {
   created: boolean;
 }
 
-export function registerAlexaTask(
+export async function registerAlexaTask(
   db: Db,
   input: { requestId: string; title: string },
   now: Date = new Date(),
-): AlexaTaskRegistrationResult {
-  const transaction = db.transaction((): AlexaTaskRegistrationResult => {
-    const existingTaskId = findProcessedAlexaTaskId(db, input.requestId);
-    if (existingTaskId !== null) {
-      const existing = getTask(db, existingTaskId);
-      if (existing) return { task: existing, created: false };
-    }
+): Promise<AlexaTaskRegistrationResult> {
+  const existingTaskId = findProcessedAlexaTaskId(db, input.requestId);
+  if (existingTaskId !== null) {
+    const existing = (await getTask(db, existingTaskId));
+    if (existing) return { task: existing, created: false };
+  }
 
-    const task = registerTask(db, {
-      title: input.title,
-      details: '',
-      status: 'todo',
-      kind: 'task',
-      creator_type: 'human',
-      due_at: null,
-      category: null,
-    }, now);
-    rememberProcessedAlexaTask(db, input.requestId, task.id, now);
-    return { task, created: true };
-  });
-  return transaction();
+  const task = (await registerTask(db, {
+    source_ref: `alexa:${input.requestId}`,
+    title: input.title,
+    details: '',
+    status: 'todo',
+    kind: 'task',
+    creator_type: 'human',
+    due_at: null,
+    category: null,
+  }, now));
+  rememberProcessedAlexaTask(db, input.requestId, task.id, now);
+  return { task, created: true };
 }

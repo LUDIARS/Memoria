@@ -1,3 +1,4 @@
+import { listTasks } from '../tasks/store.js';
 import type BetterSqlite3 from 'better-sqlite3';
 
 type Db = BetterSqlite3.Database;
@@ -24,13 +25,14 @@ export function upsertGoalEvalLog(
   `).run(goalId, date, status);
 }
 
-export function listGoalEvalLogs(db: Db, month: string): GoalEvalLog[] {
-  return db.prepare(`
+export async function listGoalEvalLogs(db: Db, month: string): Promise<GoalEvalLog[]> {
+  const goals = new Map((await listTasks(db, { kind: 'all', limit: Number.MAX_SAFE_INTEGER })).map(task => [task.id, task.title]));
+  const logs = db.prepare(`
     SELECT g.id, g.goal_id, g.date, g.status, g.evaluated_at,
-           t.title AS goal_title
+           NULL AS goal_title
     FROM goal_eval_logs g
-    LEFT JOIN tasks t ON t.id = g.goal_id
     WHERE g.date LIKE ?
     ORDER BY g.goal_id, g.date
   `).all(`${month}%`) as GoalEvalLog[];
+  return logs.map(log => ({ ...log, goal_title: goals.get(log.goal_id) ?? null }));
 }

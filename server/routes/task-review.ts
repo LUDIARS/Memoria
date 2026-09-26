@@ -40,10 +40,10 @@ export function makeTaskReviewRouter(deps: TaskReviewRouterDeps): Hono {
   });
 
   // 適用 (圧縮)。 実行直前に存在/変更ガードを通し、 conflict なら 409。
-  r.post('/api/task-reviews/:id/apply', (c: Context) => {
+  r.post('/api/task-reviews/:id/apply', async (c: Context) => {
     const id = Number(c.req.param('id'));
     if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
-    const result = applyTaskReview(db, id);
+    const result = (await applyTaskReview(db, id));
     if (result.ok) return c.json({ ok: true, review: result.review });
     if (result.code === 'not_found') return c.json({ error: result.error }, 404);
     if (result.code === 'conflict') return c.json({ error: result.error, conflicts: result.conflicts }, 409);

@@ -33,7 +33,7 @@ interface CollectedWeek {
 }
 
 /** 週次データを集めて LLM プロンプトと件数サマリを作る。 */
-function collectWeek(db: Db, dateStr: string): CollectedWeek {
+async function collectWeek(db: Db, dateStr: string): Promise<CollectedWeek> {
   const start = dateNDaysAgo(dateStr, WINDOW_DAYS - 1);
   const end = dateStr;
 
@@ -41,8 +41,8 @@ function collectWeek(db: Db, dateStr: string): CollectedWeek {
   const commits = recGitCommits(db, WINDOW_DAYS, 80);
   const rec = getLatestRecommendationRun(db, 'done');
   const tasks = [
-    ...listTasks(db, { status: 'todo', limit: 30 }),
-    ...listTasks(db, { status: 'doing', limit: 30 }),
+    ...(await listTasks(db, { status: 'todo', limit: 30 })),
+    ...(await listTasks(db, { status: 'doing', limit: 30 })),
   ];
   const rssDigest = getLatestDigest(db);
 
@@ -107,7 +107,7 @@ function collectWeek(db: Db, dateStr: string): CollectedWeek {
 
 /** AIアドバイスを生成して ai_advice に保存する。 戻り値は保存した最新行。 */
 export async function runAdvice(db: Db, dateStr: string): Promise<AiAdvice | null> {
-  const { prompt, summary } = collectWeek(db, dateStr);
+  const { prompt, summary } = (await collectWeek(db, dateStr));
   const body = (await runLlm({ task: 'ai_advice', prompt })).trim();
   insertAiAdvice(db, {
     for_date: dateStr,

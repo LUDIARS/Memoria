@@ -40,10 +40,10 @@ export function matchDeadline(task: TaskRow, deadline: NotifyFilter['deadline'],
 }
 
 /** filter に合致するアクティブ (todo/doing) タスクを返す。 */
-export function selectTasks(db: Db, filter: NotifyFilter, now: Date = new Date()): TaskRow[] {
+export async function selectTasks(db: Db, filter: NotifyFilter, now: Date = new Date()): Promise<TaskRow[]> {
   const active = [
-    ...listTasks(db, { status: 'todo', kind: 'task', limit: 500 }),
-    ...listTasks(db, { status: 'doing', kind: 'task', limit: 500 }),
+    ...(await listTasks(db, { status: 'todo', kind: 'task', limit: 500 })),
+    ...(await listTasks(db, { status: 'doing', kind: 'task', limit: 500 })),
   ];
   return active
     .filter((t) => matchCategory(t, filter.categories) && matchDeadline(t, filter.deadline, now))

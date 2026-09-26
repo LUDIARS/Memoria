@@ -141,7 +141,7 @@ export async function runTaskReview(
 ): Promise<RunTaskReviewResult> {
   const scope: TaskReviewScope = opts.scope ?? 'overdue';
   const now = opts.now ?? new Date();
-  const tasks = selectReviewTasks(listTasks(db, { kind: 'task', limit: FETCH_LIMIT }), scope, now);
+  const tasks = selectReviewTasks((await listTasks(db, { kind: 'task', limit: FETCH_LIMIT })), scope, now);
   if (tasks.length < 2) {
     // 整理対象がほぼ無い。 pending を一掃するだけ (古い提案を残さない)。
     deletePendingTaskReviews(db);

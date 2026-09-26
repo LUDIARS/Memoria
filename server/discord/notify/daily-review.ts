@@ -92,10 +92,10 @@ function saveCompletedState(db: Db, today: string, channelKind: string, channelI
   });
 }
 
-function activeTasks(db: Db): TaskRow[] {
+async function activeTasks(db: Db): Promise<TaskRow[]> {
   return [
-    ...listTasks(db, { status: 'todo', kind: 'task', limit: 500 }),
-    ...listTasks(db, { status: 'doing', kind: 'task', limit: 500 }),
+    ...(await listTasks(db, { status: 'todo', kind: 'task', limit: 500 })),
+    ...(await listTasks(db, { status: 'doing', kind: 'task', limit: 500 })),
   ];
 }
 
@@ -119,8 +119,8 @@ export function selectOverdueReviewItems(tasks: TaskRow[], filter: NotifyFilter,
   return items;
 }
 
-function selectReviewItems(db: Db, filter: NotifyFilter, now: Date): ReviewItem[] {
-  return selectOverdueReviewItems(activeTasks(db), filter, now);
+async function selectReviewItems(db: Db, filter: NotifyFilter, now: Date): Promise<ReviewItem[]> {
+  return selectOverdueReviewItems((await activeTasks(db)), filter, now);
 }
 
 function localDueAt(daysFromToday: number, now: Date = new Date()): string {
@@ -184,7 +184,7 @@ async function postNext(client: Client, db: Db, state: ReviewState): Promise<voi
     return;
   }
 
-  const task = getTask(db, next.taskId);
+  const task = (await getTask(db, next.taskId));
   if (!task || task.status === 'done') {
     state.done += 1;
     saveState(db, state);
@@ -220,7 +220,7 @@ export async function startDailyTaskReview(
     return { started: false, count: current.pending.length + (current.current ? 1 : 0), reason: 'already_running' };
   }
 
-  const pending = selectReviewItems(db, filter, now);
+  const pending = (await selectReviewItems(db, filter, now));
   if (!pending.length) {
     saveCompletedState(db, today, channelKind, opts.channelId ?? null);
     return { started: false, count: 0, reason: 'empty' };
@@ -247,7 +247,7 @@ export async function startDailyTaskReview(
 }
 
 export function registerDailyTaskReviewInteractions(client: Client, db: Db): void {
-  client.on('interactionCreate', (interaction) => {
+  client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
     if (!interaction.customId.startsWith(CUSTOM_ID_PREFIX)) return;
 
@@ -257,7 +257,7 @@ export function registerDailyTaskReviewInteractions(client: Client, db: Db): voi
       return;
     }
 
-    void handleReviewInteraction(client, db, interaction);
+    void (await handleReviewInteraction(client, db, interaction));
   });
 }
 
@@ -272,13 +272,13 @@ async function handleReviewInteraction(client: Client, db: Db, interaction: Butt
     return;
   }
 
-  const task = getTask(db, taskId);
+  const task = (await getTask(db, taskId));
   if (task) {
     if (choice === 'done') {
-      updateTask(db, taskId, { status: 'done' });
+      (await updateTask(db, taskId, { status: 'done' }));
     } else {
       const dueAt = dueAtForChoice(choice);
-      if (typeof dueAt === 'string') updateTask(db, taskId, { due_at: dueAt });
+      if (typeof dueAt === 'string') (await updateTask(db, taskId, { due_at: dueAt }));
     }
   }
 

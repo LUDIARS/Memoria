@@ -10,11 +10,11 @@ type Db = BetterSqlite3.Database;
 const PREVIEW = 5;
 const HEADING = '📋 今日のタスク';
 
-export function buildTasksBlock(db: Db): SectionBlock {
+export async function buildTasksBlock(db: Db): Promise<SectionBlock> {
   try {
     const tasks = [
-      ...listTasks(db, { status: 'todo', limit: 20 }),
-      ...listTasks(db, { status: 'doing', limit: 20 }),
+      ...(await listTasks(db, { status: 'todo', limit: 20 })),
+      ...(await listTasks(db, { status: 'doing', limit: 20 })),
     ];
     if (!tasks.length) {
       return { key: 'tasks', heading: HEADING, lines: ['✅ 未完了のタスクはありません'] };

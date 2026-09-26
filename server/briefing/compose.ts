@@ -53,7 +53,7 @@ export async function buildBriefing(db: Db, cfg: BriefingConfig): Promise<Briefi
   }
 
   if (cfg.sections.tasks) {
-    tasks.push(Promise.resolve(buildTasksBlock(db)));
+    tasks.push(Promise.resolve((await buildTasksBlock(db))));
   }
 
   if (cfg.sections.disaster) {

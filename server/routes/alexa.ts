@@ -73,13 +73,13 @@ export function makeAlexaRouter(deps: AlexaRouterDeps): Hono {
     }
 
     try {
-      const response = handleAlexaRequest(parsed.data, {
-        createTask: (input) => registerAlexaTask(deps.db, input),
+      const response = (await handleAlexaRequest(parsed.data, {
+        createTask: async (input) => (await registerAlexaTask(deps.db, input)),
         takeNotifications: (limit) => takeAlexaNotifications(deps.db, limit),
         applySubscriptionChange: (input) => {
           applyAlexaSubscriptionChange(deps.db, input);
         },
-      });
+      }));
       return context.json(response);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);

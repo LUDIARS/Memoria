@@ -1,14 +1,15 @@
+import '../tasks/test-backend.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../db.js';
 import { registerAlexaTask } from './task-registration.js';
 
-test('同じAlexa requestIdの再送でタスクを重複登録しない', () => {
+test('同じAlexa requestIdの再送でタスクを重複登録しない', async () => {
   const db = openDb(':memory:');
   try {
     const now = new Date('2026-07-10T10:00:00.000Z');
-    const first = registerAlexaTask(db, { requestId: 'request-1', title: '牛乳を買う' }, now);
-    const second = registerAlexaTask(db, { requestId: 'request-1', title: '牛乳を買う' }, now);
+    const first = (await registerAlexaTask(db, { requestId: 'request-1', title: '牛乳を買う' }, now));
+    const second = (await registerAlexaTask(db, { requestId: 'request-1', title: '牛乳を買う' }, now));
     assert.equal(first.created, true);
     assert.equal(second.created, false);
     assert.equal(second.task.id, first.task.id);

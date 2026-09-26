@@ -39,14 +39,14 @@ export type ApplyTaskReviewResult =
   | { ok: false; code: 'conflict'; error: string; conflicts: SnapshotConflict[] };
 
 /** review 1 件を適用する。 圧縮前に必ず存在/変更ガードを通す。 */
-export function applyTaskReview(db: Db, id: number): ApplyTaskReviewResult {
+export async function applyTaskReview(db: Db, id: number): Promise<ApplyTaskReviewResult> {
   const review = getTaskReview(db, id);
   if (!review) return { ok: false, code: 'not_found', error: 'review not found' };
   if (review.status !== 'pending') return { ok: false, code: 'not_pending', error: `review is ${review.status}` };
 
   // 対象タスクの現状を取得 (snapshot に載る id すべて)。
   const current = new Map<number, TaskRow | undefined>();
-  for (const snap of review.snapshot) current.set(snap.id, getTask(db, snap.id));
+  for (const snap of review.snapshot) current.set(snap.id, (await getTask(db, snap.id)));
 
   const conflicts = detectSnapshotConflicts(review.snapshot, current);
   if (conflicts.length) {
@@ -63,11 +63,11 @@ export function applyTaskReview(db: Db, id: number): ApplyTaskReviewResult {
     // 代表タスクの details 末尾に統合元を追記する (履歴を残す)。
     const mergedLines = others.map((tid) => `統合: #${tid} ${current.get(tid)?.title ?? ''}`.trim());
     const newDetails = [primary.details?.trim() || '', ...mergedLines].filter(Boolean).join('\n');
-    updateTask(db, primaryId, { details: newDetails });
-    for (const tid of others) updateTask(db, tid, { status: 'done' });
+    (await updateTask(db, primaryId, { details: newDetails }));
+    for (const tid of others) (await updateTask(db, tid, { status: 'done' }));
   } else {
     // completed: 対象を done に。
-    for (const tid of review.task_ids) updateTask(db, tid, { status: 'done' });
+    for (const tid of review.task_ids) (await updateTask(db, tid, { status: 'done' }));
   }
 
   setTaskReviewStatus(db, id, 'applied', new Date().toISOString());

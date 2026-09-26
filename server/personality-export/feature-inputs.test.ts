@@ -1,9 +1,10 @@
+import '../tasks/test-backend.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { insertTask, openDb, recordActivityEvent, upsertDiary } from '../db.js';
 import { gatherPersonalityFeatureInputs } from './feature-inputs.js';
 
-test('gatherPersonalityFeatureInputs uses local diary keys and excludes future records', () => {
+test('gatherPersonalityFeatureInputs uses local diary keys and excludes future records', async () => {
   const previousTimezone = process.env.TZ;
   process.env.TZ = 'Asia/Tokyo';
   const db = openDb(':memory:');
@@ -15,10 +16,10 @@ test('gatherPersonalityFeatureInputs uses local diary keys and excludes future r
     upsertDiary(db, { date: '2026-07-20', workMinutes: 120 });
     upsertDiary(db, { date: '2026-07-21', workMinutes: 150 });
 
-    const pastTaskId = insertTask(db, { title: 'past task' });
+    const pastTaskId = (await insertTask(db, { title: 'past task' }));
     db.prepare('UPDATE tasks SET created_at = ? WHERE id = ?')
       .run('2026-07-19T14:30:00.000Z', pastTaskId);
-    const futureTaskId = insertTask(db, { title: 'future task' });
+    const futureTaskId = (await insertTask(db, { title: 'future task' }));
     db.prepare('UPDATE tasks SET created_at = ? WHERE id = ?')
       .run('2026-07-19T16:30:00.000Z', futureTaskId);
 
@@ -33,7 +34,7 @@ test('gatherPersonalityFeatureInputs uses local diary keys and excludes future r
       ref_id: 'future',
     });
 
-    const result = gatherPersonalityFeatureInputs(db, now);
+    const result = (await gatherPersonalityFeatureInputs(db, now));
 
     assert.deepEqual(result.diaries.map((diary) => diary.date), ['2026-04-21', '2026-07-20']);
     assert.deepEqual(result.tasks.map((task) => task.created_at), ['2026-07-19T14:30:00.000Z']);

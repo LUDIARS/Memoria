@@ -36,22 +36,22 @@ function appendTaskDiaryLog(db: Db, line: string, now: Date): void {
 }
 
 /** UI/API の経路に依存せず、タスク更新とその監査上の副作用を一体で適用する。 */
-export function updateTaskWithJournal(
+export async function updateTaskWithJournal(
   db: Db,
   id: number,
   inputPatch: Record<string, unknown>,
   now: Date = new Date(),
-): TaskMutationResult | null {
-  const before = getTask(db, id);
+): Promise<TaskMutationResult | null> {
+  const before = (await getTask(db, id));
   if (!before) return null;
 
   const patch = { ...inputPatch };
   if (before.creator_type === 'ai' && Object.hasOwn(patch, 'due_at') && patch.due_at !== before.due_at) {
     patch.creator_type = 'human';
   }
-  updateTask(db, id, patch);
+  (await updateTask(db, id, patch));
 
-  const after = getTask(db, id);
+  const after = (await getTask(db, id));
   if (!after) throw new Error('task disappeared after update');
   const isGoal = after.kind === 'goal';
   const noun = isGoal ? '目標' : 'タスク';

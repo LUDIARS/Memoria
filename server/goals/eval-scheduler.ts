@@ -6,7 +6,7 @@ import { upsertGoalEvalLog } from './eval-db.js';
 type Db = BetterSqlite3.Database;
 
 export function startGoalEvalScheduler(db: Db): void {
-  const tick = () => {
+  const tick = async () => {
     try {
       const now = new Date();
       if (now.getHours() !== 7 || now.getMinutes() !== 0) return;
@@ -15,7 +15,7 @@ export function startGoalEvalScheduler(db: Db): void {
       const appS = getAppSettings(db);
       if (appS['goals.eval.last_date'] === today) return;
 
-      const goals = listTasks(db, { kind: 'goal', limit: 200 });
+      const goals = (await listTasks(db, { kind: 'goal', limit: 200 }));
       for (const goal of goals) {
         upsertGoalEvalLog(db, { goalId: goal.id, date: today, status: goal.status });
       }
@@ -26,5 +26,5 @@ export function startGoalEvalScheduler(db: Db): void {
     }
   };
 
-  setInterval(() => { tick(); }, 60_000).unref?.();
+  setInterval(() => { void tick(); }, 60_000).unref?.();
 }

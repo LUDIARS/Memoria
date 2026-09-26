@@ -23,15 +23,15 @@ function isWithinWindow(timestamp: string, startMs: number, endMs: number): bool
   return Number.isFinite(valueMs) && valueMs >= startMs && valueMs <= endMs;
 }
 
-export function gatherPersonalityFeatureInputs(
+export async function gatherPersonalityFeatureInputs(
   db: Db,
   now: Date,
-): { tasks: TaskFeatureInput[]; diaries: DiaryFeatureInput[]; activities: ActivityFeatureInput[] } {
+): Promise<{ tasks: TaskFeatureInput[]; diaries: DiaryFeatureInput[]; activities: ActivityFeatureInput[] }> {
   const endMs = now.getTime();
   const startMs = endMs - PERSONALITY_SAMPLE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const start = new Date(startMs);
 
-  const tasks: TaskFeatureInput[] = listTasks(db, { kind: 'all', limit: MAX_TASK_SAMPLE })
+  const tasks: TaskFeatureInput[] = (await listTasks(db, { kind: 'all', limit: MAX_TASK_SAMPLE }))
     .filter((task) => isWithinWindow(task.created_at, startMs, endMs))
     .map((task) => ({
       status: task.status,
