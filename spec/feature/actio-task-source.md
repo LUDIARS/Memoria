@@ -38,3 +38,8 @@ archive; completed tasks, goals, dates and category registrations survive migrat
 Goal evaluation titles and newly generated Clever Search reports also read Actio.
 Saved search reports remain historical snapshots; the refresh action rebuilds them
 from current task content and excludes the old task index from results.
+
+Task listing uses the ordinary Actio list API without personal SQL sorting.
+Memoria sorts the returned snapshot by status, deadline (undated last), original
+creation descending and numeric ID before pagination. This avoids the upstream
+PostgreSQL timestamp/bigint COALESCE error without reading archived task content.

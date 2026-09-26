@@ -31,6 +31,7 @@ test('Actio owns content; imported IDs survive and native tasks cannot collide',
       const imported = row('imported', { title: remoteTitle, pluginId: 'memoria', pluginRef: 'memoria:42', pluginPayload: { memoria: { created_at: '2020-01-01T00:00:00Z' } } });
       if (url.pathname === '/api/tasks/imported') return json({ task: imported });
       assert.equal(url.searchParams.get('scope'), 'owned');
+      assert.equal(url.searchParams.has('sort'), false);
       return json({ tasks: [row('native'), imported] });
     };
     const tasks = await listTasks(db, { kind: 'all', limit: 200 });
@@ -65,6 +66,34 @@ test('Actio failures are visible and never insert into the archive', async () =>
     assert.deepEqual(db.prepare('SELECT * FROM tasks').all(), []);
     delete process.env.ACTIO_URL;
     await assert.rejects(() => listTasks(db), /ACTIO_URL is required/);
+  } finally {
+    globalThis.fetch = fetchBefore;
+    if (urlBefore === undefined) delete process.env.ACTIO_URL; else process.env.ACTIO_URL = urlBefore;
+    db.close();
+  }
+});
+
+test('Memoria sorts status, deadline and original creation before pagination', async () => {
+  const db = new Database(':memory:');
+  const fetchBefore = globalThis.fetch;
+  const urlBefore = process.env.ACTIO_URL;
+  process.env.ACTIO_URL = 'http://actio.test';
+  try {
+    globalThis.fetch = async input => {
+      assert.equal(new URL(String(input)).searchParams.has('sort'), false);
+      return json({ tasks: [
+        row('done', { title: 'done', status: 'done' }),
+        row('undated', { title: 'undated' }),
+        row('later', { title: 'later', deadline: '2026-10-02' }),
+        row('early-old', { title: 'early-old', deadline: '2026-10-01', createdAt: '2020-01-01' }),
+        row('doing', { title: 'doing', status: 'in_progress', deadline: '2026-09-01' }),
+        row('early-new', { title: 'early-new', deadline: '2026-10-01' }),
+      ] });
+    };
+    assert.deepEqual((await listTasks(db)).map(t => t.title),
+      ['early-new', 'early-old', 'later', 'undated', 'doing', 'done']);
+    assert.deepEqual((await listTasks(db, { offset: 1, limit: 2 })).map(t => t.title),
+      ['early-old', 'later']);
   } finally {
     globalThis.fetch = fetchBefore;
     if (urlBefore === undefined) delete process.env.ACTIO_URL; else process.env.ACTIO_URL = urlBefore;

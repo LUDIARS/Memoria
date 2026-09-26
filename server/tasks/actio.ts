@@ -31,7 +31,7 @@ function toTask(db: Db, task: ActioTask): TaskRow {
 }
 
 export async function listTasks(db: Db, options: ListTasksOptions = {}): Promise<TaskRow[]> {
-  const query = new URLSearchParams({ kind: options.kind ?? 'task', scope: 'owned', sort: 'personal' });
+  const query = new URLSearchParams({ kind: options.kind ?? 'task', scope: 'owned' });
   if (options.status) query.set('status', options.status);
   const result = await requestActio<{ tasks: ActioTask[] }>(`/api/tasks?${query}`);
   if (!Array.isArray(result.tasks)) throw new Error('Invalid Actio task list response');
@@ -39,7 +39,15 @@ export async function listTasks(db: Db, options: ListTasksOptions = {}): Promise
   for (const task of result.tasks) {
     if (task.pluginId === 'memoria' && /^memoria:\d+$/.test(task.pluginRef ?? '')) toTask(db, task);
   }
-  const rows = result.tasks.map(task => toTask(db, task));
+  // Actio's personal SQL sort is not portable to PostgreSQL timestamps.
+  // Preserve Memoria order here before applying offset/limit.
+  const rank = { todo: 0, doing: 1, done: 2 };
+  const rows = result.tasks.map(task => toTask(db, task)).sort((a, b) =>
+    rank[a.status] - rank[b.status]
+    || (a.due_at ?? '9999-12-31').localeCompare(b.due_at ?? '9999-12-31')
+    || b.created_at.localeCompare(a.created_at)
+    || a.id - b.id);
+
   const offset = Math.max(0, options.offset ?? 0);
   return rows.slice(offset, offset + Math.max(0, options.limit ?? 100));
 }

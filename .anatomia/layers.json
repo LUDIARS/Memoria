@@ -52,6 +52,7 @@
     { "glob": "server/plugins/memoria-plugin/plugins/furusato-nozei/*", "layer": "domain-logic" },
     { "glob": "server/plugins/memoria-plugin/plugins/furusato-nozei/jobs/*", "layer": "domain-logic" },
 
+    { "glob": "server/tasks/*", "layer": "infrastructure" },
     { "glob": "server/db/*", "layer": "infrastructure" },
     { "glob": "server/db/types/*", "layer": "infrastructure" },
     { "glob": "server/lib/*", "layer": "infrastructure" },
