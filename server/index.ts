@@ -59,6 +59,7 @@ import { makePushRouter } from './routes/push.js';
 import { makeNotificationsRouter } from './routes/notifications.js';
 import { makePluginsRouter } from './routes/plugins.js';
 import { mountUserApps } from './plugins/host.js';
+import { registerPluginShutdown } from './plugins/shutdown.js';
 import { makeTabulaRouter } from './tabula/routes.js';
 import {ErrorLogStore} from './error-log/store.js';
 import {captureHttpErrors,errorLogRouter} from './error-log/router.js';
@@ -434,8 +435,7 @@ wss.on('connection', (sock) => {
 // MCP autostart sync (privacy.mcp_autostart_enabled に従う)
 mcp.sync(privacySettings(db).mcp_autostart_enabled);
 process.on('exit', () => { railStatus.stop(); mcp.stop(); });
-process.on('SIGINT', () => { railStatus.stop(); mcp.stop(); process.exit(0); });
-process.on('SIGTERM', () => { railStatus.stop(); mcp.stop(); process.exit(0); });
+registerPluginShutdown(userApps.registry, () => { railStatus.stop(); mcp.stop(); });
 
 // keep-alive: 30s ごとに ping。 Cloudflare の idle timeout (100s 程度) を超えない。
 setInterval(() => {

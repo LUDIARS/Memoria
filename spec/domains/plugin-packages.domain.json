@@ -1,0 +1,11 @@
+{
+  "name": "plugin-packages",
+  "description": "Downloadable user-app catalog UI and protected local package/lifecycle integration.",
+  "specRefs": ["spec/feature/plugin-packages.md"],
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    { "pathPattern": "(^|/)server/plugins/(host|catalog-config|package-router|shutdown)(\\.test)?\\.ts$" },
+    { "pathPattern": "(^|/)server/public/src/(plugin-packages-view|userapps-view)\\.ts$" }
+  ]
+}

@@ -17,7 +17,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Hono } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
-import { loadPlugins } from './memoria-plugin/host/loader.js';
+import { discoverPlugins, installedSource } from './memoria-plugin/host/discovery.js';
+import { PackageStore } from './memoria-plugin/src/packages/storage.js';
+import { PluginPackages } from './memoria-plugin/host/package-service.js';
+import { pluginCatalogSource } from './catalog-config.js';
+import { makePluginPackageRouter } from './package-router.js';
 import { mountPlugins, type PluginRegistry } from './memoria-plugin/host/registry.js';
 import type { PluginManifestEntry } from './memoria-plugin/host/types.js';
 import { ensureFrameworkTables, createCapabilityProviders } from './framework-store.js';
@@ -55,12 +59,23 @@ export async function mountUserApps(
   const { db, dataDir } = opts;
   ensureFrameworkTables(db);
   // 同梱 (低優先) → 個人ローカル (高優先) の順。 同 id は個人が上書き。
-  const loaded = await loadPlugins([BUNDLED_PLUGINS_DIR, LOCAL_PLUGINS_DIR]);
+  const store = new PackageStore(join(dataDir, 'plugin-packages'), { id: 'memoria', version: '1.0.0' });
+  const diagnostic = (message: string): void => { process.emitWarning(message, { code: 'MEMORIA_PLUGIN' }); };
+  const log = { info: diagnostic, warn: diagnostic, error: diagnostic };
+  const bundled = await discoverPlugins([BUNDLED_PLUGINS_DIR], log);
+  const installed = (await store.active()).map(installedSource);
+  const local = await discoverPlugins([LOCAL_PLUGINS_DIR], log);
+  const loaded = [...new Map([...bundled, ...installed, ...local].map((source) => [source.metadata.id, source])).values()];
   // publicBaseUrl 省略 → manifest url は /plugins/<id> の相対 (同一オリジン iframe 用)。
   const { manifest, registry } = await mountPlugins(app, loaded, {
     dataDir: join(dataDir, 'plugins'),
     sqlite: db,
     capabilities: createCapabilityProviders(db),
+    log: diagnostic,
   });
+  const source = pluginCatalogSource();
+  const packages = new PluginPackages(store, registry, source, new Set(local.map((item) => item.metadata.id)));
+  app.route('/', makePluginPackageRouter({ packages, store, configured: source !== undefined,
+    sourceOrigin: source ? new URL(source.url).origin : undefined }));
   return { manifest, registry };
 }

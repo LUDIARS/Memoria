@@ -8,7 +8,9 @@
 // 各プラグインには稼働状態 (ready / needs-setup / error) のバッジと、 単体ホットリロード
 // ボタンを添える。 選択中プラグインの「傾向 (trend)」 系列があれば簡易グラフを描く。
 
-type PluginStatus = 'ready' | 'needs-setup' | 'error';
+import { mountPluginPackages } from './plugin-packages-view.js';
+
+type PluginStatus = 'inactive' | 'ready' | 'needs-setup' | 'error';
 
 interface PluginEntry {
   id: string;
@@ -51,6 +53,7 @@ function esc(s: string): string {
 }
 
 const STATUS_BADGE: Record<PluginStatus, string> = {
+  inactive: '<span class="userapps-badge">利用時に起動</span>',
   ready: '',
   'needs-setup': '<span class="userapps-badge warn" title="要セットアップ">⚠ 要設定</span>',
   error: '<span class="userapps-badge err" title="初期化エラー">✖ エラー</span>',
@@ -61,11 +64,11 @@ function renderList(plugins: PluginEntry[]): string {
     return '<div class="muted userapps-empty">登録プラグインがありません。</div>';
   }
   return `<ul class="userapps-list">${plugins
-    .map((p, i) => {
+    .map((p) => {
       const badge = STATUS_BADGE[p.status] ?? '';
       const reason = p.statusReason ? `<small class="userapps-reason">${esc(p.statusReason)}</small>` : '';
       return `<li>
-        <button type="button" class="userapps-item${i === 0 ? ' active' : ''}" data-url="${esc(p.url)}" data-id="${esc(p.id)}">
+        <button type="button" class="userapps-item" data-url="${esc(p.url)}" data-id="${esc(p.id)}">
           <span class="userapps-icon">${esc(p.icon)}</span>
           <span class="userapps-meta"><b>${esc(p.name)} ${badge}</b><small>${esc(p.description)}</small>${reason}</span>
         </button>
@@ -185,9 +188,7 @@ function wireList(): void {
       }
     });
   });
-  // 初期表示: 先頭プラグインを開く。
-  const first = document.querySelector('.userapps-item') as HTMLElement | null;
-  if (first) selectPlugin(first, frame);
+  // Listing installed apps does not connect integrations; the user explicitly selects an app.
 }
 
 export async function loadUserApps(): Promise<void> {
@@ -209,14 +210,18 @@ export async function loadUserApps(): Promise<void> {
       <span>アプリ</span>
     </button>
     ${errBanner}
+    <div id="userappsPackages"></div>
     <div id="userappsMenuOverlay" class="userapps-menu-overlay" aria-hidden="true"></div>
     <div class="userapps-layout">
       <aside id="userappsSidebar" class="userapps-sidebar">${renderList(data.plugins)}</aside>
       <div class="userapps-content">
+        <p class="muted">利用するアプリを選んでください。選択したアプリだけ起動します。</p>
         <iframe id="userappsFrame" class="userapps-frame" title="ユーザーアプリ"></iframe>
         <div id="userappsTrends" class="userapps-trends-panel"></div>
       </div>
     </div>`;
 
   wireList();
+  const packages = document.getElementById('userappsPackages');
+  if (packages) mountPluginPackages(packages, loadUserApps);
 }
