@@ -4,6 +4,24 @@ import {Hono} from 'hono';
 import {tabulaConnection,tabulaHeaders} from './connection.js';
 import {localTabulaAccess} from './local-access.js';
 
+test('local browser and import responses retain absolute URL compatibility over Access',async()=>{
+  const previous=process.env.MEMORIA_TABULA_MODE;process.env.MEMORIA_TABULA_MODE='local';
+  try {
+    const app=new Hono();app.use('*',localTabulaAccess);
+    app.get('/api/tabula',c=>c.json({url:'/tabula/#workspace=local',mode:'local'}));
+    app.post('/api/ai/articles/1/transcribe',c=>c.json({url:'/tabula/#workspace=local&page=note-1',note:{id:'note-1'}},201));
+    const env={incoming:{socket:{remoteAddress:'127.0.0.1'}}};
+    const headers={origin:'https://memoria.ai-run-do.com','x-forwarded-proto':'https'};
+    const config=await app.request('http://memoria.ai-run-do.com/api/tabula',{headers},env);
+    assert.equal((await config.json() as {url:string}).url,'https://memoria.ai-run-do.com/tabula/#workspace=local');
+    const imported=await app.request('http://memoria.ai-run-do.com/api/ai/articles/1/transcribe',{method:'POST',headers},env);
+    assert.equal(imported.status,201);
+    const body=await imported.json() as {url:string;note:{id:string}};assert.equal(new URL(body.url).origin,'https://memoria.ai-run-do.com');assert.equal(body.note.id,'note-1');
+    const direct=await app.request('http://127.0.0.1:5180/api/tabula',{},env);
+    assert.equal((await direct.json() as {url:string}).url,'http://127.0.0.1:5180/tabula/#workspace=local');
+  } finally {if(previous===undefined)delete process.env.MEMORIA_TABULA_MODE;else process.env.MEMORIA_TABULA_MODE=previous;}
+});
+
 test('local Tabula uses the catalog endpoint without shared credentials',()=>{
   const connection=tabulaConnection({MEMORIA_TABULA_URL:'http://127.0.0.1:5197',TABULA_URL:'https://shared.example'});
   assert.equal(connection.local,true);
