@@ -15,7 +15,7 @@ Memoriaから開くTabulaは `services/tabula` にGit submoduleとして取得�
 本文・改訂本文・保存HTMLはファイル、メタデータ・索引・コメントはSQLiteに保持する。
 保存先 `Memoria/data/tabula/` はsubmoduleのcheckout外で、submodule更新では触れない。
 
-メモ画面に埋め込む編集画面と、チェックONで追加取得する一覧・本文は同じローカルTabulaを使う。
+メモ画面の一覧・閲覧オーバーレイ・編集画面は同じローカルTabulaを使う。
 リンクには `workspace=local` を付け、共有セッションが残っていてもローカル文書を開く。
 AI記事・チャット・Notion・スクラップ済みブックマークの明示登録も同じ保存先を使う。
 未設定・停止・不正な接続先はエラーを返し、遠隔TabulaやMemoria内の旧DBへ代替保存しない。
@@ -47,6 +47,11 @@ API応答ではその経路を現在のMemoriaの絶対URLに変換し、更新�
 
 ## SPEC-MM-TABULA-EMBEDDED-EDITOR
 
+ノート一覧は高さを抑えた丸い行とし、タップで閲覧オーバーレイ、明示的な編集ボタンで
+編集画面を開く。左スワイプは削除ボタンの表示だけを行い、削除は確認後に実行する。
+ヘッダー直下の旧「Tabulaの記事も表示」チェック行は撤去する。リモート環境の操作は
+この共通ヘッダーへ戻さず専用ページに分離する方針で、詳細仕様・実装は別途確定する。
+
 Memoriaのメモ画面内にTabulaのフロントエンドをiframeで表示し、Memoriaのナビゲーションを
 残したまま一覧・作成・編集を利用する。編集UIはTabula所有のまま複製しない。
 初回表示時のみ接続先とローカルセッションを確認し、同一Originの `/tabula/` を読み込む。
@@ -66,7 +71,7 @@ Memoria側のTabula見出しと接続成功時の案内文は表示せず、接�
 3. Concordiaへ `memoria-tabula` のテストclaimを取り、Excubitorから起動する。
    catalogのcwdは本体 `Memoria/services/tabula`。worktreeのsubmoduleは起動しない。
 4. Memoria自身への設定反映も、必要な場合に別claimでExcubitorから行う。
-5. MemoriaのTabulaリンクからメモ作成・保存・再読込、チェックON/OFF、AI記事・ブックマーク登録を確認。
+5. Memoriaのメモ画面で一覧・閲覧・編集・保存・再読込、AI記事・ブックマーク登録を確認。
    終了時にclaimを解放する。これらの実行権限は人間の指示範囲に従う。
 
 共有認証のCernere停止中でもローカルメモは利用できる。旧ノートの本番移行は別途判断する。
