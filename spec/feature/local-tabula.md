@@ -15,7 +15,7 @@ Memoriaから開くTabulaは `services/tabula` にGit submoduleとして取得�
 本文・改訂本文・保存HTMLはファイル、メタデータ・索引・コメントはSQLiteに保持する。
 保存先 `Memoria/data/tabula/` はsubmoduleのcheckout外で、submodule更新では触れない。
 
-メモ画面のリンクと、チェックONで追加取得する一覧・本文は同じローカルTabulaを使う。
+メモ画面に埋め込む編集画面と、チェックONで追加取得する一覧・本文は同じローカルTabulaを使う。
 リンクには `workspace=local` を付け、共有セッションが残っていてもローカル文書を開く。
 AI記事・チャット・Notion・スクラップ済みブックマークの明示登録も同じ保存先を使う。
 未設定・停止・不正な接続先はエラーを返し、遠隔TabulaやMemoria内の旧DBへ代替保存しない。
@@ -44,6 +44,17 @@ API応答ではその経路を現在のMemoriaの絶対URLに変換し、更新�
 明示的に `MEMORIA_TABULA_MODE=shared` とした環境だけは、既存の `TABULA_URL` /
 `TABULA_PUBLIC_URL` と読み取り・登録用の別トークンで共有連携する。
 ローカルモードへの変更で既存ノート・共有DB・遠隔データを自動移行しない。
+
+## SPEC-MM-TABULA-EMBEDDED-EDITOR
+
+Memoriaのメモ画面内にTabulaのフロントエンドをiframeで表示し、Memoriaのナビゲーションを
+残したまま一覧・作成・編集を利用する。編集UIはTabula所有のまま複製しない。
+初回表示時のみ接続先とローカルセッションを確認し、同一Originの `/tabula/` を読み込む。
+Memoriaのタブ切替ではiframeを作り直さず、編集中の状態を保持する。
+接続失敗は画面に表示し再接続を提供する。「別タブで開く」は補助導線とする。
+明示設定されたsharedモードは既存の別タブ導線を維持し、外部Originを埋め込まない。
+受入条件は、別タブへ移動せず一覧・作成・編集・保存を行えること、およびタブを往復しても
+未保存の編集状態が保持されること。実ブラウザの受入確認は別途実施する。
 
 ## 導入と起動
 

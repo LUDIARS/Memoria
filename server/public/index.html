@@ -19,6 +19,7 @@
   
   <link rel="stylesheet" href="style.css?v=20260513k" />
   <link rel="stylesheet" href="clever-search.css?v=20260806a" />
+  <link rel="stylesheet" href="tabula.css" />
 </head>
 <body>
   <header class="topbar">
@@ -1198,8 +1199,10 @@
 
       <!-- Tabula is the owner of pages and collaborative editing. -->
       <div id="notesView" class="hidden">
-        <h2>Tabula</h2><p id="tabulaStatus">Tabula の接続先を確認しています…</p>
-        <a id="tabulaOpen" target="_blank" rel="noopener noreferrer" hidden>Tabula でページを書く ↗</a>
+        <h2>Tabula</h2><p id="tabulaStatus" role="status">Tabula の接続先を確認しています…</p>
+        <button id="tabulaRetry" type="button" hidden>再接続</button>
+        <a id="tabulaOpen" target="_blank" rel="noopener noreferrer" hidden>別タブで開く ↗</a>
+        <iframe id="tabulaEditor" title="Tabula メモの一覧・編集" hidden></iframe>
       </div>
 
       <!-- 軌跡タブ用の「📖 設定方法」 モーダル — OwnTracks (内蔵 MQTT broker)
