@@ -30,7 +30,7 @@ function button(label:string):HTMLButtonElement {
   const el=document.createElement('button');el.type='button';el.textContent=label;return el;
 }
 
-/** Add shared documents alongside local content; never replace or persist local records. */
+/** Add documents from the configured Tabula alongside Memoria records. */
 export async function appendTabulaFeed(parent:HTMLElement,query=''):Promise<void> {
   parent.querySelectorAll('[data-tabula-feed]').forEach(el=>el.remove());
   if(!tabulaIncluded())return;
@@ -39,9 +39,10 @@ export async function appendTabulaFeed(parent:HTMLElement,query=''):Promise<void
   const current=()=>epoch===generation&&tabulaIncluded()&&panel.isConnected;
   const heading=document.createElement('h3');heading.textContent='Tabulaの共有記事';panel.append(heading);
   const message=document.createElement('p');panel.append(message);
-  let publicUrl:URL|null=null;
+  let publicUrl:URL|null=null,local=false;
   try {
-    const config=await json<{url:string}>('/api/tabula');
+    const config=await json<{url:string;mode:string}>('/api/tabula');
+    local=config.mode==='local';heading.textContent=local?'この端末のTabulaメモ':'Tabulaの共有記事';
     const url=new URL(config.url);
     if(['http:','https:'].includes(url.protocol))publicUrl=url;
   } catch { /* Reading remains available if the external editor URL is unavailable. */ }
@@ -68,12 +69,12 @@ export async function appendTabulaFeed(parent:HTMLElement,query=''):Promise<void
           } catch(error){if(current()){read.disabled=false;message.textContent=String(error);}}
         });
         if(publicUrl){
-          const link=document.createElement('a'),url=new URL(publicUrl);url.hash=`page=${encodeURIComponent(page.id)}`;
+          const link=document.createElement('a'),url=new URL(publicUrl);url.hash=`page=${encodeURIComponent(page.id)}${local?'&workspace=local':''}`;
           link.href=url.href;link.textContent='Tabulaで編集';link.target='_blank';link.rel='noopener noreferrer';card.append(link);
         }
         panel.append(card);
       }
-      message.textContent=result.items.length?'':'共有記事はありません';status('');
+      message.textContent=result.items.length?'':local?'この端末のメモはありません':'共有記事はありません';status('');
       if(Number.isSafeInteger(result.nextOffset)&&result.nextOffset!>offset){
         const more=button('Tabulaの記事をさらに取得');panel.append(more);
         more.addEventListener('click',()=>{more.remove();void load(result.nextOffset!);});

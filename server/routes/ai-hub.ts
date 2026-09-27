@@ -1,4 +1,5 @@
 import { importToTabula } from '../tabula/client.js';
+import { localTabulaAccess } from '../tabula/local-access.js';
 // /api/ai/* — 🤖 AI ハブ (記事 / 記事ネタ / AIアドバイス)。
 // Spec: spec/feature/ai-hub.md §API
 
@@ -123,7 +124,7 @@ export function makeAiHubRouter(deps: AiHubRouterDeps): Hono {
   });
 
   // Transfer the article into a private Tabula document; retain only its remote ID here.
-  r.post('/api/ai/articles/:id/transcribe', async (c: Context) => {
+  r.post('/api/ai/articles/:id/transcribe', localTabulaAccess, async (c: Context) => {
     const id = Number(c.req.param('id'));
     if (!Number.isFinite(id)) return c.json({ error: 'invalid id' }, 400);
     const article = getAiArticle(db, id);

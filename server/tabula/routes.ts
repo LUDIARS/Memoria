@@ -9,12 +9,16 @@ import {importToTabula,tabulaPublicUrl} from './client.js';
 import {chatDocument,notionDocument} from './extraction.js';
 import {bookmarkDocument} from './bookmark-document.js';
 import {tabulaReader} from './reader.js';
+import {localTabulaAccess} from './local-access.js';
+import {tabulaConnection} from './connection.js';
 
 function source(value:unknown):value is ChatExtractionSource {return value==='chatgpt'||value==='claude'||value==='gemini';}
 export function makeTabulaRouter(deps:{db:BetterSqlite3.Database;htmlDir:string}):Hono {
   const {db,htmlDir}=deps,r=new Hono();
   r.onError((error,c)=>c.json({error:error.message},502));
-  r.get('/api/tabula',c=>c.json({url:tabulaPublicUrl()}));
+  r.use('/api/notes/*',localTabulaAccess);
+  r.use('/api/bookmarks/:id/reparse',localTabulaAccess);
+  r.get('/api/tabula',localTabulaAccess,c=>c.json({url:tabulaPublicUrl(),mode:tabulaConnection().local?'local':'shared'}));
   r.route('/api/tabula',tabulaReader());
   r.post('/api/notes/from-chat',async c=>{
     const b=await c.req.json<{source:unknown;url?:string;title?:string;conversation_id?:string;memo?:string;messages?:ChatExtractedMessage[];also_create_note?:boolean}>();

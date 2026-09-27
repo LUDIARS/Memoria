@@ -1,3 +1,6 @@
 [submodule "server/plugins/memoria-plugin"]
 	path = server/plugins/memoria-plugin
 	url = https://github.com/LUDIARS/MemoriaPlugin.git
+[submodule "services/tabula"]
+	path = services/tabula
+	url = https://github.com/LUDIARS/Tabula.git

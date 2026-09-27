@@ -1,0 +1,51 @@
+---
+type: feature
+title: Local Tabula embedded in Memoria
+service: memoria
+domain: knowledge-integration
+status: implemented
+---
+
+# MemoriaのローカルTabula
+
+## SPEC-MM-LOCAL-TABULA
+
+Memoriaから開くTabulaは `services/tabula` にGit submoduleとして取得したローカルアプリ。
+既定の `MEMORIA_TABULA_MODE=local` では、未ログインでもこの端末のメモを作成する。
+本文・改訂本文・保存HTMLはファイル、メタデータ・索引・コメントはSQLiteに保持する。
+保存先 `Memoria/data/tabula/` はsubmoduleのcheckout外で、submodule更新では触れない。
+
+メモ画面のリンクと、チェックONで追加取得する一覧・本文は同じローカルTabulaを使う。
+リンクには `workspace=local` を付け、共有セッションが残っていてもローカル文書を開く。
+AI記事・チャット・Notion・スクラップ済みブックマークの明示登録も同じ保存先を使う。
+未設定・停止・不正な接続先はエラーを返し、遠隔TabulaやMemoria内の旧DBへ代替保存しない。
+
+## SPEC-MM-TABULA-ACCESS
+
+接続先は所有catalogが提供する `MEMORIA_TABULA_URL`。アプリ内にポートを直書きしない。
+localの接続先はloopbackのみ。Memoria側の個人メモ連携入口も直接loopback・同一Originを
+確認し、転送ヘッダー付き接続を拒否する。外部のMemoria閲覧者へローカルメモを中継しない。
+Tabula側でも実socketとHost・Originを再検証する。秘密トークンをブラウザへ渡さない。
+
+明示的に `MEMORIA_TABULA_MODE=shared` とした環境だけは、既存の `TABULA_URL` /
+`TABULA_PUBLIC_URL` と読み取り・登録用の別トークンで共有連携する。
+ローカルモードへの変更で既存ノート・共有DB・遠隔データを自動移行しない。
+
+## 導入と起動
+
+1. 本体のmainで `git submodule update --init services/tabula`。非公開Tabulaを読めるGitHub認証が必要。
+2. `npm --prefix services/tabula ci --include=dev`。実装コードは親repoのgitlinkで固定する。
+3. Concordiaへ `memoria-tabula` のテストclaimを取り、Excubitorから起動する。
+   catalogのcwdは本体 `Memoria/services/tabula`。worktreeのsubmoduleは起動しない。
+4. Memoria自身への設定反映も、必要な場合に別claimでExcubitorから行う。
+5. MemoriaのTabulaリンクからメモ作成・保存・再読込、チェックON/OFF、AI記事・ブックマーク登録を確認。
+   終了時にclaimを解放する。これらの実行権限は人間の指示範囲に従う。
+
+共有認証のCernere停止中でもローカルメモは利用できる。旧ノートの本番移行は別途判断する。
+バックアップはTabula停止中に `data/tabula` 全体を保存し、SQLiteとファイルを組で復元する。
+
+## 検証
+
+`server/tabula/connection.test.ts` はローカル接続先の選択、不正URLの拒否、共有設定との分離、
+リレー経由の匿名アクセス拒否を確認する。Tabula自身のファイル永続化・再読込・認証境界は
+submodule側の登録テストが担当する。実ブラウザと再起動後の受入確認は本体反映後に別途記録する。

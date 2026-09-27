@@ -23,6 +23,7 @@
     { "glob": "server/*", "layer": "application" },
     { "glob": "server/hooks/*", "layer": "application" },
     { "glob": "server/scripts/*", "layer": "application" },
+    { "glob": "server/tabula/*", "layer": "application" },
     { "glob": "server/plugins/*", "layer": "application" },
     { "glob": "server/plugins/memoria-plugin/host/*", "layer": "application" },
     { "glob": "server/plugins/memoria-plugin/scripts/*", "layer": "application" },

@@ -17,7 +17,7 @@ services:
     # The entrypoint also performs npm start's required frontend build (prestart).
     command: node node_modules/tsx/dist/cli.mjs --env-file-if-exists=.env.secrets excubitor-bootstrap.ts
     allow_hot_reload: false
-    depends_on: [actio]
+    depends_on: [actio, memoria-tabula]
     autostart: false
     restart_policy: on-failure
     max_restart: 5
@@ -31,3 +31,36 @@ services:
       MEMORIA_URL: http://127.0.0.1:${port}
     env:
       MEMORIA_PORT: "5180"
+      MEMORIA_TABULA_MODE: local
+
+  # Pinned application code lives in the submodule; personal data stays outside it.
+  - code: memoria-tabula
+    name: Memoria local Tabula
+    project_code: Mm
+    tier: personal
+    component: backend
+    repo: LUDIARS/Memoria
+    runtime: node
+    cwd: ${ARS_ROOT}/Memoria/services/tabula
+    port: 5197
+    command: node --import tsx server/main.ts
+    build_command: npm run build
+    autostart: false
+    restart_policy: "no"
+    depends_on: []
+    frontend_url: http://127.0.0.1:5197
+    env:
+      TABULA_PORT: "5197"
+      TABULA_HOST: "127.0.0.1"
+      TABULA_PUBLIC_URL: http://127.0.0.1:5197
+      TABULA_LOCAL_MODE: "1"
+      TABULA_LOCAL_DATA_DIR: ${ARS_ROOT}/Memoria/data/tabula/local
+      TABULA_DB: ${ARS_ROOT}/Memoria/data/tabula/shared.sqlite
+      TABULA_LOGS_DIR: ${ARS_ROOT}/logs
+    provides:
+      MEMORIA_TABULA_URL: http://127.0.0.1:${port}
+    health:
+      type: http
+      url: http://127.0.0.1:5197/api/health
+      interval_sec: 30
+      grace_period_sec: 15

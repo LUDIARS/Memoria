@@ -1,15 +1,12 @@
 import {Hono} from 'hono';
 import {isSameMachineRequest} from '../lib/local-request.js';
+import {tabulaConnection,tabulaHeaders} from './connection.js';
+import {localTabulaAccess} from './local-access.js';
 
 async function download(path:string):Promise<unknown> {
-  const endpoint=process.env.TABULA_URL,token=process.env.TABULA_READ_TOKEN;
-  if(!endpoint||!token)throw new Error('Tabula 読み取り連携が未設定です');
-  const url=new URL(endpoint);
-  const loopback=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
-  if((url.protocol!=='https:'&&!(url.protocol==='http:'&&loopback))||url.username||url.password||url.search||url.hash)throw new Error('Tabula URL が不正です');
-  if(!url.pathname.endsWith('/'))url.pathname+='/';
-  const response=await fetch(new URL(`api/memoria/${path}`,url),{
-    headers:{Authorization:`Bearer ${token}`},redirect:'error',signal:AbortSignal.timeout(15000),
+  const connection=tabulaConnection();
+  const response=await fetch(new URL(`${connection.local?'api/local/memoria':'api/memoria'}/${path}`,connection.base),{
+    headers:tabulaHeaders(connection,'read'),redirect:'error',signal:AbortSignal.timeout(15000),
   });
   if(!response.ok)throw new Error(`Tabula の取得に失敗しました (${response.status})`);
   return response.json();
@@ -17,6 +14,7 @@ async function download(path:string):Promise<unknown> {
 
 export function tabulaReader():Hono {
   const r=new Hono();
+  r.use('*',localTabulaAccess);
   r.use('*',async(c,next)=>{
     if(!isSameMachineRequest(c))return c.json({error:'local_only'},403);
     c.header('Cache-Control','no-store');

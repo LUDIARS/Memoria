@@ -1,0 +1,9 @@
+{
+  "name": "tabula-integration",
+  "description": "Memoriaが取得したローカルTabulaへの接続・取り込み・閲覧と個人データの境界。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [{"pathPattern": "(^|/)server/tabula/"}],
+  "specRefs": ["spec/feature/local-tabula.md", "spec/feature/tabula-extraction.md"]
+}
