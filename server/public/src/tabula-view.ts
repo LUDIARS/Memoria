@@ -13,13 +13,11 @@ export function loadTabula(): Promise<void> {
 
 async function connectTabula(): Promise<void> {
   const status = document.getElementById('tabulaStatus');
-  const link = document.getElementById('tabulaOpen') as HTMLAnchorElement | null;
   const frame = document.getElementById('tabulaEditor') as HTMLIFrameElement | null;
   const retry = document.getElementById('tabulaRetry') as HTMLButtonElement | null;
-  if (!status || !link || !frame || !retry) return;
+  if (!status || !frame || !retry) return;
   retry.onclick = () => { void loadTabula(); };
   retry.hidden = true;
-  link.hidden = true;
   status.hidden = false;
   status.textContent = 'メモに接続しています…';
   try {
@@ -29,9 +27,7 @@ async function connectTabula(): Promise<void> {
     const url = new URL(body.url, location.href);
     if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Tabula の URL が不正です');
     if (body.mode !== 'local') {
-      link.href = url.href;
-      link.hidden = false;
-      status.textContent = '共有ワークスペースは別タブで開きます。';
+      status.textContent = '共有ワークスペースの記事を表示します。';
       if (status.parentElement) void appendTabulaFeed(status.parentElement);
       return;
     }
@@ -49,8 +45,6 @@ async function connectTabula(): Promise<void> {
     embeddedUrl.searchParams.set('embedded', 'memoria');
     frame.src = embeddedUrl.href;
     frame.hidden = false;
-    link.href = url.href;
-    link.hidden = false;
     status.textContent = '';
     status.hidden = true;
   } catch (error) {
