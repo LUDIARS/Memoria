@@ -43,7 +43,7 @@ export async function appendTabulaFeed(parent:HTMLElement,query=''):Promise<void
   try {
     const config=await json<{url:string;mode:string}>('/api/tabula');
     local=config.mode==='local';heading.textContent=local?'この端末のTabulaメモ':'Tabulaの共有記事';
-    const url=new URL(config.url);
+    const url=new URL(config.url,location.href);
     if(['http:','https:'].includes(url.protocol))publicUrl=url;
   } catch { /* Reading remains available if the external editor URL is unavailable. */ }
   async function load(offset:number):Promise<void> {

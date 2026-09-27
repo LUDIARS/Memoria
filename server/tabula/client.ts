@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import { tabulaConnection,tabulaHeaders } from './connection.js';
+import { localTabulaBrowserUrl } from './browser-url.js';
 export interface ImportElement { block_type: string; text: string; data?: Record<string,unknown> }
 export interface TabulaImport { title: string; kind?: string; tags?: string[]; source_kind?: string; source_ref?: string; bookmark_url?: string; elements: ImportElement[]; snapshotHtml?: string }
 export interface TabulaResult { note: {id:string;title:string}; url:string }
 export function tabulaPublicUrl():string {
-  return tabulaConnection().browser.href;
+  const connection=tabulaConnection();
+  return connection.local?localTabulaBrowserUrl():connection.browser.href;
 }
 export async function importToTabula(input:TabulaImport):Promise<TabulaResult> {
   const connection=tabulaConnection();
@@ -16,5 +18,6 @@ export async function importToTabula(input:TabulaImport):Promise<TabulaResult> {
   if(!response.ok)throw new Error(`Tabula import failed (HTTP ${response.status})`);
   const result=await response.json() as TabulaResult;
   if(typeof result.note?.id!=='string'||typeof result.url!=='string')throw new Error('Invalid Tabula response');
+  if(connection.local)result.url=localTabulaBrowserUrl(result.note.id);
   return result;
 }

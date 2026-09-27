@@ -758,7 +758,7 @@ async function reparseDetail() {
       body: JSON.stringify({}),
     });
     if (status && state.detailId === id) {
-      const target = new URL(res.url);
+      const target = new URL(res.url, location.href);
       if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Tabula の URL が不正です');
       const link = document.createElement('a');
       link.href = target.href; link.target = '_blank'; link.rel = 'noopener noreferrer';

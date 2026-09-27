@@ -24,7 +24,7 @@ test('explicit shared mode preserves distinct import and read credentials',()=>{
   assert.throws(()=>tabulaHeaders(connection,'read',{}),/token is required/);
 });
 
-test('personal Tabula relay rejects remote clients, forwarding and cross-origin requests',async()=>{
+test('personal relay accepts the Access proxy but rejects remote peers, unknown hosts and cross-origin requests',async()=>{
   const previous=process.env.MEMORIA_TABULA_MODE;
   process.env.MEMORIA_TABULA_MODE='local';
   try {
@@ -33,6 +33,12 @@ test('personal Tabula relay rejects remote clients, forwarding and cross-origin 
     assert.equal((await app.request('http://127.0.0.1:5180/notes',{},env)).status,200);
     assert.equal((await app.request('http://127.0.0.1:5180/notes',{}, {incoming:{socket:{remoteAddress:'192.0.2.1'}}})).status,403);
     assert.equal((await app.request('http://127.0.0.1:5180/notes',{headers:{origin:'https://remote.example'}},env)).status,403);
-    assert.equal((await app.request('http://127.0.0.1:5180/notes',{headers:{'x-forwarded-for':'127.0.0.1'}},env)).status,403);
+    const forwarded={origin:'https://memoria.ai-run-do.com','x-forwarded-proto':'https','cf-connecting-ip':'192.0.2.1','sec-fetch-site':'same-origin'};
+    assert.equal((await app.request('http://memoria.ai-run-do.com/notes',{headers:forwarded},env)).status,200);
+    assert.equal((await app.request('http://memoria.ai-run-do.com/notes',{headers:forwarded},{incoming:{socket:{remoteAddress:'192.0.2.1'}}})).status,403);
+    assert.equal((await app.request('http://unknown.example/notes',{},env)).status,403);
+    assert.equal((await app.request('http://memoria.ai-run-do.com/notes',{headers:{...forwarded,origin:'https://evil.example'}},env)).status,403);
+    assert.equal((await app.request('http://memoria.ai-run-do.com/notes',{headers:{...forwarded,'sec-fetch-site':'cross-site'}},env)).status,403);
+    assert.equal((await app.request('http://memoria.ai-run-do.com/notes',{headers:forwarded})).status,403);
   } finally {if(previous===undefined)delete process.env.MEMORIA_TABULA_MODE;else process.env.MEMORIA_TABULA_MODE=previous;}
 });

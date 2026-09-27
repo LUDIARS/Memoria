@@ -11,11 +11,13 @@ import {bookmarkDocument} from './bookmark-document.js';
 import {tabulaReader} from './reader.js';
 import {localTabulaAccess} from './local-access.js';
 import {tabulaConnection} from './connection.js';
+import {tabulaBrowserProxy} from './browser-proxy.js';
 
 function source(value:unknown):value is ChatExtractionSource {return value==='chatgpt'||value==='claude'||value==='gemini';}
 export function makeTabulaRouter(deps:{db:BetterSqlite3.Database;htmlDir:string}):Hono {
   const {db,htmlDir}=deps,r=new Hono();
   r.onError((error,c)=>c.json({error:error.message},502));
+  r.route('/',tabulaBrowserProxy());
   r.use('/api/notes/*',localTabulaAccess);
   r.use('/api/bookmarks/:id/reparse',localTabulaAccess);
   r.get('/api/tabula',localTabulaAccess,c=>c.json({url:tabulaPublicUrl(),mode:tabulaConnection().local?'local':'shared'}));

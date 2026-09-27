@@ -23,9 +23,21 @@ AI記事・チャット・Notion・スクラップ済みブックマークの明
 ## SPEC-MM-TABULA-ACCESS
 
 接続先は所有catalogが提供する `MEMORIA_TABULA_URL`。アプリ内にポートを直書きしない。
-localの接続先はloopbackのみ。Memoria側の個人メモ連携入口も直接loopback・同一Originを
-確認し、転送ヘッダー付き接続を拒否する。外部のMemoria閲覧者へローカルメモを中継しない。
-Tabula側でも実socketとHost・Originを再検証する。秘密トークンをブラウザへ渡さない。
+localの接続先はloopbackのみ。Memoria側は既存のAccess保護済みブラウザAPIと同じく、
+ローカルの接続元socket・許可された公開Host・同一Originを確認する。Cloudflare Accessを
+認証境界とし、Accessで許可されたMemoria利用者はこの設置先の個人メモを閲覧・編集できる。
+CFヘッダーがあるだけでは許可しない。未知のHost、直接の遠隔socket、別Originは拒否する。
+Tabula自体の直接loopback制約は維持し、秘密トークンをブラウザへ渡さない。
+
+## SPEC-MM-TABULA-BROWSER-PROXY
+
+編集リンク・取り込み後のリンクはMemoriaと同一Originの `/tabula/` を使う。
+別端末のブラウザをその端末自身の127.0.0.1へ誘導しない。保存先はMemoria設置先のまま。
+中継は静的編集画面、ローカルセッション、ローカル文書APIだけを許可し、共有ログイン・
+共有文書・任意の接続先は公開しない。共有利用は独立Tabulaの既存経路で行う。
+書き込みには同一Originを必須とし、ブラウザのCookie・Authorization・転送ヘッダーは
+上流に渡さず、固定loopback先への新規リクエストを構築する。セッションはlocalに固定する。
+応答はキャッシュ不可とし、保存済みHTMLのsandbox CSPを維持する。
 
 明示的に `MEMORIA_TABULA_MODE=shared` とした環境だけは、既存の `TABULA_URL` /
 `TABULA_PUBLIC_URL` と読み取り・登録用の別トークンで共有連携する。
@@ -47,5 +59,7 @@ Tabula側でも実socketとHost・Originを再検証する。秘密トークン�
 ## 検証
 
 `server/tabula/connection.test.ts` はローカル接続先の選択、不正URLの拒否、共有設定との分離、
-リレー経由の匿名アクセス拒否を確認する。Tabula自身のファイル永続化・再読込・認証境界は
+許可されたAccess中継と不正な接続の拒否を確認する。`server/tabula/browser-proxy.test.ts` は
+編集経路の限定、認証情報の除去、同一Origin、HTML隔離、同一Originのリンクを確認する。
+Tabula自身のファイル永続化・再読込・認証境界は
 submodule側の登録テストが担当する。実ブラウザと再起動後の受入確認は本体反映後に別途記録する。

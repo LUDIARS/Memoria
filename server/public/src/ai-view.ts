@@ -220,7 +220,7 @@ function bindArticleActions(container: HTMLElement, articles: AiArticle[]): void
       try {
         const result = await sendJson<{ note: { id: string }; url: string }>(`/api/ai/articles/${id}/transcribe`, 'POST', {});
         const link = document.createElement('a');
-        const target = new URL(result.url);
+        const target = new URL(result.url, location.href);
         if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Tabula の URL が不正です');
         link.href = target.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
         link.textContent = 'Tabula で開く ↗'; btn.replaceWith(link);
