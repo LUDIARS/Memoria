@@ -20,7 +20,8 @@ async function connectTabula(): Promise<void> {
   retry.onclick = () => { void loadTabula(); };
   retry.hidden = true;
   link.hidden = true;
-  status.textContent = 'Tabula に接続しています…';
+  status.hidden = false;
+  status.textContent = 'メモに接続しています…';
   try {
     const response = await fetch('/api/tabula', { cache: 'no-store', signal: AbortSignal.timeout(20000) });
     const body = await response.json() as { url?: string; mode?: string; error?: string };
@@ -44,11 +45,14 @@ async function connectTabula(): Promise<void> {
     const info = await session.json() as { mode?: string };
     if (info.mode !== 'local') throw new Error('Tabula のローカルモードを確認できません');
     // Same-origin proxy owns the access policy. The editor remains owned by Tabula.
-    frame.src = url.href;
+    const embeddedUrl = new URL(url);
+    embeddedUrl.searchParams.set('embedded', 'memoria');
+    frame.src = embeddedUrl.href;
     frame.hidden = false;
     link.href = url.href;
     link.hidden = false;
-    status.textContent = 'この端末のメモをここで作成・編集できます。';
+    status.textContent = '';
+    status.hidden = true;
   } catch (error) {
     frame.hidden = true;
     retry.hidden = false;
