@@ -1,4 +1,6 @@
 import {appendTabulaFeed,setupTabulaFeed} from './tabula-feed.js';
+import {setupErrorLog,loadErrorLog} from './error-log-view.js';
+import {registerMemoriaWorker,setupFrontendUpdates} from './frontend-updates.js';
 // このファイルは esbuild で `app.js` (browser bundle) に bundle される。
 // declare global を有効にするため、 module 化のための `export {}` を末尾
 // に置いてある (TS は 1 つでも import/export があるとファイルを module
@@ -7793,7 +7795,8 @@ loadPrivacySettings().catch(console.warn);
 // All views share `state.worklog.date` (YYYY-MM-DD, local). The day navigator
 // shifts ±1 day; the date input lets users jump to any day.
 
-state.worklog = { date: localDateStr(new Date()), sub: 'schedule' };
+state.worklog = { date: localDateStr(new Date()), sub: 'errors' };
+setupErrorLog(()=>{state.worklog.sub='errors';switchTab('worklog');switchWorklogSub('errors');});
 
 function localDateStr(d) {
   const y = d.getFullYear();
@@ -7815,6 +7818,7 @@ function syncWorklogDateInput() {
 }
 
 const WL_SUB_VIEWS = {
+  errors: 'wlErrorsView',
   schedule: 'wlScheduleView',
   github: 'wlGithubView',
   claude: 'wlClaudeView',
@@ -8254,6 +8258,8 @@ async function loadWorklog() {
   syncWorklogDateInput();
   const date = state.worklog.date;
   const sub = state.worklog.sub;
+  document.querySelector('#worklogView .worklog-daynav')?.classList.toggle('hidden', !WL_DATE_BASED.has(sub));
+  if (sub === 'errors') return loadErrorLog();
   if (sub === 'schedule') return loadWorklogSchedule(date);
   if (sub === 'browsing') return loadWorklogBrowsing(date);
   if (sub === 'dig') return loadWorklogDig(date);
@@ -9981,7 +9987,7 @@ async function ensureServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     throw new Error('この端末は Service Worker 非対応です');
   }
-  return navigator.serviceWorker.register('/sw.js', { scope: '/' });
+  return registerMemoriaWorker();
 }
 
 async function pushSubscribeFlow() {
@@ -10069,11 +10075,7 @@ async function refreshPushDevices() {
 
 // 初期 SW register (subscribe ボタンを押す前に load しておくと、 push event
 // を受け取れる状態になる)
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
-    console.warn('[sw] register failed:', err);
-  });
-}
+setupFrontendUpdates();
 // 設定画面が開いた時に端末リストを更新する hook (openAiSettings 内に
 // 食い込むより、 メニュー click 経路に被せる)
 document.getElementById('aiSettingsBtn')?.addEventListener('click', () => {

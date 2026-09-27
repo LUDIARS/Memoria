@@ -1,0 +1,9 @@
+{
+  "name": "error-log",
+  "description": "HTTPエラーの履歴とブラウザからの確認導線。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [{"pathPattern": "(^|/)server/error-log/"}, {"pathPattern": "(^|/)server/public/src/error-log-"}],
+  "specRefs": ["spec/feature/error-log.md"]
+}

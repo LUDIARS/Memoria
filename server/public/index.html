@@ -267,6 +267,8 @@
 
   <main class="layout" data-active-tab="bookmarks">
     <section class="content">
+      <button id="openErrorLog" type="button" class="ghost" hidden aria-live="polite">エラーを確認</button>
+      <button id="frontendUpdate" type="button" class="ghost" hidden aria-live="polite">更新があります — 保存して再読み込み</button>
       <nav class="tabs">
         <div class="tabs-scroll">
           <button class="tab" data-tab="notes">
@@ -847,7 +849,8 @@
           <button id="wlRefresh" class="ghost">更新</button>
         </div>
         <nav class="worklog-subtabs" id="worklogSubtabs">
-          <button class="wl-subtab active" data-sub="schedule">📋 予定</button>
+          <button class="wl-subtab active" data-sub="errors">⚠ エラー</button>
+          <button class="wl-subtab" data-sub="schedule">📋 予定</button>
           <button class="wl-subtab" data-sub="github">🐙 GitHub</button>
           <button class="wl-subtab" data-sub="claude">🤖 Claude Code</button>
           <button class="wl-subtab" data-sub="gemini">💎 Gemini</button>
@@ -862,6 +865,12 @@
           <button class="wl-subtab" data-sub="spending">💰 消費傾向</button>
         </nav>
 
+        <section id="wlErrorsView" class="wl-sub">
+          <div class="wl-summary-row"><h3>エラー</h3><button id="errorLogRefresh" type="button" class="ghost">更新</button></div>
+          <p id="errorLogStatus" role="status">サーバとこの画面のエラーを確認できます。</p>
+          <ul id="errorLogList" class="wl-list"></ul>
+          <p id="errorLogEmpty" class="queue-empty">記録されたエラーはありません。</p>
+        </section>
         <section id="wlReceiptView" class="wl-sub hidden">
           <div class="wl-summary-row" id="wlReceiptSummary"></div>
           <ul id="wlReceiptList" class="wl-list"></ul>
@@ -878,7 +887,7 @@
           <div class="spending-trend-body"></div>
         </section>
 
-        <section id="wlScheduleView" class="wl-sub">
+        <section id="wlScheduleView" class="wl-sub hidden">
           <div id="wlUptimeStatus" class="uptime-status"></div>
           <ul id="wlScheduleList" class="events-list"></ul>
           <div id="wlScheduleEmpty" class="queue-empty hidden">この日のイベントはありません。</div>

@@ -60,6 +60,8 @@ import { makeNotificationsRouter } from './routes/notifications.js';
 import { makePluginsRouter } from './routes/plugins.js';
 import { mountUserApps } from './plugins/host.js';
 import { makeTabulaRouter } from './tabula/routes.js';
+import {ErrorLogStore} from './error-log/store.js';
+import {captureHttpErrors,errorLogRouter} from './error-log/router.js';
 import { makeExtensionRulesRouter } from './routes/extension-rules.js';
 import { makeConfigRouter } from './routes/config.js';
 import { makeLocationRouter } from './routes/location.js';
@@ -166,6 +168,8 @@ setTimeout(() => {
 
 // ── App ──────────────────────────────────────────────────────────────────
 const app = new Hono();
+const errorLogStore=new ErrorLogStore(db);
+app.use('*',captureHttpErrors(errorLogStore));
 // セキュリティヘッダ (HSTS / X-Content-Type-Options / X-Frame-Options / Referrer-Policy 等)。
 // クロスオリジン分離系 (COOP / COEP / CORP) は Cernere SSO ポップアップや Hub 連携を
 // 壊しうるため無効化し、 副作用のない古典的なヘッダのみを付与する。
@@ -289,6 +293,7 @@ console.log('[startup] user apps ready');
 app.route('/', makePluginsRouter({ db, registry: userApps.registry }));
 app.route('/', makeExtensionRulesRouter(db));
 app.route('/', makeTabulaRouter({ db, htmlDir: HTML_DIR }));
+app.route('/',errorLogRouter(errorLogStore));
 app.route('/', makeConfigRouter({
   db, port: PORT, dataDir: DATA_DIR,
   onMcpAutostartChange: (enabled) => mcp.sync(enabled),

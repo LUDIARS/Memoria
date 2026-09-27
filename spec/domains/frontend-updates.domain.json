@@ -1,0 +1,9 @@
+{
+  "name": "frontend-updates",
+  "description": "フロントエンド配信物の版生成と入力を保護する更新通知。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [{"pathPattern":"(^|/)server/(frontend-build|scripts/build-frontend)\\.ts$"},{"pathPattern":"(^|/)server/public/(sw\\.js|src/frontend-updates\\.ts)$"}],
+  "specRefs": ["spec/feature/frontend-updates.md"]
+}

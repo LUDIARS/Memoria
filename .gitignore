@@ -51,3 +51,5 @@ test-payload.json
 
 # generated review results
 /review/
+/server/public/app-version.json
+/server/public/app-version.json.*.tmp
