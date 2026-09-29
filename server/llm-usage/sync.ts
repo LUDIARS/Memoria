@@ -1,11 +1,13 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import { captureInventory } from './inventory.js';
-import { listRecentNativeLogs, parseNativeLog } from './native-log-reader.js';
-import { importDays, isSourceCurrent, recordSourceFailure, replaceSourceUsage, saveInventorySnapshot } from './store.js';
+import { saveInventorySnapshot } from './inventory-store.js';
+import { listRecentNativeLogs, parseNativeLog, type NativeLogRoot } from './native-log-reader.js';
+import { importSourceResponses, repriceStaleResponses } from './response-store.js';
+import { isSourceCurrent, recordSourceFailure } from './source-store.js';
+import { importDays, importWindowStartMs } from './sync-window.js';
 import type { SyncResult } from './types.js';
 
 type Db = BetterSqlite3.Database;
-const JST_OFFSET_MS = 9 * 60 * 60 * 1_000;
 
 export interface UsageSyncStatus {
   state: 'idle' | 'running' | 'complete' | 'failed';
@@ -52,34 +54,9 @@ export class UsageSyncCoordinator {
   }
 
   private async run(): Promise<SyncResult> {
-    const cutoffMs = importWindowStartMs(importDays());
-    const replaceFromDate = usageDate(cutoffMs);
-    const sources = await listRecentNativeLogs(cutoffMs);
-    this.statusValue.progress.total = sources.length;
-    const result: SyncResult = {
-      scannedSources: sources.length,
-      importedSources: 0,
-      unchangedSources: 0,
-      failedSources: 0,
-      importedRecords: 0,
-      inventoryCaptured: false,
-    };
-    for (const source of sources) {
-      try {
-        if (isSourceCurrent(this.db, source)) {
-          result.unchangedSources += 1;
-        } else {
-          const parsed = await parseNativeLog(source, cutoffMs);
-          result.importedRecords += replaceSourceUsage(this.db, source, parsed, replaceFromDate);
-          result.importedSources += 1;
-        }
-      } catch (error: unknown) {
-        result.failedSources += 1;
-        recordSourceFailure(this.db, source, error instanceof Error ? error.message : String(error));
-      } finally {
-        this.statusValue.progress.current += 1;
-      }
-    }
+    const result = await syncNativeUsage(this.db, importWindowStartMs(importDays()), undefined, (current, total) => {
+      this.statusValue.progress = { current, total };
+    });
     const inventory = await captureInventory(this.db);
     saveInventorySnapshot(this.db, inventory);
     result.inventoryCaptured = true;
@@ -87,15 +64,43 @@ export class UsageSyncCoordinator {
   }
 }
 
-export function importWindowStartMs(days: number, nowMs = Date.now()): number {
-  const localDay = new Date(nowMs + JST_OFFSET_MS);
-  localDay.setUTCHours(0, 0, 0, 0);
-  localDay.setUTCDate(localDay.getUTCDate() - (days - 1));
-  return localDay.getTime() - JST_OFFSET_MS;
-}
-
-function usageDate(timeMs: number): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date(timeMs));
+/**
+ * Import every changed native log in the window, then re-price stored responses
+ * whose rate-table version is stale (their logs may be unchanged or already gone).
+ */
+export async function syncNativeUsage(
+  db: Db,
+  cutoffMs: number,
+  roots?: NativeLogRoot[],
+  onProgress: (current: number, total: number) => void = () => undefined,
+): Promise<SyncResult> {
+  const sources = await listRecentNativeLogs(cutoffMs, roots);
+  const result: SyncResult = {
+    scannedSources: sources.length,
+    importedSources: 0,
+    unchangedSources: 0,
+    failedSources: 0,
+    importedResponses: 0,
+    repricedResponses: 0,
+    inventoryCaptured: false,
+  };
+  onProgress(0, sources.length);
+  for (const [index, source] of sources.entries()) {
+    try {
+      if (isSourceCurrent(db, source)) {
+        result.unchangedSources += 1;
+      } else {
+        const parsed = await parseNativeLog(source, cutoffMs);
+        result.importedResponses += importSourceResponses(db, source, parsed);
+        result.importedSources += 1;
+      }
+    } catch (error: unknown) {
+      result.failedSources += 1;
+      recordSourceFailure(db, source, error instanceof Error ? error.message : String(error));
+    } finally {
+      onProgress(index + 1, sources.length);
+    }
+  }
+  result.repricedResponses = repriceStaleResponses(db);
+  return result;
 }

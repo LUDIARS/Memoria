@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "contractsDir": "augur/contracts",
+  "importFrom": "@ludiars/log-weaver",
+  "contracts": [
+    {
+      "id": "C-1",
+      "criterion": "C-1 estimateResponseCost(provider, model, usage): 未掲載モデルは usd・breakdown が null、掲載モデルは usd が内訳の合計に一致する",
+      "symbol": "estimateResponseCost",
+      "file": "server/llm-usage/cost-estimator.ts",
+      "module": "augur/contracts/cost-estimate.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-2",
+      "criterion": "C-2 mergeResponse(existing, incoming): 各トークン項目は両者の最大値で、合算しない。元ファイル側の帰属を優先する",
+      "symbol": "mergeResponse",
+      "file": "server/llm-usage/response-merge.ts",
+      "module": "augur/contracts/response-merge.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-3",
+      "criterion": "C-3 claudeTokens(usage): cache write の 5m + 1h + 不明の合計は max(cache_creation_input_tokens, 5m + 1h) に一致する",
+      "symbol": "claudeTokens",
+      "file": "server/llm-usage/claude-log-parser.ts",
+      "module": "augur/contracts/claude-tokens.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-4",
+      "criterion": "C-4 repriceStaleResponses(db): 実行後、現行料金版でない応答行が 0 になる",
+      "symbol": "repriceStaleResponses",
+      "file": "server/llm-usage/response-store.ts",
+      "module": "augur/contracts/reprice.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-5",
+      "criterion": "C-5 parseUsagePeriod(from, to, nowMs): YYYY-MM-DD の from ≤ to を返す",
+      "symbol": "parseUsagePeriod",
+      "file": "server/llm-usage/usage-period.ts",
+      "module": "augur/contracts/usage-period.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-6",
+      "criterion": "C-6 usageDashboard(db, period, nowMs): 期間合計の応答数・コストがモデル別行の合計に一致する",
+      "symbol": "usageDashboard",
+      "file": "server/llm-usage/dashboard.ts",
+      "module": "augur/contracts/dashboard.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    }
+  ]
+}

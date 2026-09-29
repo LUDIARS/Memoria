@@ -1,66 +1,117 @@
-import type { LlmProvider, UsageAmounts } from './types.js';
+import type { LlmProvider } from './types.js';
 
-interface PriceScale {
+/**
+ * Bump whenever any rate below changes. Stored responses carry the version they
+ * were priced with, and sync re-prices every response whose version differs —
+ * native log mtimes do not change when a rate does, so the log cache alone
+ * would otherwise keep stale costs forever.
+ */
+export const PRICE_TABLE_VERSION = '2026-09-29';
+
+/** USD per 1M tokens, taken verbatim from the provider's official price page. */
+export interface ModelPrice {
+  id: string;
+  basis: string;
   inputPerMillion: number;
+  cacheReadPerMillion: number;
+  cacheWrite5mPerMillion: number;
+  cacheWrite1hPerMillion: number;
   outputPerMillion: number;
-  basis: string;
-}
-export interface CostEstimate {
-  usd: number;
-  basis: string;
 }
 
-const CACHE_READ_MULTIPLIER = 0.1;
-const CACHE_WRITE_5M_MULTIPLIER = 1.25;
-const CACHE_WRITE_1H_MULTIPLIER = 2;
+type Rates = [input: number, write5m: number, write1h: number, cacheRead: number, output: number];
 
-/** Villa /session-costs の比較スケール。実請求額ではなく等価 API コスト。 */
-export function estimateEquivalentApiCost(
-  provider: LlmProvider,
-  model: string,
-  usage: Pick<UsageAmounts, 'inputTokens' | 'cachedInputTokens' | 'cacheWrite5mTokens' | 'cacheWrite1hTokens' | 'outputTokens'>,
-): CostEstimate {
-  const scale = priceScale(provider, model);
-  if (!scale) return { usd: 0, basis: 'unpriced' };
-  const inputCost = usage.inputTokens * scale.inputPerMillion;
-  const cacheReadCost = usage.cachedInputTokens * scale.inputPerMillion * CACHE_READ_MULTIPLIER;
-  const cacheWrite5mCost = usage.cacheWrite5mTokens * scale.inputPerMillion * CACHE_WRITE_5M_MULTIPLIER;
-  const cacheWrite1hCost = usage.cacheWrite1hTokens * scale.inputPerMillion * CACHE_WRITE_1H_MULTIPLIER;
-  const outputCost = usage.outputTokens * scale.outputPerMillion;
+// https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-29).
+// Cache reads are stored as absolute rates: Opus 5.5 is 0.05x and Fable/Mythos
+// 5.1 are 0.025x, so one shared multiplier would misprice them.
+const CLAUDE_RATES: Record<string, Rates> = {
+  'claude-fable-5-1': [10, 12.5, 20, 0.25, 50],
+  'claude-mythos-5-1': [10, 12.5, 20, 0.25, 50],
+  'claude-fable-5': [10, 12.5, 20, 1, 50],
+  'claude-mythos-5': [10, 12.5, 20, 1, 50],
+  'claude-opus-5-5': [4, 5, 8, 0.2, 20],
+  'claude-opus-5': [5, 6.25, 10, 0.5, 25],
+  'claude-opus-4-8': [5, 6.25, 10, 0.5, 25],
+  'claude-opus-4-7': [5, 6.25, 10, 0.5, 25],
+  'claude-opus-4-6': [5, 6.25, 10, 0.5, 25],
+  'claude-opus-4-5': [5, 6.25, 10, 0.5, 25],
+  'claude-opus-4-1': [15, 18.75, 30, 1.5, 75],
+  'claude-opus-4': [15, 18.75, 30, 1.5, 75],
+  'claude-sonnet-5-5': [2, 2.5, 4, 0.2, 10],
+  'claude-sonnet-5': [2, 2.5, 4, 0.2, 10],
+  'claude-sonnet-4-6': [3, 3.75, 6, 0.3, 15],
+  'claude-sonnet-4-5': [3, 3.75, 6, 0.3, 15],
+  'claude-sonnet-4': [3, 3.75, 6, 0.3, 15],
+  'claude-haiku-4-5': [1, 1.25, 2, 0.1, 5],
+  'claude-haiku-3-5': [0.8, 1, 1.6, 0.08, 4],
+};
+
+// https://developers.openai.com/api/docs/pricing (checked 2026-09-29), standard tier.
+// [input, cached input, output]. Codex logs never report cache writes. Models the
+// page does not list (e.g. gpt-5-codex, codex auto-review) stay unpriced instead of
+// borrowing a Claude or sibling rate.
+const OPENAI_RATES: Record<string, [input: number, cacheRead: number, output: number]> = {
+  'gpt-6-astra': [10, 1, 50],
+  'gpt-6-sol': [2, 0.2, 10],
+  'gpt-6-luna': [0.1, 0.01, 0.5],
+  'gpt-5.6-sol': [4, 0.4, 20],
+  'gpt-5.6-terra': [2, 0.2, 12],
+  'gpt-5.6-luna': [0.2, 0.02, 1.2],
+  'gpt-5.5': [5, 0.5, 30],
+  'gpt-5.4': [2.5, 0.25, 15],
+  'gpt-5.3-codex': [1.75, 0.175, 14],
+  'gpt-5.2': [1.75, 0.175, 14],
+  'gpt-5.1': [1.25, 0.125, 10],
+  'gpt-5': [1.25, 0.125, 10],
+};
+
+/**
+ * Resolve the official price for an exact model id. Only date / region / context
+ * suffixes are stripped; family aliases (`opus`, `sonnet`) and unknown ids return
+ * null so they surface as unpriced rather than as a guessed rate.
+ */
+export function findModelPrice(provider: LlmProvider, rawModel: string): ModelPrice | null {
+  const id = normalizeModelId(provider, rawModel);
+  if (provider === 'claude-code') {
+    const rates = CLAUDE_RATES[id];
+    if (!rates) return null;
+    const [input, write5m, write1h, cacheRead, output] = rates;
+    return {
+      id,
+      basis: `anthropic:${id}`,
+      inputPerMillion: input,
+      cacheReadPerMillion: cacheRead,
+      cacheWrite5mPerMillion: write5m,
+      cacheWrite1hPerMillion: write1h,
+      outputPerMillion: output,
+    };
+  }
+  const rates = OPENAI_RATES[id];
+  if (!rates) return null;
+  const [input, cacheRead, output] = rates;
   return {
-    usd: (inputCost + cacheReadCost + cacheWrite5mCost + cacheWrite1hCost + outputCost) / 1_000_000,
-    basis: scale.basis,
+    id,
+    basis: `openai:${id}`,
+    inputPerMillion: input,
+    cacheReadPerMillion: cacheRead,
+    cacheWrite5mPerMillion: input,
+    cacheWrite1hPerMillion: input,
+    outputPerMillion: output,
   };
 }
 
-function priceScale(provider: LlmProvider, rawModel: string): PriceScale | null {
-  const model = rawModel.toLowerCase();
-  if (provider === 'codex-cli') {
-    if (model.includes('5.6-sol')) return { inputPerMillion: 10, outputPerMillion: 50, basis: 'proxy:fable-5' };
-    if (model.includes('5.6-terra')) return { inputPerMillion: 5, outputPerMillion: 25, basis: 'proxy:opus-4.8' };
-    if (model.includes('auto-review')) return { inputPerMillion: 3, outputPerMillion: 15, basis: 'proxy:sonnet-5' };
-    if (model.includes('5.3-codex') || model.includes('gpt-5-codex')) {
-      return { inputPerMillion: 1.25, outputPerMillion: 10, basis: 'openai:gpt-5-codex' };
-    }
-    return null;
+export function normalizeModelId(provider: LlmProvider, rawModel: string): string {
+  let id = rawModel.trim().toLowerCase();
+  if (provider === 'claude-code') {
+    id = id
+      .replace(/\[[^\]]*\]$/, '') // context-window tag such as `[1m]`
+      .replace(/^(?:[a-z]{2,4}\.)?anthropic\./, '') // Bedrock `us.anthropic.` prefix
+      .replace(/-v\d+(?::\d+)?$/, '') // Bedrock `-v1:0` revision
+      .replace(/-\d{8}$/, ''); // dated snapshot
+    return id;
   }
-  if (/claude-(fable|mythos)-5/.test(model)) {
-    return { inputPerMillion: 10, outputPerMillion: 50, basis: 'villa:fable-mythos-5' };
-  }
-  if (/claude-opus-5/.test(model)) {
-    return { inputPerMillion: 5, outputPerMillion: 25, basis: 'proxy:opus-4.8' };
-  }
-  if (/claude-opus-4-[5-8]/.test(model)) {
-    return { inputPerMillion: 5, outputPerMillion: 25, basis: 'villa:opus-4.5-4.8' };
-  }
-  if (/claude-opus-(4-[01]|3)/.test(model)) {
-    return { inputPerMillion: 15, outputPerMillion: 75, basis: 'villa:legacy-opus' };
-  }
-  if (/claude-sonnet-[45]/.test(model) || model === 'sonnet') {
-    return { inputPerMillion: 3, outputPerMillion: 15, basis: 'villa:sonnet-4-5' };
-  }
-  if (/claude-haiku-4-5/.test(model) || model === 'haiku') {
-    return { inputPerMillion: 1, outputPerMillion: 5, basis: 'villa:haiku-4.5' };
-  }
-  return null;
+  id = id.replace(/^openai\//, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  // Codex has logged bare ids such as `5.3-codex`.
+  if (/^\d/.test(id)) id = `gpt-${id}`;
+  return id;
 }

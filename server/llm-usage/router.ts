@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import { isSameMachineRequest } from '../lib/local-request.js';
+import { usageDashboard } from './dashboard.js';
 import { ensureLlmUsageSchema } from './schema.js';
-import { usageDashboard } from './store.js';
 import { UsageSyncCoordinator } from './sync.js';
+import { InvalidPeriodError, parseUsagePeriod, type UsagePeriod } from './usage-period.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -22,10 +23,19 @@ export function makeLlmUsageRouter({ db }: { db: Db }): Hono {
     await next();
   });
 
-  router.get('/api/llm-usage', (context) => context.json({
-    ...usageDashboard(db),
-    sync: coordinator.status(),
-  }));
+  router.get('/api/llm-usage', (context) => {
+    let period: UsagePeriod;
+    try {
+      period = parseUsagePeriod(context.req.query('from'), context.req.query('to'));
+    } catch (error: unknown) {
+      if (error instanceof InvalidPeriodError) return context.json({ error: error.message }, 400);
+      throw error;
+    }
+    return context.json({
+      ...usageDashboard(db, period),
+      sync: coordinator.status(),
+    });
+  });
   router.get('/api/llm-usage/sync', (context) => context.json(coordinator.status()));
   router.post('/api/llm-usage/sync', (context) => context.json(coordinator.start(), 202));
   return router;

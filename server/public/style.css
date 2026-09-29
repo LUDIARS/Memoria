@@ -6322,6 +6322,8 @@ dialog.loc-edit-modal[open] {
 .llm-head h2 { margin:0 0 4px; }
 .llm-section { margin:18px 0 26px; }
 .llm-section h3 { display:flex; gap:10px; align-items:baseline; margin:0 0 10px; }
+.llm-period { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin:0 0 12px; }
+.llm-period label { display:flex; flex-direction:column; gap:4px; font-size:12px; }
 .llm-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:10px; }
 .llm-metrics.compact { grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }
 .llm-metric { border:1px solid var(--border); background:var(--surface, #fff); border-radius:12px; padding:13px; display:flex; flex-direction:column; gap:4px; }
