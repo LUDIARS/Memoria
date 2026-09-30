@@ -41,3 +41,27 @@ neco の依頼（Actio 参照）: Memoria の LLM 使用量・コスト計算を
 - 監査値（2026-09-22〜09-28 JST の Opus 11,064 応答、暫定 $1,735.61）は、`GET /api/llm-usage?from=2026-09-22&to=2026-09-28`
   の `period.by_model` と照合できる形にしたが、同期を実行していないため照合は未実施。
 - テスト・型検査・同期・起動は実行していない（許可なし）。
+
+契約検証の準備（2026-09-30）:
+- 公開済み `@ludiars/log-weaver@0.1.0` には `contract` export が無い（Lapilli 側の `contract()` は未公開）。
+  そのため `augur.contracts.json#importFrom` は `server/shared/contract-runtime.ts`（`../shared/contract-runtime.js`）を指す。
+  weaver と同じ 3 種のメッセージと ctx キーを `contracts.jsonl` に書く。`LOG_WEAVER=1` のときだけ述語を評価する
+  （sync は解析関数を 1 行ごとに呼ぶため、既定では素通し）。
+- `augur.inject.json` は `contract-wrap` だけを有効にし、`server/llm-usage` の本体コードに限定する。
+- C-4 の述語は「版が 1 種類以下」ではなく「現行 `PRICE_TABLE_VERSION` 以外の行が 0」を検証する（全件旧版でも通っていた穴を塞いだ）。
+  C-2 の述語は帰属に `familyId` も含める。
+- 注入は証跡取得時だけ行う（apply → `LOG_WEAVER=1` で回帰テスト → `augur contracts report` → remove）。
+  注入後の述語 import は `.ts` 拡張子になるため、注入状態のままでは `tsc --noEmit` が TS5097 を出す。注入はコミットしない。
+
+契約検証の実行記録（2026-09-30、neco の明示承認「検証を実行」による。worktree の単体テストのみ。サービス起動・本番 DB 再計算はしていない）:
+- 対象 head: e92e7c2（注入はこの commit に対して行い、解除後に HEAD とバイト一致を確認）。Cc testing claim #1585 を登録し、実行後に release した。
+- 実行: `LOG_WEAVER=1` で `price-table` / `log-parsers` / `response-store` / `usage` の 4 テスト → 31 件 pass / 0 fail。
+- `augur contracts report --since 2026-09-30T00:05:51Z`: covered=6 violated=0 uncovered=0、events=586 matched=586 foreign=0 undated=0。
+  C-1 537 回 / C-2 6 回 / C-3 17 回 / C-4 4 回 / C-5 11 回 / C-6 11 回、いずれも違反 0（最終観測 2026-09-30T00:05:56Z）。
+- 証跡ファイル（gitignore 対象のローカルのみ）: `server/logs/contracts-evidence/contracts.jsonl`・`report.json`・`acceptance.json`。
+- 追加した回帰テスト: `server/shared/contract-runtime.test.ts`（observed、false / string の違反、pre 違反時は observed を出さない、
+  述語の throw、`LOG_WEAVER` が `1` 以外なら述語を評価しない、本体の戻り値・throw・reject・`this` を保つ）と
+  `server/llm-usage/reprice-contract.test.ts`（C-4: 全件旧版・混在・不正件数を拒否し、再計算後は受理）。
+  変更前の C-4 述語は全件旧版の表を `true` で通し、新しい述語は拒否することを個別に確認した。
+- 追加後の 6 テストは 43 件 pass。lint（変更ファイル）は 0 件。typecheck のエラー 19 件は、すべて未初期化のサブモジュール
+  `server/plugins/memoria-plugin` に由来する既存のもので、今回の変更に起因するものは 0 件。

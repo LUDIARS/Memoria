@@ -1,0 +1,17 @@
+{
+  "service": "memoria",
+  "include": ["server/llm-usage/**/*.ts"],
+  "exclude": ["**/*.test.ts"],
+  "runtime": {
+    "autoImport": false
+  },
+  "rules": {
+    "entry-runtime": false,
+    "silent-catch": false,
+    "spawn-watch": false,
+    "interval-guard": false,
+    "listener-guard": false,
+    "contract-wrap": true
+  },
+  "importFrom": "../shared/contract-runtime.js"
+}

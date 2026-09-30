@@ -1,7 +1,7 @@
 {
   "version": 1,
   "contractsDir": "augur/contracts",
-  "importFrom": "@ludiars/log-weaver",
+  "importFrom": "../shared/contract-runtime.js",
   "contracts": [
     {
       "id": "C-1",
