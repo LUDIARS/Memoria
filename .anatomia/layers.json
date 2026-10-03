@@ -35,6 +35,7 @@
     { "glob": "server/briefing/*", "layer": "domain-logic" },
     { "glob": "server/briefing/sources/*", "layer": "domain-logic" },
     { "glob": "server/clever-search/*", "layer": "domain-logic" },
+    { "glob": "server/code-volume/*", "layer": "domain-logic" },
     { "glob": "server/goals/*", "layer": "domain-logic" },
     { "glob": "server/llm-usage/*", "layer": "domain-logic" },
     { "glob": "server/multi/*", "layer": "domain-logic" },

@@ -1,0 +1,21 @@
+{
+  "name": "code-volume",
+  "description": "コード変更量の集計。GitHub に載った本人のコミットを検索し、コミットごとのファイル別変更行をキャッシュして、月別のコード変更行数・週平均・月平均を Villa 配信用の単一 HTML / JSON に書き出す CLI。検索・詳細取得 (rate limit 待ち)・キャッシュ・集計・描画・CLI 引数を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/code-volume/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/scripts/code-volume\\.ts$"
+    }
+  ],
+  "specRefs": [
+    "spec/feature/code-volume.md#使い方",
+    "spec/feature/code-volume.md#数え方",
+    "spec/feature/code-volume.md#制約",
+    "spec/feature/code-volume.md#構成-servercode-volume"
+  ]
+}
