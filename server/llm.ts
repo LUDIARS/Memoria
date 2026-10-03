@@ -2,7 +2,8 @@
 // route through runLlm({ task, prompt, ... }) so the user can pick a provider
 // per task: Claude CLI, Gemini CLI, Codex CLI, or the OpenAI Chat API.
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { resolveModel } from '@ludiars/one-shot';
+import { runCli } from './shared/llm-cli.js';
 import { forwardToConcordia } from './concordia-forward.js';
 
 export type LlmTaskName =
@@ -44,13 +45,13 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   domain_classify: 'sonnet',
   page_summary: 'sonnet',
   diary_work: 'sonnet',
-  diary_highlights: 'claude-opus-4-7[1m]',
-  diary_weekly: 'claude-opus-4-7[1m]',
+  diary_highlights: 'opus[1m]',
+  diary_weekly: 'opus[1m]',
   meal_vision: 'sonnet',
   meal_calorie: 'sonnet',
   app_classify: 'sonnet',
   recommendation_agent: 'sonnet',
-  recommendation_synthesize: 'claude-opus-4-7[1m]',
+  recommendation_synthesize: 'opus[1m]',
   endpoint_identify: 'sonnet',
   rss_score: 'haiku',      // 多数記事を高速・安価に採点する。
   rss_summarize: 'haiku',  // 記事ごとの短い要約。 数が出るので安価に。
@@ -58,7 +59,7 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   weather_rain_verify: 'sonnet',    // 複数ソースの一致から雨を検証 + ルール提案。
   weather_likely_place: 'sonnet',   // 曜日 × 訪問履歴から行きがちな場所を推定。
   article_topics: 'sonnet',          // 前日データから記事候補トピックを JSON 抽出・ランク付け。
-  article_write: 'claude-opus-4-7[1m]', // 1 トピックを本記事 (Markdown) に。 品質寄り + 長文。
+  article_write: 'opus[1m]', // 1 トピックを本記事 (Markdown) に。 品質寄り + 長文。
   article_tags: 'haiku',             // 完成記事から分類タグ (言語/技術領域 等) を抽出。 短文・安価。
   ai_advice: 'sonnet',               // 週次データから助言 (Markdown)。
   task_review: 'sonnet',             // 期限超過の todo/doing タスクから統合候補・完了候補を JSON 抽出。
@@ -101,15 +102,15 @@ export interface LlmModelOption {
 export const PROVIDER_MODELS: Record<LlmProviderKey, LlmModelOption[]> = {
   algorithm: [],
   claude: [
-    { id: 'sonnet',                 label: 'Sonnet 4.6 (default)' },
+    { id: 'sonnet',                 label: 'Sonnet (default)' },
     { id: 'haiku',                  label: 'Haiku 4.5 (fast)' },
-    { id: 'opus',                   label: 'Opus 4.7' },
-    { id: 'claude-opus-4-7[1m]',    label: 'Opus 4.7 (1M context)' },
+    { id: 'opus',                   label: 'Opus' },
+    { id: 'opus[1m]',    label: 'Opus (1M context)' },
     { id: 'claude-sonnet-4-6',      label: 'Sonnet 4.6 (full id)' },
     { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (full id)' },
   ],
   codex: [
-    { id: '5.3-codex',  label: '5.3-codex (default)' },
+    { id: 'sol',  label: 'Sol (default)' },
     { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
   ],
   gemini: [
@@ -129,7 +130,7 @@ export const PROVIDER_MODELS: Record<LlmProviderKey, LlmModelOption[]> = {
 
 export const PROVIDER_DEFAULT_MODEL: Partial<Record<LlmProviderKey, string>> = {
   claude: 'sonnet',
-  codex:  '5.3-codex',
+  codex:  'sol',
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
   gamma:  'gemma4:12b',
@@ -252,13 +253,15 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }: RunLl
   if (!p) throw new Error(`unknown provider: ${provider}`);
   if (p.kind === 'none') return '';
 
-  const modelToUse: string =
+  let modelToUse: string =
     taskCfg.model ||
     (provider === 'gamma'
       ? (cfg.gamma_model || PROVIDER_DEFAULT_MODEL.gamma || 'gemma4:12b')
       : p.kind === 'api'
         ? (cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai || 'gpt-4o-mini')
-        : (TASK_DEFAULT_MODELS[task] || PROVIDER_DEFAULT_MODEL[provider] || ''));
+        : ((provider === 'claude' ? TASK_DEFAULT_MODELS[task] : undefined) || PROVIDER_DEFAULT_MODEL[provider] || ''));
+
+  if (provider === 'claude' || provider === 'codex') modelToUse = resolveModel(modelToUse, provider);
 
   forwardToConcordia({ kind: 'llm-request', task, provider, model: modelToUse, text: prompt });
 
@@ -343,99 +346,6 @@ function buildCliArgs({
     else args.push('--allowedTools', tools.join(','));
   }
   return args;
-}
-
-function runCli({
-  bin, args, prompt, timeoutMs, env, label, jsonOutput = false,
-}: {
-  bin: string;
-  args: string[];
-  prompt: string;
-  timeoutMs: number;
-  env: NodeJS.ProcessEnv;
-  label: string;
-  jsonOutput?: boolean;
-}): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, env });
-    } catch (e: unknown) {
-      reject(new Error(`spawn ${bin}: ${e instanceof Error ? e.message : String(e)}`));
-      return;
-    }
-    let stdout = '', stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`${label} CLI timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
-    child.on('error', err => { clearTimeout(timer); reject(new Error(`${label} CLI: ${err.message}`)); });
-    child.on('close', code => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`${label} CLI exited ${code}: ${stderr.slice(0, 400)}`));
-      else resolve(jsonOutput ? extractCodexLastMessage(stdout) : stdout);
-    });
-    child.stdin.end(prompt, 'utf8');
-  });
-}
-
-function extractCodexLastMessage(raw: string): string {
-  let lastText = '';
-  const lines = raw.split(/\r?\n/).filter(l => l.trim());
-  for (const line of lines) {
-    let obj: unknown;
-    try { obj = JSON.parse(line); } catch { continue; }
-    const text = extractTextFromCodexEvent(obj);
-    if (text) lastText = text;
-  }
-  return lastText || raw;
-}
-
-interface CodexEvent {
-  message?: unknown;
-  text?: unknown;
-  delta?: unknown;
-  payload?: { message?: unknown; text?: unknown; delta?: unknown } & Record<string, unknown>;
-}
-
-function extractTextFromCodexEvent(obj: unknown): string {
-  if (!obj || typeof obj !== 'object') return '';
-  const o = obj as CodexEvent;
-  const candidates: unknown[] = [
-    o.message,
-    o.text,
-    o.delta,
-    o.payload?.message,
-    o.payload?.text,
-    o.payload?.delta,
-    o.payload,
-  ];
-  for (const candidate of candidates) {
-    const text = extractContentText(candidate);
-    if (text) return text;
-  }
-  return '';
-}
-
-interface ContentLike {
-  role?: unknown;
-  content?: unknown;
-  text?: unknown;
-}
-
-function extractContentText(value: unknown): string {
-  if (!value) return '';
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(extractContentText).filter(Boolean).join('\n');
-  if (typeof value !== 'object') return '';
-  const v = value as ContentLike;
-  if (v.role && v.role !== 'assistant') return '';
-  if (typeof v.content === 'string') return v.content;
-  if (Array.isArray(v.content)) return extractContentText(v.content);
-  if (typeof v.text === 'string') return v.text;
-  return '';
 }
 
 /**

@@ -4,3 +4,6 @@
 [submodule "services/tabula"]
 	path = services/tabula
 	url = https://github.com/LUDIARS/Tabula.git
+[submodule "lib/lapilli"]
+	path = lib/lapilli
+	url = https://github.com/LUDIARS/Lapilli.git

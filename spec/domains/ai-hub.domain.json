@@ -13,5 +13,8 @@
     {
       "pathPattern": "(^|/)server/(?:llm|claude|agent-dispatch)\\.ts$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/shared-one-shot.md"
   ]
 }

@@ -22,5 +22,8 @@
     {
       "pathPattern": "(^|/)server/[^/]+\\.(?:ts|mjs|js)$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/shared-one-shot.md"
   ]
 }

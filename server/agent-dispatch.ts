@@ -7,6 +7,7 @@
 //   - 'concordia':         Concordia /v1/spawn 経由で wt タブ起動 + inject
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawnOneShot, resolveModel } from '@ludiars/one-shot';
 import { mkdirSync, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -65,7 +66,7 @@ function buildPrompt({ task, project }: { task: TaskRow; project: AgentProjectRo
 
 const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   claude_code: 'sonnet',
-  codex:       '5.3-codex',
+  codex:       'sol',
   gemini:      'gemini-2.5-flash',
 };
 
@@ -146,7 +147,8 @@ export function startAgentRun(
   const logFile = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.log`;
   const logPath = join(logDir, logFile);
   const prompt = buildPrompt({ task, project });
-  const effectiveModel = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[a] || '';
+  const requestedModel = (model && String(model).trim()) || AGENT_DEFAULT_MODEL[a] || '';
+  const effectiveModel = a === 'gemini' ? requestedModel : resolveModel(requestedModel, a === 'codex' ? 'codex' : 'claude');
 
   const runId = insertAgentRun(db, {
     task_id: task.id,
@@ -171,7 +173,7 @@ export function startAgentRun(
   stream.write(`# agent: ${a}\n# model: ${effectiveModel || '(default)'}\n# bin: ${bin}\n# args: ${JSON.stringify(args)}\n# cwd: ${project.path}\n# started: ${new Date().toISOString()}\n# task: ${task.title}\n\n----- prompt -----\n${prompt}\n----- output -----\n`);
 
   try {
-    child = spawn(bin, args, {
+    child = (a === 'gemini' ? spawn : spawnOneShot)(bin, args, {
       cwd: project.path,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
