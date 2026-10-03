@@ -36,8 +36,9 @@ async function main(): Promise<void> {
   const token = resolveToken();
   if (!token) console.error('[code-volume] token が無いため未認証で呼びます (rate limit が厳しく、 private リポは取れません)');
   const cache = new CommitVolumeCache(opts.cachePath);
+  const client = createGithubCommitClient({ token });
   const result = await collectCommitVolumes({
-    client: createGithubCommitClient({ token }),
+    client,
     cache,
     months: opts.months,
     authors: opts.authors,
@@ -49,7 +50,14 @@ async function main(): Promise<void> {
   });
   const report = buildReport({ months: opts.months, commits: result.commits, authors: opts.authors, generatedAt: new Date().toISOString() });
   if (opts.outJson) writeOut(opts.outJson, `${JSON.stringify({ ...report, overflowDays: result.overflowDays }, null, 2)}\n`);
-  if (opts.outHtml) writeOut(opts.outHtml, renderVolumeHtml(report, { overflowDays: result.overflowDays }));
+  if (opts.outHtml) {
+    // 表に出るリポだけ公開範囲を調べ、 非公開は名前を伏せる
+    const privateRepos = new Set<string>();
+    for (const repo of new Set(report.months.flatMap((m) => m.topRepos.map((r) => r.repo)))) {
+      if (await client.isPrivateRepo(repo)) privateRepos.add(repo);
+    }
+    writeOut(opts.outHtml, renderVolumeHtml(report, { overflowDays: result.overflowDays, privateRepos }));
+  }
   console.error(`[code-volume] commits=${result.searched} fetched=${result.fetched} cached=${result.cached} overflow=${result.overflowDays.length}`);
   for (const m of report.months) {
     console.log(`${m.month}\tcode=${m.codeChanged}\tcodeWeekly=${m.weeklyAvgCodeChanged}\tall=${m.changed}\tallWeekly=${m.weeklyAvgChanged}\tcommits=${m.commits}`);

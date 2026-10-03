@@ -174,3 +174,29 @@ test('HTML はリポ名をエスケープし、 平均値を載せる', () => {
   assert.match(html, /<title>コード変更量<\/title>/);
   assert.match(html, /週平均 \(コード\)/);
 });
+
+test('HTML は非公開リポの名前を伏せてまとめる', () => {
+  const r = buildReport({
+    months: ['2026-09'],
+    commits: [
+      commit({ sha: 'a', authoredAt: '2026-09-02T00:00:00Z', repo: 'pub/open', codeAdditions: 10 }),
+      commit({ sha: 'b', authoredAt: '2026-09-03T00:00:00Z', repo: 'org/secret-one', codeAdditions: 20 }),
+      commit({ sha: 'c', authoredAt: '2026-09-04T00:00:00Z', repo: 'org/secret-two', codeAdditions: 5 }),
+    ],
+    authors: [{ kind: 'login', value: 'me' }],
+    generatedAt: 'now',
+  });
+  const html = renderVolumeHtml(r, { privateRepos: new Set(['org/secret-one', 'org/secret-two']) });
+  assert.match(html, /pub\/open/);
+  assert.doesNotMatch(html, /secret-one|secret-two/);
+  assert.match(html, /非公開リポ \(2 件\) <span class="muted">25<\/span>/);
+});
+
+test('GitHub adapter: 見えないリポは非公開として扱う', async () => {
+  const { fetch } = fakeFetch((url) => (url.endsWith('/repos/o/pub')
+    ? { status: 200, body: { private: false } }
+    : { status: 404 }));
+  const client = createGithubCommitClient({ token: null, fetch, sleep: async () => {} });
+  assert.equal(await client.isPrivateRepo('o/pub'), false);
+  assert.equal(await client.isPrivateRepo('o/hidden'), true);
+});

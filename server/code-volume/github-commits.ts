@@ -119,7 +119,17 @@ export function createGithubCommitClient(opts: GithubClientOptions) {
     return { sha: hit.sha, repo: hit.repo, authoredAt, additions, deletions, files: changes, filesTruncated: truncated };
   }
 
-  return { searchCommits, fetchCommitVolume };
+  /** リポが非公開なら true。 見えない (404 等) リポも非公開として扱う。 */
+  async function isPrivateRepo(repo: string): Promise<boolean> {
+    try {
+      const json = await getJson(`${API}/repos/${repo}`) as { private?: boolean };
+      return json.private !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  return { searchCommits, fetchCommitVolume, isPrivateRepo };
 }
 
 export type GithubCommitClient = ReturnType<typeof createGithubCommitClient>;

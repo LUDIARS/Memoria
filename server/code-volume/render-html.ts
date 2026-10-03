@@ -31,14 +31,28 @@ function monthRow(m: MonthVolume, maxCode: number): string {
 </tr>`;
 }
 
-function repoBlock(m: MonthVolume): string {
+export interface RenderOptions {
+  overflowDays?: string[];
+  /** 名前を出さないリポ (非公開)。 まとめて「非公開リポ (N 件)」 と表示する */
+  privateRepos?: ReadonlySet<string>;
+}
+
+function repoBlock(m: MonthVolume, privateRepos: ReadonlySet<string>): string {
   if (m.topRepos.length === 0) return `<li><b>${esc(m.month)}</b> <span class="muted">コミットなし</span></li>`;
-  const items = m.topRepos.map((r) => `${esc(r.repo)} <span class="muted">${n(r.codeChanged)}</span>`).join('、');
+  const shown = m.topRepos.filter((r) => !privateRepos.has(r.repo));
+  const hidden = m.topRepos.filter((r) => privateRepos.has(r.repo));
+  const parts = shown.map((r) => `${esc(r.repo)} <span class="muted">${n(r.codeChanged)}</span>`);
+  if (hidden.length > 0) {
+    const sum = hidden.reduce((s, r) => s + r.codeChanged, 0);
+    parts.push(`非公開リポ (${hidden.length} 件) <span class="muted">${n(sum)}</span>`);
+  }
+  const items = parts.join('、');
   const note = m.truncatedCommits > 0 ? ` <span class="warn">(ファイル数上限で下限値: ${m.truncatedCommits} 件)</span>` : '';
   return `<li><b>${esc(m.month)}</b> ${items}${note}</li>`;
 }
 
-export function renderVolumeHtml(report: VolumeReport, opts: { overflowDays?: string[] } = {}): string {
+export function renderVolumeHtml(report: VolumeReport, opts: RenderOptions = {}): string {
+  const privateRepos = opts.privateRepos ?? new Set<string>();
   const maxCode = Math.max(0, ...report.months.map((m) => m.codeChanged));
   const authors = report.authors.map((a) => `${a.kind === 'login' ? '@' : ''}${esc(a.value)}`).join('、');
   const overflow = opts.overflowDays?.length
@@ -95,10 +109,11 @@ ${report.months.map((m) => monthRow(m, maxCode)).join('\n')}
 </div>
 <h2>月ごとの主なリポ (コード変更行)</h2>
 <ul>
-${report.months.map(repoBlock).join('\n')}
+${report.months.map((m) => repoBlock(m, privateRepos)).join('\n')}
 </ul>
 <h2>数え方</h2>
 <ul>
+<li>非公開リポは名前を伏せ、 月ごとに 「非公開リポ」 としてまとめる。</li>
 <li>変更行 = 追加行 + 削除行。 GitHub のコミット検索で本人の識別子に当たった、 merge 以外のコミットを数える (既定ブランチに載ったものだけ)。</li>
 <li>「コード」 はソース拡張子のファイルに限り、 node_modules・dist・build・vendor・third_party・generated 等とロックファイルを除く。 「全ファイル」 は除外なし。</li>
 <li>週平均 = 月合計 ÷ (その月の日数 ÷ 7)。 上部の週平均は選んだ月の合計 ÷ (総日数 ÷ 7)、 月平均は選んだ月数で割った値。</li>
