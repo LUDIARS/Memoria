@@ -5,6 +5,7 @@
 import { resolveModel } from '@ludiars/one-shot';
 import { runCli } from './shared/llm-cli.js';
 import { forwardToConcordia } from './concordia-forward.js';
+import { runTextSummary } from './shared/text-summary.js';
 
 export type LlmTaskName =
   | 'summarize' | 'dig' | 'dig_preview' | 'cloud_extract' | 'cloud_validate'
@@ -245,6 +246,14 @@ export interface RunLlmArgs {
 export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }: RunLlmArgs): Promise<string> {
   const start = Date.now();
   const taskCfg = cfg.tasks[task] || { provider: 'claude' as LlmProviderKey };
+  if (task === 'summarize') {
+    const provider = taskCfg.provider;
+    const model = taskCfg.model || (provider === 'gamma' ? cfg.gamma_model
+      : provider === 'openai' ? cfg.openai_model : TASK_DEFAULT_MODELS.summarize || 'haiku');
+    return runTextSummary({ provider, model: provider === 'claude' ? resolveModel(model, provider) : model,
+      bin: cfg.bins.claude, baseUrl: provider === 'gamma' ? cfg.gamma_base_url : 'https://api.openai.com/v1',
+      prompt, timeoutMs });
+  }
   let provider: LlmProviderKey = taskCfg.provider || 'claude';
   if (provider === 'openai' && !cfg.openai_api_key) provider = 'claude';
   // gamma は base_url が無いと繋げないので claude フォールバック (既定は Ollama なので通常起きない)。

@@ -1,6 +1,7 @@
 const DEFAULT_SERVER = 'http://localhost:5180';
 
 const serverInput = document.getElementById('server');
+const bookmarkTokenInput = document.getElementById('bookmarkToken');
 const msg = document.getElementById('msg');
 const chatRows = document.getElementById('chatRows');
 const implRows = document.getElementById('implRows');
@@ -139,6 +140,7 @@ document.getElementById('save').addEventListener('click', async () => {
   try {
     const server = serverInput.value.trim() || DEFAULT_SERVER;
     await chrome.storage.sync.set({ server });
+    await chrome.storage.local.set({ bookmarkToken: bookmarkTokenInput.value.trim() });
     await pushRules(rules);
     msg.textContent = '保存しました';
     msg.style.color = '#2a7';
@@ -152,6 +154,8 @@ document.getElementById('save').addEventListener('click', async () => {
 (async () => {
   const { server } = await chrome.storage.sync.get({ server: DEFAULT_SERVER });
   serverInput.value = server;
+  const { bookmarkToken = '' } = await chrome.storage.local.get('bookmarkToken');
+  bookmarkTokenInput.value = bookmarkToken;
   try {
     rules = await fetchRules();
     renderAll();

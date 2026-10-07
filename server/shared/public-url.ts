@@ -84,11 +84,9 @@ function isBlockedV6(ip: string): boolean {
   if (!words) return true;
   const v4 = embeddedV4(words);
   if (v4 !== null) return isBlockedV4(v4);
-  // 6to4 embeds the destination IPv4 address immediately after 2002::/16.
-  if (words[0] === 0x2002) {
-    const tunneledV4 = `${words[1] >>> 8}.${words[1] & 0xff}.${words[2] >>> 8}.${words[2] & 0xff}`;
-    if (isBlockedV4(tunneledV4)) return true;
-  }
+  // Exclude site-local and translation/tunneling ranges whose routing may reach private networks.
+  if ((words[0] & 0xe000) !== 0x2000 || words[0] === 0x2002
+    || (words[0] === 0x2001 && words[1] === 0)) return true;
   const head = lower.split(':')[0] ?? '';
   const value = parseInt(head || '0', 16);
   if (Number.isNaN(value)) return true;
@@ -108,7 +106,8 @@ export function isBlockedAddress(ip: string): boolean {
 /**
  * Rejects non-HTTP schemes and hostnames that currently resolve to non-public addresses.
  * Callers must repeat this check for every redirect. The later network connection performs
- * its own DNS lookup, so DNS rebinding between validation and connection remains a residual risk.
+ * its own DNS lookup, so this predicate alone does not prevent rebinding. Use public-fetch
+ * for untrusted HTTP retrieval; its transport pins this validation to the connection.
  */
 export async function assertPublicHttpUrl(rawUrl: string): Promise<void> {
   let url: URL;

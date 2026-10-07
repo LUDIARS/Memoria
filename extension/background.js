@@ -205,9 +205,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function handleSave(payload) {
   try {
     const server = await getServer();
+    const { bookmarkToken = '' } = await chrome.storage.local.get('bookmarkToken');
     const res = await fetch(`${server}/api/bookmark`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      redirect: 'error',
+      headers: { 'Content-Type': 'application/json', ...(bookmarkToken ? { 'X-Memoria-Bookmark-Token': bookmarkToken } : {}) },
       body: JSON.stringify(payload),
     });
     if (!res.ok) {

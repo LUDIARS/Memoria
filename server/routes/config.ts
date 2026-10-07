@@ -16,6 +16,7 @@ import type { LlmConfigPatch } from '../llm.js';
 import { privacySettings } from '../lib/privacy.js';
 import { getIngestKey, maskKey } from '../lib/ingest-auth.js';
 import type { FifoQueue } from '../queue.js';
+import { requireScope } from '../lib/scoped-access.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -234,6 +235,7 @@ export function makeConfigRouter(deps: ConfigRouterDeps): Hono {
 
   // ---- llm config -----------------------------------------------------------
 
+  r.use('/api/llm/config', requireScope('admin'));
   r.get('/api/llm/config', (c: Context) => {
     const cfg = getLlmConfig();
     const settings = getAppSettings(db);

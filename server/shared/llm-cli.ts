@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { spawnOneShot } from '@ludiars/one-shot';
 
 export function runCli({
-  bin, args, prompt, timeoutMs, env, label, jsonOutput = false,
+  bin, args, prompt, timeoutMs, env, label, jsonOutput = false, cwd, maxOutputBytes,
 }: {
   bin: string;
   args: string[];
@@ -11,26 +11,43 @@ export function runCli({
   env: NodeJS.ProcessEnv;
   label: string;
   jsonOutput?: boolean;
+  cwd?: string;
+  maxOutputBytes?: number;
 }): Promise<string> {
   return new Promise((resolve, reject) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = (label === 'claude' || label === 'codex' ? spawnOneShot : spawn)(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, env });
+      child = (label === 'claude' || label === 'codex' ? spawnOneShot : spawn)(bin, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: false, env, cwd });
     } catch (e: unknown) {
       reject(new Error(`spawn ${bin}: ${e instanceof Error ? e.message : String(e)}`));
       return;
     }
     let stdout = '', stderr = '';
+    let failure: Error | undefined;
+    let outputBytes = 0;
     const timer = setTimeout(() => {
+      failure = new Error(`${label} CLI timed out after ${timeoutMs}ms`);
       child.kill('SIGKILL');
-      reject(new Error(`${label} CLI timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
-    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
+    const collect = (data: Buffer, isError: boolean): void => {
+      outputBytes += data.length;
+      if (maxOutputBytes !== undefined && outputBytes > maxOutputBytes) {
+        failure = new Error(`${label} CLI output limit exceeded`);
+        child.kill('SIGKILL');
+        return;
+      }
+      if (isError) stderr += data.toString('utf8');
+      else stdout += data.toString('utf8');
+    };
+    child.stdout.on('data', (d: Buffer) => collect(d, false));
+    child.stderr.on('data', (d: Buffer) => collect(d, true));
+    child.stdin.on('error', err => { failure = err; child.kill('SIGKILL'); });
     child.on('error', err => { clearTimeout(timer); reject(new Error(`${label} CLI: ${err.message}`)); });
     child.on('close', code => {
       clearTimeout(timer);
-      if (code !== 0) reject(new Error(`${label} CLI exited ${code}: ${stderr.slice(0, 400)}`));
+      if (failure) reject(failure);
+      else if (code !== 0) reject(new Error(maxOutputBytes === undefined
+        ? `${label} CLI exited ${code}: ${stderr.slice(0, 400)}` : `${label} CLI exited ${code}`));
       else resolve(jsonOutput ? extractCodexLastMessage(stdout) : stdout);
     });
     child.stdin.end(prompt, 'utf8');

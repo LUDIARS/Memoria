@@ -1,10 +1,11 @@
-import { assertPublicHttpUrl } from './public-url.js';
+import { fetchPinnedPublicResponse } from './public-connection.js';
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 
 export interface PublicFetchOptions {
+  timeoutMs?: number;
   accept?: string;
   maxBytes?: number;
   userAgent?: string;
@@ -62,20 +63,19 @@ async function discardBody(response: Response): Promise<void> {
 /**
  * 公開 http(s) URL のテキストを SSRF ガード付きで取得する (redirect は手動追跡し、 各 hop で再検証)。
  */
-export async function fetchPublicText(initialUrl: string, options: PublicFetchOptions = {}): Promise<PublicFetchResult> {
+export async function fetchPublicText(initialUrl: string, options: PublicFetchOptions = {},
+  request: typeof fetchPinnedPublicResponse = fetchPinnedPublicResponse): Promise<PublicFetchResult> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? FETCH_TIMEOUT_MS);
   let currentUrl = initialUrl;
   const initialOrigin = new URL(initialUrl).origin;
   try {
     for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
-      await assertPublicHttpUrl(currentUrl);
       // extraHeaders は資格情報 (GitHub の Authorization 等) を含みうるので、
       // redirect で別 origin に移ったら引き継がない。
       const sameOrigin = new URL(currentUrl).origin === initialOrigin;
-      const response = await fetch(currentUrl, {
-        redirect: 'manual',
+      const response = await request(currentUrl, {
         signal: controller.signal,
         headers: {
           'User-Agent': options.userAgent ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MemoriaReleaseWatch/1.0',

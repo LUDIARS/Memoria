@@ -16,6 +16,9 @@ import {
 import type { FifoQueue } from '../queue.js';
 import { parseOgFromHtml } from '../url-preview.js';
 import { featureEnabled } from '../lib/privacy.js';
+import { requireScope } from '../lib/scoped-access.js';
+import { storedHtmlHeaders } from '../lib/stored-html.js';
+import { bodyLimit } from 'hono/body-limit';
 
 type Db = BetterSqlite3.Database;
 
@@ -35,6 +38,10 @@ export interface BookmarkRouterDeps {
 export function makeBookmarkRouter(deps: BookmarkRouterDeps): Hono {
   const { db, htmlDir, summaryQueue, enqueueSummary, fetchPageHtml } = deps;
   const r = new Hono();
+  for (const path of ['/api/bookmark', '/api/bookmarks/from-url', '/api/bookmarks/:id/resummarize']) {
+    r.use(path, requireScope('bookmark'));
+    r.use(path, bodyLimit({ maxSize: 4 * 1024 * 1024 }));
+  }
 
   r.post('/api/bookmark', async (c: Context) => {
     const body = await c.req.json().catch(() => null) as
@@ -164,7 +171,7 @@ export function makeBookmarkRouter(deps: BookmarkRouterDeps): Hono {
     if (!b) return c.text('not found', 404);
     const p = join(htmlDir, b.html_path);
     if (!existsSync(p)) return c.text('html missing', 404);
-    return c.body(readFileSync(p), 200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return c.body(readFileSync(p), 200, storedHtmlHeaders());
   });
 
   r.get('/api/bookmarks/:id/accesses', (c: Context) => {

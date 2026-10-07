@@ -33,9 +33,11 @@ saveBtn.addEventListener('click', async () => {
       }),
     });
     statusEl.textContent = '送信中...';
+    const { bookmarkToken = '' } = await chrome.storage.local.get('bookmarkToken');
     const res = await fetch(`${server}/api/bookmark`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      redirect: 'error',
+      headers: { 'Content-Type': 'application/json', ...(bookmarkToken ? { 'X-Memoria-Bookmark-Token': bookmarkToken } : {}) },
       body: JSON.stringify(result),
     });
     if (!res.ok) {

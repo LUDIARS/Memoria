@@ -4,6 +4,38 @@
   "importFrom": "../shared/contract-runtime.js",
   "contracts": [
     {
+      "id": "C-7",
+      "criterion": "C-7 hasScopedAccess(c, scope): 不透明 origin を拒否し、管理と取込の権限を別々に判定する",
+      "symbol": "hasScopedAccess",
+      "file": "server/lib/scoped-access.ts",
+      "module": "augur/contracts/security-access.contract.ts",
+      "mode": "observe", "sample": 1
+    },
+    {
+      "id": "C-8",
+      "criterion": "C-8 resolvePublicAddress(url): 全 DNS 応答が公開 IP のときだけ接続に固定する IP を返す",
+      "symbol": "resolvePublicAddress",
+      "file": "server/shared/public-connection.ts",
+      "module": "augur/contracts/security-address.contract.ts",
+      "mode": "observe", "sample": 1
+    },
+    {
+      "id": "C-9",
+      "criterion": "C-9 storedHtmlHeaders(): 保存 HTML に script・同一 origin 権限を与えない CSP sandbox を返す",
+      "symbol": "storedHtmlHeaders",
+      "file": "server/lib/stored-html.ts",
+      "module": "augur/contracts/security-html.contract.ts",
+      "mode": "observe", "sample": 1
+    },
+    {
+      "id": "C-10",
+      "criterion": "C-10 textSummaryArgs(model): 要約 CLI の tools・MCP・hooks・セッション保存を無効にする",
+      "symbol": "textSummaryArgs",
+      "file": "server/shared/text-summary.ts",
+      "module": "augur/contracts/security-summary.contract.ts",
+      "mode": "observe", "sample": 1
+    },
+    {
       "id": "C-1",
       "criterion": "C-1 estimateResponseCost(provider, model, usage): 未掲載モデルは usd・breakdown が null、掲載モデルは usd が内訳の合計に一致する",
       "symbol": "estimateResponseCost",

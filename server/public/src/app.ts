@@ -1,4 +1,5 @@
 import {appendTabulaFeed,setupTabulaFeed} from './tabula-feed.js';
+import { scopedFetch } from './shared/scoped-fetch.js';
 import {setupErrorLog,loadErrorLog} from './error-log-view.js';
 import {registerMemoriaWorker,setupFrontendUpdates} from './frontend-updates.js';
 // このファイルは esbuild で `app.js` (browser bundle) に bundle される。
@@ -507,7 +508,7 @@ async function api<T = ApiResp>(path: string, opts?: ApiOpts): Promise<T> {
       const { silent: _drop, ...rest } = opts;
       fetchOpts = rest;
     }
-    const res = await fetch(path, fetchOpts);
+    const res = await scopedFetch(path, fetchOpts);
     if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=>'')}`);
     return await res.json() as T;
   } finally {
