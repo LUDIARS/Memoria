@@ -38,7 +38,7 @@ export async function withSummaryBudget<T>(prompt: string, run: () => Promise<T>
   try { return await run(); } finally { active -= 1; }
 }
 
-interface TextSummaryOptions {
+export interface TextSummaryOptions {
   provider: string;
   model: string;
   bin: string;
@@ -47,18 +47,26 @@ interface TextSummaryOptions {
   timeoutMs: number;
 }
 
-export async function runTextSummary(options: TextSummaryOptions): Promise<string> {
+export interface TextSummaryDependencies {
+  fetch?: typeof fetch;
+  runCli?: typeof runCli;
+  environment?: NodeJS.ProcessEnv;
+  now?: () => number;
+}
+
+export async function runTextSummary(options: TextSummaryOptions, deps: TextSummaryDependencies = {}): Promise<string> {
+  const environment = deps.environment ?? process.env;
   return withSummaryBudget(options.prompt, async () => {
     const timeoutMs = Math.min(options.timeoutMs, 180_000);
     if (options.provider === 'openai' || options.provider === 'gamma') {
-      const apiKey = process.env.MEMORIA_SUMMARY_API_KEY;
+      const apiKey = environment.MEMORIA_SUMMARY_API_KEY;
       if (options.provider === 'openai' && !apiKey) throw new Error('MEMORIA_SUMMARY_API_KEY is required');
       const url = new URL(`${options.baseUrl.replace(/\/+$/, '')}/chat/completions`);
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('invalid summary API URL');
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const response = await fetch(url, {
+        const response = await (deps.fetch ?? fetch)(url, {
           method: 'POST', redirect: 'error', signal: controller.signal,
           headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
           body: JSON.stringify({ model: options.model, messages: [{ role: 'user', content: options.prompt }], max_tokens: 4096 }),
@@ -78,12 +86,12 @@ export async function runTextSummary(options: TextSummaryOptions): Promise<strin
     }
     if (options.provider !== 'claude') throw new Error(`tool-less summary provider unsupported: ${options.provider}`);
     // Check the required credential before allocating resources or spawning a process.
-    if (!process.env.MEMORIA_SUMMARY_CLAUDE_TOKEN) throw new Error('MEMORIA_SUMMARY_CLAUDE_TOKEN is required');
+    if (!environment.MEMORIA_SUMMARY_CLAUDE_TOKEN) throw new Error('MEMORIA_SUMMARY_CLAUDE_TOKEN is required');
     const directory = await mkdtemp(join(tmpdir(), 'memoria-summary-'));
     try {
-      return await runCli({ bin: options.bin, args: textSummaryArgs(options.model),
-        prompt: options.prompt, timeoutMs, env: textSummaryEnvironment(process.env, directory),
+      return await (deps.runCli ?? runCli)({ bin: options.bin, args: textSummaryArgs(options.model),
+        prompt: options.prompt, timeoutMs, env: textSummaryEnvironment(environment, directory),
         cwd: directory, label: 'claude', maxOutputBytes: 1024 * 1024 });
     } finally { await rm(directory, { recursive: true, force: true }); }
-  });
+  }, (deps.now ?? Date.now)());
 }

@@ -11,6 +11,10 @@ Actio: `actio:9ecb314b-65e8-4c19-9ed5-f74220113417`。人間による M1–M4 �
 
 ## 契約・作業単位
 
+2026-10-07追加受入: 人間が隔離回帰テストを許可。test:securityの4ファイルは当初7/7成功。M4の不足を補うためrunner/fetch/env/clockを任意注入可能にし、既定のproduction経路は維持。tool calls/redirect拒否、API1MiB応答とtimeout abort、fakeCLIの隔離cwd/env/tools・180秒/1MiB上限、一時dirの成功/失敗cleanup、同時2・毎分10のbudgetと失敗slot解放を追加し11/11成功。実LLM・ネットワーク・子プロセスは使わない。cc-test claim/release済み。C7–C10の2回合計観測は32/4/2/4、違反/predicate例外0。ログはworktree .tmp/security-regression-20261007/contracts.jsonl。
+
+変更2moduleのfocused strict型検査とdiff check成功。全体tscは既存missing @types/better-sqlite3等で失敗し、read-onlyの本体dependency junctionへinstallしない。PR2518 mergedmainと元featureHEADは祖先でないがtreeは同一。追加差分だけをmain起点のfollowupworktreeへ移し、既存ActioIDを維持する。旧PRを再提出しない。
+
 - C-7 hasScopedAccess(c, scope): 不透明 origin を拒否し、管理と取込の権限を別々に判定する。
 - C-8 resolvePublicAddress(url): 全 DNS 応答が公開 IP のときだけ接続に固定する IP を返す。
 - C-9 storedHtmlHeaders(): 保存 HTML に script・同一 origin 権限を与えない CSP sandbox を返す。
