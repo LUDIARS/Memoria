@@ -52,9 +52,12 @@
 |---|---|---|---|
 | POST | `/api/notes/from-chat` | `NoteFromChatRequest` | `NoteFromChatResponse` |
 | POST | `/api/notes/from-notion` | `NoteFromNotionRequest` | `NoteFromNotionResponse` |
+| POST | `/api/notes/from-text` | `{ external_id, title, markdown, source }` | `{ note: { id }, url, external_id, created }` (新規 201 / 既存 200) |
 | POST | `/api/bookmarks/:id/reparse` | `BookmarkReparseRequest` | `BookmarkReparseResponse` |
 
 `NoteFromChatResponse.note.id` / `NoteFromNotionResponse.note.id` は UUID。
+
+`/api/notes/from-text` は外部サービス (Concordia のデイリーゴール等) 向け。 同じ `external_id` は作らずに既存を返す。 対応表 `external_notes` は Tabula 取り込み成功後にだけ保存する。 詳細は [local-tabula.md](../feature/local-tabula.md) の SPEC-MM-TABULA-TEXT-IMPORT。
 
 ### 保存済 HTML の再パース (`/api/bookmarks/:id/reparse`)
 

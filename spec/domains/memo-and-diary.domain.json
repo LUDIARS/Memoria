@@ -11,6 +11,12 @@
       "pathPattern": "(^|/)server/diary\\.ts$"
     },
     {
+      "pathPattern": "(^|/)server/diary/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/diary-sections-view\\.ts$"
+    },
+    {
       "pathPattern": "(^|/)server/routes/(?:note|diary|dict|bookmark|misc)\\.ts$"
     },
     {

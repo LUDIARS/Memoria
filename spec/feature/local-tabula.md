@@ -20,6 +20,17 @@ Memoriaから開くTabulaは `services/tabula` にGit submoduleとして取得�
 AI記事・チャット・Notion・スクラップ済みブックマークの明示登録も同じ保存先を使う。
 未設定・停止・不正な接続先はエラーを返し、遠隔TabulaやMemoria内の旧DBへ代替保存しない。
 
+## SPEC-MM-TABULA-TEXT-IMPORT
+
+外部サービス (例: Concordia のデイリーゴール自走) は `POST /api/notes/from-text`
+`{ external_id, title, markdown, source }` で Markdown を1本のノートとして取り込む。
+本文はtextブロック1つとしてTabulaのMarkdown取り込みへ渡す (`server/tabula/text-note.ts`)。
+`external_notes` が `external_id` とTabulaのnote id/URLを対応づけ、同じ `external_id` は
+Tabulaを呼ばずに既存を返す (200)。新規は201。同時に同じ `external_id` が来ても取り込みは1回。
+対応表はTabula取り込み成功後にだけ書く。失敗はエラーを返し、再試行で改めて取り込む。
+`title` は1〜200字、`markdown` は空でなく200KB以下、`source` は `[a-z0-9-]{1,64}`、
+`external_id` は1〜200字。違反は400。アクセスは既存の `/api/notes/*` と同じ `localTabulaAccess`。
+
 ## SPEC-MM-TABULA-ACCESS
 
 接続先は所有catalogが提供する `MEMORIA_TABULA_URL`。アプリ内にポートを直書きしない。
@@ -79,6 +90,7 @@ Memoria側のTabula見出しと接続成功時の案内文は表示せず、接�
 
 ## 検証
 
+`server/tabula/text-note.test.ts` はテキスト取り込みの冪等性・同時実行・取り込み失敗時に対応表を残さないこと・入力上限を確認する。
 `server/tabula/connection.test.ts` はローカル接続先の選択、不正URLの拒否、共有設定との分離、
 許可されたAccess中継と不正な接続の拒否を確認する。`server/tabula/browser-proxy.test.ts` は
 編集経路の限定、認証情報の除去、同一Origin、HTML隔離、同一Originのリンクを確認する。

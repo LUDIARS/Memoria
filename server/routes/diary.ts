@@ -13,6 +13,8 @@ import {
   aggregateDay, bookmarksForDate, pingGithub, weekRangeFor, weekOfMonth,
 } from '../diary.js';
 import type { FifoQueue } from '../queue.js';
+import { deleteDiarySections } from '../diary/sections-store.js';
+import { makeDiarySectionsRouter } from '../diary/sections-router.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -31,6 +33,8 @@ export interface DiaryRouterDeps {
 export function makeDiaryRouter(deps: DiaryRouterDeps): Hono {
   const { db, diaryQueue, enqueueDiary, enqueueWeekly } = deps;
   const r = new Hono();
+  // External sections (/api/diary/:date/sections*) live in their own table; see server/diary/.
+  r.route('/', makeDiarySectionsRouter(db));
 
   function settingsAsObject() {
     const s = getDiarySettings(db);
@@ -167,7 +171,11 @@ export function makeDiaryRouter(deps: DiaryRouterDeps): Hono {
 
   r.delete('/api/diary/:date', (c: Context) => {
     const date = c.req.param('date') ?? '';
-    deleteDiary(db, date);
+    // Deleting the day removes its external sections too; regeneration (generate) keeps them.
+    db.transaction(() => {
+      deleteDiary(db, date);
+      deleteDiarySections(db, date);
+    })();
     return c.json({ ok: true });
   });
 

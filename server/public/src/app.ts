@@ -1,6 +1,7 @@
 import {appendTabulaFeed,setupTabulaFeed} from './tabula-feed.js';
 import { scopedFetch } from './shared/scoped-fetch.js';
 import {setupErrorLog,loadErrorLog} from './error-log-view.js';
+import { loadDiarySections } from './diary-sections-view.js';
 import {registerMemoriaWorker,setupFrontendUpdates} from './frontend-updates.js';
 // このファイルは esbuild で `app.js` (browser bundle) に bundle される。
 // declare global を有効にするため、 module 化のための `export {}` を末尾
@@ -3375,6 +3376,7 @@ function renderDiaryDetail() {
   }
 
   $('diaryNotes').value = d.notes || '';
+  void loadDiarySections(d.date);
 }
 
 const PIE_PALETTE = [

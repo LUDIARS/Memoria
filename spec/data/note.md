@@ -148,5 +148,19 @@ Index: `idx_note_comments_set_position` (set_id, position) / `idx_note_comments_
 - `GET /api/multi/notes/:note_id` で全コメント set の一覧を取得
 - ローカル UI は「自分のコメントだけ」 / 「全員のコメント」 / 「特定 user のコメント」 を切替表示
 
+## `external_notes`
+`POST /api/notes/from-text` の冪等キー。 外部サービスの `external_id` と取り込み先 Tabula ノートを対応づける。
+スキーマは `server/tabula/text-note.ts` の `ensureExternalNotesSchema` が起動時に `CREATE TABLE IF NOT EXISTS` で作る。
+
+| 列 | 型 | NotNull | Default | 役割 |
+|---|---|---|---|---|
+| `external_id` | TEXT | ✓ | — | PK。 呼び出し側の冪等キー (例 `concordia-daily-goal:2026-10-09`) |
+| `source` | TEXT | ✓ | — | 呼び出し元 (`[a-z0-9-]{1,64}`) |
+| `note_id` | TEXT | ✓ | — | Tabula の note id |
+| `note_url` | TEXT | ✓ | — | ブラウザで開く URL |
+| `created_at` | TEXT | ✓ | UTC | |
+
+行を消すと次の同じ `external_id` で新しいノートが作られる。 戻す場合は `DROP TABLE external_notes`。
+
 ## マイグレーション
 PR rev1 の `notes` (INTEGER PK) は **空のとき drop+recreate**。 行があれば schema 不一致を warn して停止 (手動移行)。 PR rev1 の `note_blocks` も同様 (`uuid` 列追加)。

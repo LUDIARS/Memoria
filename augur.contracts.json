@@ -9,7 +9,8 @@
       "symbol": "hasScopedAccess",
       "file": "server/lib/scoped-access.ts",
       "module": "augur/contracts/security-access.contract.ts",
-      "mode": "observe", "sample": 1
+      "mode": "observe",
+      "sample": 1
     },
     {
       "id": "C-8",
@@ -17,7 +18,8 @@
       "symbol": "resolvePublicAddress",
       "file": "server/shared/public-connection.ts",
       "module": "augur/contracts/security-address.contract.ts",
-      "mode": "observe", "sample": 1
+      "mode": "observe",
+      "sample": 1
     },
     {
       "id": "C-9",
@@ -25,7 +27,8 @@
       "symbol": "storedHtmlHeaders",
       "file": "server/lib/stored-html.ts",
       "module": "augur/contracts/security-html.contract.ts",
-      "mode": "observe", "sample": 1
+      "mode": "observe",
+      "sample": 1
     },
     {
       "id": "C-10",
@@ -33,7 +36,8 @@
       "symbol": "textSummaryArgs",
       "file": "server/shared/text-summary.ts",
       "module": "augur/contracts/security-summary.contract.ts",
-      "mode": "observe", "sample": 1
+      "mode": "observe",
+      "sample": 1
     },
     {
       "id": "C-1",
@@ -86,6 +90,42 @@
       "symbol": "usageDashboard",
       "file": "server/llm-usage/dashboard.ts",
       "module": "augur/contracts/dashboard.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-11",
+      "criterion": "C-11 validateDiarySectionInput(date, source, body): 日付・source の形式違反と、空または 200 字超の title・空または 200KB 超の markdown を拒否する",
+      "symbol": "validateDiarySectionInput",
+      "file": "server/diary/sections-store.ts",
+      "module": "augur/contracts/diary-section-input.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-12",
+      "criterion": "C-12 putDiarySection(db, date, source, input): 保存後に (date, source) の外部節がちょうど 1 件あり、入力の title と markdown に一致する",
+      "symbol": "putDiarySection",
+      "file": "server/diary/sections-store.ts",
+      "module": "augur/contracts/diary-section-put.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-13",
+      "criterion": "C-13 deleteDiarySections(db, date): 実行後、その日の外部節が 0 件になる",
+      "symbol": "deleteDiarySections",
+      "file": "server/diary/sections-store.ts",
+      "module": "augur/contracts/diary-section-delete.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-14",
+      "criterion": "C-14 importTextNote(db, input, importer): 同じ external_id の対応表はちょうど 1 行で、返すノートは対応表のノートと一致する",
+      "symbol": "importTextNote",
+      "file": "server/tabula/text-note.ts",
+      "module": "augur/contracts/text-note-import.contract.ts",
       "mode": "observe",
       "sample": 1
     }

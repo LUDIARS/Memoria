@@ -12,10 +12,12 @@ import {tabulaReader} from './reader.js';
 import {localTabulaAccess} from './local-access.js';
 import {tabulaConnection} from './connection.js';
 import {tabulaBrowserProxy} from './browser-proxy.js';
+import {ensureExternalNotesSchema,importTextNote,validateTextNoteInput} from './text-note.js';
 
 function source(value:unknown):value is ChatExtractionSource {return value==='chatgpt'||value==='claude'||value==='gemini';}
 export function makeTabulaRouter(deps:{db:BetterSqlite3.Database;htmlDir:string}):Hono {
   const {db,htmlDir}=deps,r=new Hono();
+  ensureExternalNotesSchema(db);
   r.onError((error,c)=>c.json({error:error.message},502));
   r.route('/',tabulaBrowserProxy());
   r.use('/api/notes/*',localTabulaAccess);
@@ -43,6 +45,12 @@ export function makeTabulaRouter(deps:{db:BetterSqlite3.Database;htmlDir:string}
     let bookmarkId:number|null=null;
     if(b.also_bookmark)bookmarkId=findBookmarkByUrl(db,b.url)?.id??insertBookmark(db,{url:b.url,title:b.title,htmlPath:''});
     return c.json({...result,blocks_inserted:b.blocks.length,bookmark_id:bookmarkId},201);
+  });
+  r.post('/api/notes/from-text',async c=>{
+    const checked=validateTextNoteInput(await c.req.json().catch(()=>null));
+    if(!checked.ok)return c.json({error:checked.error},400);
+    const result=await importTextNote(db,checked.input,importToTabula);
+    return c.json(result,result.created?201:200);
   });
   r.post('/api/bookmarks/:id/reparse',async c=>{
     const id=Number(c.req.param('id'));if(!Number.isSafeInteger(id))return c.json({error:'invalid id'},400);

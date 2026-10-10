@@ -2169,6 +2169,11 @@ body:not([data-multi-mode="on"]) .multi-only-control { display: none !important;
 /* textarea の base スタイルは .foundation-form から継承。 */
 .diary-detail textarea { font-family: inherit; }
 .diary-detail-actions { display: flex; gap: 8px; margin-top: 8px; }
+.diary-sections { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+.diary-section { border-top: 1px solid var(--border, #ddd); padding-top: 8px; }
+.diary-section-head { display: flex; align-items: baseline; gap: 8px; }
+.diary-section-head h4 { margin: 0; }
+.diary-section-meta { flex: 1; font-size: 12px; opacity: 0.7; }
 
 .diary-settings {
   position: fixed;
