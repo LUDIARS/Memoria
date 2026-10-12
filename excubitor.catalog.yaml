@@ -54,6 +54,10 @@ services:
       TABULA_HOST: "127.0.0.1"
       TABULA_PUBLIC_URL: http://127.0.0.1:5197
       TABULA_LOCAL_MODE: "1"
+      # Local mode does not use Cernere. Blank out the inherited user/topology values:
+      # Tabula rejects a non-loopback http CERNERE_URL (e.g. the Tailscale host) at startup.
+      CERNERE_URL: ""
+      CERNERE_FRONTEND_URL: ""
       TABULA_LOCAL_DATA_DIR: ${ARS_ROOT}/Memoria/data/tabula/local
       TABULA_DB: ${ARS_ROOT}/Memoria/data/tabula/shared.sqlite
       TABULA_LOGS_DIR: ${ARS_ROOT}/logs
