@@ -5,7 +5,10 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)server/(?:index|bootstrap|app-catalog|excubitor-bootstrap|notifications|push|browser-host-config)\\.ts$"
+      "pathPattern": "(^|/)server/(?:index|bootstrap|runtime-paths|external-ts-loader|app-catalog|notifications|push|browser-host-config)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/scripts/build-server\\.(?:mjs|test\\.ts)$"
     },
     {
       "pathPattern": "(^|/)server/lib/[^/]+$"

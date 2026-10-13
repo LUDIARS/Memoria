@@ -13,8 +13,7 @@
 //  - 個人: 隣接リポ MemoriaPlugin-Local/plugins (public submodule に含めない個人用)。
 //    同 id は個人が上書きする。
 
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { Hono } from 'hono';
 import type BetterSqlite3 from 'better-sqlite3';
 import { discoverPlugins, installedSource } from './memoria-plugin/host/discovery.js';
@@ -25,14 +24,16 @@ import { makePluginPackageRouter } from './package-router.js';
 import { mountPlugins, type PluginRegistry } from './memoria-plugin/host/registry.js';
 import type { PluginManifestEntry } from './memoria-plugin/host/types.js';
 import { ensureFrameworkTables, createCapabilityProviders } from './framework-store.js';
+import { REPO_ROOT as MEMORIA_REPO_ROOT, SERVER_DIR } from '../runtime-paths.js';
 
 type Db = BetterSqlite3.Database;
 
-const HERE = dirname(fileURLToPath(import.meta.url)); // server/plugins
+// bundle (dist/server.js) 起動でもソース位置を指すよう runtime-paths で解決する。
+const HERE = join(SERVER_DIR, 'plugins'); // server/plugins
 /** submodule 同梱の共有プラグイン置き場。 */
 const BUNDLED_PLUGINS_DIR = join(HERE, 'memoria-plugin', 'plugins');
 /** Memoria リポルート。 */
-const REPO_ROOT = join(HERE, '..', '..');
+const REPO_ROOT = MEMORIA_REPO_ROOT;
 /** 個人用ローカルプラグイン (public submodule に含めない)。 submodule 化でパス固定。 */
 const LOCAL_PLUGINS_DIR = join(REPO_ROOT, '..', 'MemoriaPlugin-Local', 'plugins');
 

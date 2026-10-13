@@ -12,10 +12,13 @@ services:
     repo: LUDIARS/Memoria
     runtime: node
     cwd: ${ARS_ROOT}/Memoria/server
-    # Invoke tsx through node directly. On Windows this avoids npm.cmd, whose
-    # shell hop cannot survive Excubitor's job-breakaway service launcher.
-    # The entrypoint also performs npm start's required frontend build (prestart).
-    command: node node_modules/tsx/dist/cli.mjs --env-file-if-exists=.env.secrets excubitor-bootstrap.ts
+    # 常駐プロセスは事前コンパイルした JS だけで起動する (neco 2026-10-12 /
+    # AIFormat RULE_TECH_STACK.md「常駐プロセスの起動形」)。tsx CLI は親 node + 子 node +
+    # esbuild.exe を常駐させ 1 本あたり約 135MB 上乗せするので挟まない。
+    # build_command がフロントエンド (public/app.js) と server (dist/server.js) を作り、
+    # command は node で dist を直接起動する (npm を挟まない → pid が実体を指す)。
+    command: node --env-file-if-exists=.env.secrets dist/server.js
+    build_command: npm run build
     allow_hot_reload: false
     depends_on: [actio, memoria-tabula]
     autostart: false

@@ -36,11 +36,21 @@ npm start          # → http://localhost:5180/
 - `npm start` は内部で `npm run build:frontend` (esbuild で SPA をバンドル) を
   prestart に走らせてから `tsx bootstrap.ts` を起動する (`server/package.json:7-8`)。
 - 開発時は `npm run dev` (`tsx watch` で自動再起動 / `server/package.json:10`)。
-- Excubitor 経由の常駐起動 (`excubitor.catalog.yaml`) は Windows で `npm.cmd` の
-  シェル経由子プロセスが job-breakaway ランチャーを生き残れないため、
-  `node node_modules/tsx/dist/cli.mjs ... excubitor-bootstrap.ts` で tsx を直接起動する。
-  `server/excubitor-bootstrap.ts` が prestart 相当のフロントエンドビルドを行ってから
-  `bootstrap.ts` を読み込むので、`npm start` と同じ結果になる。
+- Excubitor 経由の常駐起動 (`excubitor.catalog.yaml`) は事前コンパイルした JS だけで動かす
+  (neco 2026-10-12 / AIFormat `RULE_TECH_STACK.md`「常駐プロセスの起動形」)。
+  `build_command: npm run build` がフロントエンド (`public/app.js`) と server
+  (`scripts/build-server.mjs` で `bootstrap.ts` を `dist/server.js` 1 本へ bundle、
+  node_modules は external) を作り、`command` は
+  `node --env-file-if-exists=.env.secrets dist/server.js` で node を直接起動する。
+  tsx CLI (親 node + 子 node + esbuild.exe、約 135MB) と npm (約 59MB) を挟まない。
+  - ソース基準のパス (`data/` / `mcp-server/` / `plugins/`) は `server/runtime-paths.ts` の
+    `SERVER_DIR` で解決する。bundle 後は `import.meta.url` が `dist/server.js` を指すため。
+  - cwd は従来通り `server/` なので、`public/` の静的配信と `.env.secrets` の位置は変わらない。
+  - 実行時に `await import()` するプラグインの `plugin.ts` などは、dist 起動時だけ
+    `server/external-ts-loader.ts` が `tsx/esm/api` の loader を同じプロセスへ登録して読む
+    (子 node は立てない)。
+  - コード変更の反映は Excubitor からの再起動 (build_command → command) で行う。
+- tsx はテスト (`npm test`) と一回限りの CLI (`build:frontend` など) と `npm start` / `npm run dev` に残す。
 
 ポート・データ保存先を変えたいときだけ env を渡す:
 

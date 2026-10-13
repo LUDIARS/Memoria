@@ -16,8 +16,8 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
 import { mkdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
+import { SERVER_DIR } from './runtime-paths.js';
 import {
   openDb, ensureUserStopwordsTable,
   getAppSettings, setDiaryDataDir, migrateDiariesToSidecar,
@@ -93,9 +93,8 @@ import { makeShoppingRouter } from './routes/shopping.js';
 import { makeBooksRouter } from './books/index.js';
 import { makeReleaseWatchRouter } from './release-watch/router.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
-const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(__dirname, '..', 'data'));
+const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(SERVER_DIR, '..', 'data'));
 const HTML_DIR = join(DATA_DIR, 'html');
 const MEAL_DIR = join(DATA_DIR, 'meals');
 const DB_PATH = join(DATA_DIR, 'memoria.db');
@@ -122,7 +121,7 @@ startUptimeTracking({ db, dataDir: DATA_DIR, heartbeatFile: HEARTBEAT_FILE });
 console.log('[startup] composing queues and local services');
 const queues = makeQueues({ db, htmlDir: HTML_DIR, mealDir: MEAL_DIR });
 const ws = makeWsLocations(db);
-const mcp = makeMcpServer({ port: PORT, mcpDir: resolve(__dirname, '..', 'mcp-server') });
+const mcp = makeMcpServer({ port: PORT, mcpDir: resolve(SERVER_DIR, '..', 'mcp-server') });
 console.log('[startup] queues and local services ready');
 
 // Recover any bookmarks left in 'pending' from a previous run.

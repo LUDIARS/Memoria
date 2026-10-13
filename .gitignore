@@ -26,6 +26,9 @@ desktop/dist/
 desktop/dist-release/
 desktop/out/
 
+# memoria-server の事前コンパイル成果物 (npm run build で生成)。
+server/dist/
+
 # logs / artifacts
 *.log
 *.stackdump
