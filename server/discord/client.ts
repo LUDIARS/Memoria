@@ -16,6 +16,7 @@ import { startNewsScheduler } from './news.js';
 import { startDiarySummaryScheduler } from './diary-summary.js';
 import { startRecommendScheduler } from './recommend-scheduler.js';
 import { startBookNotifyScheduler } from './notify/books.js';
+import { registerDiscordSink } from './sink.js';
 
 type Db = BetterSqlite3.Database;
 type ReadyTask = () => void | Promise<void>;
@@ -63,6 +64,7 @@ export async function createDiscordClient(db: Db): Promise<Client | null> {
         await registerSlashCommands(guild);
       });
 
+      runReadyTask('notify sink registration', () => registerDiscordSink(c, db));
       runReadyTask('task-notify scheduler start', () => startNotifyScheduler(c, db));
       runReadyTask('monitor scheduler start', () => startMonitor(c, db));
       runReadyTask('news scheduler start', () => startNewsScheduler(c, db));

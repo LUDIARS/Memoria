@@ -22,7 +22,6 @@
   "enabled": true,
   "trigger": { "type": "time",   "at": "08:00" },                 // 毎日この時刻
   //          { "type": "random", "window": ["09:00","21:00"], "count": 1 }  // 日に count 回、 窓内のランダム時刻
-  //          { "type": "gps",    "event": "arrive"|"depart", "radius_m": 200 } // 自宅 geofence 帰宅/出発
   "filter": {
     "categories": ["all"] | ["買い物","開発"],   // "all" or 登録カテゴリ名の集合
     "deadline":   "due_today_or_overdue" | "all" // 期限フィルタ
@@ -44,11 +43,9 @@
 |------|----------|-------|
 | `time` | ローカル時刻が `at` (HH:MM) と一致 | `notify.fired.<id>` = 当日日付 (1日1回) |
 | `random` | 当日分の乱数時刻に到達 | 当日プランを `notify.random.<id>.<date>` に保存、 fire 済みフラグ |
-| `gps` | 自宅 geofence の inside/outside 遷移 (arrive=外→内, depart=内→外) | 遷移時のみ発火 (状態 `notify.gps.inside`)、 cooldown 10分 |
 
-- **自宅座標** = `weather.fixed_lat`/`weather.fixed_lon` (既存設定を流用)。未設定なら gps トリガーは no-op。
-- 距離は haversine。`radius_m` 既定 200m。
-- GPS は `gps_locations` の最新行を使う (既存 `readLatestGpsLatLon` と同経路)。
+帰宅・出発 (旧 `gps` 種別) は 2026-10-13 に [home-presence-notify](./home-presence-notify.md) へ移した。
+既存の `gps` トリガーは初回起動時に帰宅・出発通知の rule へ変換され、 ここからは消える。
 
 ## モジュール (`server/discord/notify/`)
 
@@ -56,11 +53,10 @@
 |------|------|
 | `types.ts` | NotifyTrigger / TriggerSpec / NotifyFilter 型 |
 | `config.ts` | triggers の load/save (app_settings `features.discord.notify.triggers`) |
-| `select.ts` | filter → アクティブタスク選択 (category + deadline) |
+| `../../shared/task-select.ts` | filter → アクティブタスク選択 (category + deadline)。 帰宅・出発通知と共用 |
 | `card.ts` | タスク (群) → Discord メッセージ整形 (カード) |
-| `geofence.ts` | haversine + 自宅 inside 判定 + 遷移検出 (状態は app_settings) |
 | `engine.ts` | fireTrigger(client, db, trigger): select → card → postToChannel |
-| `scheduler.ts` | startNotifyScheduler(client, db): time/random/gps の interval 評価 |
+| `scheduler.ts` | startNotifyScheduler(client, db): time/random の interval 評価 |
 
 Bot の ready 時 (`client.ts`) に `startNotifyScheduler(client, db)` を起動する
 (Bot OFF のときは通知も止まる)。
@@ -107,5 +103,4 @@ Bot の ready 時 (`client.ts`) に `startNotifyScheduler(client, db)` を起動
 ## 非対象 (この PR では作らない)
 
 - 通知の既読/snooze 管理、 通知履歴 UI。
-- GPS の複数地点 geofence (自宅のみ)。
 - per-trigger の quiet-hours (グローバルな Bot announce 設定に従う)。

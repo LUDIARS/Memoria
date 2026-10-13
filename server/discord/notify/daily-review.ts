@@ -19,7 +19,7 @@ import { selfMention } from '../notifier.js';
 import { discordSettings } from '../settings.js';
 import { isSelf } from '../user-map.js';
 import { formatTaskLine } from './card.js';
-import { matchCategory } from './select.js';
+import { matchCategory } from '../../shared/task-select.js';
 import type { NotifyFilter } from './types.js';
 
 type Db = BetterSqlite3.Database;

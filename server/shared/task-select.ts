@@ -1,11 +1,29 @@
-// 通知フィルタ → アクティブタスク選択。 純粋ロジック (テスト対象)。
+// 通知フィルタ → アクティブタスク選択。 Discord 通知と帰宅・出発通知で共用する。
 
 import type BetterSqlite3 from 'better-sqlite3';
-import { listTasks } from '../../db.js';
-import type { TaskRow } from '../../db/types/task.js';
-import type { NotifyFilter } from './types.js';
+import { listTasks } from '../db.js';
+import type { TaskRow } from '../db/types/task.js';
 
 type Db = BetterSqlite3.Database;
+
+export type DeadlineFilter = 'all' | 'due_today_or_overdue';
+
+export interface TaskFilter {
+  /** ["all"] = 全カテゴリ、 それ以外は登録カテゴリ名の集合 (いずれか含むタスク)。 */
+  categories: string[];
+  /** "due_today_or_overdue" = 今日締切 or 期限超過のみ、 "all" = 期限不問。 */
+  deadline: DeadlineFilter;
+}
+
+/** UI / 保存値など任意入力を TaskFilter に矯正する。 */
+export function normalizeTaskFilter(v: unknown): TaskFilter {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  const cats = Array.isArray(o.categories)
+    ? o.categories.filter((c): c is string => typeof c === 'string' && c.trim().length > 0).map((c) => c.trim())
+    : [];
+  const deadline: DeadlineFilter = o.deadline === 'all' ? 'all' : 'due_today_or_overdue';
+  return { categories: cats.length ? cats : ['all'], deadline };
+}
 
 /** tasks.category (カンマ区切り) を配列に。 */
 export function parseCategories(raw: string | null): string[] {
@@ -31,7 +49,7 @@ function endOfTodayLocalMs(now: Date): number {
  * due_at は UTC ISO ('...Z') か local 'YYYY-MM-DDTHH:MM' のどちらも来うるが、
  * どちらも new Date() で正しく解釈できる (前者=UTC, 後者=ローカル)。
  */
-export function matchDeadline(task: TaskRow, deadline: NotifyFilter['deadline'], now: Date): boolean {
+export function matchDeadline(task: TaskRow, deadline: DeadlineFilter, now: Date): boolean {
   if (deadline === 'all') return true;
   if (!task.due_at) return false;
   const due = new Date(task.due_at).getTime();
@@ -40,7 +58,7 @@ export function matchDeadline(task: TaskRow, deadline: NotifyFilter['deadline'],
 }
 
 /** filter に合致するアクティブ (todo/doing) タスクを返す。 */
-export async function selectTasks(db: Db, filter: NotifyFilter, now: Date = new Date()): Promise<TaskRow[]> {
+export async function selectTasks(db: Db, filter: TaskFilter, now: Date = new Date()): Promise<TaskRow[]> {
   const active = [
     ...(await listTasks(db, { status: 'todo', kind: 'task', limit: 500 })),
     ...(await listTasks(db, { status: 'doing', kind: 'task', limit: 500 })),

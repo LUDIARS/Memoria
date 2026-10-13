@@ -46,6 +46,11 @@ import { makeVisitRouter } from './routes/visit.js';
 import { makeDictRouter } from './routes/dict.js';
 import { makeMealRouter } from './routes/meal.js';
 import { makeDiscordRouter } from './routes/discord.js';
+import { makeHomePresenceRouter } from './routes/home-presence.js';
+import { makeLineRouter } from './routes/line.js';
+import { registerLineSink } from './line/sink.js';
+import { migrateGpsTriggers } from './home-presence/migrate-gps-triggers.js';
+import { startHomePresenceScheduler } from './home-presence/scheduler.js';
 import { makeDiaryRouter } from './routes/diary.js';
 import { makeTaskRouter } from './routes/task.js';
 import { makeAgentRouter } from './routes/agent.js';
@@ -260,6 +265,8 @@ app.route('/', makeAgentRouter({ db, dataDir: DATA_DIR }));
 app.route('/', makeWorkplaceRouter({ db }));
 app.route('/', makeAttendanceRouter({ db }));
 app.route('/', makeDiscordRouter({ db }));
+app.route('/', makeHomePresenceRouter({ db }));
+app.route('/', makeLineRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makePersonalityExportRouter({ db }));
 app.route('/', makeSpendingLogRouter({ db }));
@@ -535,6 +542,19 @@ try {
 startDiscordBot(db).catch((e: unknown) => {
   console.error(`[discord] failed to start: ${e instanceof Error ? e.message : String(e)}`);
 });
+
+// ---- 帰宅・出発通知 (近く / 到着 / 出発) ------------------------------------
+//
+// 自宅との位置関係の変化をトリガーに Discord / LINE へ通知する。 Discord Bot とは独立。
+// spec/feature/home-presence-notify.md。 旧 Discord gps トリガーは初回起動時に移す。
+try {
+  const migrated = migrateGpsTriggers(db);
+  if (migrated) console.log(`[home-presence] migrated ${migrated} gps trigger(s) from Discord notify`);
+  registerLineSink(db);
+  startHomePresenceScheduler(db);
+} catch (e: unknown) {
+  console.error(`[home-presence] failed to start: ${e instanceof Error ? e.message : String(e)}`);
+}
 
 // ---- PC WiFi → 位置情報 (Google Geolocation API) --------------------------
 //

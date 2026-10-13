@@ -9,7 +9,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings, setAppSettings } from '../db.js';
 import { channelIdFor } from './layout.js';
 import { discordSettings } from './settings.js';
-import { selectTasks } from './notify/select.js';
+import { selectTasks } from '../shared/task-select.js';
 import { loadTriggers } from './notify/config.js';
 
 type Db = BetterSqlite3.Database;

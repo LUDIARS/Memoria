@@ -4,7 +4,6 @@ import { getAppSettings, setAppSettings } from '../../db.js';
 import { formatLocalDate } from '../../diary.js';
 import { discordSettings } from '../settings.js';
 import { loadTriggers } from './config.js';
-import { detectHomeTransition } from './geofence.js';
 import { fireTrigger } from './engine.js';
 import { startDailyTaskReview } from './daily-review.js';
 import type { NotifyTrigger, RandomSpec } from './types.js';
@@ -107,31 +106,11 @@ async function minuteTick(client: Client, db: Db): Promise<void> {
   }
 }
 
-async function gpsTick(client: Client, db: Db): Promise<void> {
-  if (!discordSettings(db).enabled) return;
-  const gps = loadTriggers(db).filter((t) => t.enabled && t.trigger.type === 'gps');
-  if (!gps.length) return;
-  const radius = Math.min(...gps.map((t) => (t.trigger.type === 'gps' ? t.trigger.radius_m : 200)));
-  const ev = detectHomeTransition(db, radius);
-  if (!ev) return;
-  for (const t of gps) {
-    if (t.trigger.type === 'gps' && t.trigger.event === ev) {
-      try {
-        await fireTrigger(client, db, t);
-      } catch (e: unknown) {
-        console.warn(`[notify] gps trigger ${t.id} failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-  }
-}
-
 export function startNotifyScheduler(client: Client, db: Db): void {
   const onError = (label: string) => (e: unknown) => {
     console.warn(`[notify] ${label} failed: ${e instanceof Error ? e.message : String(e)}`);
   };
   setInterval(() => { void minuteTick(client, db).catch(onError('minute tick')); }, 60_000).unref?.();
-  setTimeout(() => { void gpsTick(client, db).catch(onError('gps tick')); }, 25_000).unref?.();
-  setInterval(() => { void gpsTick(client, db).catch(onError('gps tick')); }, 5 * 60_000).unref?.();
   console.log('[notify] task-notify scheduler started');
 }
 

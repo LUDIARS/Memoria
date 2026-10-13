@@ -175,6 +175,7 @@ import { loadUserApps } from './userapps-view.js';
 import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-view.js';
 import { loadLlmView } from './llm-view.js';
 import { loadShoppingView } from './shopping-view.js';
+import { loadHomePresenceSettings, mountHomePresenceSettings } from './home-presence-view.js';
 import { loadReleaseWatchView } from './release-watch-view.js';
 import { loadBooksView } from './books-view.js';
 import { loadSpendingLogView, loadSpendingTrendView } from './spending-view.js';
@@ -5665,6 +5666,7 @@ document.addEventListener('click', (ev) => {
     applyAllModeHeadings(panel, true);
     // 全部表示時は privacy 側 (Legatus 等) もロードしておく
     loadPrivacySettings().catch(console.warn);
+    loadHomePresenceSettings().catch(console.warn);
   } else {
     applyAllModeHeadings(panel, false);
     panel.querySelectorAll('.settings-tab-body').forEach(sec => {
@@ -5674,6 +5676,7 @@ document.addEventListener('click', (ev) => {
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'discord') loadDiscordSettings().catch(console.warn);
+  if (stab === 'home-presence') loadHomePresenceSettings().catch(console.warn);
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
   // 'agent-projects' タブは廃止 (AI 実装プロジェクト機能を休止)
   panel.scrollTop = 0;
@@ -5838,8 +5841,7 @@ interface NotifyTriggerUI {
   enabled: boolean;
   trigger:
     | { type: 'time'; at: string }
-    | { type: 'random'; window: [string, string]; count: number }
-    | { type: 'gps'; event: 'arrive' | 'depart'; radius_m: number };
+    | { type: 'random'; window: [string, string]; count: number };
   filter: { categories: string[]; deadline: 'all' | 'due_today_or_overdue' };
   channel: string;
 }
@@ -5872,11 +5874,6 @@ function renderNotifyParams(tt: NotifyTriggerUI['trigger']): string {
       `<input class="t-rend" type="time" value="${escapeHtml(tt.window?.[1] || '21:00')}" /> × ` +
       `<input class="t-rcount" type="number" min="1" max="10" value="${tt.count || 1}" style="width:70px" /> 回/日`;
   }
-  if (tt.type === 'gps') {
-    return `<select class="t-gevent"><option value="arrive"${tt.event !== 'depart' ? ' selected' : ''}>帰宅 (自宅に到着)</option>` +
-      `<option value="depart"${tt.event === 'depart' ? ' selected' : ''}>出発 (自宅を離れる)</option></select> ` +
-      `半径 <input class="t-radius" type="number" min="50" max="5000" value="${tt.radius_m || 200}" style="width:80px" /> m`;
-  }
   return `時刻 <input class="t-at" type="time" value="${escapeHtml(tt.at || '08:00')}" />`;
 }
 
@@ -5893,7 +5890,6 @@ function renderNotifyTriggers(): void {
         <select class="t-type">
           <option value="time"${t.trigger.type === 'time' ? ' selected' : ''}>時刻</option>
           <option value="random"${t.trigger.type === 'random' ? ' selected' : ''}>ランダム時刻</option>
-          <option value="gps"${t.trigger.type === 'gps' ? ' selected' : ''}>GPS 帰宅/出発</option>
         </select>
         <button class="t-test" type="button">テスト</button>
         <button class="t-del" type="button">削除</button>
@@ -5933,8 +5929,6 @@ function collectNotifyTriggers(): NotifyTriggerUI[] {
     let trigger: NotifyTriggerUI['trigger'];
     if (type === 'random') {
       trigger = { type: 'random', window: [val('.t-rstart') || '09:00', val('.t-rend') || '21:00'], count: Number(val('.t-rcount')) || 1 };
-    } else if (type === 'gps') {
-      trigger = { type: 'gps', event: val('.t-gevent') === 'depart' ? 'depart' : 'arrive', radius_m: Number(val('.t-radius')) || 200 };
     } else {
       trigger = { type: 'time', at: val('.t-at') || '08:00' };
     }
@@ -6128,6 +6122,7 @@ let ensureMemoriaFeatureViews = function () {
     for (const spec of [
       ['privacy', '🔒 プライバシー / 表示'],
       ['discord', '🤖 Discord'],
+      ['home-presence', '🏠 帰宅・出発 / LINE'],
       ['setup', '📚 セットアップ手順'],
     ]) {
       const b = document.createElement('button');
@@ -6217,7 +6212,7 @@ let ensureMemoriaFeatureViews = function () {
       <label class="check-inline"><input id="dcAutoRecommend" type="checkbox" /> おすすめ (/recommend)</label>
       <div style="margin-top:10px"><button id="discordSaveBtn" type="button" class="primary">保存</button></div>
       <h4 style="margin-top:16px">通知トリガー</h4>
-      <p class="diary-settings-help">時刻 / GPS(帰宅・出発) / ランダム時刻が発火すると、 条件に合うアクティブタスクを選んだチャンネルへ通知します。GPS は ⚙設定→天気 の固定座標 (自宅) を使います。</p>
+      <p class="diary-settings-help">時刻 / ランダム時刻が発火すると、 条件に合うアクティブタスクを選んだチャンネルへ通知します。帰宅・出発をきっかけにした通知は「🏠 帰宅・出発 / LINE」タブで設定します。</p>
       <div id="dcNotifyTriggers"></div>
       <div style="margin-top:8px">
         <button id="dcNotifyAddBtn" type="button">＋ トリガーを追加</button>
@@ -6226,6 +6221,7 @@ let ensureMemoriaFeatureViews = function () {
       <p class="diary-settings-help" style="margin-top:6px">設定したチャンネル/カテゴリは Bot 有効化 + 起動時に自動生成されます。反映には Memoria の再起動が必要な場合があります。</p>`;
     footer.parentNode.insertBefore(sec, footer);
   }
+  if (footer) mountHomePresenceSettings(footer);
   if (footer && !$('setupDocsBody')) {
     const sec = document.createElement('section');
     sec.id = 'setupDocsBody';

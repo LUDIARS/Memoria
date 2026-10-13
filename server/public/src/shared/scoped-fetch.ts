@@ -1,8 +1,13 @@
 const tokens: Partial<Record<'admin' | 'bookmark', string>> = {};
 
+/** 管理用 token が要る設定 API (帰宅・出発通知 / LINE)。 */
+function isAdminSettingsPath(path: string): boolean {
+  return path === '/api/home-presence' || path.startsWith('/api/home-presence/') || path.startsWith('/api/line/');
+}
+
 /** Credentials stay in this tab's memory and are sent only to the exact scoped endpoints. */
 export async function scopedFetch(path: string, options?: RequestInit): Promise<Response> {
-  const scope = path === '/api/llm/config' ? 'admin'
+  const scope = path === '/api/llm/config' || isAdminSettingsPath(path) ? 'admin'
     : path === '/api/bookmark' || path === '/api/bookmarks/from-url'
       || /^\/api\/bookmarks\/\d+\/resummarize$/.test(path) ? 'bookmark' : null;
   if (!scope) return fetch(path, options);

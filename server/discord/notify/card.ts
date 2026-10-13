@@ -1,5 +1,5 @@
 ﻿import type { TaskRow } from '../../db/types/task.js';
-import { parseCategories } from './select.js';
+import { parseCategories } from '../../shared/task-select.js';
 
 function pad2(n: number): string { return String(n).padStart(2, '0'); }
 

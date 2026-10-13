@@ -6,6 +6,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { discordReady } from './settings.js';
 import { createDiscordClient } from './client.js';
 import { installDiscordProcessGuard } from './process-guard.js';
+import { unregisterDiscordSink } from './sink.js';
 import { postAnnouncement, postToChannel } from './notifier.js';
 import { findTrigger } from './notify/config.js';
 import { fireTrigger } from './notify/engine.js';
@@ -32,6 +33,7 @@ export async function startDiscordBot(db: Db): Promise<void> {
 
 /** Discord Bot を停止する。 */
 export function stopDiscordBot(): void {
+  unregisterDiscordSink();
   if (!current) return;
   try { current.destroy(); } catch { /* swallow */ }
   current = null;

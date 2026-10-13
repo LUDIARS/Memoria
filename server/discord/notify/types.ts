@@ -1,8 +1,11 @@
 // Discord タスク通知エンジンの型。 spec/feature/discord-task-notify.md。
 
-export type TriggerKind = 'time' | 'random' | 'gps';
-export type GpsEvent = 'arrive' | 'depart';
-export type DeadlineFilter = 'all' | 'due_today_or_overdue';
+// 帰宅・出発 (旧 gps 種別) は home-presence ドメインへ移した (spec/feature/home-presence-notify.md)。
+
+import type { TaskFilter } from '../../shared/task-select.js';
+
+export type { DeadlineFilter } from '../../shared/task-select.js';
+export type TriggerKind = 'time' | 'random';
 
 /** 毎日決まった時刻に発火。 */
 export interface TimeSpec {
@@ -20,22 +23,9 @@ export interface RandomSpec {
   count: number;
 }
 
-/** 自宅 geofence の帰宅 (arrive=外→内) / 出発 (depart=内→外) で発火。 */
-export interface GpsSpec {
-  type: 'gps';
-  event: GpsEvent;
-  /** geofence 半径 (m)。 */
-  radius_m: number;
-}
+export type TriggerSpec = TimeSpec | RandomSpec;
 
-export type TriggerSpec = TimeSpec | RandomSpec | GpsSpec;
-
-export interface NotifyFilter {
-  /** ["all"] = 全カテゴリ、 それ以外は登録カテゴリ名の集合 (いずれか含むタスク)。 */
-  categories: string[];
-  /** "due_today_or_overdue" = 今日締切 or 期限超過のみ、 "all" = 期限不問。 */
-  deadline: DeadlineFilter;
-}
+export type NotifyFilter = TaskFilter;
 
 export interface NotifyTrigger {
   id: string;
@@ -47,7 +37,5 @@ export interface NotifyTrigger {
   channel: string;
 }
 
-/** 通知先に選べる channel kind。 layout.ts の生成 channel と揃える。 */
-export const NOTIFY_CHANNEL_KINDS = [
-  'announce', 'task', 'memo', 'bookmark', 'meal', 'recommend', 'activity',
-] as const;
+/** 通知先に選べる channel kind。 */
+export { DISCORD_CHANNEL_KINDS as NOTIFY_CHANNEL_KINDS } from '../../shared/notify-sink.js';

@@ -4,10 +4,9 @@
 import { randomUUID } from 'node:crypto';
 import type BetterSqlite3 from 'better-sqlite3';
 import { getAppSettings, setAppSettings } from '../../db.js';
+import { normalizeTaskFilter } from '../../shared/task-select.js';
 import {
   NOTIFY_CHANNEL_KINDS,
-  type DeadlineFilter,
-  type NotifyFilter,
   type NotifyTrigger,
   type TriggerSpec,
 } from './types.js';
@@ -54,8 +53,10 @@ function hhmm(v: unknown, fallback: string): string {
   return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
 }
 
-function normSpec(v: unknown): TriggerSpec {
+/** 旧 gps 種別は home-presence へ移行済みなので null (= トリガーごと捨てる)。 */
+function normSpec(v: unknown): TriggerSpec | null {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  if (o.type === 'gps') return null;
   if (o.type === 'random') {
     const w = Array.isArray(o.window) ? o.window : [];
     return {
@@ -64,25 +65,10 @@ function normSpec(v: unknown): TriggerSpec {
       count: Math.min(10, Math.max(1, Math.round(num(o.count, 1)))),
     };
   }
-  if (o.type === 'gps') {
-    return {
-      type: 'gps',
-      event: o.event === 'depart' ? 'depart' : 'arrive',
-      radius_m: Math.min(5000, Math.max(50, Math.round(num(o.radius_m, 200)))),
-    };
-  }
   // 既定 time
   return { type: 'time', at: hhmm(o.at, '08:00') };
 }
 
-function normFilter(v: unknown): NotifyFilter {
-  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
-  const cats = Array.isArray(o.categories)
-    ? o.categories.filter((c): c is string => typeof c === 'string' && c.trim().length > 0).map((c) => c.trim())
-    : [];
-  const deadline: DeadlineFilter = o.deadline === 'all' ? 'all' : 'due_today_or_overdue';
-  return { categories: cats.length ? cats : ['all'], deadline };
-}
 
 function normChannel(v: unknown): string {
   const s = str(v, 'announce');
@@ -94,12 +80,14 @@ export function normalizeTriggers(input: unknown[]): NotifyTrigger[] {
   for (const raw of input) {
     if (!raw || typeof raw !== 'object') continue;
     const o = raw as Record<string, unknown>;
+    const trigger = normSpec(o.trigger);
+    if (!trigger) continue;
     out.push({
       id: str(o.id).trim() || randomUUID(),
       name: str(o.name).trim().slice(0, 80) || '通知',
       enabled: o.enabled !== false,
-      trigger: normSpec(o.trigger),
-      filter: normFilter(o.filter),
+      trigger,
+      filter: normalizeTaskFilter(o.filter),
       channel: normChannel(o.channel),
     });
   }

@@ -3,7 +3,7 @@
 import type { Client } from 'discord.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { postToChannel } from '../notifier.js';
-import { selectTasks } from './select.js';
+import { selectTasks } from '../../shared/task-select.js';
 import { formatTaskListCard } from './card.js';
 import type { NotifyTrigger } from './types.js';
 
