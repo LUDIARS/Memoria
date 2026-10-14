@@ -6655,6 +6655,44 @@ dialog.loc-edit-modal[open] {
 .tc-source-row .tc-source-remove { grid-column: -2 / -1; justify-self: end; }
 @media (max-width: 640px) { .tc-source-row { grid-template-columns: 1fr 1fr; } .tc-source-grid { grid-template-columns: 1fr; } }
 
+/* 📈 トレンド > 🫧 マップ (trend-map-view.ts)。 色 = ジャンル (--tm-h の色相)、 大きさと丸さは要素ごとの inline style。 */
+.tc-mode { margin: 0; }
+.tm-g-news { --tm-h: 0; }
+.tm-g-anime { --tm-h: 28; }
+.tm-g-music { --tm-h: 50; }
+.tm-g-book { --tm-h: 82; }
+.tm-g-app { --tm-h: 125; }
+.tm-g-life { --tm-h: 160; }
+.tm-g-tech { --tm-h: 192; }
+.tm-g-general { --tm-h: 216; }
+.tm-g-game { --tm-h: 248; }
+.tm-g-global { --tm-h: 272; }
+.tm-g-youth { --tm-h: 302; }
+.tm-g-entertainment { --tm-h: 332; }
+.tm-view { display: grid; gap: 12px; }
+.tm-help { margin: 0; font-size: 12px; }
+.tm-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.tm-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.tm-chip { border: 2px solid hsl(var(--tm-h, 220) 55% 55%); background: hsl(var(--tm-h, 220) 80% 92%); color: hsl(var(--tm-h, 220) 45% 22%); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.tm-chip-all { --tm-h: 220; border-color: var(--border); background: var(--panel); color: var(--text); }
+.tm-chip.active { box-shadow: 0 0 0 2px var(--accent); font-weight: 600; }
+.tm-view.foundation-form select.tm-weight { font-size: 12px; padding: 4px 8px; width: auto; min-width: 0; }
+.tm-keywords { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.tm-keywords label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); flex: 1 1 280px; }
+.tm-field { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 8px 0; }
+.tm-tile { position: relative; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px 10px; overflow: hidden;
+  background: hsl(var(--tm-h) 80% 90%); border: 2px solid hsl(var(--tm-h) 55% 55%); color: hsl(var(--tm-h) 45% 20%);
+  text-decoration: none; line-height: 1.25; transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.tm-tile:hover { transform: scale(1.05); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); z-index: 1; }
+.tm-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.tm-badge { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); font-size: 9px; font-weight: 700; color: #fff; background: #dc2626; border-radius: 999px; padding: 0 4px; }
+.tm-badge-up { background: #16a34a; }
+@media (prefers-color-scheme: dark) {
+  .tm-chip { background: hsl(var(--tm-h, 220) 35% 24%); color: hsl(var(--tm-h, 220) 60% 88%); border-color: hsl(var(--tm-h, 220) 45% 50%); }
+  .tm-tile { background: hsl(var(--tm-h) 35% 24%); color: hsl(var(--tm-h) 60% 90%); border-color: hsl(var(--tm-h) 45% 50%); }
+}
+@media (max-width: 640px) { .tm-field { gap: 6px; } }
+
 /* 📚 本タブ (books-view.ts) */
 .bk-view { display: grid; gap: 16px; padding: 6px 0; }
 .bk-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }

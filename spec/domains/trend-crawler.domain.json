@@ -13,12 +13,16 @@
     },
     {
       "pathPattern": "(^|/)server/public/src/trend-crawler-view\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/trend-map-view\\.ts$"
     }
   ],
   "specRefs": [
     "spec/feature/trend-crawler.md#目的",
     "spec/feature/trend-crawler.md#構成",
     "spec/feature/trend-crawler.md#ソース種類",
+    "spec/feature/trend-crawler.md#トレンドマップ",
     "spec/feature/trend-crawler.md#制約"
   ]
 }

@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { Hono } from 'hono';
 import { TrendCrawlCoordinator } from './coordinator.js';
 import { makeTrendCrawlerRouter } from './router.js';
+import { clickStats, getInterestPrefs } from './interest-store.js';
+import { ensureTrendCrawlerSchema } from './schema.js';
+import type { TrendMap } from './map.js';
 import type { TrendCrawlResult, TrendOverview } from './types.js';
 
 type Db = BetterSqlite3.Database;
@@ -44,4 +48,34 @@ test('巡回中の手動更新は 409 にする', async () => {
   assert.equal(done.status, 200);
   assert.deepEqual(await done.json(), { result, overview });
   assert.equal(calls, 1);
+});
+
+const jsonInit = (method: string, body: unknown): RequestInit => ({
+  method, headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+});
+
+function memoryDb(): Db {
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)');
+  ensureTrendCrawlerSchema(db);
+  return db;
+}
+
+test('マップ・興味・開いた記録の API', async () => {
+  const db = memoryDb();
+  const map: TrendMap = { lastCrawledAt: null, prefs: { genreWeights: {}, keywords: [] }, genres: [], tiles: [] };
+  const app = makeTrendCrawlerRouter({ db, coordinator: new TrendCrawlCoordinator(), overview: () => overview, map: () => map });
+  const got = await requestFrom(app, '127.0.0.1', 'http://localhost/api/trend-crawler/map');
+  assert.deepEqual(await got.json(), { map, busy: false });
+
+  const bad = await requestFrom(app, '127.0.0.1', 'http://localhost/api/trend-crawler/interest', jsonInit('PUT', { genreWeights: { tech: 9 }, keywords: [] }));
+  assert.equal(bad.status, 400);
+  const ok = await requestFrom(app, '127.0.0.1', 'http://localhost/api/trend-crawler/interest', jsonInit('PUT', { genreWeights: { tech: 2 }, keywords: ['AI'] }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(getInterestPrefs(db), { genreWeights: { tech: 2 }, keywords: ['AI'] });
+
+  assert.equal((await requestFrom(app, '127.0.0.1', 'http://localhost/api/trend-crawler/click', jsonInit('POST', { key: 'a', genre: 'nope', sourceId: 's' }))).status, 400);
+  assert.equal((await requestFrom(app, '127.0.0.1', 'http://localhost/api/trend-crawler/click', jsonInit('POST', { key: 'a', genre: 'tech', sourceId: 'hn' }))).status, 200);
+  assert.equal(clickStats(db).byGenre.get('tech'), 1);
+  assert.equal((await requestFrom(app, '192.168.1.25', 'http://localhost/api/trend-crawler/click', jsonInit('POST', { key: 'a', genre: 'tech', sourceId: 'hn' }))).status, 403);
 });

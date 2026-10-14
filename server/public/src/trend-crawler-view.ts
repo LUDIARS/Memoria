@@ -3,6 +3,7 @@
 // 前回巡回との順位の動き (新登場 / ↑ / ↓)、 複数ソースに出ている話題、 AI のジャンル別要約を表示する。
 
 import { escapeHtml } from './shared/sanitize.js';
+import { loadTrendMap } from './trend-map-view.js';
 
 type TrendGenre =
   | 'general' | 'youth' | 'news' | 'tech' | 'game' | 'anime' | 'music'
@@ -109,6 +110,33 @@ let initialized = false;
 let config: TrendCrawlerConfig | null = null;
 let selectedGenre: TrendGenre | 'all' = 'all';
 let lastOverview: TrendOverview | null = null;
+
+type DisplayMode = 'map' | 'list';
+const MODE_STORAGE_KEY = 'memoria.trendCrawler.mode';
+
+/** 表示の切り替え (マップ / リスト) は端末ごとの好みなので localStorage に置く。 読めなくてもマップで始める。 */
+function readMode(): DisplayMode {
+  try { return localStorage.getItem(MODE_STORAGE_KEY) === 'list' ? 'list' : 'map'; } catch { return 'map'; }
+}
+
+function writeMode(mode: DisplayMode): void {
+  try { localStorage.setItem(MODE_STORAGE_KEY, mode); } catch { /* 保存できなくても切り替えは効く */ }
+}
+
+let mode: DisplayMode = readMode();
+
+function applyMode(): void {
+  document.getElementById('trendCrawlerMap')?.classList.toggle('hidden', mode !== 'map');
+  document.getElementById('trendCrawlerOverview')?.classList.toggle('hidden', mode !== 'list');
+  document.querySelectorAll<HTMLButtonElement>('.tc-mode [data-mode]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.mode === mode);
+  });
+}
+
+async function loadMap(): Promise<void> {
+  const container = document.getElementById('trendCrawlerMap');
+  if (container) await loadTrendMap(container);
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -254,6 +282,7 @@ async function refresh(sourceId?: string): Promise<void> {
     const query = sourceId ? `?source=${encodeURIComponent(sourceId)}` : '';
     const response = await request<{ result: TrendCrawlResult; overview: TrendOverview }>(`/api/trend-crawler/refresh${query}`, { method: 'POST' });
     renderOverview(response.overview);
+    await loadMap();
     setStatus(describeResult(response.result));
   } catch (error) {
     setStatus(`巡回失敗: ${error instanceof Error ? error.message : String(error)}`);
@@ -369,7 +398,7 @@ async function saveConfig(): Promise<void> {
     });
     renderSources();
     if (status) status.textContent = '保存しました';
-    await loadOverview();
+    await Promise.all([loadOverview(), loadMap()]);
   } catch (error) {
     if (status) status.textContent = `保存失敗: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -384,6 +413,8 @@ function initialize(): void {
       <div><h2>📈 トレンド</h2><p>検索・ニュース・テック・ゲーム・アニメ・音楽・アプリ・本などのランキングを定期的に巡回し、 前回からの順位の動きと AI の要約をジャンル別に並べます。</p></div>
       <div class="tc-header-actions"><button id="trendCrawlerRefresh" type="button">今すぐ巡回</button><span id="trendCrawlerStatus" class="muted"></span></div>
     </header>
+    <nav class="tc-mode worklog-subtabs"><button type="button" class="wl-subtab" data-mode="map">🫧 マップ</button><button type="button" class="wl-subtab" data-mode="list">☰ リスト</button></nav>
+    <div id="trendCrawlerMap"><div class="empty">読み込み中…</div></div>
     <div id="trendCrawlerOverview"><div class="empty">読み込み中…</div></div>
     <details class="tc-settings">
       <summary>巡回するソースの設定</summary>
@@ -402,6 +433,14 @@ function initialize(): void {
   </div>`;
 
   document.getElementById('trendCrawlerRefresh')?.addEventListener('click', () => { void refresh(); });
+  element.querySelectorAll<HTMLButtonElement>('.tc-mode [data-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      mode = button.dataset.mode === 'list' ? 'list' : 'map';
+      writeMode(mode);
+      applyMode();
+    });
+  });
+  applyMode();
   document.getElementById('trendCrawlerAddSource')?.addEventListener('click', () => {
     if (!config) return;
     config.sources = collectSources();
@@ -416,7 +455,7 @@ function initialize(): void {
 export async function loadTrendCrawlerView(): Promise<void> {
   initialize();
   try {
-    await Promise.all([loadConfig(), loadOverview()]);
+    await Promise.all([loadConfig(), loadOverview(), loadMap()]);
   } catch (error) {
     const output = document.getElementById('trendCrawlerOverview');
     if (output) output.innerHTML = `<div class="empty">読み込み失敗: ${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`;

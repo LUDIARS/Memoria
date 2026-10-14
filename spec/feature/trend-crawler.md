@@ -56,11 +56,28 @@ TikTok・Instagram・X の公式トレンドは API キーが要るため、公�
 既定ソースは追加した版 (`DEFAULT_TREND_SOURCE_RELEASES`) ごとに持つ。保存済み設定の `defaultsVersion` より
 新しい版のソースだけを読み込み時に足す。利用者が消した古い既定ソースは戻さず、同じ id があれば足さない。
 
+## トレンドマップ
+
+「📈 トレンド」の既定表示。トレンド 1 つ 1 つを図形で並べ、色でジャンル、大きさと丸さで興味の度合いを表す。
+興味が強いほど大きく丸く (0.75 以上は円)、弱いほど小さな横長の角丸矩形になる。最小の大きさがあり、消えはしない。
+
+- 興味 = ジャンルの興味の強さ (0〜3、未設定は 1) × 気になる言葉の一致 × よく開くジャンル × 開いた話題 × トレンドの強さ。
+  - よく開くジャンル: マップで開いた記録 (`trend_clicks`、直近 90 日) のジャンル比率。3 回未満は効かせない。
+  - トレンドの強さ: ソース内順位、新登場、急上昇、複数サイト一致。
+- スコアは対数で 0〜1 に正規化して大きさを決める。ジャンルの興味が 0 でもスコアは 0 にしない。
+- 同じ話題が複数ソースに出ていても 1 枚にまとめる。1 ソースからは上位 8 件まで載せる。
+- 構成: `interest.ts` (純関数のスコア) / `interest-store.ts` (設定と開いた記録) / `map.ts` (タイル組み立て) /
+  `server/public/src/trend-map-view.ts` (描画・ジャンル別の興味・気になる言葉)。
+- 開いた記録とジャンルの興味は端末内の SQLite (`trend_clicks`、`app_settings` の `trend_crawler.interest`) に閉じる。
+
 ## HTTP API (同一端末のみ)
 
 - `GET /api/trend-crawler/config` / `PUT /api/trend-crawler/config`
 - `GET /api/trend-crawler/overview` → `{ overview, busy }`
 - `POST /api/trend-crawler/refresh[?source=<id>]` → `{ result, overview }`。巡回中は 409
+- `GET /api/trend-crawler/map` → `{ map, busy }`
+- `GET /api/trend-crawler/interest` / `PUT /api/trend-crawler/interest` (ジャンルの興味・気になる言葉)
+- `POST /api/trend-crawler/click` (`{ key, genre, sourceId }`、マップで開いた記録)
 
 既存の `/api/trends/*` (保存・閲覧傾向) とは別の名前空間。
 

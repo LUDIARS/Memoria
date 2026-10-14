@@ -5,6 +5,7 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { getTrendCrawlerConfig, getTrendSummary, setTrendSummary } from './config.js';
 import { buildTrendOverview } from './overview.js';
 import { fetchTrendSource, type FetchSourceDeps } from './sources/fetch-source.js';
+import { CLICK_WINDOW_DAYS, pruneClicksBefore } from './interest-store.js';
 import { pruneSnapshotsBefore, recordSnapshot } from './store.js';
 import { summarizeTrends, type TrendSummaryRunner } from './summarizer.js';
 import type { RawTrendItem, TrendCrawlResult, TrendSource } from './types.js';
@@ -51,6 +52,7 @@ export async function crawlTrends(
   }
 
   pruneSnapshotsBefore(db, new Date(now.getTime() - config.retentionDays * DAY_MS).toISOString());
+  pruneClicksBefore(db, new Date(now.getTime() - CLICK_WINDOW_DAYS * DAY_MS).toISOString());
 
   let summaryError: string | null = null;
   // 1 ソースだけの手動更新では要約を作り直さない (全体の傾向は全ソース巡回のときだけ書く)。
