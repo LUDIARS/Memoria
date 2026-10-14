@@ -23,6 +23,7 @@ import { startAiHubSchedulers } from '../ai-hub/index.js';
 import { startTaskReviewScheduler } from '../task-review/index.js';
 import { startShoppingScheduler } from '../shopping/scheduler.js';
 import { startReleaseWatchScheduler } from '../release-watch/scheduler.js';
+import { startTrendCrawlerScheduler } from '../trend-crawler/scheduler.js';
 import { startBooksScheduler } from '../books/index.js';
 
 type Db = BetterSqlite3.Database;
@@ -57,6 +58,7 @@ export function startSchedulers(deps: SchedulerDeps): void {
   startTaskReviewScheduler(deps.db);
   startShoppingScheduler(deps.db);
   startReleaseWatchScheduler(deps.db);
+  startTrendCrawlerScheduler(deps.db);
   startBooksScheduler(deps.db);
 }
 
