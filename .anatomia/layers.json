@@ -49,8 +49,6 @@
     { "glob": "server/spending-log/*", "layer": "domain-logic" },
     { "glob": "server/task-review/*", "layer": "domain-logic" },
     { "glob": "server/task-triage/*", "layer": "domain-logic" },
-    { "glob": "server/trend-crawler/*", "layer": "domain-logic" },
-    { "glob": "server/trend-crawler/sources/*", "layer": "domain-logic" },
     { "glob": "server/weather/*", "layer": "domain-logic" },
     { "glob": "server/weather/sources/*", "layer": "domain-logic" },
     { "glob": "server/plugins/memoria-plugin/plugins/furusato-nozei/*", "layer": "domain-logic" },

@@ -21,7 +21,6 @@ export type LlmTaskName =
   | 'article_topics' | 'article_write' | 'article_tags' | 'ai_advice'
   | 'task_review' | 'task_triage'
   | 'release_extract' | 'release_summarize'
-  | 'trend_summarize'
   | 'book_suggest' | 'book_bib_lookup'
   | 'plugin_llm';
 
@@ -39,7 +38,6 @@ export const TASKS: LlmTaskName[] = [
   'article_topics', 'article_write', 'article_tags', 'ai_advice',
   'task_review', 'task_triage',
   'release_extract', 'release_summarize',
-  'trend_summarize',
   'book_suggest', 'book_bib_lookup',
   'plugin_llm',
 ];
@@ -68,7 +66,6 @@ const TASK_DEFAULT_MODELS: Partial<Record<LlmTaskName, string>> = {
   task_review: 'sonnet',             // 期限超過の todo/doing タスクから統合候補・完了候補を JSON 抽出。
   task_triage: 'sonnet',             // 期限未設定タスクのバッチに 期限/完了/据え置き を JSON で提案。
   release_extract: 'sonnet',         // 更新クローラー: RSS/API の無い公式ページ本文からバージョン一覧を JSON 抽出。
-  trend_summarize: 'haiku',          // トレンドクローラー: 巡回ごとに全ジャンルの流行を 1 回の JSON でまとめる。
   release_summarize: 'haiku',        // 更新クローラー: 1 バージョンの変更点を日本語 3〜6 行に。 数が出るので安価に。
   book_bib_lookup: 'sonnet',         // 書誌の欠損補完: 著者/ISBN/出版社を JSON で 1 冊分。
   book_suggest: 'sonnet',            // 本のサジェスト: 良かった本の傾向から推薦候補を JSON で出す。

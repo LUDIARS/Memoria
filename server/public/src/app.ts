@@ -177,7 +177,6 @@ import { loadLlmView } from './llm-view.js';
 import { loadShoppingView } from './shopping-view.js';
 import { loadHomePresenceSettings, mountHomePresenceSettings } from './home-presence-view.js';
 import { loadReleaseWatchView } from './release-watch-view.js';
-import { loadTrendCrawlerView } from './trend-crawler-view.js';
 import { loadBooksView } from './books-view.js';
 import { loadSpendingLogView, loadSpendingTrendView } from './spending-view.js';
 import {
@@ -7891,7 +7890,6 @@ const AI_SUB_VIEWS = {
   seeds: 'aiSeedsView',
   advice: 'aiAdviceView',
   releases: 'aiReleaseWatchView',
-  trends: 'aiTrendCrawlerView',
 };
 
 state.ai = state.ai || { sub: 'recommend' };
@@ -7925,7 +7923,6 @@ function switchAiSub(sub) {
   if (sub === 'seeds') void loadAiSeedsView();
   if (sub === 'advice') void loadAiAdviceView();
   if (sub === 'releases') void loadReleaseWatchView();
-  if (sub === 'trends') void loadTrendCrawlerView();
 }
 
 interface ApplicationCatalogRow {

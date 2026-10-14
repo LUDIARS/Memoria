@@ -4,7 +4,6 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, unlinkS
 import { dirname, join } from 'node:path';
 
 import { ensureRssSchema } from './rss/index.js';
-import { ensureTrendCrawlerSchema } from './trend-crawler/schema.js';
 import type { BookmarkRow } from './db/types/bookmark.js';
 import type { AgentRunRow, AgentProjectRow } from './db/types/agent.js';
 import type { WorkLocationRow } from './db/types/workplace.js';
@@ -1048,7 +1047,6 @@ export function openDb(dbPath: string): Db {
 
   // RSS リーダー + トレンド取り込みドメインのスキーマ (自己完結モジュール)。
   ensureRssSchema(db);
-  ensureTrendCrawlerSchema(db);
   ensureTaskTriageSchema(db);
   ensureBooksSchema(db);
 
