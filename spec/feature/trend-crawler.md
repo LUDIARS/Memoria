@@ -2,8 +2,8 @@
 
 ## 目的
 
-検索・ニュース・テック・ゲーム・アニメ・音楽・アプリ・本・エンタメ・暮らし・海外の
-11 ジャンルについて、公開されているランキング・人気一覧を定期巡回して履歴に積み、
+検索・若者 (Z世代)・ニュース・テック・ゲーム・アニメ・音楽・アプリ・本・エンタメ・暮らし・海外の
+12 ジャンルについて、公開されているランキング・人気一覧を定期巡回して履歴に積み、
 🤖 AI タブ内の「📈 トレンド」サブビューにジャンル別で表示する。
 
 前回の成功取得と比べた順位の動き (新登場 / ↑ / ↓ / →) と、保持期間内での初登場時刻、
@@ -16,7 +16,7 @@
 ## 構成
 
 - `server/trend-crawler/types.ts`: ジャンル・取得方式・ソース・設定・一覧表示・要約の型。
-- `server/trend-crawler/default-sources.ts`: 既定の 25 ソース (API キー不要の公開一覧のみ)。
+- `server/trend-crawler/default-sources.ts`: 既定ソース (API キー不要の公開一覧のみ) を追加した版ごとに持つ。
 - `server/trend-crawler/config.ts`: zod スキーマ、`app_settings` の `trend_crawler.config` / `trend_crawler.latest_summary`。
 - `server/trend-crawler/schema.ts`: 履歴テーブル `trend_snapshots` / `trend_items` (openDb から呼ぶ)。
 - `server/trend-crawler/store.ts`: 履歴の記録・最新 2 回の成功取得・初登場時刻・保持期間外の削除 (SQL のみ)。
@@ -34,7 +34,7 @@
 
 | kind | 取得方法 | 指標 | 既定ソース |
 |---|---|---|---|
-| `rss` | RSS 1.0 (RDF) / 2.0 / Atom。並び順を順位とする | Google トレンド `ht:approx_traffic`、はてブ `hatena:bookmarkcount` | Google トレンド (JP/US)、はてブ各カテゴリ、Zenn、Product Hunt、Reddit |
+| `rss` | RSS 1.0 (RDF) / 2.0 / Atom。並び順を順位とする | Google トレンド `ht:approx_traffic`、はてブ `hatena:bookmarkcount` | Google トレンド (JP/US)、はてブ各カテゴリ、Zenn、Product Hunt、Reddit、Google ニュース検索 |
 | `apple_top` | `rss.marketingtools.apple.com` のランキング JSON。URL で国・種類・件数を指定 | なし | Apple Music、App Store 無料/有料、Apple Books、Apple Podcasts |
 | `wikipedia_top` | Wikimedia `pageviews/top` の前日 (UTC) 分。未公開 (404) なら 1 日遡る | 閲覧数 | ja / en Wikipedia |
 | `anilist_anime` / `anilist_manga` | `graphql.anilist.co` へ POST、`TRENDING_DESC`、`isAdult: false` | trending 値 | AniList |
@@ -42,6 +42,19 @@
 
 メインページ・特別ページ・名前空間付きの Wikipedia 記事は話題ではないので除く。
 Google トレンドの item は link がフィード自身を指すため、最初の関連ニュースの URL を使う。
+
+## 若者 (Z世代) ジャンル
+
+TikTok・Instagram・X の公式トレンドは API キーが要るため、公開されている報道と掲示板から拾う。
+
+- Google ニュースの検索結果 RSS (直近 7 日、`when:7d`): 「Z世代 トレンド」「TikTok 流行」「女子高生 流行」「若者言葉」、英語圏の "Gen Z trend"。
+  検索結果は関連度順なので順位は話題の大きさではなく並び順として扱う。
+- Reddit r/GenZ の今日の上位。
+
+## 既定ソースの追加
+
+既定ソースは追加した版 (`DEFAULT_TREND_SOURCE_RELEASES`) ごとに持つ。保存済み設定の `defaultsVersion` より
+新しい版のソースだけを読み込み時に足す。利用者が消した古い既定ソースは戻さず、同じ id があれば足さない。
 
 ## HTTP API (同一端末のみ)
 

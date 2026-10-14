@@ -5,15 +5,16 @@
 
 /** トレンドのジャンル。 表示のまとまりと AI 要約の単位。 */
 export type TrendGenre =
-  | 'general' | 'news' | 'tech' | 'game' | 'anime' | 'music'
+  | 'general' | 'youth' | 'news' | 'tech' | 'game' | 'anime' | 'music'
   | 'app' | 'book' | 'entertainment' | 'life' | 'global';
 
 export const TREND_GENRES: readonly TrendGenre[] = [
-  'general', 'news', 'tech', 'game', 'anime', 'music', 'app', 'book', 'entertainment', 'life', 'global',
+  'general', 'youth', 'news', 'tech', 'game', 'anime', 'music', 'app', 'book', 'entertainment', 'life', 'global',
 ];
 
 export const GENRE_LABELS: Record<TrendGenre, string> = {
   general: '総合 (検索・閲覧)',
+  youth: '若者 (Z世代)',
   news: 'ニュース・社会',
   tech: 'テック',
   game: 'ゲーム',

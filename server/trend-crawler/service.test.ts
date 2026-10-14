@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
-import { DEFAULT_TREND_CRAWLER_CONFIG, getTrendCrawlerConfig, getTrendSummary, setTrendCrawlerConfig, trendCrawlerConfigSchema } from './config.js';
+import { DEFAULT_TREND_CRAWLER_CONFIG, getTrendCrawlerConfig, withNewDefaultSources, getTrendSummary, setTrendCrawlerConfig, trendCrawlerConfigSchema } from './config.js';
 import { buildTrendOverview } from './overview.js';
 import { ensureTrendCrawlerSchema } from './schema.js';
 import { shouldCrawlTrends } from './scheduler.js';
 import { crawlTrends } from './service.js';
 import { buildTrendSummaryPrompt, parseTrendSummary } from './summarizer.js';
+import { DEFAULT_TREND_SOURCE_RELEASES } from './default-sources.js';
 import type { RawTrendItem, TrendCrawlerConfig, TrendSource } from './types.js';
 
 const SOURCES: TrendSource[] = [
@@ -141,4 +142,28 @@ test('設定スキーマは既定値を通し、 重複 id と種類に合わな
   assert.equal(trendCrawlerConfigSchema.safeParse(badApple).success, false);
   const badWiki = { ...DEFAULT_TREND_CRAWLER_CONFIG, sources: [{ ...SOURCES[1], url: 'https://example.com' }] };
   assert.equal(trendCrawlerConfigSchema.safeParse(badWiki).success, false);
+});
+
+test('保存済み設定には、 その版より後に加わった既定ソースだけを足す', () => {
+  const v1 = DEFAULT_TREND_SOURCE_RELEASES.find((release) => release.version === 1)!.sources;
+  const youthIds = DEFAULT_TREND_SOURCE_RELEASES.find((release) => release.version === 2)!.sources.map((s) => s.id);
+  // 版 1 で保存し、 その後 利用者が google-trends-jp を消した設定。
+  const saved: TrendCrawlerConfig = { ...DEFAULT_TREND_CRAWLER_CONFIG, defaultsVersion: 1, sources: v1.filter((s) => s.id !== 'google-trends-jp') };
+  const merged = withNewDefaultSources(saved);
+  assert.equal(merged.defaultsVersion, DEFAULT_TREND_CRAWLER_CONFIG.defaultsVersion);
+  assert.equal(merged.sources.some((s) => s.id === 'google-trends-jp'), false);
+  assert.deepEqual(merged.sources.filter((s) => s.genre === 'youth').map((s) => s.id), youthIds);
+  // 既に最新版なら何も足さない (利用者が若者ソースを消していても戻さない)。
+  const latest = { ...merged, sources: merged.sources.filter((s) => s.genre !== 'youth') };
+  assert.equal(withNewDefaultSources(latest).sources.some((s) => s.genre === 'youth'), false);
+});
+
+test('読み込み時に版 1 の保存設定へ若者ジャンルが加わる', () => {
+  const db = openDb();
+  db.prepare('UPDATE app_settings SET value = ? WHERE key = ?').run(
+    JSON.stringify({ ...DEFAULT_TREND_CRAWLER_CONFIG, defaultsVersion: 1, sources: SOURCES }), 'trend_crawler.config',
+  );
+  const config = getTrendCrawlerConfig(db);
+  assert.equal(config.sources.length, SOURCES.length + DEFAULT_TREND_SOURCE_RELEASES[1].sources.length);
+  assert.equal(trendCrawlerConfigSchema.safeParse(config).success, true);
 });

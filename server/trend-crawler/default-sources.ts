@@ -6,7 +6,7 @@ import type { TrendSource } from './types.js';
 const APPLE = 'https://rss.marketingtools.apple.com/api/v2/jp';
 const HATENA = 'https://b.hatena.ne.jp/hotentry';
 
-export const DEFAULT_TREND_SOURCES: TrendSource[] = [
+const INITIAL_SOURCES: TrendSource[] = [
   // ── 総合 ──
   { id: 'google-trends-jp', name: 'Google トレンド (日本・急上昇)', genre: 'general', kind: 'rss', url: 'https://trends.google.co.jp/trending/rss?geo=JP', enabled: true },
   { id: 'wikipedia-ja', name: 'Wikipedia 日本語版 (前日の閲覧数)', genre: 'general', kind: 'wikipedia_top', url: 'https://ja.wikipedia.org', enabled: true },
@@ -44,3 +44,32 @@ export const DEFAULT_TREND_SOURCES: TrendSource[] = [
   { id: 'reddit-popular', name: 'Reddit r/popular', genre: 'global', kind: 'rss', url: 'https://www.reddit.com/r/popular/.rss', enabled: true },
   { id: 'wikipedia-en', name: 'Wikipedia 英語版 (前日の閲覧数)', genre: 'global', kind: 'wikipedia_top', url: 'https://en.wikipedia.org', enabled: true },
 ];
+
+/** Google ニュースの検索結果 RSS (直近 7 日)。 若者向けの話題は公開ランキングが少ないため、 報道から拾う。 */
+function googleNewsSearch(query: string, locale: 'ja' | 'en'): string {
+  const q = encodeURIComponent(`${query} when:7d`);
+  return locale === 'ja'
+    ? `https://news.google.com/rss/search?q=${q}&hl=ja&gl=JP&ceid=JP:ja`
+    : `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;
+}
+
+/** 版 2: 若者 (Z世代) ジャンル。 TikTok・Instagram・X の公式トレンドは API キーが要るので含めない。 */
+const YOUTH_SOURCES: TrendSource[] = [
+  { id: 'youth-gn-genz', name: 'Google ニュース「Z世代 トレンド」', genre: 'youth', kind: 'rss', url: googleNewsSearch('Z世代 トレンド', 'ja'), enabled: true },
+  { id: 'youth-gn-tiktok', name: 'Google ニュース「TikTok 流行」', genre: 'youth', kind: 'rss', url: googleNewsSearch('TikTok 流行', 'ja'), enabled: true },
+  { id: 'youth-gn-highschool', name: 'Google ニュース「女子高生 流行」', genre: 'youth', kind: 'rss', url: googleNewsSearch('女子高生 流行', 'ja'), enabled: true },
+  { id: 'youth-gn-slang', name: 'Google ニュース「若者言葉」', genre: 'youth', kind: 'rss', url: googleNewsSearch('若者言葉', 'ja'), enabled: true },
+  { id: 'youth-gn-genz-en', name: 'Google News "Gen Z trend" (英語圏)', genre: 'youth', kind: 'rss', url: googleNewsSearch('Gen Z trend', 'en'), enabled: true },
+  { id: 'reddit-genz', name: 'Reddit r/GenZ (今日の上位)', genre: 'youth', kind: 'rss', url: 'https://www.reddit.com/r/GenZ/top/.rss?t=day', enabled: true },
+];
+
+/**
+ * 既定ソースを追加した版ごとに並べる。 保存済み設定は defaultsVersion より新しい版のソースだけを
+ * 読み込み時に足す (config.ts withNewDefaultSources)。 既定を増やすときは新しい版を足す。
+ */
+export const DEFAULT_TREND_SOURCE_RELEASES: { version: number; sources: TrendSource[] }[] = [
+  { version: 1, sources: INITIAL_SOURCES },
+  { version: 2, sources: YOUTH_SOURCES },
+];
+
+export const DEFAULT_TREND_SOURCES: TrendSource[] = DEFAULT_TREND_SOURCE_RELEASES.flatMap((release) => release.sources);

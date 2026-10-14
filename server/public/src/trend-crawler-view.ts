@@ -5,7 +5,7 @@
 import { escapeHtml } from './shared/sanitize.js';
 
 type TrendGenre =
-  | 'general' | 'news' | 'tech' | 'game' | 'anime' | 'music'
+  | 'general' | 'youth' | 'news' | 'tech' | 'game' | 'anime' | 'music'
   | 'app' | 'book' | 'entertainment' | 'life' | 'global';
 type SourceKind = 'rss' | 'apple_top' | 'wikipedia_top' | 'anilist_anime' | 'anilist_manga' | 'hn_top';
 type MovementStatus = 'new' | 'up' | 'down' | 'same' | 'unknown';
@@ -79,6 +79,7 @@ interface TrendCrawlResult {
 
 const GENRE_LABELS: Record<TrendGenre, string> = {
   general: '総合 (検索・閲覧)',
+  youth: '若者 (Z世代)',
   news: 'ニュース・社会',
   tech: 'テック',
   game: 'ゲーム',

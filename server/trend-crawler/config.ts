@@ -3,12 +3,12 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import { z } from 'zod';
-import { DEFAULT_TREND_SOURCES } from './default-sources.js';
+import { DEFAULT_TREND_SOURCE_RELEASES, DEFAULT_TREND_SOURCES } from './default-sources.js';
 import { TREND_GENRES, TREND_SOURCE_KINDS, type TrendCrawlerConfig, type TrendSource, type TrendSummary } from './types.js';
 
 type Db = BetterSqlite3.Database;
 
-const CURRENT_DEFAULTS_VERSION = 1;
+const CURRENT_DEFAULTS_VERSION = Math.max(...DEFAULT_TREND_SOURCE_RELEASES.map((release) => release.version));
 const MAX_SOURCES = 60;
 export const MAX_ITEMS_PER_SOURCE = 50;
 
@@ -81,6 +81,21 @@ function writeSetting(db: Db, key: string, value: string): void {
   `).run(key, value);
 }
 
+/**
+ * 保存済み設定の作成後に既定へ加わったソースを足す。 利用者が消した古い既定ソースは戻さない
+ * (その版より新しい既定だけを対象にする)。 同じ id が既にあれば足さない。
+ */
+export function withNewDefaultSources(config: TrendCrawlerConfig): TrendCrawlerConfig {
+  if (config.defaultsVersion >= CURRENT_DEFAULTS_VERSION) return config;
+  const ids = new Set(config.sources.map((source) => source.id));
+  const added = DEFAULT_TREND_SOURCE_RELEASES
+    .filter((release) => release.version > config.defaultsVersion)
+    .flatMap((release) => release.sources)
+    .filter((source) => !ids.has(source.id))
+    .slice(0, Math.max(0, MAX_SOURCES - config.sources.length));
+  return { ...config, defaultsVersion: CURRENT_DEFAULTS_VERSION, sources: [...config.sources, ...structuredClone(added)] };
+}
+
 export function getTrendCrawlerConfig(db: Db): TrendCrawlerConfig {
   const raw = readSetting(db, CONFIG_KEY);
   if (raw === null) return structuredClone(DEFAULT_TREND_CRAWLER_CONFIG);
@@ -88,7 +103,7 @@ export function getTrendCrawlerConfig(db: Db): TrendCrawlerConfig {
   try { decoded = JSON.parse(raw); } catch { throw new Error('trend_crawler.config is not valid JSON'); }
   const parsed = trendCrawlerConfigSchema.safeParse(decoded);
   if (!parsed.success) throw new Error(`trend_crawler.config is invalid: ${parsed.error.message}`);
-  return parsed.data as TrendCrawlerConfig;
+  return withNewDefaultSources(parsed.data as TrendCrawlerConfig);
 }
 
 export function setTrendCrawlerConfig(db: Db, config: TrendCrawlerConfig): TrendCrawlerConfig {
