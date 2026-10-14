@@ -1,0 +1,21 @@
+{
+  "name": "dev-throughput",
+  "description": "開発量の日次集計。Revisor (Rv) でマージされた PR の件数と、GitHub の LUDIARS org の既定ブランチに載ったコミット件数を JST の 1 日ごとに集め、Memoria の SQLite に保存して 📒 作業記録タブの「📊 開発量」に直近 30 日の表で見せる。Revisor 一覧の読取・GitHub 検索・保存・定期収集・表示を所有する。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/dev-throughput/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/dev-throughput-view\\.ts$"
+    }
+  ],
+  "specRefs": [
+    "spec/feature/dev-throughput.md#目的",
+    "spec/feature/dev-throughput.md#数え方",
+    "spec/feature/dev-throughput.md#構成",
+    "spec/feature/dev-throughput.md#制約"
+  ]
+}

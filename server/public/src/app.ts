@@ -180,6 +180,7 @@ import { loadReleaseWatchView } from './release-watch-view.js';
 import { loadTendentiaView } from './tendentia-view.js';
 import { loadBooksView } from './books-view.js';
 import { loadSpendingLogView, loadSpendingTrendView } from './spending-view.js';
+import { loadDevThroughputView } from './dev-throughput-view.js';
 import {
   loadAiArticlesView,
   loadAiAdviceView,
@@ -7832,6 +7833,7 @@ const WL_SUB_VIEWS = {
   receipt: 'wlReceiptView',
   card: 'wlCardView',
   spending: 'wlSpendingTrendView',
+  throughput: 'wlThroughputView',
 };
 
 // データベースタブのサブビュー一覧 (旧 'external' は軌跡タブに統合)
@@ -8271,6 +8273,7 @@ async function loadWorklog() {
   if (sub === 'receipt') return loadSpendingLogView('receipt', date);
   if (sub === 'card') return loadSpendingLogView('transaction', date);
   if (sub === 'spending') return loadSpendingTrendView();
+  if (sub === 'throughput') return loadDevThroughputView();
   if (WL_KIND_BY_SUB[sub]) {
     await loadWorklogActivity(date, sub);
     if (sub === 'gemini') await loadGeminiWebResearchLogs(date);

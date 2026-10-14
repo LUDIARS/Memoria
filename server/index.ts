@@ -98,6 +98,7 @@ import { makeShoppingRouter } from './routes/shopping.js';
 import { makeBooksRouter } from './books/index.js';
 import { makeReleaseWatchRouter } from './release-watch/router.js';
 import { makeTendentiaLinkRouter } from './tendentia-link/router.js';
+import { createDevThroughput, SYNC_INTERVAL_MS as DEV_THROUGHPUT_SYNC_MS } from './dev-throughput/router.js';
 
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
 const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(SERVER_DIR, '..', 'data'));
@@ -341,6 +342,8 @@ app.route('/', makeShoppingRouter({ db }));
 app.route('/', makeBooksRouter({ db }));
 app.route('/', makeReleaseWatchRouter({ db }));
 app.route('/', makeTendentiaLinkRouter());
+const devThroughput = createDevThroughput({ db });
+app.route('/', devThroughput.router);
 app.route('/', makeBriefingRouter({ db }));
 const railStatus = new RailStatusCache();
 app.route('/', makeRailStatusRouter(railStatus));
@@ -456,6 +459,10 @@ setInterval(() => {
 
 // ── schedulers ────────────────────────────────────────────────────────────
 railStatus.start();
+// 開発量の日次集計: 起動時に 1 回、 以後 1 時間ごとに Revisor と GitHub から集め直す。
+devThroughput.coordinator.start();
+devThroughput.coordinator.schedule(DEV_THROUGHPUT_SYNC_MS);
+process.on('exit', () => devThroughput.coordinator.stop());
 startSchedulers({
   db,
   blackbox: blackbox.engine,

@@ -6667,4 +6667,20 @@ dialog.loc-edit-modal[open] {
 .td-reason-cross { background: #7c3aed; }
 .td-reason-new { background: #dc2626; }
 .td-reason-up { background: #16a34a; }
+
+/* 📒 作業記録 > 📊 開発量 (dev-throughput-view.ts) */
+.dt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dt-head .grow { flex: 1; }
+.dt-note { font-size: 12px; margin: 4px 0 10px; }
+.dt-error { color: #dc2626; }
+.dt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dt-table th { text-align: left; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.dt-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.dt-day { white-space: nowrap; }
+.dt-cell { width: 28%; min-width: 120px; white-space: nowrap; }
+.dt-bar { display: inline-block; height: 10px; border-radius: 3px; vertical-align: middle; max-width: calc(100% - 44px); }
+.dt-bar-merge { background: #7c3aed; }
+.dt-bar-commit { background: #0ea5e9; }
+.dt-num { display: inline-block; margin-left: 6px; min-width: 32px; font-variant-numeric: tabular-nums; }
+.dt-repos { font-size: 12px; }
 @media (max-width: 640px) { .td-grid { grid-template-columns: 1fr; } }
