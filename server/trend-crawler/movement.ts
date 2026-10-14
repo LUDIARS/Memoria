@@ -38,6 +38,8 @@ export function rankMap(items: Pick<RawTrendItem, 'rank' | 'title'>[]): Map<stri
 
 export interface CrossHitInput {
   sourceId: string;
+  /** 取得元サイト (ホスト名)。 同じサイトのカテゴリ違い (はてブ総合と暮らし等) の重複は話題の広がりに数えない。 */
+  site: string;
   name: string;
   genre: TrendGenre;
   items: Pick<RawTrendItem, 'rank' | 'title'>[];
@@ -47,10 +49,11 @@ export interface CrossHitInput {
 const MIN_CROSS_KEY_LENGTH = 2;
 
 /**
- * 2 つ以上のソースに同じ話題が出ているものを、 出ているソース数の多い順 → 最高順位の高い順に返す。
+ * 2 つ以上の別サイトに同じ話題が出ているものを、 出ているソース数の多い順 → 最高順位の高い順に返す。
  */
 export function findCrossHits(inputs: CrossHitInput[], limit = 20): TrendCrossHit[] {
   const byKey = new Map<string, TrendCrossHit>();
+  const sitesByKey = new Map<string, Set<string>>();
   for (const input of inputs) {
     const seen = new Set<string>();
     for (const item of input.items) {
@@ -60,11 +63,14 @@ export function findCrossHits(inputs: CrossHitInput[], limit = 20): TrendCrossHi
       const hit = byKey.get(key) ?? { key, title: item.title, sources: [] };
       hit.sources.push({ sourceId: input.sourceId, name: input.name, genre: input.genre, rank: item.rank });
       byKey.set(key, hit);
+      const sites = sitesByKey.get(key) ?? new Set<string>();
+      sites.add(input.site);
+      sitesByKey.set(key, sites);
     }
   }
   const bestRank = (hit: TrendCrossHit): number => Math.min(...hit.sources.map((s) => s.rank));
   return [...byKey.values()]
-    .filter((hit) => hit.sources.length >= 2)
+    .filter((hit) => (sitesByKey.get(hit.key)?.size ?? 0) >= 2)
     .sort((a, b) => b.sources.length - a.sources.length || bestRank(a) - bestRank(b))
     .slice(0, limit);
 }

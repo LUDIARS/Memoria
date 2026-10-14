@@ -41,6 +41,10 @@ export function buildSourceView(db: Db, source: TrendSource): TrendSourceView {
   };
 }
 
+function siteOf(url: string): string {
+  try { return new URL(url).hostname; } catch { return url; }
+}
+
 export function buildTrendOverview(db: Db, config: TrendCrawlerConfig, summary: TrendSummary | null): TrendOverview {
   const enabled = config.sources.filter((source) => source.enabled);
   const views = new Map(enabled.map((source) => [source.id, buildSourceView(db, source)]));
@@ -53,7 +57,7 @@ export function buildTrendOverview(db: Db, config: TrendCrawlerConfig, summary: 
     }))
     .filter((genre) => genre.sources.length > 0);
   const crossHits = findCrossHits(enabled.map((source) => ({
-    sourceId: source.id, name: source.name, genre: source.genre, items: views.get(source.id)!.items,
+    sourceId: source.id, site: siteOf(source.url), name: source.name, genre: source.genre, items: views.get(source.id)!.items,
   })));
   return { lastCrawledAt: lastCrawledAt(db), summary, crossHits, genres };
 }
