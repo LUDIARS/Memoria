@@ -1,0 +1,20 @@
+{
+  "name": "tendentia-link",
+  "description": "Tendentia (トレンドの集積サービス、Td) への接続口。同じ端末の Tendentia API からジャンルごとの注目と複数サイトで話題のものを読み、🤖 AI タブの「📈 トレンド」に要点だけを表示し、Tendentia の画面を開く URL を渡す。トレンドの巡回・保存は持たない。",
+  "role": "semantic",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)server/tendentia-link/[^/]+\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)server/public/src/tendentia-view\\.ts$"
+    }
+  ],
+  "specRefs": [
+    "spec/feature/tendentia-link.md#目的",
+    "spec/feature/tendentia-link.md#構成",
+    "spec/feature/tendentia-link.md#制約"
+  ]
+}

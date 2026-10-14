@@ -6647,3 +6647,24 @@ dialog.loc-edit-modal[open] {
   .bk-card { grid-template-columns: 40px 1fr; }
   .bk-actions { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; }
 }
+
+/* 🤖 AI タブ > 📈 トレンド (tendentia-view.ts)。 中身は Tendentia から。 */
+.td-view { display: grid; gap: 14px; padding: 6px 0; }
+.td-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.td-head h2 { margin: 0; }
+.td-head p { margin: 4px 0 0; }
+.td-open { display: inline-block; padding: 6px 12px; border-radius: 6px; background: var(--accent); color: #fff; text-decoration: none; font-size: 13px; white-space: nowrap; }
+.td-crawled { margin: 0; font-size: 12px; }
+.td-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.td-card { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 12px 14px; min-width: 0; }
+.td-card h3 { margin: 0 0 8px; font-size: 14px; }
+.td-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.td-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.td-title { overflow-wrap: anywhere; }
+.td-title a { color: var(--text); text-decoration: none; }
+.td-title a:hover { text-decoration: underline; }
+.td-reason { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; color: #fff; background: #64748b; }
+.td-reason-cross { background: #7c3aed; }
+.td-reason-new { background: #dc2626; }
+.td-reason-up { background: #16a34a; }
+@media (max-width: 640px) { .td-grid { grid-template-columns: 1fr; } }

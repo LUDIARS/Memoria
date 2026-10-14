@@ -97,6 +97,7 @@ import { makeLlmUsageRouter } from './llm-usage/router.js';
 import { makeShoppingRouter } from './routes/shopping.js';
 import { makeBooksRouter } from './books/index.js';
 import { makeReleaseWatchRouter } from './release-watch/router.js';
+import { makeTendentiaLinkRouter } from './tendentia-link/router.js';
 
 const PORT = Number(process.env.MEMORIA_PORT ?? 5180);
 const DATA_DIR = resolve(process.env.MEMORIA_DATA ?? join(SERVER_DIR, '..', 'data'));
@@ -339,6 +340,7 @@ app.route('/', makeRssRouter({ db }));
 app.route('/', makeShoppingRouter({ db }));
 app.route('/', makeBooksRouter({ db }));
 app.route('/', makeReleaseWatchRouter({ db }));
+app.route('/', makeTendentiaLinkRouter());
 app.route('/', makeBriefingRouter({ db }));
 const railStatus = new RailStatusCache();
 app.route('/', makeRailStatusRouter(railStatus));
