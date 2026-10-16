@@ -6668,7 +6668,7 @@ dialog.loc-edit-modal[open] {
 .td-reason-new { background: #dc2626; }
 .td-reason-up { background: #16a34a; }
 
-.llm-remaining-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.llm-remaining-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .llm-remaining-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; }
 .llm-remaining-chart { margin: 16px 0; }
 .llm-remaining-chart small { display: block; margin: 4px 0; }
