@@ -6677,6 +6677,13 @@ dialog.loc-edit-modal[open] {
 .llm-remaining-chart text { fill: var(--text); font-size: 11px; }
 .llm-remaining-chart path { fill: none; stroke: var(--accent); stroke-width: 2; }
 .llm-remaining-chart circle { fill: var(--accent); }
+.llm-history-controls, .llm-history-controls form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.llm-history-controls { margin: 12px 0; }
+.llm-history-controls form { margin: 0; }
+.llm-time-axis { position: relative; height: 36px; margin: 0 2.5% 0 6.875%; }
+.llm-axis-tick { position: absolute; transform: translateX(-50%); text-align: center; white-space: nowrap; font-size: 10px; line-height: 1.5; }
+.llm-axis-tick:first-child { transform: none; text-align: left; }
+.llm-axis-tick:last-child { transform: translateX(-100%); text-align: right; }
 
 /* 📒 作業記録 > 📊 開発量 (dev-throughput-view.ts) */
 .dt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

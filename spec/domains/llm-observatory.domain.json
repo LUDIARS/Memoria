@@ -9,7 +9,7 @@
       "pathPattern": "(^|/)server/llm-usage/[^/]+\\.ts$"
     },
     {
-      "pathPattern": "(^|/)server/public/src/llm-(?:view|remaining-view)\\.ts$"
+      "pathPattern": "(^|/)server/public/src/llm-(?:view|remaining-view|history-window)\\.ts$"
     },
     {
       "pathPattern": "(^|/)server/public/src/app\\.ts$"

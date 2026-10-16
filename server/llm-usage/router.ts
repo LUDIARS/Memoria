@@ -5,7 +5,7 @@ import { usageDashboard } from './dashboard.js';
 import { ensureLlmUsageSchema } from './schema.js';
 import { UsageSyncCoordinator } from './sync.js';
 import { InvalidPeriodError, parseUsagePeriod, type UsagePeriod } from './usage-period.js';
-import { fetchRemainingUsage, parseRemainingRange } from './remaining.js';
+import { fetchRemainingUsage, parseRemainingRange, parseRemainingStart } from './remaining.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -40,14 +40,16 @@ export function makeLlmUsageRouter({ db }: { db: Db }): Hono {
   router.get('/api/llm-usage/sync', (context) => context.json(coordinator.status()));
   router.get('/api/llm-usage/remaining', async (context) => {
     let range: ReturnType<typeof parseRemainingRange>;
+    let from: number | undefined;
     try {
       range = parseRemainingRange(context.req.query('range'));
+      from = parseRemainingStart(context.req.query('from'), Math.floor(Date.now() / 1000));
     } catch (error: unknown) {
       if (error instanceof RangeError) return context.json({ error: error.message }, 400);
       throw error;
     }
     try {
-      return context.json(await fetchRemainingUsage({ range }));
+      return context.json(await fetchRemainingUsage({ range, from }));
     } catch (error: unknown) {
       // Network errors may contain the configured endpoint. Expose only known safe messages.
       const detail = error instanceof Error && /^(Concordia の|Concordia が)/.test(error.message)

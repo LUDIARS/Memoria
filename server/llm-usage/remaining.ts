@@ -23,6 +23,15 @@ export function parseRemainingRange(value: string | undefined): RemainingRange {
   throw new RangeError('表示期間は 3m / 1m / 1w / 1d / 1h から選んでください');
 }
 
+export function parseRemainingStart(value: string | undefined, now: number): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed < 0 || parsed > now) {
+    throw new RangeError('開始日時は現在以前の日時を指定してください');
+  }
+  return parsed;
+}
+
 function isPoint(value: unknown): value is LimitPoint {
   if (!value || typeof value !== 'object') return false;
   const row = value as Record<string, unknown>;
@@ -37,10 +46,13 @@ export async function fetchRemainingUsage(deps: {
   fetchImpl?: typeof fetch;
   now?: () => number;
   range?: RemainingRange;
-} = {}): Promise<{ points: LimitPoint[]; range: RemainingRange; from: number; to: number }> {
+  from?: number;
+} = {}): Promise<{ points: LimitPoint[]; range: RemainingRange; from: number; to: number; now: number }> {
   const range = parseRemainingRange(deps.range);
-  const to = Math.floor((deps.now ?? Date.now)() / 1000);
-  const from = to - REMAINING_RANGE_SECONDS[range];
+  const now = Math.floor((deps.now ?? Date.now)() / 1000);
+  const selectedStart = parseRemainingStart(deps.from === undefined ? undefined : String(deps.from), now);
+  const from = selectedStart ?? now - REMAINING_RANGE_SECONDS[range];
+  const to = from + REMAINING_RANGE_SECONDS[range];
   const base = deps.baseUrl ?? process.env.CONCORDIA_URL ?? process.env.MEMORIA_CONCORDIA_URL;
   if (!base) throw new Error('Concordia の接続先 (CONCORDIA_URL) が設定されていません');
   const url = new URL(base);
@@ -60,7 +72,7 @@ export async function fetchRemainingUsage(deps: {
     throw new Error('Concordia の残量データの形式が不正です');
   }
   // Return only the chart contract, even if the upstream response gains private fields.
-  return { range, from, to, points: body.points.filter((point) => point.ts >= from && point.ts <= to)
+  return { range, from, to, now, points: body.points.filter((point) => point.ts >= from && point.ts <= Math.min(to, now))
     .map(({ ts, provider, plan, used5hPct, usedWeeklyPct, reset5hAt, resetWeeklyAt }) =>
     ({ ts, provider, plan, used5hPct, usedWeeklyPct, reset5hAt, resetWeeklyAt })) };
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchRemainingUsage, parseRemainingRange, REMAINING_RANGE_SECONDS } from './remaining.js';
+import { fetchRemainingUsage, parseRemainingRange, parseRemainingStart, REMAINING_RANGE_SECONDS } from './remaining.js';
 
 test('remaining usage reads a bounded Cc history and returns only the public chart contract', async () => {
   const point = { ts: 1700000000, provider: 'codex-cli', plan: 'pro', used5hPct: null,
@@ -14,7 +14,7 @@ test('remaining usage reads a bounded Cc history and returns only the public cha
       assert.ok(init?.signal);
       return Response.json({ points: [{ ...point, privatePath: '/private' }], secret: 'omit' });
     } });
-  assert.deepEqual(result, { points: [point], range: '1w', from: 1700000000 - 604800, to: 1700000000 });
+  assert.deepEqual(result, { points: [point], range: '1w', from: 1700000000 - 604800, to: 1700000000, now: 1700000000 });
 });
 
 test('unavailable upstream and malformed observations fail instead of inventing a remaining limit', async () => {
@@ -26,7 +26,7 @@ test('unavailable upstream and malformed observations fail instead of inventing 
 test('empty history stays empty and credential-bearing connection URLs are rejected before fetch', async () => {
   assert.deepEqual(await fetchRemainingUsage({ baseUrl: 'http://localhost:1234', now: () => 1700000000000,
     fetchImpl: async () => Response.json({ points: [] }) }),
-  { points: [], range: '1w', from: 1700000000 - 604800, to: 1700000000 });
+  { points: [], range: '1w', from: 1700000000 - 604800, to: 1700000000, now: 1700000000 });
   let calls = 0;
   await assert.rejects(fetchRemainingUsage({ baseUrl: 'http://user:secret@localhost',
     fetchImpl: async () => { calls++; return Response.json({ points: [] }); } }), /設定が不正/);
@@ -44,7 +44,7 @@ test('all five ranges query the selected window and exclude outside observations
         assert.equal(new URL(String(input)).searchParams.get('since'), String(from));
         return Response.json({ points: [makePoint(from - 1), makePoint(from), makePoint(now), makePoint(now + 1)] });
       } });
-    assert.deepEqual(result, { range, from, to: now, points: [makePoint(from), makePoint(now)] });
+    assert.deepEqual(result, { range, from, to: now, now, points: [makePoint(from), makePoint(now)] });
   }
 });
 
@@ -61,4 +61,35 @@ test('three-month history accepts more than the previous one-week row limit', as
   const result = await fetchRemainingUsage({ baseUrl: 'http://localhost:1234', range: '3m', now: () => 1700000000000,
     fetchImpl: async () => Response.json({ points: Array.from({ length: 10001 }, () => point) }) });
   assert.equal(result.points.length, 10001);
+});
+
+test('an explicit historical start returns one full period and excludes later observations', async () => {
+  const now = 1700000000, from = now - 3 * 86400, to = from + 86400;
+  const makePoint = (ts: number) => ({ ts, provider: 'codex-cli', plan: null, used5hPct: null,
+    usedWeeklyPct: 10, reset5hAt: null, resetWeeklyAt: null });
+  const result = await fetchRemainingUsage({ baseUrl: 'http://localhost:1234', range: '1d', from, now: () => now * 1000,
+    fetchImpl: async (input) => {
+      assert.equal(new URL(String(input)).searchParams.get('since'), String(from));
+      return Response.json({ points: [from - 1, from, to, to + 1, now].map(makePoint) });
+    } });
+  assert.deepEqual(result, { range: '1d', from, to, now, points: [makePoint(from), makePoint(to)] });
+});
+
+test('a window ending in the future keeps its full width without including future observations', async () => {
+  const now = 1700000000;
+  const makePoint = (ts: number) => ({ ts, provider: 'codex-cli', plan: null, used5hPct: null,
+    usedWeeklyPct: 10, reset5hAt: null, resetWeeklyAt: null });
+  const result = await fetchRemainingUsage({ baseUrl: 'http://localhost:1234', range: '1h', from: now - 1800,
+    now: () => now * 1000, fetchImpl: async () => Response.json({ points: [makePoint(now), makePoint(now + 1)] }) });
+  assert.equal(result.to, now + 1800);
+  assert.deepEqual(result.points, [makePoint(now)]);
+});
+
+test('start validation permits epoch boundaries and rejects future, fractional, or malformed values', () => {
+  assert.equal(parseRemainingStart(undefined, 1700000000), undefined);
+  assert.equal(parseRemainingStart('0', 1700000000), 0);
+  assert.equal(parseRemainingStart('1700000000', 1700000000), 1700000000);
+  for (const value of ['', '-1', '1.5', '1e3', ' 1', '1700000001', 'NaN']) {
+    assert.throws(() => parseRemainingStart(value, 1700000000), RangeError);
+  }
 });
