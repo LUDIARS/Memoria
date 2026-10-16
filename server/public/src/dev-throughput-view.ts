@@ -8,6 +8,7 @@ interface DailyView {
   rvMerged: number | null;
   rvByRepo: Record<string, number>;
   commits: number | null;
+  codeAdditions: number | null;
 }
 
 interface SyncStatus {
@@ -64,25 +65,28 @@ function syncLine(sync: SyncStatus): string {
 export function renderDevThroughput(data: DevThroughputResponse): string {
   const merged = sum(data.days.map((d) => d.rvMerged));
   const commits = sum(data.days.map((d) => d.commits));
+  const additions = sum(data.days.map(d => d.codeAdditions ?? null));
+  const maxAdditions = Math.max(0, ...data.days.map(d => d.codeAdditions ?? 0));
   const maxMerged = Math.max(0, ...data.days.map((d) => d.rvMerged ?? 0));
   const maxCommits = Math.max(0, ...data.days.map((d) => d.commits ?? 0));
   const rows = data.days.map((d) => `<tr>
       <td class="dt-day">${escapeHtml(dayLabel(d.day))}</td>
       <td class="dt-cell">${bar(d.rvMerged, maxMerged, 'merge')}</td>
       <td class="dt-cell">${bar(d.commits, maxCommits, 'commit')}</td>
+      <td class="dt-cell">${bar(d.codeAdditions ?? null, maxAdditions, 'commit')}</td>
       <td class="dt-repos muted">${topRepos(d.rvByRepo)}</td>
     </tr>`).join('');
   return `<div class="wl-summary-row dt-head">
-      <span><b>直近 ${data.days.length} 日</b> · Rv マージ 計 ${merged.total} (1 日平均 ${average(merged)}) · コミット 計 ${commits.total} (1 日平均 ${average(commits)})</span>
+      <span><b>直近 ${data.days.length} 日</b> · Rv マージ 計 ${merged.total} (1 日平均 ${average(merged)}) · コミット 計 ${commits.total} (1 日平均 ${average(commits)}) · コード追加 ${additions.days ? additions.total.toLocaleString('ja-JP') : '—'} 行 (集計済み ${additions.days} 日・1 日平均 ${average(additions)} 行)</span>
       <span class="grow"></span>
       <span class="muted dt-sync">${syncLine(data.sync)}</span>
       <button type="button" class="ghost" id="devThroughputSync">今すぐ集計</button>
     </div>
-    <p class="muted dt-note">Rv マージ = Revisor でマージされた PR の数 (マージ済み PR の最終更新日で数える)。 コミット = GitHub の LUDIARS org の既定ブランチに載ったコミットの数。 日付は日本時間。</p>
-    <table class="dt-table">
-      <thead><tr><th>日付</th><th>Rv マージ</th><th>コミット</th><th>マージの多いリポ</th></tr></thead>
+    <p class="muted dt-note">Rv マージ = Revisor でマージされた PR の数 (マージ済み PR の最終更新日で数える)。 コミット = GitHub の LUDIARS org の既定ブランチに載ったコミットの数。 コード追加行数 = 同じ GitHub 組織の非マージコミットで追加されたソースの行数（生成物を除外、削除行は差し引かない）。— は未集計。日付は日本時間。</p>
+    <div style="overflow-x:auto"><table class="dt-table">
+      <thead><tr><th>日付</th><th>Rv マージ</th><th>コミット</th><th>コード追加行数</th><th>マージの多いリポ</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table></div>`;
 }
 
 async function requestSync(): Promise<void> {

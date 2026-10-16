@@ -9,6 +9,8 @@ export interface DailyThroughput {
   rvByRepo: Record<string, number>;
   /** GitHub の既定ブランチに載ったコミット件数。 まだ数えていない日は null */
   commits: number | null;
+  /** Code additions; null until collected. */
+  codeAdditions: number | null;
   /** 最後に集計した時刻 (ISO) */
   collectedAt: string;
 }

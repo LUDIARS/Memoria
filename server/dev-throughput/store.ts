@@ -3,6 +3,8 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import type { DailyThroughput, MergeCount } from './types.js';
 
+import { ensureCodeAdditionsSchema } from './code-additions-store.js';
+
 type Db = BetterSqlite3.Database;
 
 interface Row {
@@ -10,6 +12,7 @@ interface Row {
   rv_merged: number;
   rv_by_repo: string;
   commits: number | null;
+  code_additions: number | null;
   collected_at: string;
 }
 
@@ -23,6 +26,7 @@ export function ensureDevThroughputSchema(db: Db): void {
       collected_at TEXT NOT NULL
     )
   `);
+  ensureCodeAdditionsSchema(db);
 }
 
 export function saveMergeCount(db: Db, day: string, count: MergeCount, at: string): void {
@@ -56,6 +60,6 @@ export function listDaily(db: Db, days: readonly string[]): DailyThroughput[] {
   const byDay = new Map(rows.map((row) => [row.day, row]));
   return days.flatMap((day) => {
     const row = byDay.get(day);
-    return row ? [{ day, rvMerged: row.rv_merged, rvByRepo: parseByRepo(row.rv_by_repo), commits: row.commits, collectedAt: row.collected_at }] : [];
+    return row ? [{ day, rvMerged: row.rv_merged, rvByRepo: parseByRepo(row.rv_by_repo), commits: row.commits, codeAdditions: row.code_additions, collectedAt: row.collected_at }] : [];
   });
 }

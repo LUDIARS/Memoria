@@ -11,9 +11,95 @@ import { createDevThroughput, parseViewDays } from './router.js';
 import { ensureDevThroughputSchema, listDaily, saveCommitCount, saveMergeCount } from './store.js';
 import { DevThroughputSyncCoordinator } from './sync-coordinator.js';
 import type { DailyThroughput, MergeCount } from './types.js';
+import { countCodeAdditionsOnDay } from './github-code-additions.js';
+import { readCodeCache, saveCodeCache, saveCodeAdditions } from './code-additions-store.js';
 
 // 2026-10-14 20:30 JST
 const NOW = new Date('2026-10-14T11:30:00.000Z');
+
+test('code additions paginate details, exclude generated files, and reuse immutable commit cache', async () => {
+  const cache = new Map<string, number>();
+  let details = 0;
+  const sha = 'a'.repeat(40);
+  const deps = {
+    org: 'LUDIARS', token: null, pause: async () => {},
+    readCached: (repo: string, id: string) => cache.get(`${repo}@${id}`),
+    saveCached: (repo: string, id: string, value: number) => { cache.set(`${repo}@${id}`, value); },
+    fetchImpl: async (url: string) => {
+      if (url.includes('/search/')) {
+        assert.match(decodeURIComponent(url), /merge:false/);
+        return Response.json({ total_count: 1, incomplete_results: false, items: [{ sha, repository: { full_name: 'LUDIARS/Memoria' } }] });
+      }
+      details++;
+      return url.endsWith('page=1')
+        ? Response.json({ files: [{ filename: 'src/a.ts', additions: 12 }, { filename: 'dist/a.js', additions: 999 }] }, { headers: { link: '<https://api.github.com/next>; rel="next"' } })
+        : Response.json({ files: [{ filename: 'src/b.ts', additions: 3 }, { filename: 'README.md', additions: 25 }] });
+    },
+  };
+  assert.equal(await countCodeAdditionsOnDay('2026-10-14', deps), 15);
+  assert.equal(await countCodeAdditionsOnDay('2026-10-14', deps), 15);
+  assert.equal(details, 2);
+});
+
+test('code additions reject incomplete search and HTTP limits without publishing a partial total', async () => {
+  const deps = { org: 'LUDIARS', token: null, pause: async () => {}, readCached: () => undefined, saveCached: () => { assert.fail('must not cache'); } };
+  for (const body of [
+    { total_count: 1001, incomplete_results: false, items: [] },
+    { total_count: 0, incomplete_results: true, items: [] },
+    { total_count: 1, incomplete_results: false, items: [] },
+  ]) {
+    await assert.rejects(countCodeAdditionsOnDay('2026-10-14', { ...deps, fetchImpl: async () => Response.json(body) }));
+  }
+  await assert.rejects(countCodeAdditionsOnDay('2026-10-14', { ...deps, fetchImpl: async () => new Response('', { status: 429 }) }), GithubRateLimitError);
+});
+
+test('code additions traverse search pages and deduplicate by repository and SHA', async () => {
+  let searches = 0;
+  let pauses = 0;
+  const hits = Array.from({ length: 101 }, (_, i) => ({ sha: i.toString(16).padStart(40, '0'), repository: { full_name: 'LUDIARS/Memoria' } }));
+  const count = await countCodeAdditionsOnDay('2026-10-14', {
+    org: 'LUDIARS', token: null, pause: async () => { pauses++; },
+    readCached: () => 1, saveCached: () => { assert.fail('already cached'); },
+    fetchImpl: async () => Response.json({ total_count: 101, incomplete_results: false, items: searches++ === 0 ? hits.slice(0, 100) : hits.slice(100) }),
+  });
+  assert.equal(count, 101);
+  assert.equal(searches, 2);
+  assert.equal(pauses, 1);
+});
+
+test('failed code day preserves old data, retries unknown history, and skips completed history', async () => {
+  const asked: string[] = [];
+  const saved: string[] = [];
+  const result = await collectDevThroughput({
+    now: () => NOW, days: 4, fetchMerged: async () => [], countCommits: async () => 1,
+    saveMergeCount: () => {}, saveCommitCount: () => {}, pause: async () => {},
+    listDaily: (days) => days.map((day, index) => ({ day, rvMerged: 0, rvByRepo: {}, commits: 1, codeAdditions: index === 3 ? null : 10, collectedAt: '' })),
+    countCodeAdditions: async (day) => { asked.push(day); if (day === '2026-10-14') throw new Error('offline'); return 0; },
+    saveCodeAdditions: (day) => { saved.push(day); },
+  });
+  assert.deepEqual(asked, ['2026-10-14', '2026-10-13', '2026-10-11']);
+  assert.deepEqual(saved, ['2026-10-13', '2026-10-11']);
+  assert.match(result.errors.join('|'), /offline/);
+});
+
+test('existing daily rows migrate idempotently and additions do not overwrite commit counts', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec("CREATE TABLE dev_throughput_daily (day TEXT PRIMARY KEY, rv_merged INTEGER DEFAULT 0, rv_by_repo TEXT DEFAULT '{}', commits INTEGER, collected_at TEXT NOT NULL)");
+    saveCommitCount(db, '2026-10-14', 7, 'old');
+    ensureDevThroughputSchema(db);
+    ensureDevThroughputSchema(db);
+    assert.equal(listDaily(db, ['2026-10-14'])[0].codeAdditions, null);
+    saveCodeAdditions(db, '2026-10-14', 0, 'new');
+    assert.equal(listDaily(db, ['2026-10-14'])[0].commits, 7);
+    assert.equal(listDaily(db, ['2026-10-14'])[0].codeAdditions, 0);
+    saveCodeCache(db, 'org/repo', 'abc', 4);
+    assert.equal(readCodeCache(db, 'org/repo', 'abc'), 4);
+    assert.equal(readCodeCache(db, 'other/repo', 'abc'), undefined);
+  } finally { db.close(); }
+});
+
+
 
 test('JST の暦日: UTC 15:00 で日付が変わり、 直近の日を新しい順に返す', () => {
   assert.equal(jstDayOf('2026-10-13T14:59:59.000Z'), '2026-10-13');
@@ -72,8 +158,8 @@ test('保存はマージとコミットを別々に上書きし、 一覧は指�
   saveCommitCount(db, '2026-10-13', 7, 'c');
   saveMergeCount(db, '2026-10-14', { total: 4, byRepo: { 'LUDIARS/Mm': 4 } }, 'd');
   assert.deepEqual(listDaily(db, ['2026-10-14', '2026-10-12', '2026-10-13']), [
-    { day: '2026-10-14', rvMerged: 4, rvByRepo: { 'LUDIARS/Mm': 4 }, commits: 10, collectedAt: 'd' },
-    { day: '2026-10-13', rvMerged: 0, rvByRepo: {}, commits: 7, collectedAt: 'c' },
+    { day: '2026-10-14', rvMerged: 4, rvByRepo: { 'LUDIARS/Mm': 4 }, commits: 10, codeAdditions: null, collectedAt: 'd' },
+    { day: '2026-10-13', rvMerged: 0, rvByRepo: {}, commits: 7, codeAdditions: null, collectedAt: 'c' },
   ]);
 });
 
@@ -82,14 +168,16 @@ function memoryStore() {
   const commits = new Map<string, number>();
   return {
     merges, commits,
-    listDaily: (days: readonly string[]): DailyThroughput[] => days.filter((d) => commits.has(d)).map((day) => ({ day, rvMerged: 0, rvByRepo: {}, commits: commits.get(day)!, collectedAt: '' })),
+    countCodeAdditions: async () => 0,
+    saveCodeAdditions: () => {},
+    listDaily: (days: readonly string[]): DailyThroughput[] => days.filter((d) => commits.has(d)).map((day) => ({ day, rvMerged: 0, rvByRepo: {}, commits: commits.get(day)!, codeAdditions: null, collectedAt: '' })),
     saveMergeCount: (day: string, count: MergeCount) => { merges.set(day, count); },
     saveCommitCount: (day: string, value: number) => { commits.set(day, value); },
   };
 }
 
 test('コミット件数を聞き直すのは直近 2 日と未集計の日だけ', () => {
-  const stored = ['2026-10-14', '2026-10-13', '2026-10-12'].map((day) => ({ day, rvMerged: 0, rvByRepo: {}, commits: 1, collectedAt: '' }));
+  const stored = ['2026-10-14', '2026-10-13', '2026-10-12'].map((day) => ({ day, rvMerged: 0, rvByRepo: {}, commits: 1, codeAdditions: null, collectedAt: '' }));
   assert.deepEqual(daysNeedingCommitCount(['2026-10-14', '2026-10-13', '2026-10-12', '2026-10-11'], stored), ['2026-10-14', '2026-10-13', '2026-10-11']);
 });
 
@@ -151,8 +239,8 @@ test('API: 同じ端末からだけ使え、 直近 N 日を新しい順に未�
   assert.equal(response.status, 200);
   const body = await response.json() as { days: unknown[]; sync: { running: boolean } };
   assert.deepEqual(body.days, [
-    { day: '2026-10-14', rvMerged: 2, rvByRepo: { 'LUDIARS/Mm': 2 }, commits: 9 },
-    { day: '2026-10-13', rvMerged: null, rvByRepo: {}, commits: null },
+    { day: '2026-10-14', rvMerged: 2, rvByRepo: { 'LUDIARS/Mm': 2 }, commits: 9, codeAdditions: null },
+    { day: '2026-10-13', rvMerged: null, rvByRepo: {}, commits: null, codeAdditions: null },
   ]);
   assert.equal(body.sync.running, false);
   assert.equal(parseViewDays(undefined), 30);

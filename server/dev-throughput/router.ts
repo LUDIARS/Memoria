@@ -7,6 +7,8 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { isSameMachineRequest } from '../lib/local-request.js';
 import { collectDevThroughput } from './collect.js';
 import { countCommitsOnDay } from './github-commit-count.js';
+import { countCodeAdditionsOnDay } from './github-code-additions.js';
+import { readCodeCache, saveCodeCache, saveCodeAdditions } from './code-additions-store.js';
 import { resolveGithubToken } from './github-token.js';
 import { recentJstDays } from './jst-day.js';
 import { fetchMergedPullRequests, type FetchLike } from './revisor-merges.js';
@@ -25,6 +27,7 @@ export interface DailyView {
   rvMerged: number | null;
   rvByRepo: Record<string, number>;
   commits: number | null;
+  codeAdditions: number | null;
 }
 
 export interface DevThroughputDeps {
@@ -48,8 +51,8 @@ export function dailyView(db: Db, days: readonly string[]): DailyView[] {
   return days.map((day) => {
     const row = stored.get(day);
     return row
-      ? { day, rvMerged: row.rvMerged, rvByRepo: row.rvByRepo, commits: row.commits }
-      : { day, rvMerged: null, rvByRepo: {}, commits: null };
+      ? { day, rvMerged: row.rvMerged, rvByRepo: row.rvByRepo, commits: row.commits, codeAdditions: row.codeAdditions }
+      : { day, rvMerged: null, rvByRepo: {}, commits: null, codeAdditions: null };
   });
 }
 
@@ -69,6 +72,14 @@ export function createDevThroughput(deps: DevThroughputDeps): { router: Hono; co
       token: githubToken(),
       fetchImpl: deps.fetchImpl,
     }),
+    countCodeAdditions: (day) => countCodeAdditionsOnDay(day, {
+      org: deps.githubOrg ?? process.env.DEV_THROUGHPUT_GITHUB_ORG ?? 'LUDIARS',
+      token: githubToken(), fetchImpl: deps.fetchImpl,
+      readCached: (repo, sha) => readCodeCache(db, repo, sha),
+      saveCached: (repo, sha, additions) => saveCodeCache(db, repo, sha, additions),
+      pause: deps.pause ?? (() => new Promise(resolve => setTimeout(resolve, GITHUB_SEARCH_GAP_MS))),
+    }),
+    saveCodeAdditions: (day, additions, at) => saveCodeAdditions(db, day, additions, at),
     listDaily: (days) => listDaily(db, days),
     saveMergeCount: (day, count, at) => saveMergeCount(db, day, count, at),
     saveCommitCount: (day, commits, at) => saveCommitCount(db, day, commits, at),

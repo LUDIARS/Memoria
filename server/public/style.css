@@ -6694,7 +6694,7 @@ dialog.loc-edit-modal[open] {
 .dt-table th { text-align: left; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .dt-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .dt-day { white-space: nowrap; }
-.dt-cell { width: 28%; min-width: 120px; white-space: nowrap; }
+.dt-cell { width: 22%; min-width: 120px; white-space: nowrap; }
 .dt-bar { display: inline-block; height: 10px; border-radius: 3px; vertical-align: middle; max-width: calc(100% - 44px); }
 .dt-bar-merge { background: #7c3aed; }
 .dt-bar-commit { background: #0ea5e9; }

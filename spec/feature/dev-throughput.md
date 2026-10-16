@@ -8,6 +8,12 @@
 
 ## 数え方
 
+- **コード追加行数**: コミット件数と同じ org・JST の committer-date を使い、`merge:false` の検索結果を repository/SHA で重複排除する。コミット詳細のファイル別 `additions` のうち、共有 `server/shared/code-file-filter.ts` がソースと判定するファイルだけを合計する。削除行は差し引かない。生成物・同梱ライブラリ・ドキュメントは除外する。手入力の打鍵量ではなく、GitHub に記録された追加行数であり、AI による追加も含む。
+- コード追加行数は日別の棒・数値と期間合計・集計済み日の平均を表示する。未取得は `null` / `—`。一部だけ集計済みなら集計済み日数を示す。
+- コード追加行数も今日・昨日と未集計日を再取得する。検索は100件ずつ、詳細は100ファイルずつ取得し、repository/SHAごとの結果をSQLiteへキャッシュする。検索1000件超・不完全な検索・詳細3000ファイル上限・HTTP失敗はその日を確定せず、エラー表示して次の定期集計で再試行する。以前の確定値は失敗時に保持する。
+- SQLite既存テーブルへnullableの`code_additions`列を冪等追加する。`dev_throughput_code_cache_v1`は分類ルール版を含むコミットキャッシュ。分類変更時には版を更新し日次値の再集計も行う必要がある。
+- GitHub APIの契約: [コミット詳細](https://docs.github.com/en/rest/commits/commits#get-a-commit)、[コミット検索](https://docs.github.com/en/rest/search/search#search-commits)。認証で読めるリポジトリだけが対象。未認証ではprivateを含まない。遅れて反映された古いコミット（昨日より前）は自動で再集計しない既存の制約を維持する。
+
 - 1 日 = 日本時間 (JST) の 0:00〜23:59:59。
 - **Rv マージ**: Revisor の `GET /v1/local-prs?view=summary&state=merged` (接続先は Excubitor が配る `REVISOR_URL`)
   を 1 回読み、 マージ済み PR の `updatedAt` の JST 日付で数える。 summary はマージ時刻を持たないので、
@@ -50,7 +56,7 @@
 | `server/dev-throughput/router.ts` | HTTP 口と組み立て |
 | `server/public/src/dev-throughput-view.ts` | 「📊 開発量」の表示 |
 
-他ドメインへの import は無い (`lib/local-request` のみ)。
+コードファイル判定は `shared/code-file-filter` を月次レポートと共有し、domain間の直接importを持たない。`github-code-additions.ts`は日別の追加行数取得、`code-additions-store.ts`はその保存・スキーマ更新を所有する。
 
 ## 制約
 

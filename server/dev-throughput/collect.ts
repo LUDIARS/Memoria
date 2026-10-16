@@ -13,6 +13,8 @@ export interface CollectDeps {
   days: number;
   fetchMerged: () => Promise<MergedPullRequest[]>;
   countCommits: (day: string) => Promise<number>;
+  countCodeAdditions: (day: string) => Promise<number>;
+  saveCodeAdditions: (day: string, additions: number, at: string) => void;
   listDaily: (days: readonly string[]) => DailyThroughput[];
   saveMergeCount: (day: string, count: MergeCount, at: string) => void;
   saveCommitCount: (day: string, commits: number, at: string) => void;
@@ -55,6 +57,17 @@ export async function collectDevThroughput(deps: CollectDeps): Promise<CollectRe
       result.commitDays += 1;
     } catch (error: unknown) {
       result.errors.push(`GitHub ${day}: ${message(error)}`);
+      if (error instanceof GithubRateLimitError) return result;
+    }
+  }
+  const stored = new Map(deps.listDaily(days).map(row => [row.day, row]));
+  for (const [index, day] of days.entries()) {
+    if (index >= 2 && stored.get(day)?.codeAdditions != null) continue;
+    await deps.pause();
+    try {
+      deps.saveCodeAdditions(day, await deps.countCodeAdditions(day), deps.now().toISOString());
+    } catch (error: unknown) {
+      result.errors.push(`GitHub code ${day}: ${message(error)}`);
       if (error instanceof GithubRateLimitError) break;
     }
   }
