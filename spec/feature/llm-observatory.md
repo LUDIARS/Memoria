@@ -19,6 +19,17 @@ AI アドバイスとは別のトップレベル「LLM」タブに、Claude Code
 
 ## データ
 
+### 残り使用量 (SPEC-LLM-OBS-REMAINING)
+
+- LLM タブの先頭に Claude / Codex の週間枠・短時間枠（日別 / 5時間）の残量推移を表示する。
+- Cc 所有の `GET /v1/cost/limit-timeseries?since=<直近7日前のepoch秒>` を読み、
+  `100 - usedWeeklyPct` / `100 - used5hPct` を 0〜100% に収めて表示する。
+- 状態と履歴の所有者は Cc。Memoria は認証情報・native JSONL から残量を再計算せず、履歴も保存しない。
+- 観測時刻・リセット予定は日本時間で表示する。欠測は線を途切れさせ、最新観測が欠測なら「未取得」。
+  取得失敗は残量欄に示し、既存の利用ログ表示は継続する。「残量を更新」で再取得する。
+- `GET /api/llm-usage/remaining` は既存 LLM API と同じアクセス制限の下で、必要な数値と provider / plan だけを返す。
+  接続先は Excubitor 提供の `CONCORDIA_URL`（既存設定 `MEMORIA_CONCORDIA_URL` も可）。未設定・取得失敗は 502。
+
 - native JSONL はプロバイダが所有する一次資料で、Memoria は変更しない。
 - 読む場所: `~/.claude/projects/**`（サブエージェントの `subagents/agent-*.jsonl` を含む）、
   `$CODEX_HOME/sessions/**`、`$CODEX_HOME/archived_sessions/**`。

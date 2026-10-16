@@ -5,6 +5,7 @@ import { usageDashboard } from './dashboard.js';
 import { ensureLlmUsageSchema } from './schema.js';
 import { UsageSyncCoordinator } from './sync.js';
 import { InvalidPeriodError, parseUsagePeriod, type UsagePeriod } from './usage-period.js';
+import { fetchRemainingUsage } from './remaining.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -37,6 +38,16 @@ export function makeLlmUsageRouter({ db }: { db: Db }): Hono {
     });
   });
   router.get('/api/llm-usage/sync', (context) => context.json(coordinator.status()));
+  router.get('/api/llm-usage/remaining', async (context) => {
+    try {
+      return context.json(await fetchRemainingUsage());
+    } catch (error: unknown) {
+      // Network errors may contain the configured endpoint. Expose only known safe messages.
+      const detail = error instanceof Error && /^(Concordia の|Concordia が)/.test(error.message)
+        ? error.message : 'Concordia から残量を取得できませんでした';
+      return context.json({ error: detail }, 502);
+    }
+  });
   router.post('/api/llm-usage/sync', (context) => context.json(coordinator.start(), 202));
   return router;
 }

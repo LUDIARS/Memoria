@@ -6668,6 +6668,16 @@ dialog.loc-edit-modal[open] {
 .td-reason-new { background: #dc2626; }
 .td-reason-up { background: #16a34a; }
 
+.llm-remaining-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.llm-remaining-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 20px; }
+.llm-remaining-chart { margin: 16px 0; }
+.llm-remaining-chart small { display: block; margin: 4px 0; }
+.llm-remaining-chart svg { display: block; width: 100%; height: auto; }
+.llm-remaining-chart line { stroke: var(--border); stroke-width: 1; }
+.llm-remaining-chart text { fill: var(--text); font-size: 11px; }
+.llm-remaining-chart path { fill: none; stroke: var(--accent); stroke-width: 2; }
+.llm-remaining-chart circle { fill: var(--accent); }
+
 /* 📒 作業記録 > 📊 開発量 (dev-throughput-view.ts) */
 .dt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dt-head .grow { flex: 1; }

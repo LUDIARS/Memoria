@@ -1,3 +1,5 @@
+import { loadRemainingUsage } from './llm-remaining-view.js';
+
 interface Metric { value: number | null; delta: number | null }
 interface InventoryRow {
   date: string;
@@ -97,6 +99,7 @@ function render(root: HTMLElement, data: Dashboard): void {
       <button id="llmRefresh" class="primary" ${data.sync.state === 'running' ? 'disabled' : ''}>${data.sync.state === 'running' ? '集計中…' : 'ログを更新'}</button>
     </div>
     ${syncBanner(data)}
+    <section class="llm-section" id="llmRemaining"></section>
     <section class="llm-section">
       <h3>今日の利用</h3>
       <div class="llm-metrics">
@@ -155,6 +158,8 @@ function render(root: HTMLElement, data: Dashboard): void {
     </section>
     <p class="llm-method muted">コストは公式 API 定価による換算 (料金表 ${esc(data.methodology.price_version)}) で、実請求額・サブスク枠の消費ではありません。Codex credits は別単位です。料金未掲載モデルは未評価として合算しません。TTL 不明の cache write は 5 分書込単価 (下限) で換算します。初回は直近 ${data.methodology.initial_import_days} 日を取り込み、以後 Memoria に蓄積します。${data.legacy.records ? ` 旧集計 ${number(data.legacy.records)} 行 (${esc(data.legacy.date_from || '—')}〜${esc(data.legacy.date_to || '—')}) は応答単位で再評価できないため表示に含めません。` : ''}</p>`;
   root.querySelector('#llmRefresh')?.addEventListener('click', () => void startSync(root));
+  const remainingPanel = root.querySelector<HTMLElement>('#llmRemaining');
+  if (remainingPanel) void loadRemainingUsage(remainingPanel);
   root.querySelector<HTMLFormElement>('#llmPeriodForm')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;

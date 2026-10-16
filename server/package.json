@@ -7,6 +7,7 @@
     "node": "24.x"
   },
   "scripts": {
+    "test:llm-remaining": "node --import tsx --test llm-usage/remaining.test.ts",
     "prestart": "npm run build:frontend",
     "start": "tsx --env-file-if-exists=.env.secrets bootstrap.ts",
     "predev": "npm run build:frontend",
