@@ -31,6 +31,7 @@
 | ブラウジング履歴 | [visit.md](visit.md) | 🏠 | bookmark に昇格させて初めてシェア可能 |
 | PWA Web Push | [push-notification.md](push-notification.md) | 🏠 | 端末固有の機微鍵を含む |
 | Amazon Echo / Alexa連携 | [amazon-echo.md](amazon-echo.md) | 🏠 | 本文はローカル保持。Amazonへはopt-inで未読件数だけ送信 |
+| LINE 連携 (Concordia 経由) | [line-relay.md](line-relay.md) | 🏠 | Concordia が振り分けた発言だけ受ける。タスク・日記は既存の正本に書き、LINE へは返信の文面だけ |
 | Memoria Hub プレゼンス | [multi-hub.md](multi-hub.md) | ✓ | この機能自体が Hub 連携の入口 |
 | Legatus → Memoria GPS 転送 | [legatus-subscriber.md](legatus-subscriber.md) | 🏠 | loopback / tailnet 内で完結 |
 | 外部 chat 取り込み | [external-chat.md](external-chat.md) | 🏠 | チャネル名 / 個人発言を含む |

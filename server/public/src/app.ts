@@ -176,6 +176,7 @@ import { initCleverSearchView, loadCleverSearchHistory } from './clever-search-v
 import { loadLlmView } from './llm-view.js';
 import { loadShoppingView } from './shopping-view.js';
 import { loadHomePresenceSettings, mountHomePresenceSettings } from './home-presence-view.js';
+import { loadLineRelaySettings, mountLineRelaySettings } from './line-relay-view.js';
 import { loadReleaseWatchView } from './release-watch-view.js';
 import { loadTendentiaView } from './tendentia-view.js';
 import { loadBooksView } from './books-view.js';
@@ -5669,6 +5670,7 @@ document.addEventListener('click', (ev) => {
     // 全部表示時は privacy 側 (Legatus 等) もロードしておく
     loadPrivacySettings().catch(console.warn);
     loadHomePresenceSettings().catch(console.warn);
+    loadLineRelaySettings().catch(console.warn);
   } else {
     applyAllModeHeadings(panel, false);
     panel.querySelectorAll('.settings-tab-body').forEach(sec => {
@@ -5678,7 +5680,10 @@ document.addEventListener('click', (ev) => {
   // タブを切り替えたら panel を上にリセット (各タブの先頭から見たい)
   if (stab === 'privacy') loadPrivacySettings().catch(console.warn);
   if (stab === 'discord') loadDiscordSettings().catch(console.warn);
-  if (stab === 'home-presence') loadHomePresenceSettings().catch(console.warn);
+  if (stab === 'home-presence') {
+    loadHomePresenceSettings().catch(console.warn);
+    loadLineRelaySettings().catch(console.warn);
+  }
   if (stab === 'setup') loadSetupDocs().catch(console.warn);
   // 'agent-projects' タブは廃止 (AI 実装プロジェクト機能を休止)
   panel.scrollTop = 0;
@@ -6224,6 +6229,7 @@ let ensureMemoriaFeatureViews = function () {
     footer.parentNode.insertBefore(sec, footer);
   }
   if (footer) mountHomePresenceSettings(footer);
+  if (footer) mountLineRelaySettings(footer);
   if (footer && !$('setupDocsBody')) {
     const sec = document.createElement('section');
     sec.id = 'setupDocsBody';

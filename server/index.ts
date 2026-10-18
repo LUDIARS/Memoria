@@ -48,6 +48,7 @@ import { makeMealRouter } from './routes/meal.js';
 import { makeDiscordRouter } from './routes/discord.js';
 import { makeHomePresenceRouter } from './routes/home-presence.js';
 import { makeLineRouter } from './routes/line.js';
+import { makeLineRelayRouter } from './routes/line-relay.js';
 import { registerLineSink } from './line/sink.js';
 import { migrateGpsTriggers } from './home-presence/migrate-gps-triggers.js';
 import { startHomePresenceScheduler } from './home-presence/scheduler.js';
@@ -269,6 +270,8 @@ app.route('/', makeAttendanceRouter({ db }));
 app.route('/', makeDiscordRouter({ db }));
 app.route('/', makeHomePresenceRouter({ db }));
 app.route('/', makeLineRouter({ db }));
+// LINE 連携 (Concordia 経由): Concordia が 1 つの公式アカウントで受け、 Memoria 宛ての発言だけを中継してくる。
+app.route('/', makeLineRelayRouter({ db }));
 app.route('/', makeActivityRouter({ db }));
 app.route('/', makePersonalityExportRouter({ db }));
 app.route('/', makeSpendingLogRouter({ db }));

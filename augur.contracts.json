@@ -128,6 +128,42 @@
       "module": "augur/contracts/text-note-import.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-15",
+      "criterion": "C-15 checkLineRelayToken(db, authorization): 中継トークン未発行は not_configured、保存ハッシュと一致したときだけ ok を返す",
+      "symbol": "checkLineRelayToken",
+      "file": "server/line-relay/token.ts",
+      "module": "augur/contracts/line-relay-token.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-16",
+      "criterion": "C-16 redeemLineLinkCode(db, talk, code, now): 期限内で未使用のコードのときだけ linked を返し、そのトークの紐付けを作ってコードを使用済みにする",
+      "symbol": "redeemLineLinkCode",
+      "file": "server/line-relay/links.ts",
+      "module": "augur/contracts/line-relay-link.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-17",
+      "criterion": "C-17 appendDiaryLine(db, line, now): その日の日記メモの既存本文を残したまま末尾に 1 行追記する",
+      "symbol": "appendDiaryLine",
+      "file": "server/shared/diary-append.ts",
+      "module": "augur/contracts/diary-append.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-18",
+      "criterion": "C-18 handleLineRelayBody(deps, events): 返信は届いたイベントの replyToken にだけ付け、1 つの replyToken あたり 5 件以内にする",
+      "symbol": "handleLineRelayBody",
+      "file": "server/line-relay/relay.ts",
+      "module": "augur/contracts/line-relay-replies.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }
