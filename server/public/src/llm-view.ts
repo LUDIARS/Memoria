@@ -1,4 +1,5 @@
 import { loadRemainingUsage } from './llm-remaining-view.js';
+import { renderProjectCosts, renderSessionProjects, type ProjectCostRow } from './llm-project-view.js';
 
 interface Metric { value: number | null; delta: number | null }
 interface InventoryRow {
@@ -41,6 +42,7 @@ interface PeriodView {
   to: string;
   summary: UsageSummary;
   by_model: ModelRow[];
+  by_project: ProjectCostRow[];
   sessions_total: number;
   sessions_truncated: boolean;
 }
@@ -50,6 +52,7 @@ interface SessionRow extends UsageSummary {
   started_at: string | null;
   ended_at: string | null;
   repo_name: string | null;
+  projects: ProjectCostRow[];
   models: string;
   efforts: string;
   cost_basis: string;
@@ -120,6 +123,7 @@ function render(root: HTMLElement, data: Dashboard): void {
       </div>
     </section>
     ${renderPeriod(data.period)}
+    ${renderProjectCosts(data.period.by_project ?? [])}
     <section class="llm-section">
       <h3>日別ログ</h3>
       <div class="llm-table-wrap"><table class="llm-table llm-daily-table"><thead><tr>
@@ -273,7 +277,7 @@ function sessionRow(row: SessionRow): string {
   const id = row.session_id.length > 20 ? `${row.session_id.slice(0, 8)}…${row.session_id.slice(-6)}` : row.session_id;
   const period = `${shortDate(row.started_at)} 〜 ${shortDate(row.ended_at)}`;
   return `<tr title="${esc(row.cost_basis || '')}">
-    <td><code>${esc(id)}</code><small>${esc(row.repo_name || '')}</small></td>
+    <td><code>${esc(id)}</code>${renderSessionProjects(row.projects ?? [])}</td>
     <td>${esc(row.provider)}<small>${esc(row.models || 'unknown')}${row.efforts && row.efforts !== 'unknown' ? ` / ${esc(row.efforts)}` : ''}${row.subagents ? ` / subagents ${number(row.subagents)}` : ''}</small></td>
     <td>${esc(period)}</td><td class="num">${number(row.contexts)}</td>
     <td class="num">${compact(row.total_tokens)}</td><td class="num">${percent(row.cache_hit_rate)}</td><td class="num">${usd(row.cost_usd)}${row.unpriced_responses ? '<small>一部未評価</small>' : ''}</td>

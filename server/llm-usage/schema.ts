@@ -101,4 +101,11 @@ export function ensureLlmUsageSchema(db: Db): void {
     // Existing rows default to 0 so every source is re-read once by the current parser.
     db.exec('ALTER TABLE llm_usage_sources ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 0');
   }
+  const responseColumns = new Set((db.prepare('PRAGMA table_info(llm_usage_responses)').all() as Array<{ name: string }>)
+    .map((column) => column.name));
+  for (const column of ['project_key', 'project_name', 'project_source']) {
+    if (!responseColumns.has(column)) db.exec(`ALTER TABLE llm_usage_responses ADD COLUMN ${column} TEXT`);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_llm_usage_responses_project ON llm_usage_responses(project_key, usage_date)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_llm_usage_responses_source_time ON llm_usage_responses(source_path, occurred_ms)');
 }

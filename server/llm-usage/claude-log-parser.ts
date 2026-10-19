@@ -1,6 +1,7 @@
 import { basename, extname } from 'node:path';
 import { forEachJsonLine, jstDate, nonNegative, object, text, timeMs, type JsonObject } from './jsonl.js';
 import { mergeResponse } from './response-merge.js';
+import { ProjectAttributor } from './project-attribution.js';
 import type { ParsedUsageSource, UsageResponse, UsageTokens } from './types.js';
 
 /** Claude Code writes placeholder assistant rows under this model; they are never billed. */
@@ -19,9 +20,11 @@ export async function parseClaudeLog(path: string, cutoffMs: number): Promise<Pa
   const responses = new Map<string, UsageResponse>();
   let repoPath: string | null = null;
   let sessionEffort = 'unknown';
+  const projects = new ProjectAttributor();
 
   await forEachJsonLine(path, (row) => {
-    repoPath = repoPath ?? text(row.cwd);
+    repoPath = text(row.cwd) ?? repoPath;
+    projects.observe(row);
     // Effort set for the session applies to later turns; a per-turn override
     // applies only to the row that carries it.
     sessionEffort = text(row.effort) ?? sessionEffort;
@@ -51,10 +54,11 @@ export async function parseClaudeLog(path: string, cutoffMs: number): Promise<Pa
       model,
       effort: text(row.perTurnEffort) ?? sessionEffort,
       repoPath,
+      project: projects.current(repoPath),
       ...claudeTokens(usage),
     };
     const existing = responses.get(responseId);
-    responses.set(responseId, existing ? mergeResponse(existing, response) : response);
+    responses.set(responseId, existing ? mergeResponse(existing, { ...response, project: existing.project }) : response);
   });
 
   return {

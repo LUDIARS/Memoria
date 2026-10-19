@@ -10,7 +10,7 @@ import type { LlmProvider, ParsedUsageSource, SourceSignature } from './types.js
  * Bump when parsing changes what a log yields. Sources imported by an older
  * parser are re-read even though their mtime / size did not change.
  */
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 export interface NativeLogRoot { path: string; provider: LlmProvider }
 

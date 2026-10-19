@@ -1,6 +1,7 @@
 import { basename, extname } from 'node:path';
 import { forEachJsonLine, jstDate, nonNegative, object, text, timeMs } from './jsonl.js';
 import type { ParsedUsageSource, UsageResponse } from './types.js';
+import { ProjectAttributor } from './project-attribution.js';
 
 interface CumulativeUsage { input: number; cached: number; output: number }
 
@@ -19,8 +20,10 @@ export async function parseCodexLog(path: string, cutoffMs: number): Promise<Par
   let effort = 'unknown';
   let previous: CumulativeUsage = { input: 0, cached: 0, output: 0 };
   const responses: UsageResponse[] = [];
+  const projects = new ProjectAttributor();
 
   await forEachJsonLine(path, (row) => {
+    projects.observe(row);
     const payload = object(row.payload);
     if (row.type === 'session_meta' && payload) {
       sessionId = text(payload.id) ?? sessionId;
@@ -65,6 +68,7 @@ export async function parseCodexLog(path: string, cutoffMs: number): Promise<Par
       model,
       effort,
       repoPath,
+      project: projects.current(repoPath),
       // Codex input_tokens includes the cached part.
       inputTokens: Math.max(deltaInput - deltaCached, 0),
       cacheReadTokens: deltaCached,

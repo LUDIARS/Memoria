@@ -4,9 +4,60 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { parseNativeLog } from './native-log-reader.js';
+import { ProjectAttributor } from './project-attribution.js';
 import type { SourceSignature } from './types.js';
 
 const CUTOFF_MS = Date.parse('2026-08-01T00:00:00+09:00');
+
+test('project declaration changes split both provider logs at response boundaries', async (context) => {
+  const directory = await tempDir(context);
+  const declaration = (name: string) => `[Cc policy update]\nprojectRoot: /missing-projects/${name}\n[Cc policy revision: x]`;
+  const claudePath = join(directory, 'main-session.jsonl');
+  await writeJsonl(claudePath, [
+    { type: 'user', message: { content: declaration('Discutere') } },
+    claudeRow('a', '2026-09-25T00:00:00Z', { output_tokens: 1 }),
+    { type: 'user', message: { content: 'Memoria was mentioned, but this is not a project switch.' } },
+    claudeRow('b', '2026-09-25T00:01:00Z', { output_tokens: 2 }),
+    { type: 'user', message: { content: declaration('Memoria') } },
+    claudeRow('c', '2026-09-25T00:02:00Z', { output_tokens: 3 }),
+  ]);
+  const claude = await parseNativeLog(signature(claudePath, 'claude-code'), CUTOFF_MS);
+  assert.deepEqual(claude.responses.map((row) => row.project?.name), ['Discutere', 'Discutere', 'Memoria']);
+  const codexPath = join(directory, 'codex.jsonl');
+  await writeJsonl(codexPath, [
+    { type: 'session_meta', payload: { id: 'codex', cwd: directory } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: declaration('Discutere') }] } },
+    { type: 'event_msg', timestamp: '2026-09-25T00:00:00Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 10, output_tokens: 2 } } } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: declaration('Memoria') }] } },
+    { type: 'event_msg', timestamp: '2026-09-25T00:01:00Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 20, output_tokens: 4 } } } },
+  ]);
+  const codex = await parseNativeLog(signature(codexPath, 'codex-cli'), CUTOFF_MS);
+  assert.deepEqual(codex.responses.map((row) => row.project?.name), ['Discutere', 'Memoria']);
+});
+
+test('worktrees and nested cwd map to their common repository; missing roots stay unknown', async (context) => {
+  const directory = await tempDir(context);
+  const repo = join(directory, 'Memoria');
+  const worktree = join(directory, '.wt-Memoria-feature');
+  const gitdir = join(repo, '.git', 'worktrees', 'feature');
+  await mkdir(gitdir, { recursive: true });
+  await mkdir(join(repo, 'server'), { recursive: true });
+  await mkdir(worktree);
+  await writeFile(join(worktree, '.git'), `gitdir: ${gitdir}`);
+  await writeFile(join(gitdir, 'commondir'), '../..');
+  const projects = new ProjectAttributor();
+  assert.deepEqual(projects.current(worktree), projects.current(join(repo, 'server')));
+  assert.equal(projects.current(worktree)?.name, 'Memoria');
+  assert.equal(projects.current(join(directory, 'unknown')), null);
+  projects.observe({ type: 'user', message: { content: '[Cc policy update]\nprojectRoot: /missing-projects/Other' } });
+  assert.equal(projects.current(worktree)?.name, 'Other');
+  projects.observe({ type: 'user', message: { content: '[Cc policy update]\n前版の対象固有案内は無効です。\nbranch: main' } });
+  assert.equal(projects.current(worktree)?.name, 'Memoria');
+  projects.observe({ type: 'user', message: { content: '[Cc policy update]\nrepo: /missing-projects/.wt-deleted' } });
+  assert.equal(projects.current(worktree), null, 'unresolved explicit target must not fall back to a different cwd');
+  projects.observe({ type: 'user', message: { content: '[Cc policy update]\nprojectRoot: /missing-projects/First\n[Cc policy revision: x]\n[Cc policy update]\nprojectRoot: /missing-projects/Last' } });
+  assert.equal(projects.current(worktree)?.name, 'Last');
+});
 
 async function tempDir(context: TestContext): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'memoria-llm-parse-'));

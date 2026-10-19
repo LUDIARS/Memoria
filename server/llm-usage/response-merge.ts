@@ -39,5 +39,11 @@ export function mergeResponse(existing: UsageResponse, incoming: UsageResponse):
   }
   if (existing.model === 'unknown') merged.model = incoming.model;
   if (existing.effort === 'unknown') merged.effort = incoming.effort;
+  // Reparse may improve attribution; copied history must never overwrite origin evidence.
+  if (incoming.isOrigin && (!existing.isOrigin || incoming.sourcePath === existing.sourcePath)) {
+    merged.project = incoming.project === undefined ? existing.project : incoming.project;
+  } else if (!existing.isOrigin && !existing.project) {
+    merged.project = incoming.project;
+  }
   return merged;
 }

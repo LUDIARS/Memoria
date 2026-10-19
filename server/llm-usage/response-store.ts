@@ -21,6 +21,9 @@ interface ResponseRow {
   model: string;
   effort: string;
   repo_path: string | null;
+  project_key: string | null;
+  project_name: string | null;
+  project_source: 'declared-project' | 'repository' | null;
   input_tokens: number;
   cache_read_tokens: number;
   cache_write_5m_tokens: number;
@@ -32,14 +35,14 @@ interface ResponseRow {
 const UPSERT_SQL = `
   INSERT INTO llm_usage_responses (
     provider, response_id, session_id, agent_id, family_id, is_origin, source_path,
-    occurred_at, occurred_ms, usage_date, model, effort, repo_path,
+    occurred_at, occurred_ms, usage_date, model, effort, repo_path, project_key, project_name, project_source,
     input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
     cache_write_unknown_tokens, output_tokens,
     cost_usd, cost_input_usd, cost_cache_read_usd, cost_cache_write_usd, cost_output_usd,
     cost_basis, codex_credits, price_version, imported_at
   ) VALUES (
     @provider, @response_id, @session_id, @agent_id, @family_id, @is_origin, @source_path,
-    @occurred_at, @occurred_ms, @usage_date, @model, @effort, @repo_path,
+    @occurred_at, @occurred_ms, @usage_date, @model, @effort, @repo_path, @project_key, @project_name, @project_source,
     @input_tokens, @cache_read_tokens, @cache_write_5m_tokens, @cache_write_1h_tokens,
     @cache_write_unknown_tokens, @output_tokens,
     @cost_usd, @cost_input_usd, @cost_cache_read_usd, @cost_cache_write_usd, @cost_output_usd,
@@ -50,6 +53,7 @@ const UPSERT_SQL = `
     is_origin=excluded.is_origin, source_path=excluded.source_path,
     occurred_at=excluded.occurred_at, occurred_ms=excluded.occurred_ms, usage_date=excluded.usage_date,
     model=excluded.model, effort=excluded.effort, repo_path=excluded.repo_path,
+    project_key=excluded.project_key, project_name=excluded.project_name, project_source=excluded.project_source,
     input_tokens=excluded.input_tokens, cache_read_tokens=excluded.cache_read_tokens,
     cache_write_5m_tokens=excluded.cache_write_5m_tokens, cache_write_1h_tokens=excluded.cache_write_1h_tokens,
     cache_write_unknown_tokens=excluded.cache_write_unknown_tokens, output_tokens=excluded.output_tokens,
@@ -126,6 +130,8 @@ function fromRow(row: ResponseRow): UsageResponse {
     model: row.model,
     effort: row.effort,
     repoPath: row.repo_path,
+    project: row.project_key && row.project_name && row.project_source
+      ? { key: row.project_key, name: row.project_name, source: row.project_source } : null,
     inputTokens: row.input_tokens,
     cacheReadTokens: row.cache_read_tokens,
     cacheWrite5mTokens: row.cache_write_5m_tokens,
@@ -150,6 +156,9 @@ function toRow(response: UsageResponse, cost: CostEstimate, importedAt: string):
     model: response.model,
     effort: response.effort,
     repo_path: response.repoPath,
+    project_key: response.project?.key ?? null,
+    project_name: response.project?.name ?? null,
+    project_source: response.project?.source ?? null,
     input_tokens: response.inputTokens,
     cache_read_tokens: response.cacheReadTokens,
     cache_write_5m_tokens: response.cacheWrite5mTokens,

@@ -1,11 +1,12 @@
 import type BetterSqlite3 from 'better-sqlite3';
+import { stat } from 'node:fs/promises';
 import { captureInventory } from './inventory.js';
 import { saveInventorySnapshot } from './inventory-store.js';
-import { listRecentNativeLogs, parseNativeLog, type NativeLogRoot } from './native-log-reader.js';
+import { listRecentNativeLogs, parseNativeLog, PARSER_VERSION, type NativeLogRoot } from './native-log-reader.js';
 import { importSourceResponses, repriceStaleResponses } from './response-store.js';
 import { isSourceCurrent, recordSourceFailure } from './source-store.js';
 import { importDays, importWindowStartMs } from './sync-window.js';
-import type { SyncResult } from './types.js';
+import type { LlmProvider, SyncResult } from './types.js';
 
 type Db = BetterSqlite3.Database;
 
@@ -75,6 +76,19 @@ export async function syncNativeUsage(
   onProgress: (current: number, total: number) => void = () => undefined,
 ): Promise<SyncResult> {
   const sources = await listRecentNativeLogs(cutoffMs, roots);
+  // Reattribute already imported history even when its file is older than the discovery window.
+  const known = db.prepare(`SELECT source_path, provider FROM llm_usage_sources WHERE parser_version <> ?`)
+    .all(PARSER_VERSION) as Array<{ source_path: string; provider: LlmProvider }>;
+  const paths = new Set(sources.map((source) => source.path));
+  for (const row of known) {
+    if (paths.has(row.source_path)) continue;
+    try {
+      const info = await stat(row.source_path);
+      if (info.isFile()) sources.push({ path: row.source_path, provider: row.provider, modifiedMs: info.mtimeMs, sizeBytes: info.size });
+    } catch {
+      // Rotated logs cannot supply new evidence. Retain their saved usage as unassigned.
+    }
+  }
   const result: SyncResult = {
     scannedSources: sources.length,
     importedSources: 0,
@@ -90,7 +104,9 @@ export async function syncNativeUsage(
       if (isSourceCurrent(db, source)) {
         result.unchangedSources += 1;
       } else {
-        const parsed = await parseNativeLog(source, cutoffMs);
+        const earliest = db.prepare('SELECT MIN(occurred_ms) AS time FROM llm_usage_responses WHERE source_path = ?')
+          .get(source.path) as { time: number | null };
+        const parsed = await parseNativeLog(source, earliest.time === null ? cutoffMs : Math.min(cutoffMs, earliest.time));
         result.importedResponses += importSourceResponses(db, source, parsed);
         result.importedSources += 1;
       }

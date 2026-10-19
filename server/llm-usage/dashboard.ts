@@ -67,7 +67,7 @@ export function usageDashboard(db: Db, period: UsagePeriod, nowMs = Date.now()):
   // is the parent plus every child agent it spawned.
   const families = db.prepare(`
     SELECT provider, family_id AS session_id, MIN(occurred_at) AS started_at, MAX(occurred_at) AS ended_at,
-      MAX(repo_path) AS repo_name, COUNT(DISTINCT agent_id) AS subagents,
+      COUNT(DISTINCT agent_id) AS subagents,
       GROUP_CONCAT(DISTINCT model) AS models, GROUP_CONCAT(DISTINCT effort) AS efforts,
       GROUP_CONCAT(DISTINCT cost_basis) AS cost_basis, ${SUMMARY_SQL}
     FROM llm_usage_responses ${periodWhere}
@@ -84,6 +84,27 @@ export function usageDashboard(db: Db, period: UsagePeriod, nowMs = Date.now()):
     FROM llm_usage_records
   `).get();
   const periodSummary = summary(periodWhere, period.from, period.to);
+  const projects = db.prepare(`
+    SELECT project_key, MAX(project_name) AS project_name,
+      GROUP_CONCAT(DISTINCT project_source) AS attribution_sources, ${SUMMARY_SQL}
+    FROM llm_usage_responses ${periodWhere}
+    GROUP BY project_key ORDER BY cost_usd DESC, total_tokens DESC
+  `).all(period.from, period.to) as Row[];
+  // Aggregate all selected responses, independently of the 500-session display limit.
+  const sessionProjects = db.prepare(`
+    SELECT provider, family_id, project_key, MAX(project_name) AS project_name,
+      GROUP_CONCAT(DISTINCT project_source) AS attribution_sources, ${SUMMARY_SQL}
+    FROM llm_usage_responses ${periodWhere}
+    GROUP BY provider, family_id, project_key
+    ORDER BY cost_usd DESC, project_key
+  `).all(period.from, period.to) as Row[];
+  const byFamily = new Map<string, Row[]>();
+  for (const row of sessionProjects) {
+    const key = `${row.provider}:${row.family_id}`;
+    const rows = byFamily.get(key) ?? [];
+    rows.push(withHitRate(row));
+    byFamily.set(key, rows);
+  }
   return {
     today: summary('WHERE usage_date = ?', today),
     total: summary(''),
@@ -95,13 +116,15 @@ export function usageDashboard(db: Db, period: UsagePeriod, nowMs = Date.now()):
       summary: periodSummary,
       by_model: byModel.map(withHitRate),
       by_effort: byEffort.map(withHitRate),
+      by_project: projects.map(withHitRate),
       sessions_total: periodSummary.families,
       sessions_truncated: Number(periodSummary.families) > families.length,
     },
     sessions: families.map((row) => withHitRate({
       ...row,
-      // The UI needs only a project label; never expose a local absolute path.
-      repo_name: repositoryName(row.repo_name),
+      projects: byFamily.get(`${row.provider}:${row.session_id}`) ?? [],
+      repo_name: (byFamily.get(`${row.provider}:${row.session_id}`) ?? [])
+        .map((project) => project.project_name ?? '未判定').join(' / ') || null,
     })),
     inventory: inventoryHistory(db),
     sources,
@@ -121,6 +144,7 @@ export function usageDashboard(db: Db, period: UsagePeriod, nowMs = Date.now()):
       cache_hit_rate: 'cache read / (uncached input + cache read + cache write)',
       contexts: 'Unique provider responses (Claude message.id / Codex token_count increases)',
       initial_import_days: importDays(),
+      project_attribution: 'Per-response declared project, otherwise Git repository; linked worktrees share their common repository. Unknown/legacy responses stay unassigned. No proportional guessing.',
     },
   };
 }
@@ -163,10 +187,4 @@ function withHitRate(row: Row): Row {
   const written = Number(row.cache_write_tokens) || 0;
   const denominator = uncached + cached + written;
   return { ...row, contexts: row.responses, cache_hit_rate: denominator > 0 ? cached / denominator : null };
-}
-
-function repositoryName(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const parts = value.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? null;
 }

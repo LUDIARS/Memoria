@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -16,12 +16,43 @@ import { parseUsagePeriod } from './usage-period.js';
 type Db = ReturnType<typeof openDb>;
 type Summary = Record<string, unknown>;
 interface Dashboard {
-  period: { summary: Summary; by_model: Summary[]; sessions_total: number; sessions_truncated: boolean };
+  period: { summary: Summary; by_model: Summary[]; by_project: Summary[]; sessions_total: number; sessions_truncated: boolean };
   sessions: Array<{ session_id: string; subagents: number; responses: number }>;
 }
 
 const NOW_MS = Date.parse('2026-09-29T12:00:00+09:00');
 const CUTOFF_MS = Date.parse('2026-09-01T00:00:00+09:00');
+
+test('project costs partition every response including unknown and sessions beyond display limit', withDb((db) => {
+  const di = { key: 'di', name: 'Discutere', source: 'declared-project' as const };
+  const mm = { key: 'mm', name: 'Memoria', source: 'repository' as const };
+  const rows = Array.from({ length: SESSION_LIST_LIMIT + 2 }, (_, i) => response({
+    responseId: `project-${i}`, sessionId: `session-${i}`, project: i % 2 ? di : mm,
+  }));
+  rows.push(response({ responseId: 'same-session-second-project', sessionId: 'session-0', project: di }));
+  rows.push(response({ responseId: 'unknown-project-and-price', sessionId: 'unknown', model: 'unlisted', project: null }));
+  importResponses(db, 'project-log.jsonl', rows);
+  const result = dashboard(db, '2026-09-25', '2026-09-25');
+  assert.equal(result.sessions.length, SESSION_LIST_LIMIT);
+  const projects = result.period.by_project;
+  assert.equal(projects.reduce((sum, row) => sum + Number(row.responses), 0), result.period.summary.responses);
+  assert.ok(Math.abs(projects.reduce((sum, row) => sum + Number(row.cost_usd), 0) - Number(result.period.summary.cost_usd)) < 1e-9);
+  assert.equal(projects.find((row) => row.project_key === null)?.unpriced_responses, 1);
+  assert.equal(projects.length, 3);
+  assert.equal(JSON.stringify(result).includes('C:\\workspace'), false);
+  assert.equal(dashboard(db, '2026-09-24', '2026-09-24').period.by_project.length, 0);
+}));
+
+test('origin reparse fills legacy project attribution and copied history cannot change it', withDb((db) => {
+  const original = response({});
+  importResponses(db, original.sourcePath, [original]);
+  const project = { key: 'mm', name: 'Memoria', source: 'declared-project' as const };
+  importResponses(db, original.sourcePath, [{ ...original, project }]);
+  importResponses(db, 'copy.jsonl', [{ ...original, sourcePath: 'copy.jsonl', isOrigin: false,
+    project: { key: 'wrong', name: 'Wrong', source: 'repository' } }]);
+  assert.deepEqual(db.prepare('SELECT project_key, project_name FROM llm_usage_responses').all(), [{ project_key: 'mm', project_name: 'Memoria' }]);
+  assert.equal(dashboard(db, '2026-09-25', '2026-09-25').period.summary.responses, 1);
+}));
 
 function withDb(run: (db: Db) => void | Promise<void>): () => Promise<void> {
   return async () => {
@@ -184,6 +215,31 @@ test('sources imported by an older parser are re-read', withDb((db) => {
   db.prepare('UPDATE llm_usage_sources SET parser_version = 0').run();
   assert.equal(isSourceCurrent(db, source), false);
 }));
+
+test('parser upgrade reattributes saved history outside the discovery window without adding usage', async (context) => {
+  const directory = await tempDir(context);
+  const path = join(directory, 'session.jsonl');
+  await writeFile(path, [
+    { type: 'user', message: { content: '[Cc policy update]\nprojectRoot: /missing-projects/Memoria' } },
+    { sessionId: 'session', timestamp: '2026-09-25T00:00:00Z',
+      message: { id: 'msg', model: 'claude-opus-5-5', usage: { input_tokens: 1000, output_tokens: 100 } } },
+  ].map((row) => JSON.stringify(row)).join('\n'), 'utf8');
+  const oldTime = new Date('2026-09-25T01:00:00Z');
+  await utimes(path, oldTime, oldTime);
+  await withDb(async (db) => {
+    importResponses(db, path, [response({ sourcePath: path })]);
+    db.prepare('UPDATE llm_usage_sources SET parser_version = 2').run();
+    const result = await syncNativeUsage(db, Date.parse('2026-10-01T00:00:00Z'), [
+      { path: directory, provider: 'claude-code' },
+    ]);
+    assert.equal(result.importedSources, 1);
+    assert.equal(result.failedSources, 0);
+    const view = dashboard(db, '2026-09-25', '2026-09-25');
+    assert.equal(view.period.summary.responses, 1);
+    assert.equal(view.period.by_project[0].project_name, 'Memoria');
+    assert.equal(view.period.summary.input_tokens, 1000);
+  })();
+});
 
 test('archived Codex rollouts are discovered and deduplicated, and re-running sync adds nothing', async (context) => {
   const directory = await tempDir(context);

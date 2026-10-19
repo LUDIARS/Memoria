@@ -38,6 +38,8 @@ export interface UsageResponse extends UsageTokens {
   model: string;
   effort: string;
   repoPath: string | null;
+  /** Per-response work target. Missing on legacy rows until their source is re-read. */
+  project?: import('./project-attribution.js').ProjectAttribution | null;
 }
 
 export interface CostBreakdown {
