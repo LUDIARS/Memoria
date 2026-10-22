@@ -23,7 +23,7 @@ function render(date: string, items: DiarySection[]): void {
     remove.type = 'button';
     remove.textContent = '削除';
     remove.addEventListener('click', () => void removeSection(section));
-    // renderMarkdownBlock escapes the source before building markup.
+    // The shared renderer escapes raw HTML, including inside inline Markdown.
     body.className = 'diary-section-body md-block';
     body.innerHTML = renderMarkdownBlock(section.markdown);
     head.append(title, meta, remove);

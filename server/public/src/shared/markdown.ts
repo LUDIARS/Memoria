@@ -2,7 +2,7 @@
 //
 // 対応:
 //   **bold** *italic* `code` [text](url)
-//   既に HTML (allowlisted) が混ざっている場合はそのまま (sanitize で処理)
+//   入力中の HTML は常に文字として表示する (表示側の追加 sanitize は不要)。
 //
 // 行レベル (heading / list / quote / code fence) は処理しない — それらは
 // block_type 側で決まる。 この関数は 1 ブロック分の inline span を扱う。
@@ -11,17 +11,16 @@ import { escapeHtml } from './sanitize.js';
 
 export function renderInline(text: string): string {
   if (!text) return '';
-  // 既存 HTML タグはそのまま、それ以外は escape する。
-  // パース手法: 連続 HTML タグ / マークダウンランをトークン化 → render
+  // Only markup generated below is trusted; raw HTML is escaped as text.
   const parts: string[] = [];
   let i = 0;
   while (i < text.length) {
     const c = text[i];
     if (c === '<') {
-      // HTML タグ (allowlisted) — 閉じタグまでスキップ。
+      // Keep raw HTML literal, including tags nested in Markdown decorations.
       const end = text.indexOf('>', i);
       if (end < 0) { parts.push(escapeHtml(text.slice(i))); break; }
-      parts.push(text.slice(i, end + 1));
+      parts.push(escapeHtml(text.slice(i, end + 1)));
       i = end + 1;
       continue;
     }

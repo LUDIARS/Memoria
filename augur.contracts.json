@@ -4,6 +4,24 @@
   "importFrom": "../shared/contract-runtime.js",
   "contracts": [
     {
+      "id": "C-19",
+      "criterion": "C-19 renderInlineEvidence(input): 生HTMLを文字として表示し、生成タグはb・i・code・安全なaだけに限定する",
+      "symbol": "renderInlineEvidence",
+      "file": "augur/probes/markdown-boundary.ts",
+      "module": "augur/contracts/markdown-inline.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-20",
+      "criterion": "C-20 renderBlockEvidence(input): 外部日記と同じMarkdown表示経路で危険なHTML・属性・URLを出力せずブロック構造を維持する",
+      "symbol": "renderBlockEvidence",
+      "file": "augur/probes/markdown-boundary.ts",
+      "module": "augur/contracts/markdown-block.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
       "id": "C-7",
       "criterion": "C-7 hasScopedAccess(c, scope): 不透明 origin を拒否し、管理と取込の権限を別々に判定する",
       "symbol": "hasScopedAccess",

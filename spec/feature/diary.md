@@ -32,6 +32,7 @@
 - 書き込み (PUT / DELETE) は同一端末からだけ受ける (`isSameMachineRequest` + `Sec-Fetch-Site` が same-origin / none)。 遠隔 socket や別 Origin は 403
 - 日記の再生成 (`/api/diary/:date/generate`) は外部節を消さない。 日記の LLM 生成 (work / highlights / weekly) に外部節は渡さない (表示と保存のみ)
 - 呼び出し側: Concordia `spec/feature/daily-goal-run.md` の「Memoria との契約」 (`source=concordia-daily-goal`)。 ノート側は [local-tabula.md](local-tabula.md) の `POST /api/notes/from-text`
+- 外部節の Markdown は表示時に生 HTML をエスケープする。見出し・リスト・表・装飾・コード・許可 URL のリンクは維持し、入力元の安全性に依存しない。仕様・契約: [表示境界](../tasks/2026-10-22-markdown-html-boundary.md) (`actio:70af739f-1884-4535-acc8-b44ca92a938c`)。
 
 ## API
 - [diary.md](../interface/diary.md) — `/api/diary*` (月一覧 / 詳細 / 生成キュー / 編集 / 削除) / `/api/diary/settings` / `/api/diary/test-github` / `/api/diary/:date/bookmarks` / `/api/diary/:date/digs` / `/api/diary/:date/sections*`
