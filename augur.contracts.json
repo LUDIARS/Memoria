@@ -182,6 +182,24 @@
       "module": "augur/contracts/line-relay-replies.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-21",
+      "criterion": "C-21 feedPinnedEvidence(): RSS の全ホップが検査済み IP にのみ接続し XML を維持する",
+      "symbol": "feedPinnedEvidence",
+      "file": "augur/probes/pinned-retrieval.ts",
+      "module": "augur/contracts/pinned-retrieval.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-22",
+      "criterion": "C-22 shoppingPinnedEvidence(): 買い物取得の全ホップが検査済み IP にのみ接続し商品抽出を維持する",
+      "symbol": "shoppingPinnedEvidence",
+      "file": "augur/probes/pinned-retrieval.ts",
+      "module": "augur/contracts/pinned-retrieval.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

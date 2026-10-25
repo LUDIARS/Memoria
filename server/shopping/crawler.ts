@@ -1,4 +1,5 @@
-import { assertPublicHttpUrl } from '../shared/public-url.js';
+import { BlockedUrlError } from '../shared/public-url.js';
+import { fetchPinnedPublicResponse } from '../shared/public-connection.js';
 import { parseShoppingOffers } from './parser.js';
 import type { ShoppingOffer, ShoppingSource } from './types.js';
 
@@ -60,21 +61,28 @@ async function cancelResponseBody(response: Response): Promise<void> {
   }
 }
 
-async function fetchPublicHtml(initialUrl: string): Promise<{ html: string; finalUrl: string }> {
+async function fetchPublicHtml(
+  initialUrl: string,
+  dependencies: Parameters<typeof fetchPinnedPublicResponse>[2],
+): Promise<{ html: string; finalUrl: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   let currentUrl = initialUrl;
   try {
     for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
-      await assertPublicHttpUrl(currentUrl);
-      const response = await fetch(currentUrl, {
-        redirect: 'manual',
+      if (!URL.canParse(currentUrl)) throw new BlockedUrlError(`invalid url: ${currentUrl}`);
+      const response = await fetchPinnedPublicResponse(currentUrl, {
         signal: controller.signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36 MemoriaShoppingCrawler/1.0',
           'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
           'Accept-Language': 'ja,en;q=0.8',
         },
+      }, dependencies).catch((error: unknown) => {
+        if (error instanceof Error && 'syscall' in error && error.syscall === 'getaddrinfo') {
+          throw new BlockedUrlError(`dns lookup failed: ${new URL(currentUrl).hostname}`);
+        }
+        throw error;
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
@@ -111,8 +119,12 @@ function crawlUrl(source: ShoppingSource, query?: string): string {
   return source.searchUrlTemplate.replaceAll('{query}', encodeURIComponent(query));
 }
 
-export async function crawlShoppingSource(source: ShoppingSource, query?: string): Promise<ShoppingOffer[]> {
+export async function crawlShoppingSource(
+  source: ShoppingSource,
+  query?: string,
+  dependencies: Parameters<typeof fetchPinnedPublicResponse>[2] = {},
+): Promise<ShoppingOffer[]> {
   const url = crawlUrl(source, query);
-  const page = await fetchPublicHtml(url);
+  const page = await fetchPublicHtml(url, dependencies);
   return parseShoppingOffers(page.html, source, page.finalUrl, { query });
 }

@@ -4,7 +4,8 @@
 // ここで XML/RSS 用の取得関数を別に持つ。
 
 import type { RssFeedKind, DiscoveredFeed } from './types.js';
-import { assertFetchableFeedUrl } from './url-guard.js';
+import { BlockedUrlError } from './url-guard.js';
+import { fetchPinnedPublicResponse } from '../shared/public-connection.js';
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB 上限 (巨大フィードの暴走防止)
 const MAX_REDIRECTS = 5;
@@ -12,32 +13,39 @@ const MAX_REDIRECTS = 5;
 /**
  * RSS/Atom XML を取得して文字列で返す。 content-type は xml 系を許容。
  *
- * SSRF 対策: 取得先 (初回 URL + 各リダイレクト hop) を assertFetchableFeedUrl で
- * 検査し、内部/予約レンジを遮断する。リダイレクトは redirect:'manual' で hop ごと
- * に再検査する (follow 任せだと内部 URL へ飛ばされても検査できないため)。
+ * SSRF 対策: 初回 URL と各リダイレクト hop を検査し、接続先を検査済み IP に固定する。
+ * 手動で hop を追従し、内部/予約レンジへの転送と DNS rebinding を防ぐ。
  */
-export async function fetchFeedXml(url: string, timeoutMs = 20_000): Promise<string> {
+export async function fetchFeedXml(
+  url: string,
+  timeoutMs = 20_000,
+  dependencies: Parameters<typeof fetchPinnedPublicResponse>[2] = {},
+): Promise<string> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
     let current = url;
     for (let hop = 0; ; hop++) {
-      await assertFetchableFeedUrl(current);
-      const res = await fetch(current, {
+      if (!URL.canParse(current)) throw new BlockedUrlError(`invalid url: ${current}`);
+      const res = await fetchPinnedPublicResponse(current, {
         signal: ac.signal,
-        redirect: 'manual',
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Memoria-RSS/0.1',
           'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.5',
           'Accept-Language': 'ja,en;q=0.9',
         },
+      }, dependencies).catch((error: unknown) => {
+        if (error instanceof Error && 'syscall' in error && error.syscall === 'getaddrinfo') {
+          throw new BlockedUrlError(`dns lookup failed: ${new URL(current).hostname}`);
+        }
+        throw error;
       });
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get('location');
         if (!loc) throw new Error(`HTTP ${res.status} without Location`);
         if (hop >= MAX_REDIRECTS) throw new Error('too many redirects');
         current = new URL(loc, current).toString();
-        continue; // 次 hop の先頭で assertFetchableFeedUrl により再検査
+        continue; // 次 hop でも公開 IP の検査と接続先固定を行う。
       }
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       const buf = await res.arrayBuffer();
