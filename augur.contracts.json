@@ -4,6 +4,24 @@
   "importFrom": "../shared/contract-runtime.js",
   "contracts": [
     {
+      "id": "C-23",
+      "criterion": "C-23 extractFeedTitle(body): CDATA除去・空白正規化・200文字制限を維持し、閉じない256KiB以上のtitle入力を1秒未満で処理する",
+      "symbol": "extractFeedTitle",
+      "file": "server/rss/discovery-markup.ts",
+      "module": "augur/contracts/rss-discovery-title.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-24",
+      "criterion": "C-24 extractFeedLinks(body, siteUrl): alternateのRSS・Atom候補を絶対URLで重複除去し、閉じない256KiB以上のlink入力を1秒未満で処理する",
+      "symbol": "extractFeedLinks",
+      "file": "server/rss/discovery-markup.ts",
+      "module": "augur/contracts/rss-discovery-links.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
       "id": "C-19",
       "criterion": "C-19 renderInlineEvidence(input): 生HTMLを文字として表示し、生成タグはb・i・code・安全なaだけに限定する",
       "symbol": "renderInlineEvidence",

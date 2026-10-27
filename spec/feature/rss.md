@@ -85,6 +85,11 @@ pollAllFeeds(db)              # 定期 tick / 手動更新の入口 (多重起�
 - **フィード自動発見** (`sources.ts#discoverFeeds`) — サイト URL を投げると HTML の
   `<link rel="alternate" type="application/rss+xml|atom+xml">` を走査して登録候補を返す。
   URL 自体がフィードならそれを採用。 `POST /api/rss/discover`。
+  - 本文の title と link 抽出は `discovery-markup.ts` の純粋関数で行う。
+    開始位置と終端を順方向に検索し、終端がない場合は打ち切ることで入力長に対し線形時間で処理する。
+    CDATA 除去・title の空白正規化と200文字制限、RSS/Atom alternate 判定、URL 絶対化と重複除去を維持する。
+    関連タスク: `actio:a3f2859e-66b1-4c4f-b517-34b9a645b7f0`。
+    契約 C-23 / C-24 と `rss/sources.test.ts` で通常入力および閉じない256KiB入力の1秒未満の処理を検証する。
 
 ### 記事の AI 要約 (`summarize.ts`)
 - 記事ページ本文を取得 → タグ除去 → `runLlm({ task:'rss_summarize' })` (既定 haiku) で

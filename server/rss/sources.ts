@@ -6,6 +6,7 @@
 import type { RssFeedKind, DiscoveredFeed } from './types.js';
 import { BlockedUrlError } from './url-guard.js';
 import { fetchPinnedPublicResponse } from '../shared/public-connection.js';
+import { extractFeedTitle, extractFeedLinks } from './discovery-markup.js';
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB 上限 (巨大フィードの暴走防止)
 const MAX_REDIRECTS = 5;
@@ -69,33 +70,15 @@ export async function discoverFeeds(siteUrl: string): Promise<Omit<DiscoveredFee
 
   // 渡された URL 自体が既にフィードならそれを返す。
   if (/^\s*<\?xml|<rss|<feed|<rdf/.test(head)) {
-    const m = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     return [{
       url: siteUrl,
-      title: m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) : null,
+      title: extractFeedTitle(body),
       kind: detectFeedKind(siteUrl),
     }];
   }
 
   // HTML の <link rel="alternate" type="application/rss+xml|atom+xml" href="...">。
-  const out: Omit<DiscoveredFeed, 'alreadyRegistered'>[] = [];
-  const seen = new Set<string>();
-  const linkRe = /<link\b[^>]*>/gi;
-  let lm: RegExpExecArray | null;
-  while ((lm = linkRe.exec(body)) !== null) {
-    const tag = lm[0];
-    if (!/rel\s*=\s*["']?alternate/i.test(tag)) continue;
-    if (!/type\s*=\s*["']?application\/(rss|atom)\+xml/i.test(tag)) continue;
-    const href = tag.match(/href\s*=\s*["']([^"']+)["']/i)?.[1];
-    if (!href) continue;
-    let abs: string;
-    try { abs = new URL(href, siteUrl).toString(); } catch { continue; }
-    if (seen.has(abs)) continue;
-    seen.add(abs);
-    const title = tag.match(/title\s*=\s*["']([^"']*)["']/i)?.[1] || null;
-    out.push({ url: abs, title: title ? title.trim().slice(0, 200) : null, kind: detectFeedKind(abs) });
-  }
-  return out;
+  return extractFeedLinks(body, siteUrl).map((feed) => ({ ...feed, kind: detectFeedKind(feed.url) }));
 }
 
 /** URL から種別を推定する (表示・パースの出し分け用)。 */
