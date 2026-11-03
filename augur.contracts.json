@@ -218,6 +218,15 @@
       "module": "augur/contracts/pinned-retrieval.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-25",
+      "criterion": "C-25 qsLockEvidence(registry, base): 両ロックの qs だけを既存親レンジ内の 6.16.2 に更新し、公開 registry の配布 URL・integrity と一致する",
+      "symbol": "qsLockEvidence",
+      "file": "augur/probes/qs-lock.ts",
+      "module": "augur/contracts/qs-lock.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

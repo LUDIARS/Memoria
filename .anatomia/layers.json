@@ -21,6 +21,9 @@
     { "glob": "server/plugins/memoria-plugin/plugins/furusato-nozei/ui/*", "layer": "presentation" },
 
     { "glob": "server/*", "layer": "application" },
+    { "glob": "augur/probes/qs-lock.ts", "layer": "application" },
+    { "glob": "augur/probes/run-qs-lock.ts", "layer": "application" },
+    { "glob": "augur/contracts/qs-lock.contract.ts", "layer": "application" },
     { "glob": "server/hooks/*", "layer": "application" },
     { "glob": "server/scripts/*", "layer": "application" },
     { "glob": "server/tabula/*", "layer": "application" },

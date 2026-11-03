@@ -5,6 +5,9 @@
   "templateRules": [],
   "membership": [
     {
+      "pathPattern": "(^|/)augur/(?:contracts/qs-lock\\.contract|probes/(?:qs-lock|run-qs-lock))\\.ts$"
+    },
+    {
       "pathPattern": "(^|/)server/(?:index|bootstrap|runtime-paths|external-ts-loader|app-catalog|notifications|push|browser-host-config)\\.ts$"
     },
     {
@@ -27,6 +30,7 @@
     }
   ],
   "specRefs": [
+    "spec/plan/2026-11-04-qs-security.md",
     "spec/feature/shared-one-shot.md"
   ]
 }
