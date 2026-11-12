@@ -47,14 +47,17 @@ if(MEMORIA_NATIVE_BUILD_TESTS)
 		find_program(MEMORIA_MOSQUITTO_EXECUTABLE mosquitto PATHS /usr/sbin /usr/local/sbin)
 		find_program(MEMORIA_MOSQUITTO_PUB_EXECUTABLE mosquitto_pub)
 		find_program(MEMORIA_MOSQUITTO_PASSWD_EXECUTABLE mosquitto_passwd)
-		add_executable(memoria_owntracks_e2e tests/e2e_test.cpp tests/e2e_process.cpp)
+		add_executable(memoria_owntracks_e2e tests/e2e_test.cpp tests/e2e_process.cpp tests/e2e_diagnostics.cpp)
 		target_link_libraries(memoria_owntracks_e2e PRIVATE lapilli::sqlite)
 		memoria_native_target_defaults(memoria_owntracks_e2e)
 		add_test(NAME memoria_owntracks_e2e COMMAND memoria_owntracks_e2e
 			$<TARGET_FILE:memoria-owntracks>
 			"${MEMORIA_MOSQUITTO_EXECUTABLE}"
 			"${MEMORIA_MOSQUITTO_PUB_EXECUTABLE}"
-			"${MEMORIA_MOSQUITTO_PASSWD_EXECUTABLE}")
+			"${MEMORIA_MOSQUITTO_PASSWD_EXECUTABLE}"
+			#作業ファイル (設定・passwd・DB・ログ・写したブローカー) はビルドディレクトリの下に置く
+			#  (失敗したときに残すファイルを、ビルドと同じ場所で見られる)
+			"${CMAKE_CURRENT_BINARY_DIR}/e2e-work")
 		set_tests_properties(memoria_owntracks_e2e PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 	endif()
 endif()
