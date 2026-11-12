@@ -130,3 +130,32 @@ VPN を使えない環境向けの fallback。 セキュリティ面で大きく
 | モバイルから繋がらない | `MEMORIA_MQTT_BROKER_HOST=127.0.0.1` になっていないか / Windows Firewall で 1883 が in-bound 拒否になっていないか / tailnet IP を OwnTracks に入れているか |
 | 接続はできるが gps_locations に入らない | topic が `owntracks/<user>/<device>` の 3 セグメントになっているか (OwnTracks の "Auto topic" を ON にすると自動で合う) / payload が `_type=location` の JSON か |
 | `client error: ... bad credentials` | `MEMORIA_MQTT_USERNAME` / `MEMORIA_MQTT_PASSWORD` と OwnTracks 側の User / Password が一致していない |
+
+## 7. 外部 broker (mosquitto) を使う場合の購読プロセス
+
+内蔵 broker を使わず、リポジトリ同梱の `docker-compose.yml` の mosquitto (host port 1884) に
+OwnTracks を publish させる構成では、別プロセスの購読者が `gps_locations` へ書く。
+
+TypeScript 版 (従来どおり):
+
+```bash
+cd server
+npm run owntracks        # tsx --env-file-if-exists=.env.secrets owntracks-server.ts
+```
+
+C++ 版 (代替。Node を載せないので常駐メモリが約 6MB):
+
+```bash
+git submodule update --init lib/portus lib/lapilli
+cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build
+cd server
+../native/build/owntracks/memoria-owntracks
+```
+
+- どちらも `server/` で起動する。環境変数 (`MEMORIA_MQTT_URL` 既定 `mqtt://localhost:1884` /
+  `MEMORIA_MQTT_USERNAME` / `MEMORIA_MQTT_PASSWORD` / `MEMORIA_MQTT_TOPIC` / `MEMORIA_MQTT_CLIENT_ID` /
+  `MEMORIA_USER_ID` / `MEMORIA_DB_PATH`) と `.env.secrets` の読み方は同じで、既定ではどちらも
+  `<repo>/data/memoria.db` に書く
+- C++ 版は DB とスキーマを作らない。先に Memoria サーバを一度起動して DB を作っておく
+- C++ 版は Linux で検証済み、Windows では未確認。確認できるまで TS 版を残す。詳細と TS 版との違いは
+  [`../native/README.md`](../native/README.md)

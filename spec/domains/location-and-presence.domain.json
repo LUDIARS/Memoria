@@ -11,6 +11,9 @@
       "pathPattern": "(^|/)server/owntracks-server\\.ts$"
     },
     {
+      "pathPattern": "(^|/)native/owntracks/(?:.*/)?[^/]+$"
+    },
+    {
       "pathPattern": "(^|/)server/wifi-location\\.ts$"
     },
     {
