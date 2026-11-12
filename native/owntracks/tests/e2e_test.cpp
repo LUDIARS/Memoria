@@ -2,7 +2,8 @@
 //publish した位置が gps_locations に入ること、ブローカーを再起動しても繋ぎ直して入り続けること、
 //SIGTERM で (ブローカーが落ちていても) すぐ 0 で終わることを確かめる
 //
-//  引数: <memoria-owntracks> <mosquitto> <mosquitto_pub> <mosquitto_passwd>
+//  引数: <memoria-owntracks> <mosquitto> <mosquitto_pub> <mosquitto_passwd> [作業ファイルを置くディレクトリ]
+//  作業ディレクトリを省くとシステムの一時ディレクトリを使う
 //  mosquitto が無ければ 77 (ctest の SKIP_RETURN_CODE) で終わる。通過とは数えない
 #include <pwd.h>
 #include <unistd.h>
@@ -17,6 +18,7 @@
 #include <string>
 #include <system_error>
 
+#include "e2e_diagnostics.hpp"
 #include "e2e_process.hpp"
 #include "gps_fixture.hpp"
 
@@ -197,7 +199,7 @@ void run(Env& env) {
 
 int main(int argc, char** argv) {
 	if (argc < 5) {
-		std::fprintf(stderr, "usage: %s <memoria-owntracks> <mosquitto> <mosquitto_pub> <mosquitto_passwd>\n", argv[0]);
+		std::fprintf(stderr, "usage: %s <memoria-owntracks> <mosquitto> <mosquitto_pub> <mosquitto_passwd> [work-root]\n", argv[0]);
 		return 2;
 	}
 	Env env;
@@ -219,14 +221,20 @@ int main(int argc, char** argv) {
 	std::random_device rd;
 	char name[64];
 	std::snprintf(name, sizeof(name), "memoria-owntracks-e2e-%08x%08x", rd(), rd());
-	env.dir = fs::temp_directory_path() / name;
+	//CTest からはビルドディレクトリの下を渡す。システムの /tmp は、ブローカーの実体によっては見えない
+	//  (snap の私有 /tmp など) ことがあり、CI で設定ファイルを開けずに落ちた
+	const fs::path root = argc > 5 && argv[5][0] != '\0' ? fs::path(argv[5]) : fs::temp_directory_path();
+	env.dir = root / name;
 	fs::create_directories(env.dir);
+	//権限を umask 任せにしない。ブローカーは同じユーザで動くので、持ち主だけが読み書きできれば足りる
+	fs::permissions(env.dir, fs::perms::owner_all, fs::perm_options::replace);
 	env.port = e2e::free_port();
 
 	const std::string passwd = (env.dir / "passwd").string();
 	const pid_t pw = e2e::spawn({ { env.mosquitto_passwd, "-b", "-c", passwd, kUser, kPassword }, {}, "", "" });
 	if (pw <= 0 || e2e::wait_exit(pw, 10000) != 0) {
 		std::fprintf(stderr, "mosquitto_passwd failed\n");
+		e2e::print_broker_diagnostics(env.mosquitto, env.dir.string(), { passwd });
 		return 1;
 	}
 	env.conf = (env.dir / "mosquitto.conf").string();
@@ -239,9 +247,18 @@ int main(int argc, char** argv) {
 			//root で起動すると mosquitto は既定で mosquitto ユーザへ権限を落とし、0600 の passwd を読めなくなる。
 			//  起動したユーザのまま動かす
 			<< "user " << current_user() << "\n";
+		//書けなかったのに黙って進むと、ブローカーの「開けない」に化けて原因が見えなくなる
+		conf.close();
+		if (!conf) {
+			std::fprintf(stderr, "cannot write %s\n", env.conf.c_str());
+			return 1;
+		}
 	}
+	fs::permissions(env.conf, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
 	if (!start_broker(env)) {
 		std::fprintf(stderr, "mosquitto did not start:\n%s\n", e2e::read_file((env.dir / "mosquitto.log").string()).c_str());
+		e2e::print_broker_diagnostics(env.mosquitto, env.dir.string(), { env.conf, passwd });
+		std::fprintf(stderr, "files kept in %s\n", env.dir.string().c_str());
 		return 1;
 	}
 
