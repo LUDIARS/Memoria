@@ -1,6 +1,7 @@
 #include "e2e_diagnostics.hpp"
 
 #include <climits>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -50,9 +51,31 @@ void print_matching_lines(const char* path, const std::string& needle) {
 	if (!any && !needle.empty()) std::fprintf(stderr, "    %s: no line with '%s'\n", path, needle.c_str());
 }
 
+//ブローカーが実際に受ける LSM のラベル。設定ファイル無しで起動すると loopback だけで待ち受けて
+//  何も読まずに動き続けるので、exec が済んだ (/proc/<pid>/exe が変わった) ところで attr/current を読む
+std::string confinement_label(const std::string& broker, const std::string& dir) {
+	const pid_t p = spawn({ { broker, "-p", std::to_string(free_port()) }, {}, dir, "" });
+	if (p <= 0) return "(cannot spawn)";
+	std::string label = "(not available)";
+	const std::string proc = "/proc/" + std::to_string(p);
+	for (int i = 0; i < 50; ++i) {
+		char exe[PATH_MAX];
+		const ssize_t n = readlink((proc + "/exe").c_str(), exe, sizeof(exe) - 1);
+		char real[PATH_MAX];
+		if (n > 0 && realpath(broker.c_str(), real) && std::string(exe, static_cast<std::size_t>(n)) == real) {
+			const std::string text = first_line(read_file(proc + "/attr/current"));
+			if (!text.empty()) label = text;
+			break;
+		}
+		sleep_ms(20);
+	}
+	stop(p, SIGTERM, 2000);
+	return label;
 }
 
-void print_broker_diagnostics(const std::string& broker, const std::string& dir, const std::vector<std::string>& files) {
+}
+
+void print_broker_diagnostics(const std::vector<std::string>& brokers, const std::string& dir, const std::vector<std::string>& files) {
 	std::fprintf(stderr, "--- diagnostics (broker did not start) ---\n");
 
 	//テストのプロセス自身: 権限と umask (root では DAC を越えて読めるので、非 root の CI だけで落ちる形を見分ける)
@@ -61,19 +84,21 @@ void print_broker_diagnostics(const std::string& broker, const std::string& dir,
 	std::fprintf(stderr, "  process: uid %u euid %u gid %u egid %u umask %03o\n", static_cast<unsigned>(getuid()),
 		static_cast<unsigned>(geteuid()), static_cast<unsigned>(getgid()), static_cast<unsigned>(getegid()), static_cast<unsigned>(mask));
 
-	//ブローカー: 実体の場所。snap の wrapper (/usr/bin/snap) なら /tmp は snap の私有 /tmp になり、見えない
-	std::fprintf(stderr, "  broker: %s\n", broker.c_str());
-	print_stat(broker);
-	char real[PATH_MAX];
-	if (realpath(broker.c_str(), real)) {
-		const std::string r = real;
-		std::fprintf(stderr, "    realpath %s%s\n", real, r.find("/snap") != std::string::npos ? "  <- snap" : "");
-	}
-	{
+	//ブローカー: 実体の場所 (snap の wrapper なら /tmp は私有になる)、版、実際に掛かる LSM のラベル
+	for (const std::string& broker : brokers) {
+		std::fprintf(stderr, "  broker: %s\n", broker.c_str());
+		print_stat(broker);
+		char real[PATH_MAX];
+		if (realpath(broker.c_str(), real)) {
+			const std::string r = real;
+			std::fprintf(stderr, "    realpath %s%s\n", real, r.find("/snap") != std::string::npos ? "  <- snap" : "");
+		}
 		const std::string out = (fs::path(dir) / "broker-version.txt").string();
+		std::remove(out.c_str());
 		const pid_t p = spawn({ { broker, "-h" }, {}, dir, out });
 		if (p > 0) wait_exit(p, 5000);
 		std::fprintf(stderr, "    version: %s\n", first_line(read_file(out)).c_str());
+		std::fprintf(stderr, "    label: %s\n", confinement_label(broker, dir).c_str());
 	}
 
 	//作業ディレクトリとその上 (どこかが辿れなければ、ブローカーからは開けない)
@@ -103,6 +128,17 @@ void print_broker_diagnostics(const std::string& broker, const std::string& dir,
 	print_matching_lines("/proc/self/attr/current", "");
 	print_matching_lines("/sys/module/apparmor/parameters/enabled", "");
 	print_matching_lines("/sys/kernel/security/apparmor/profiles", "mosquitto");
+	//プロファイルのファイル (名前だけ)
+	std::error_code ec;
+	bool any = false;
+	//範囲 for の ++ は失敗で例外を投げるので、error_code を取る increment で回す
+	for (fs::directory_iterator it("/etc/apparmor.d", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+		const std::string name = it->path().filename().string();
+		if (name.find("mosquitto") == std::string::npos) continue;
+		std::fprintf(stderr, "    /etc/apparmor.d/%s\n", name.c_str());
+		any = true;
+	}
+	if (!any) std::fprintf(stderr, "    /etc/apparmor.d: %s\n", ec ? "not readable" : "no file with 'mosquitto'");
 	std::fprintf(stderr, "--- end of diagnostics ---\n");
 }
 

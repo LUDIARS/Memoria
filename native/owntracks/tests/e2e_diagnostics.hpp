@@ -6,7 +6,7 @@
 
 namespace e2e {
 
-//broker: 起動したブローカーの実行ファイル、dir: 作業ディレクトリ、files: ブローカーが読むはずのファイル
-void print_broker_diagnostics(const std::string& broker, const std::string& dir, const std::vector<std::string>& files);
+//brokers: 起動したブローカーの実行ファイル (写しと元のシステムのもの)、dir: 作業ディレクトリ、files: ブローカーが読むはずのファイル
+void print_broker_diagnostics(const std::vector<std::string>& brokers, const std::string& dir, const std::vector<std::string>& files);
 
 }

@@ -55,8 +55,8 @@ if(MEMORIA_NATIVE_BUILD_TESTS)
 			"${MEMORIA_MOSQUITTO_EXECUTABLE}"
 			"${MEMORIA_MOSQUITTO_PUB_EXECUTABLE}"
 			"${MEMORIA_MOSQUITTO_PASSWD_EXECUTABLE}"
-			#作業ファイル (設定・passwd・DB・ログ) はビルドディレクトリの下に置く。システムの /tmp は
-			#  ブローカーの実体によっては見えないことがある (snap の私有 /tmp など)
+			#作業ファイル (設定・passwd・DB・ログ・写したブローカー) はビルドディレクトリの下に置く
+			#  (失敗したときに残すファイルを、ビルドと同じ場所で見られる)
 			"${CMAKE_CURRENT_BINARY_DIR}/e2e-work")
 		set_tests_properties(memoria_owntracks_e2e PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 	endif()
