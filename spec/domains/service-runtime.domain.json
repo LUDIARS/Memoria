@@ -14,6 +14,9 @@
       "pathPattern": "(^|/)server/scripts/build-server\\.(?:mjs|test\\.ts)$"
     },
     {
+      "pathPattern": "(^|/)native/(?:CMakeLists\\.txt|README\\.md)$"
+    },
+    {
       "pathPattern": "(^|/)server/lib/[^/]+$"
     },
     {
