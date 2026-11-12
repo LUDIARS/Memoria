@@ -1,0 +1,58 @@
+# C++ 版のプロセス (native/) のビルドとテスト。Linux はサニタイザ付き、Windows は MSVC で回す。
+# 必要なサブモジュール (lib/portus, lib/lapilli) だけを取得する。private なサブモジュールには触らない。
+name: native
+
+on:
+  push:
+    branches: [main]
+    paths: ['native/**', 'lib/portus', 'lib/lapilli', '.gitmodules', '.github/workflows/native.yml']
+  pull_request:
+    paths: ['native/**', 'lib/portus', 'lib/lapilli', '.gitmodules', '.github/workflows/native.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: linux (${{ matrix.config.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { name: debug, flags: "" }
+          - { name: asan-ubsan, flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
+          - { name: tsan, flags: "-fsanitize=thread -fno-omit-frame-pointer" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the C++ submodules
+        run: git submodule update --init --depth=1 lib/portus lib/lapilli
+      # mosquitto は結合テスト用 (実物のブローカーで受信から DB への書き込みまで確かめる)
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev libsqlite3-dev mosquitto mosquitto-clients
+      # ランナーの既定 (アドレス空間の乱数化が強い) だと TSan が起動時に落ちる
+      - name: Lower ASLR entropy for TSan
+        if: matrix.config.name == 'tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Configure
+        run: cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_CXX_FLAGS=${{ matrix.config.flags }}"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  windows:
+    name: windows (msvc)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the C++ submodules
+        run: git submodule update --init --depth=1 lib/portus lib/lapilli
+      - name: Install SQLite (vcpkg)
+        run: vcpkg install sqlite3:x64-windows
+      - name: Configure
+        run: cmake -S native -B build "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
