@@ -5378,9 +5378,13 @@ async function openAiSettings() {
     const optionsHtml = providers.map(p => `<option value="${p.key}">${escapeHtml(p.label)}</option>`).join('');
     function modelOptionsFor(provider, current) {
       const list = providerModels[provider] || [];
-      if (!list.length) return '<option value="">(なし)</option>';
+      const defaultModel = providerDefaults[provider];
+      const defaultLabel = defaultModel ? `(default: ${defaultModel})` : provider === 'openai' ? '(共通設定)' : '(なし)';
       const opts = [
-        `<option value="">(default: ${escapeHtml(providerDefaults[provider] || '')})</option>`,
+        `<option value="">${escapeHtml(defaultLabel)}</option>`,
+        ...(current && !list.some(m => m.id === current) ? [
+          `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}</option>`,
+        ] : []),
         ...list.map(m => `<option value="${escapeHtml(m.id)}" ${m.id === current ? 'selected' : ''}>${escapeHtml(m.label)}</option>`),
       ];
       return opts.join('');
@@ -5423,9 +5427,9 @@ async function openAiSettings() {
       // provider 変更時に model dropdown を再構築
       sel.addEventListener('change', () => {
         const cur = mSel.value;
-        mSel.innerHTML = modelOptionsFor(sel.value, cur);
+        mSel.innerHTML = modelOptionsFor(sel.value, '');
         // 新しい provider に同じ model が無ければ default に
-        if (![...mSel.options].some(o => o.value === cur)) mSel.value = '';
+        mSel.value = [...mSel.options].some(o => o.value === cur) ? cur : '';
       });
     }
     $('aiBinClaude').value = cfg.bins?.claude || '';
@@ -5542,7 +5546,7 @@ async function saveAiSettings() {
       gemini: $('aiBinGemini').value.trim() || 'gemini',
       codex:  $('aiBinCodex').value.trim()  || 'codex',
     },
-    openai_model: $('aiOpenaiModel').value.trim() || 'gpt-4o-mini',
+    openai_model: $('aiOpenaiModel').value.trim(),
     git_bash_path: $('aiGitBashPath').value.trim(),
     diary_global_memo: $('aiDiaryGlobalMemo')?.value || '',
     user_profile: {
@@ -6927,23 +6931,22 @@ function ensureAgentRunModal() {
 const PROVIDER_MODELS_FALLBACK = {
   algorithm: [],
   claude: [
-    { id: 'sonnet', label: 'Sonnet 4.6 (default)' },
-    { id: 'haiku',  label: 'Haiku 4.5 (fast)' },
-    { id: 'opus',   label: 'Opus 4.7' },
-    { id: 'claude-opus-4-7[1m]', label: 'Opus 4.7 (1M)' },
+    { id: 'sonnet',   label: 'Sonnet (default)' },
+    { id: 'haiku',    label: 'Haiku (fast)' },
+    { id: 'opus',     label: 'Opus' },
+    { id: 'opus[1m]', label: 'Opus (1M context)' },
+    { id: 'fable',    label: 'Fable' },
   ],
   codex: [
-    { id: '5.3-codex',   label: '5.3-codex (default)' },
-    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+    { id: 'sol',   label: 'Sol (default)' },
+    { id: 'astra', label: 'Astra' },
+    { id: 'luna',  label: 'Luna' },
   ],
   gemini: [
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
     { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
   ],
-  openai: [
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini (default)' },
-    { id: 'gpt-4o',      label: 'GPT-4o' },
-  ],
+  openai: [],
 };
 let _providerModelsCache = null;
 let _providerDefaultsCache = null;

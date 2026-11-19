@@ -2,7 +2,7 @@
 // route through runLlm({ task, prompt, ... }) so the user can pick a provider
 // per task: Claude CLI, Gemini CLI, Codex CLI, or the OpenAI Chat API.
 
-import { resolveModel } from '@ludiars/one-shot';
+import { resolveLlmModel } from './shared/llm-model.js';
 import { runCli } from './shared/llm-cli.js';
 import { forwardToConcordia } from './concordia-forward.js';
 import { runTextSummary } from './shared/text-summary.js';
@@ -103,26 +103,22 @@ export interface LlmModelOption {
 export const PROVIDER_MODELS: Record<LlmProviderKey, LlmModelOption[]> = {
   algorithm: [],
   claude: [
-    { id: 'sonnet',                 label: 'Sonnet (default)' },
-    { id: 'haiku',                  label: 'Haiku 4.5 (fast)' },
-    { id: 'opus',                   label: 'Opus' },
-    { id: 'opus[1m]',    label: 'Opus (1M context)' },
-    { id: 'claude-sonnet-4-6',      label: 'Sonnet 4.6 (full id)' },
-    { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (full id)' },
+    { id: 'sonnet',    label: 'Sonnet (default)' },
+    { id: 'haiku',     label: 'Haiku (fast)' },
+    { id: 'opus',      label: 'Opus' },
+    { id: 'opus[1m]',  label: 'Opus (1M context)' },
+    { id: 'fable',     label: 'Fable' },
   ],
   codex: [
     { id: 'sol',  label: 'Sol (default)' },
-    { id: 'gpt-5-codex', label: 'GPT-5 Codex' },
+    { id: 'astra', label: 'Astra' },
+    { id: 'luna',  label: 'Luna' },
   ],
   gemini: [
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (default)' },
     { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro' },
   ],
-  openai: [
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini (default)' },
-    { id: 'gpt-4o',      label: 'GPT-4o' },
-    { id: 'gpt-5-mini',  label: 'GPT-5 mini' },
-  ],
+  openai: [],
   gamma: [
     { id: 'gemma4:12b',         label: 'Gemma 4 12B (default)' },
     { id: 'qwen2.5-coder:14b',  label: 'Qwen2.5 Coder 14B' },
@@ -133,7 +129,6 @@ export const PROVIDER_DEFAULT_MODEL: Partial<Record<LlmProviderKey, string>> = {
   claude: 'sonnet',
   codex:  'sol',
   gemini: 'gemini-2.5-flash',
-  openai: 'gpt-4o-mini',
   gamma:  'gemma4:12b',
 };
 
@@ -161,7 +156,7 @@ let cfg: LlmRuntimeConfig = {
   tasks: Object.fromEntries(TASKS.map(t => [t, { provider: 'claude' as LlmProviderKey }])) as Partial<Record<LlmTaskName, LlmTaskConfig>>,
   bins: { claude: 'claude', gemini: 'gemini', codex: 'codex' },
   openai_api_key: '',
-  openai_model: 'gpt-4o-mini',
+  openai_model: '',
   gamma_base_url: GAMMA_DEFAULT_BASE_URL,
   gamma_api_key: '',
   gamma_model: 'gemma4:12b',
@@ -188,7 +183,7 @@ export function loadLlmConfigFromSettings(settings: Record<string, string | null
       codex:  settings['llm.bin.codex']  || 'codex',
     },
     openai_api_key: settings['llm.openai.api_key'] || '',
-    openai_model:   settings['llm.openai.model']   || 'gpt-4o-mini',
+    openai_model:   settings['llm.openai.model']   || '',
     gamma_base_url: settings['llm.gamma.base_url'] || GAMMA_DEFAULT_BASE_URL,
     gamma_api_key:  settings['llm.gamma.api_key']  || '',
     gamma_model:    settings['llm.gamma.model']    || 'gemma4:12b',
@@ -250,7 +245,7 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }: RunLl
     const provider = taskCfg.provider;
     const model = taskCfg.model || (provider === 'gamma' ? cfg.gamma_model
       : provider === 'openai' ? cfg.openai_model : TASK_DEFAULT_MODELS.summarize || 'haiku');
-    return runTextSummary({ provider, model: provider === 'claude' ? resolveModel(model, provider) : model,
+    return runTextSummary({ provider, model: provider === 'claude' || provider === 'openai' ? resolveLlmModel(provider, model) : model,
       bin: cfg.bins.claude, baseUrl: provider === 'gamma' ? cfg.gamma_base_url : 'https://api.openai.com/v1',
       prompt, timeoutMs });
   }
@@ -262,15 +257,15 @@ export async function runLlm({ task, prompt, tools, timeoutMs = 180_000 }: RunLl
   if (!p) throw new Error(`unknown provider: ${provider}`);
   if (p.kind === 'none') return '';
 
-  let modelToUse: string =
+  const configuredModel =
     taskCfg.model ||
     (provider === 'gamma'
       ? (cfg.gamma_model || PROVIDER_DEFAULT_MODEL.gamma || 'gemma4:12b')
       : p.kind === 'api'
-        ? (cfg.openai_model || PROVIDER_DEFAULT_MODEL.openai || 'gpt-4o-mini')
+        ? cfg.openai_model
         : ((provider === 'claude' ? TASK_DEFAULT_MODELS[task] : undefined) || PROVIDER_DEFAULT_MODEL[provider] || ''));
 
-  if (provider === 'claude' || provider === 'codex') modelToUse = resolveModel(modelToUse, provider);
+  const modelToUse = resolveLlmModel(provider, configuredModel);
 
   forwardToConcordia({ kind: 'llm-request', task, provider, model: modelToUse, text: prompt });
 

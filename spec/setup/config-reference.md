@@ -40,7 +40,7 @@ Memoria の全 env / app_settings キーをセクション別に列挙する。 
 | `llm.<task>.model` | app_settings | (既定モデル) | タスク別モデル ID | `server/llm.ts:129` |
 | `llm.bin.claude` / `.gemini` / `.codex` | app_settings | `claude` / `gemini` / `codex` | CLI パス | `server/llm.ts:135-137` |
 | `llm.openai.api_key` | app_settings | `''` | OpenAI API key | `server/llm.ts:139` |
-| `llm.openai.model` | app_settings | `gpt-4o-mini` | OpenAI モデル | `server/llm.ts:140` |
+| `llm.openai.model` | app_settings | `''` | OpenAI API の明示モデル ID | `server/llm.ts:140` |
 | `runtime.git_bash_path` | app_settings → env | `''` | git-bash パス。 app_settings → `CLAUDE_CODE_GIT_BASH_PATH` | `server/llm.ts:141` |
 
 task 一覧: `server/llm.ts:8-27`。 provider 一覧: `server/llm.ts:54-60`。

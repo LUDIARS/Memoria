@@ -79,7 +79,7 @@ function claudeRow(id: string, timestamp: string, usage: Record<string, unknown>
     sessionId: 'main-session',
     cwd: 'C:\\work\\repo',
     ...extra,
-    message: { id, model: 'claude-opus-5-5', usage, ...(extra.message as object | undefined) },
+    message: { id, model: 'claude-opus-fixture', usage, ...(extra.message as object | undefined) },
   };
 }
 
@@ -96,12 +96,12 @@ test('native log parsers exclude rows before the configured import window', asyn
   const codexPath = join(directory, 'codex.jsonl');
   await writeJsonl(codexPath, [
     { type: 'session_meta', payload: { id: 'codex-session', cwd: 'C:\\work\\current' } },
-    { type: 'turn_context', timestamp: '2026-07-31T12:00:00Z', payload: { model: '5.3-codex', effort: 'high' } },
+    { type: 'turn_context', timestamp: '2026-07-31T12:00:00Z', payload: { model: 'codex-fixture', effort: 'high' } },
     {
       type: 'event_msg', timestamp: '2026-07-31T12:01:00Z',
       payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 } } },
     },
-    { type: 'turn_context', timestamp: '2026-08-01T01:00:00Z', payload: { model: '5.3-codex', effort: 'high' } },
+    { type: 'turn_context', timestamp: '2026-08-01T01:00:00Z', payload: { model: 'codex-fixture', effort: 'high' } },
     {
       type: 'event_msg', timestamp: '2026-08-01T01:01:00Z',
       payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 150, cached_input_tokens: 30, output_tokens: 20 } } },
@@ -146,7 +146,7 @@ test('thinking is inside output_tokens and never added again', async (context) =
   const codexPath = join(directory, 'codex.jsonl');
   await writeJsonl(codexPath, [
     { type: 'session_meta', payload: { id: 'codex-thinking' } },
-    { type: 'turn_context', timestamp: '2026-08-02T00:00:00Z', payload: { model: 'gpt-6-sol', effort: 'high' } },
+    { type: 'turn_context', timestamp: '2026-08-02T00:00:00Z', payload: { model: 'gpt-fixture-sol', effort: 'high' } },
     {
       type: 'event_msg', timestamp: '2026-08-02T00:00:01Z',
       payload: {
@@ -225,9 +225,9 @@ test('effort is recorded per turn for Codex and per row override for Claude', as
   });
   await writeJsonl(codexPath, [
     { type: 'session_meta', payload: { id: 'codex-effort' } },
-    { type: 'turn_context', timestamp: '2026-08-02T00:00:00Z', payload: { model: 'gpt-6-sol', effort: 'medium' } },
+    { type: 'turn_context', timestamp: '2026-08-02T00:00:00Z', payload: { model: 'gpt-fixture-sol', effort: 'medium' } },
     count(10, 1, '2026-08-02T00:00:01Z'),
-    { type: 'turn_context', timestamp: '2026-08-02T00:01:00Z', payload: { model: 'gpt-6-sol', effort: 'xhigh' } },
+    { type: 'turn_context', timestamp: '2026-08-02T00:01:00Z', payload: { model: 'gpt-fixture-sol', effort: 'xhigh' } },
     count(20, 2, '2026-08-02T00:01:01Z'),
   ]);
   const codex = await parseNativeLog(signature(codexPath, 'codex-cli'), CUTOFF_MS);

@@ -4,7 +4,7 @@
 タスクごと (要約 / dig / wordcloud / 日記 / 食事 vision 等 12 タスク) に **どの LLM プロバイダ** (Claude CLI / Codex CLI / Gemini CLI / OpenAI API / アルゴリズム) を使うか、 どの **モデル** を使うかを設定する。 OpenAI のみ API key を Memoria サーバに保持、 残り 3 種は CLI バイナリをユーザの API key スコープで呼ぶ。
 
 ## ユースケース
-- 「日記ハイライトは Opus 4.7 (1M)、 ブクマ要約は Sonnet」 のようなタスク別ルーティング
+- 「日記ハイライトは Opus (1M)、 ブクマ要約は Sonnet」 のようなタスク別ルーティング
 - ローカル CLI バイナリ (`claude` / `gemini` / `codex`) のパスを overide
 - diary global memo (毎回の日記生成 prompt 末尾に貼られる立ち位置メモ)
 - ユーザプロファイル (年齢 / 性別 / 体重 / 身長 / 活動量) を栄養計算に使う
@@ -12,6 +12,18 @@
 ## 画面 / 入口
 - 設定 → `AI / LLM` タブ — 12 タスク × プロバイダ / モデル選択 + diary memo + user profile
 - 公開 endpoint で 12 タスク + 5 プロバイダ + モデル一覧を返す
+
+## モデルの指定
+
+Claude CLI の役割は `opus` / `sonnet` / `haiku` / `fable`、Codex CLI の役割は
+`astra` / `sol` / `luna`。Lapilli one-shot が実行時に Concordia の役割対応表を参照する。
+`opus[1m]` は対応表の Opus モデルにコンテキスト指定を引き継ぐ。
+明示的に保存されたモデル ID はそのまま使う。
+
+OpenAI Chat API は接続先で使えるモデル ID を `llm.openai.model` またはタスク別モデルに設定する。
+どちらも空の場合は API リクエスト前にエラーを返す。
+
+関連タスク: `actio:44755d20-9da0-4d77-b52f-1c39bad689db`
 
 ## データ
 - 設定: `app_settings.llm.*` (プロバイダ / モデル / バイナリパス / API key)

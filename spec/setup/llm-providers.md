@@ -23,7 +23,7 @@ LLM 設定は **env ではなく SQLite の `app_settings`** に入る。 起動
 | `llm.bin.gemini` | `gemini` | Gemini CLI バイナリパス | `server/llm.ts:136` |
 | `llm.bin.codex` | `codex` | Codex CLI バイナリパス | `server/llm.ts:137` |
 | `llm.openai.api_key` | `''` | OpenAI API key (openai プロバイダ使用時) | `server/llm.ts:139` |
-| `llm.openai.model` | `gpt-4o-mini` | OpenAI モデル ID | `server/llm.ts:140` |
+| `llm.openai.model` | `''` | OpenAI API の明示モデル ID | `server/llm.ts:140` |
 | `runtime.git_bash_path` | env → `''` | Windows の git-bash 絶対パス。 app_settings → `CLAUDE_CODE_GIT_BASH_PATH` の順 | `server/llm.ts:141` |
 
 ### プロバイダ一覧 (`server/llm.ts:54-60`)
@@ -45,7 +45,7 @@ LLM 設定は **env ではなく SQLite の `app_settings`** に入る。 起動
 `discord_route`。
 
 タスク既定モデル (`server/llm.ts:29-41`) は要約系が `sonnet`、 ハイライト統合 /
-週報 / おすすめ統合が `claude-opus-4-7[1m]` (Opus 1M)。
+週報 / おすすめ統合が `opus[1m]` (Opus 1M)。
 
 ## 手順
 
@@ -53,7 +53,7 @@ LLM 設定は **env ではなく SQLite の `app_settings`** に入る。 起動
    OpenAI API key を用意する。
 2. `http://localhost:5180/` → **⚙ AI** を開く。
 3. タスク別にプロバイダ + モデルを選ぶ。 OpenAI を選んだタスクがあれば
-   `llm.openai.api_key` も入れる。
+   `llm.openai.api_key` とモデル ID を入れる。Claude と Codex の役割名は Concordia の対応表から解決する。
 4. CLI が PATH に無ければ `llm.bin.*` にフルパスを入れる。 Windows で claude を
    使うなら `runtime.git_bash_path` に git-bash の絶対パスを入れる。
 

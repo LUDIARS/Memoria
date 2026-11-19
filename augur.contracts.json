@@ -4,6 +4,15 @@
   "importFrom": "../shared/contract-runtime.js",
   "contracts": [
     {
+      "id": "C-26",
+      "criterion": "C-26 resolveLlmModel(provider, model): Claude と Codex の役割名を解決し、Claude のコンテキスト接尾辞と明示指定のモデル ID を維持する",
+      "symbol": "resolveLlmModel",
+      "file": "server/shared/llm-model.ts",
+      "module": "augur/contracts/llm-model.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
       "id": "C-23",
       "criterion": "C-23 extractFeedTitle(body): CDATA除去・空白正規化・200文字制限を維持し、閉じない256KiB以上のtitle入力を1秒未満で処理する",
       "symbol": "extractFeedTitle",

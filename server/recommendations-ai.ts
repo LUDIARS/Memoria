@@ -538,7 +538,7 @@ export async function runAiRecommendations(db: Db, options: { force?: boolean } 
   if (!avail.available) throw new Error(avail.reason);
   const cfg = getLlmConfig();
   const modelSonnet = cfg.tasks.recommendation_agent?.model || 'sonnet';
-  const modelOpus = cfg.tasks.recommendation_synthesize?.model || 'claude-opus-4-7[1m]';
+  const modelOpus = cfg.tasks.recommendation_synthesize?.model || 'opus[1m]';
   const runId = insertRecommendationRun(db);
   const handle = { runId, promise: undefined as unknown as Promise<RecRunResult> };
   const promise = (async () => {
